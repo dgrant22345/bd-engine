@@ -2610,11 +2610,11 @@ function Invoke-AtsDiscovery {
         $stats.checked += 1
 
         foreach ($field in 'atsType', 'boardId', 'domain', 'careersUrl', 'resolvedBoardUrl', 'source', 'notes', 'active', 'supportedImport', 'discoveryStatus', 'discoveryMethod', 'confidenceScore', 'confidenceBand', 'evidenceSummary', 'reviewStatus', 'failureReason', 'redirectTarget', 'matchedSignatures', 'attemptedUrls', 'httpSummary') {
-            $config[$field] = $result[$field]
+            [void](Set-ObjectValue -Object $config -Name $field -Value $result[$field])
         }
-        $config.lastCheckedAt = (Get-Date).ToString('o')
-        $config.lastResolutionAttemptAt = $config.lastCheckedAt
-        $config.nextResolutionAttemptAt = Get-ResolverNextAttemptAt -DiscoveryStatus ([string]$result.discoveryStatus) -ConfidenceBand ([string]$result.confidenceBand)
+        [void](Set-ObjectValue -Object $config -Name 'lastCheckedAt' -Value ((Get-Date).ToString('o')))
+        [void](Set-ObjectValue -Object $config -Name 'lastResolutionAttemptAt' -Value (Get-ObjectValue -Object $config -Name 'lastCheckedAt'))
+        [void](Set-ObjectValue -Object $config -Name 'nextResolutionAttemptAt' -Value (Get-ResolverNextAttemptAt -DiscoveryStatus ([string]$result.discoveryStatus) -ConfidenceBand ([string]$result.confidenceBand)))
 
         switch ([string]$result.discoveryStatus) {
             'mapped' { $stats.mapped += 1 }
@@ -2674,7 +2674,7 @@ function Sync-BoardConfigsFromCompanies {
         if (-not $key) {
             continue
         }
-        $config.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
         if (-not $existingByCompany.ContainsKey($key)) {
             $existingByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -2822,12 +2822,12 @@ function Get-AshbyJobs {
         foreach ($job in @($payload.jobs)) {
             [ordered]@{
                 jobId = [string](Get-NestedValue -Object $job -Paths @('id', 'jobPostId'))
-                title = if ($job.title) { $job.title } else { '' }
-                location = if ($job.location) { $job.location } else { '' }
-                department = if ($job.departmentName) { $job.departmentName } elseif ($job.department) { $job.department } else { '' }
-                employmentType = if ($job.employmentType) { $job.employmentType } else { '' }
-                url = if ($job.jobUrl) { $job.jobUrl } else { '' }
-                postedAt = if ($job.publishedAt) { Convert-ToDateString $job.publishedAt } else { (Get-Date).ToString('o') }
+                title = [string](Get-NestedValue -Object $job -Paths @('title'))
+                location = [string](Get-NestedValue -Object $job -Paths @('location'))
+                department = [string](Get-NestedValue -Object $job -Paths @('departmentName', 'department'))
+                employmentType = [string](Get-NestedValue -Object $job -Paths @('employmentType'))
+                url = [string](Get-NestedValue -Object $job -Paths @('jobUrl'))
+                postedAt = if (Get-NestedValue -Object $job -Paths @('publishedAt')) { Convert-ToDateString (Get-NestedValue -Object $job -Paths @('publishedAt')) } else { (Get-Date).ToString('o') }
                 sourceUrl = $url
                 rawPayload = $job
             }
@@ -3042,7 +3042,7 @@ function Sync-ImportedCompanyData {
     foreach ($config in @($State.boardConfigs)) {
         $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
         if (-not $key) { continue }
-        $config.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
         if (-not $configsByCompany.ContainsKey($key)) {
             $configsByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -3080,11 +3080,11 @@ function Sync-ImportedCompanyData {
 
         $company = Update-CompanyProjection -Company $company -Jobs $jobItems -Configs $configItems
         foreach ($config in @($configItems)) {
-            $config.accountId = $company.id
+            [void](Set-ObjectValue -Object $config -Name 'accountId' -Value $company.id)
         }
         foreach ($job in @($jobItems)) {
-            $job.accountId = $company.id
-            if (-not $job.companyName) { $job.companyName = $company.displayName }
+            [void](Set-ObjectValue -Object $job -Name 'accountId' -Value $company.id)
+            if (-not $job.companyName) { [void](Set-ObjectValue -Object $job -Name 'companyName' -Value $company.displayName) }
         }
     }
 
@@ -3148,9 +3148,9 @@ function Invoke-LiveJobImport {
         if ($ProgressCallback) {
             Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Importing live jobs' -Processed $configIndex -Total $totalConfigs -StartedAt $startedAt -Message ("Fetching {0}" -f [string]$config.companyName)
         }
-        $config.companyName = [string]$config.companyName
-        $config.companyName = Get-CanonicalCompanyDisplayName $config.companyName
-        $config.normalizedCompanyName = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        [void](Set-ObjectValue -Object $config -Name 'companyName' -Value ([string]$config.companyName))
+        [void](Set-ObjectValue -Object $config -Name 'companyName' -Value (Get-CanonicalCompanyDisplayName ([string]$config.companyName)))
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value (Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })))
         if ($config.normalizedCompanyName) {
             [void]$companyKeys.Add($config.normalizedCompanyName)
         }
@@ -3189,37 +3189,37 @@ function Invoke-LiveJobImport {
                 $jobId = if ($existingJob) { [string]$existingJob.id } else { New-DeterministicId -Prefix 'job' -Seed $naturalKey }
 
                 $jobRecord = if ($existingJob) { $existingJob } else { [ordered]@{} }
-                $jobRecord.id = $jobId
-                $jobRecord.workspaceId = $State.workspace.id
-                $jobRecord.accountId = $config.accountId
-                $jobRecord.companyName = $config.companyName
-                $jobRecord.normalizedCompanyName = $config.normalizedCompanyName
-                $jobRecord.title = $job.title
-                $jobRecord.normalizedTitle = Normalize-TextKey $job.title
-                $jobRecord.location = $job.location
-                $jobRecord.department = $job.department
-                $jobRecord.employmentType = $job.employmentType
-                $jobRecord.jobId = $externalJobId
-                $jobRecord.url = $job.url
-                $jobRecord.jobUrl = $job.url
-                $jobRecord.sourceUrl = $job.sourceUrl
-                $jobRecord.atsType = $config.atsType
-                $jobRecord.configKey = $configKey
-                $jobRecord.postedAt = $job.postedAt
-                $jobRecord.retrievedAt = $retrievedAt
-                $jobRecord.lastSeenAt = $retrievedAt
-                if (-not $jobRecord.firstSeenAt) {
-                    $jobRecord.firstSeenAt = $retrievedAt
+                [void](Set-ObjectValue -Object $jobRecord -Name 'id' -Value $jobId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'workspaceId' -Value $State.workspace.id)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'accountId' -Value $config.accountId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'companyName' -Value $config.companyName)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'normalizedCompanyName' -Value $config.normalizedCompanyName)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'title' -Value $job.title)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'normalizedTitle' -Value (Normalize-TextKey $job.title))
+                [void](Set-ObjectValue -Object $jobRecord -Name 'location' -Value $job.location)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'department' -Value $job.department)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'employmentType' -Value $job.employmentType)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'jobId' -Value $externalJobId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'url' -Value $job.url)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'jobUrl' -Value $job.url)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'sourceUrl' -Value $job.sourceUrl)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'atsType' -Value $config.atsType)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'configKey' -Value $configKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'postedAt' -Value $job.postedAt)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'retrievedAt' -Value $retrievedAt)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'lastSeenAt' -Value $retrievedAt)
+                if (-not (Get-ObjectValue -Object $jobRecord -Name 'firstSeenAt')) {
+                    [void](Set-ObjectValue -Object $jobRecord -Name 'firstSeenAt' -Value $retrievedAt)
                 }
-                if (-not $jobRecord.importedAt) {
-                    $jobRecord.importedAt = $retrievedAt
+                if (-not (Get-ObjectValue -Object $jobRecord -Name 'importedAt')) {
+                    [void](Set-ObjectValue -Object $jobRecord -Name 'importedAt' -Value $retrievedAt)
                 }
-                $jobRecord.naturalKey = $naturalKey
-                $jobRecord.dedupeKey = $naturalKey
-                $jobRecord.rawPayload = $job.rawPayload
-                $jobRecord.active = $true
-                $jobRecord.isGta = (Test-GtaLocation -Location $job.location)
-                $jobRecord.isNew = [bool](-not $existingJob)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'naturalKey' -Value $naturalKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'dedupeKey' -Value $naturalKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'rawPayload' -Value $job.rawPayload)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'active' -Value $true)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'isGta' -Value (Test-GtaLocation -Location $job.location))
+                [void](Set-ObjectValue -Object $jobRecord -Name 'isNew' -Value ([bool](-not $existingJob)))
 
                 if (-not $existingJob) {
                     $stats.newJobs += 1
@@ -3234,9 +3234,9 @@ function Invoke-LiveJobImport {
                         $_.active -ne $false
                     })) {
                 if (-not $seenNaturalKeys.Contains([string]$existingJob.naturalKey)) {
-                    $existingJob.active = $false
-                    $existingJob.isNew = $false
-                    $existingJob.retrievedAt = $retrievedAt
+                    [void](Set-ObjectValue -Object $existingJob -Name 'active' -Value $false)
+                    [void](Set-ObjectValue -Object $existingJob -Name 'isNew' -Value $false)
+                    [void](Set-ObjectValue -Object $existingJob -Name 'retrievedAt' -Value $retrievedAt)
                 }
             }
 
@@ -3253,12 +3253,12 @@ function Invoke-LiveJobImport {
                 }
             }
 
-            $config.lastImportAt = $retrievedAt
-            $config.lastImportStatus = 'success'
+            [void](Set-ObjectValue -Object $config -Name 'lastImportAt' -Value $retrievedAt)
+            [void](Set-ObjectValue -Object $config -Name 'lastImportStatus' -Value 'success')
         } catch {
             $stats.errors += 1
-            $config.lastImportAt = $retrievedAt
-            $config.lastImportStatus = 'error'
+            [void](Set-ObjectValue -Object $config -Name 'lastImportAt' -Value $retrievedAt)
+            [void](Set-ObjectValue -Object $config -Name 'lastImportStatus' -Value 'error')
             $fetchErrorMsg = [string]$_.Exception.Message
             Write-PipelineDiag -Stage 'job_fetch_error' -Company $config.companyName -Message ('Job fetch failed: ' + $fetchErrorMsg) -Data @{
                 atsType = [string]$config.atsType; boardId = [string]$config.boardId; statusCode = ''
