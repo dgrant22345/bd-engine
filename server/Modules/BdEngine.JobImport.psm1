@@ -3242,13 +3242,13 @@ function Invoke-LiveJobImport {
 
             # Log when the location filter drops a significant number of jobs
             if ($configFilteredOut -gt 0) {
-                Write-PipelineDiag -Stage 'job_filter' -Company $config.companyName -Message "Location filter: $configFilteredOut of $fetchedCount jobs dropped (non-Canada)" -Data @{
+                Write-PipelineDiag -Stage 'job_filter' -Company $config.companyName -Message ('Location filter: ' + $configFilteredOut + ' of ' + $fetchedCount + ' jobs dropped (non-Canada)') -Data @{
                     fetched = $fetchedCount; filteredOut = $configFilteredOut; kept = ($fetchedCount - $configFilteredOut)
                     reason = 'Non-Canada location'; atsType = [string]$config.atsType
                 }
             }
             if ($fetchedCount -gt 0 -and $configFilteredOut -eq $fetchedCount) {
-                Write-PipelineDiag -Stage 'job_filter_zero' -Company $config.companyName -Message "ALL $fetchedCount jobs filtered out by Canada location filter — zero imported" -Data @{
+                Write-PipelineDiag -Stage 'job_filter_zero' -Company $config.companyName -Message ('ALL ' + $fetchedCount + ' jobs filtered out by Canada location filter - zero imported') -Data @{
                     atsType = [string]$config.atsType; boardId = [string]$config.boardId
                 }
             }
