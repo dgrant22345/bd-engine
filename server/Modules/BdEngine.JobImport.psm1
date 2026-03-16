@@ -2480,7 +2480,8 @@ function Get-DiscoveryResultForConfig {
             httpSummary = @($httpSummary.ToArray())
         }
     } catch {
-        Write-PipelineDiag -Stage 'discovery_error' -Company $companyName -Message "Exception: $($_.Exception.Message)"
+        $discoveryErrorMsg = [string]$_.Exception.Message
+        Write-PipelineDiag -Stage 'discovery_error' -Company $companyName -Message ('Exception: ' + $discoveryErrorMsg)
         return [ordered]@{
             atsType = ''
             boardId = ''
@@ -3258,13 +3259,14 @@ function Invoke-LiveJobImport {
             $stats.errors += 1
             $config.lastImportAt = $retrievedAt
             $config.lastImportStatus = 'error'
-            Write-PipelineDiag -Stage 'job_fetch_error' -Company $config.companyName -Message "Job fetch failed: $($_.Exception.Message)" -Data @{
+            $fetchErrorMsg = [string]$_.Exception.Message
+            Write-PipelineDiag -Stage 'job_fetch_error' -Company $config.companyName -Message ('Job fetch failed: ' + $fetchErrorMsg) -Data @{
                 atsType = [string]$config.atsType; boardId = [string]$config.boardId; statusCode = ''
             }
             [void]$errors.Add([ordered]@{
                 company = $config.companyName
                 atsType = $config.atsType
-                message = $_.Exception.Message
+                message = $fetchErrorMsg
             })
         }
 
