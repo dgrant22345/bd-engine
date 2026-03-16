@@ -3031,7 +3031,7 @@ function Sync-ImportedCompanyData {
     foreach ($job in @($State.jobs)) {
         $key = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
         if (-not $key) { continue }
-        $job.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $job -Name 'normalizedCompanyName' -Value $key)
         if (-not $jobsByCompany.ContainsKey($key)) {
             $jobsByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -3118,19 +3118,19 @@ function Invoke-LiveJobImport {
     $existingByNaturalKey = @{}
     foreach ($job in @($State.jobs)) {
         if (-not $job.retrievedAt -and $job.importedAt) {
-            $job.retrievedAt = $job.importedAt
+            [void](Set-ObjectValue -Object $job -Name 'retrievedAt' -Value $job.importedAt)
         }
         if (-not $job.firstSeenAt -and $job.importedAt) {
-            $job.firstSeenAt = $job.importedAt
+            [void](Set-ObjectValue -Object $job -Name 'firstSeenAt' -Value $job.importedAt)
         }
         if (-not $job.url -and $job.jobUrl) {
-            $job.url = $job.jobUrl
+            [void](Set-ObjectValue -Object $job -Name 'url' -Value $job.jobUrl)
         }
         if (-not $job.jobId) {
-            $job.jobId = ''
+            [void](Set-ObjectValue -Object $job -Name 'jobId' -Value '')
         }
         if (-not $job.naturalKey) {
-            $job.naturalKey = if ($job.dedupeKey) { [string]$job.dedupeKey } else { '{0}|{1}|{2}' -f $job.normalizedCompanyName, $job.atsType, ($job.url) }
+            [void](Set-ObjectValue -Object $job -Name 'naturalKey' -Value $(if ($job.dedupeKey) { [string]$job.dedupeKey } else { '{0}|{1}|{2}' -f $job.normalizedCompanyName, $job.atsType, ($job.url) }))
         }
         $jobMap[$job.id] = $job
         if ($job.naturalKey) {
