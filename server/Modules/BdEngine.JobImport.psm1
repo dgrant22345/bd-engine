@@ -2555,15 +2555,15 @@ function Invoke-AtsDiscovery {
         $candidates = @($candidates | Where-Object { $_.id -eq $ConfigId })
     } elseif ($OnlyMissing) {
         $candidates = @($candidates | Where-Object {
-                ([string]$_.discoveryStatus) -notin @('mapped', 'discovered') -or
-                ([string]$_.confidenceBand).ToLowerInvariant() -in @('medium', 'low', 'unresolved')
+                ([string](Get-ObjectValue -Object $_ -Name 'discoveryStatus' -Default '')) -notin @('mapped', 'discovered') -or
+                ([string](Get-ObjectValue -Object $_ -Name 'confidenceBand' -Default '')).ToLowerInvariant() -in @('medium', 'low', 'unresolved')
             })
     }
 
     if (-not $ForceRefresh) {
         $now = Get-Date
         $candidates = @($candidates | Where-Object {
-                $nextAttempt = [string]$(if ($_.nextResolutionAttemptAt) { $_.nextResolutionAttemptAt } else { '' })
+                $nextAttempt = [string](Get-ObjectValue -Object $_ -Name 'nextResolutionAttemptAt' -Default '')
                 if (-not $nextAttempt) {
                     return $true
                 }
@@ -2597,15 +2597,17 @@ function Invoke-AtsDiscovery {
 
     for ($index = 0; $index -lt $candidates.Count; $index++) {
         $config = $candidates[$index]
-        if (([string]$config.discoveryMethod).ToLowerInvariant() -eq 'manual' -and -not $ForceRefresh) {
+        if (([string](Get-ObjectValue -Object $config -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' -and -not $ForceRefresh) {
             continue
         }
 
+        $configCompanyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $configNormalizedName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
         if ($ProgressCallback) {
-            Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Running ATS discovery' -Processed $index -Total $totalCandidates -StartedAt $startedAt -Message ("Resolving {0}" -f [string]$config.companyName)
+            Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Running ATS discovery' -Processed $index -Total $totalCandidates -StartedAt $startedAt -Message ("Resolving {0}" -f $configCompanyName)
         }
 
-        $company = if ($companyByKey.ContainsKey($config.normalizedCompanyName)) { $companyByKey[$config.normalizedCompanyName] } else { [ordered]@{ displayName = $config.companyName; domain = ''; careersUrl = '' } }
+        $company = if ($configNormalizedName -and $companyByKey.ContainsKey($configNormalizedName)) { $companyByKey[$configNormalizedName] } else { [ordered]@{ displayName = $configCompanyName; domain = ''; careersUrl = '' } }
         $result = Get-DiscoveryResultForConfig -Company $company -Config $config -ForceRefresh:$ForceRefresh
         $stats.checked += 1
 
@@ -2694,7 +2696,7 @@ function Sync-BoardConfigsFromCompanies {
 
         $key = $generated.normalizedCompanyName
         $existingItems = if ($existingByCompany.ContainsKey($key)) { @($existingByCompany[$key].ToArray()) } else { @() }
-        $manualItems = @($existingItems | Where-Object { ([string]$_.source).ToLowerInvariant() -eq 'manual' -or ([string]$_.discoveryMethod).ToLowerInvariant() -eq 'manual' })
+        $manualItems = @($existingItems | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'source' -Default '')).ToLowerInvariant() -eq 'manual' -or ([string](Get-ObjectValue -Object $_ -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' })
 
         if ($manualItems.Count -gt 0) {
             foreach ($item in $existingItems) {
