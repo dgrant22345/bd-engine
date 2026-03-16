@@ -1,0 +1,17 @@
+{
+    "1password":  {
+                      "atsType":  "ashby",
+                      "boardId":  "1password",
+                      "domain":  "jobs.ashbyhq.com",
+                      "careersUrl":  "https://jobs.ashbyhq.com/1password",
+                      "resolvedBoardUrl":  "https://jobs.ashbyhq.com/1password",
+                      "source":  "https://api.ashbyhq.com/posting-api/job-board/1password",
+                      "notes":  "Resolved using normalized_company slug \u00271password\u0027",
+                      "discoveryStatus":  "mapped",
+                      "discoveryMethod":  "known_override",
+                      "confidenceScore":  100,
+                      "confidenceBand":  "high",
+                      "supportedImport":  true,
+                      "active":  true
+                  }
+}

@@ -1,0 +1,21 @@
+# Data files — large DB and state, not for version control
+data/bd-engine.db
+data/bd-engine.db-journal
+data/bd-engine.db-wal
+data/bd-engine.db-shm
+data/companies.json
+data/contacts.json
+data/jobs.json
+data/board-configs.json
+data/activities.json
+data/import-runs.json
+data/live-sheet-backups/
+data_backup_before_reseed/
+
+# Scratch / logs
+scratch.txt
+server-test.log
+*.log
+
+# Claude Code worktrees
+.claude/worktrees/

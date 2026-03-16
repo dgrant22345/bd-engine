@@ -1,0 +1,55 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BD Engine</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page-noise" aria-hidden="true"></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand-card">
+        <p class="eyebrow">Recruiter workflow</p>
+        <h1>BD Engine</h1>
+        <p class="brand-copy">Daily account prioritization, contact intelligence, and ATS import orchestration in one place.</p>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="#/accounts" data-route="accounts">Accounts</a>
+        <a href="#/contacts" data-route="contacts">Contacts</a>
+        <a href="#/jobs" data-route="jobs">Jobs</a>
+        <a href="#/admin" data-route="admin">Admin</a>
+      </nav>
+      <div class="sidebar-footnote">
+        <span class="dot"></span>
+        <span id="workspace-name">Loading workspace</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Business development operating system</p>
+          <h2 id="view-title">Dashboard</h2>
+        </div>
+        <div class="topbar-tools">
+          <label class="search-shell" for="global-search-input">
+            <span>Search companies, contacts, jobs</span>
+            <input id="global-search-input" type="search" placeholder="Type a company, person, or role">
+          </label>
+          <button class="ghost-button" id="refresh-bootstrap">Refresh snapshot</button>
+        </div>
+      </header>
+
+      <div id="app-alert" class="app-alert hidden"></div>
+      <div id="search-results" class="search-results hidden"></div>
+      <div id="app" class="view-root"></div>
+    </main>
+  </div>
+
+  <script src="/local-api.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
