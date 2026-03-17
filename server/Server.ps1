@@ -1,6 +1,7 @@
 param(
     [int]$Port = 8173,
-    [switch]$OpenBrowser
+    [switch]$OpenBrowser,
+    [switch]$LocalOnly
 )
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -1264,10 +1265,21 @@ if (Test-AppStoreUsesSqlite) {
     $script:ServerWarmedAt = (Get-Date).ToString('o')
 }
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+$bindAddr = if ($LocalOnly) { [System.Net.IPAddress]::Loopback } else { [System.Net.IPAddress]::Any }
+$listener = [System.Net.Sockets.TcpListener]::new($bindAddr, $Port)
 $listener.Start()
 $prefix = "http://localhost:$Port/"
-Write-ServerLog "BD Engine app listening at $prefix"
+if (-not $LocalOnly) {
+    $tailscaleIp = try { (Get-NetIPAddress -InterfaceAlias 'Tailscale' -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress } catch { $null }
+    if ($tailscaleIp) {
+        Write-ServerLog "BD Engine app listening at $prefix"
+        Write-ServerLog "Tailscale URL: http://${tailscaleIp}:$Port/"
+    } else {
+        Write-ServerLog "BD Engine app listening at $prefix (all interfaces on port $Port)"
+    }
+} else {
+    Write-ServerLog "BD Engine app listening at $prefix (localhost only)"
+}
 Write-ServerLog 'Press Ctrl+C to stop.'
 if ($OpenBrowser) { Start-Process $prefix | Out-Null }
 
