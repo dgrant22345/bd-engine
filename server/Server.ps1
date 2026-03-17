@@ -19,9 +19,16 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') 
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 
 function Get-DefaultWorkbookPath {
+    $userProfile = [Environment]::GetFolderPath('UserProfile')
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $downloads = Join-Path $userProfile 'Downloads'
+    $oneDriveDesktop = Join-Path $userProfile 'OneDrive\Desktop'
+
     $candidates = @(
-        'C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx',
-        'C:\Users\ddere\Downloads\BD Engine - Final v 1.6 (1).xlsx'
+        (Join-Path $oneDriveDesktop 'Google_Sheets_Daily_BD_Engine (1).xlsx'),
+        (Join-Path $desktop 'Google_Sheets_Daily_BD_Engine (1).xlsx'),
+        (Join-Path $downloads 'BD Engine - Final v 1.6 (1).xlsx'),
+        (Join-Path $dataRoot 'workbook.xlsx')
     )
 
     foreach ($candidate in $candidates) {
@@ -34,10 +41,15 @@ function Get-DefaultWorkbookPath {
 }
 
 function Get-DefaultConnectionsCsvPath {
+    $userProfile = [Environment]::GetFolderPath('UserProfile')
+    $downloads = Join-Path $userProfile 'Downloads'
+    $oneDriveDownloads = Join-Path $userProfile 'OneDrive\Downloads'
+
     $candidates = @(
-        'C:\Users\ddere\Downloads\Connections.csv',
-        'C:\Users\ddere\Downloads\connections.csv',
-        'C:\Users\ddere\OneDrive\Downloads\Connections.csv'
+        (Join-Path $downloads 'Connections.csv'),
+        (Join-Path $downloads 'connections.csv'),
+        (Join-Path $oneDriveDownloads 'Connections.csv'),
+        (Join-Path $dataRoot 'Connections.csv')
     )
 
     foreach ($candidate in $candidates) {
