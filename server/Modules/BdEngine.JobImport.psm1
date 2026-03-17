@@ -293,7 +293,12 @@ function Get-ResolverKnownMappingOverrides {
         $parsed = if ([string]::IsNullOrWhiteSpace($raw)) { @{} } else { $raw | ConvertFrom-Json -Depth 20 }
         $overrides = @{}
         foreach ($property in @($parsed.PSObject.Properties)) {
-            $overrides[[string]$property.Name] = Convert-ToPlainObject -InputObject $property.Value
+            $pso = $property.Value
+            $hash = [ordered]@{}
+            foreach ($p in @($pso.PSObject.Properties)) {
+                $hash[[string]$p.Name] = $p.Value
+            }
+            $overrides[[string]$property.Name] = $hash
         }
         $script:ResolverKnownMappingOverrides = $overrides
     } catch {
@@ -665,7 +670,7 @@ function New-GeneratedBoardConfig {
     $templateDiscoveryStatus = [string](Get-ObjectValue -Object $template -Name 'discoveryStatus')
     if ($templateDiscoveryMethod -in @('known_map', 'repair_seed')) {
         $template.discoveryStatus = 'mapped'
-        $template.confidenceScore = if ($template.confidenceScore) { $template.confidenceScore } else { 100 }
+        $template.confidenceScore = if (Test-ObjectHasKey -Object $template -Name 'confidenceScore' | Where-Object { $_ }) { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 100 }
         $template.confidenceBand = 'high'
         $template.supportedImport = [bool](Test-ImportCapableAtsType -AtsType ([string]$template.atsType))
         $template.active = [bool]($template.supportedImport -and $template.active)
