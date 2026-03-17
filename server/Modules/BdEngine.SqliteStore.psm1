@@ -2768,9 +2768,12 @@ function Get-BdSqliteFilterOptionsInternal {
         statuses = @((Invoke-BdSqliteTimedStep -Name 'statusesMs' -TimingBag $TimingBag -Action {
                     Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT status AS value FROM companies WHERE status IS NOT NULL AND status <> '' ORDER BY status ASC;"
                 }) | ForEach-Object { [string]$_.value })
-        owners = @((Invoke-BdSqliteTimedStep -Name 'ownersMs' -TimingBag $TimingBag -Action {
-                    Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT owner AS value FROM companies WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner ASC;"
-                }) | ForEach-Object { [string]$_.value })
+        owners = @(
+                    @(try { (Get-OwnerRoster) | ForEach-Object { [string]$_.displayName } } catch { @() }) +
+                    @((Invoke-BdSqliteTimedStep -Name 'ownersMs' -TimingBag $TimingBag -Action {
+                        Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT owner AS value FROM companies WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner ASC;"
+                    }) | ForEach-Object { [string]$_.value }) | Select-Object -Unique
+                )
         outreachStatuses = @((Invoke-BdSqliteTimedStep -Name 'outreachStatusesMs' -TimingBag $TimingBag -Action {
                     Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT outreach_status AS value FROM companies WHERE outreach_status IS NOT NULL AND outreach_status <> '' ORDER BY outreach_status ASC;"
                 }) | ForEach-Object { [string]$_.value })

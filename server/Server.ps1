@@ -732,12 +732,18 @@ function Handle-ApiRequest {
                 workspace = $workspace
                 settings = $settings
                 filters = $filters
+                ownerRoster = @(Get-OwnerRoster)
                 defaults = [ordered]@{
                     workbookPath = $defaultWorkbookPath
                     connectionsCsvPath = $defaultConnectionsCsvPath
                     spreadsheetId = $defaultSpreadsheetId
                 }
             })
+        })
+    }
+    if ($path -eq '/api/owners' -and $method -eq 'GET') {
+        return New-JsonResult ([ordered]@{
+            owners = @(Get-OwnerRoster)
         })
     }
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {

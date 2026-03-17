@@ -6,6 +6,37 @@ $script:DashboardCacheSignature = ''
 $script:FilterOptionsCache = $null
 $script:FilterOptionsCacheSignature = ''
 
+# ─── Fixed owner roster ───
+$script:OwnerRoster = @(
+    [ordered]@{ ownerId = 'derek-grant';  displayName = 'Derek Grant' }
+    [ordered]@{ ownerId = 'alex-chong';   displayName = 'Alex Chong' }
+    [ordered]@{ ownerId = 'danny-chung';  displayName = 'Danny Chung' }
+)
+
+function Get-OwnerRoster {
+    return @($script:OwnerRoster)
+}
+
+function Resolve-OwnerDisplayName {
+    param([string]$OwnerIdOrName)
+    if (-not $OwnerIdOrName) { return '' }
+    $match = $script:OwnerRoster | Where-Object {
+        $_.ownerId -eq $OwnerIdOrName -or $_.displayName -eq $OwnerIdOrName
+    } | Select-Object -First 1
+    if ($match) { return [string]$match.displayName }
+    return $OwnerIdOrName
+}
+
+function Resolve-OwnerId {
+    param([string]$OwnerIdOrName)
+    if (-not $OwnerIdOrName) { return '' }
+    $match = $script:OwnerRoster | Where-Object {
+        $_.ownerId -eq $OwnerIdOrName -or $_.displayName -eq $OwnerIdOrName
+    } | Select-Object -First 1
+    if ($match) { return [string]$match.ownerId }
+    return ''
+}
+
 function Normalize-TextKey {
     param([string]$Value)
 
@@ -703,6 +734,9 @@ function Select-AccountSummary {
         enrichmentEvidence = [string](Get-ObjectValue -Object $Company -Name 'enrichmentEvidence')
         enrichmentFailureReason = [string](Get-ObjectValue -Object $Company -Name 'enrichmentFailureReason')
         owner = [string](Get-ObjectValue -Object $Company -Name 'owner')
+        ownerId = [string](Get-ObjectValue -Object $Company -Name 'ownerId')
+        ownerAssignedAt = Get-ObjectValue -Object $Company -Name 'ownerAssignedAt' -Default $null
+        ownerAssignedBy = [string](Get-ObjectValue -Object $Company -Name 'ownerAssignedBy')
         priority = [string](Get-ObjectValue -Object $Company -Name 'priority')
         status = [string](Get-ObjectValue -Object $Company -Name 'status')
         outreachStatus = [string](Get-ObjectValue -Object $Company -Name 'outreachStatus')
@@ -878,6 +912,9 @@ function New-CompanyProjection {
         domain = ''
         canonicalDomain = ''
         owner = ''
+        ownerId = ''
+        ownerAssignedAt = ''
+        ownerAssignedBy = ''
         priority = 'medium'
         industry = ''
         location = ''
@@ -1601,7 +1638,7 @@ function Get-AccountFilterOptions {
         priorityTiers = Get-SortedUniqueTextValues -Map $priorityTiers
         priorities = Get-SortedUniqueTextValues -Map $priorities
         statuses = Get-SortedUniqueTextValues -Map $statuses
-        owners = Get-SortedUniqueTextValues -Map $owners
+        owners = @(($script:OwnerRoster | ForEach-Object { $_.displayName }) + @(Get-SortedUniqueTextValues -Map $owners) | Select-Object -Unique)
         outreachStatuses = Get-SortedUniqueTextValues -Map $outreachStatuses
         configDiscoveryStatuses = Get-SortedUniqueTextValues -Map $configDiscoveryStatuses
         configImportStatuses = Get-SortedUniqueTextValues -Map $configImportStatuses
@@ -1984,13 +2021,23 @@ function Set-AccountFields {
             continue
         }
 
-        foreach ($field in 'status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'owner', 'nextAction', 'nextActionAt') {
+        foreach ($field in 'status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt') {
             if (@($Patch.Keys) -contains $field) {
                 if ($field -eq 'status') {
                     $account[$field] = Normalize-AccountStatus $Patch[$field]
                 } else {
                     $account[$field] = [string]$Patch[$field]
                 }
+            }
+        }
+        if (@($Patch.Keys) -contains 'owner') {
+            $resolvedOwner = Resolve-OwnerDisplayName ([string]$Patch['owner'])
+            $previousOwner = [string]$account['owner']
+            $account['owner'] = $resolvedOwner
+            if ($resolvedOwner -ne $previousOwner) {
+                $account['ownerId'] = Resolve-OwnerId $resolvedOwner
+                $account['ownerAssignedAt'] = (Get-Date).ToString('o')
+                $account['ownerAssignedBy'] = 'ui'
             }
         }
         if (@($Patch.Keys) -contains 'priority') {
@@ -2167,9 +2214,9 @@ function Add-Account {
         throw 'That company name looks like a pseudo-company entry and was intentionally rejected.'
     }
 
-    $existing = @($State.companies | Where-Object {
+    $existing = $State.companies | Where-Object {
         (Get-CanonicalCompanyKey $(if ($_.normalizedName) { $_.normalizedName } else { $_.displayName })) -eq $companyKey
-    } | Select-Object -First 1)
+    } | Select-Object -First 1
 
     if (-not $existing) {
         $existing = New-CompanyProjection -WorkspaceId $State.workspace.id -NormalizedName $companyKey -DisplayName $companyName
@@ -2181,7 +2228,14 @@ function Add-Account {
     $existing.domain = [string]$(if ($payloadDomain) { $payloadDomain } elseif ($existing.domain) { $existing.domain } else { Get-DomainName $payloadCareersUrl })
     $existing.careersUrl = [string]$(if ($payloadCareersUrl) { $payloadCareersUrl } else { $existing.careersUrl })
     $existing.canonicalDomain = [string]$(if ($payloadDomain) { Get-DomainName $payloadDomain } elseif ($existing.canonicalDomain) { $existing.canonicalDomain } else { Get-DomainName $payloadCareersUrl })
-    $existing.owner = [string]$(if ($payloadOwner) { $payloadOwner } else { $existing.owner })
+    $resolvedOwner = [string]$(if ($payloadOwner) { Resolve-OwnerDisplayName $payloadOwner } else { $existing.owner })
+    $previousOwner = [string](Get-ObjectValue -Object $existing -Name 'owner')
+    $existing.owner = $resolvedOwner
+    if ($resolvedOwner -ne $previousOwner) {
+        [void](Set-ObjectValue -Object $existing -Name 'ownerId' -Value (Resolve-OwnerId $resolvedOwner))
+        [void](Set-ObjectValue -Object $existing -Name 'ownerAssignedAt' -Value (Get-Date).ToString('o'))
+        [void](Set-ObjectValue -Object $existing -Name 'ownerAssignedBy' -Value 'ui')
+    }
     $existing.priority = Normalize-AccountPriority $(if ($payloadPriority) { $payloadPriority } else { $existing.priority })
     $existing.status = Normalize-AccountStatus $(if ($payloadStatus) { $payloadStatus } else { $existing.status })
     $existing.notes = [string]$(if ($payloadNotes) { $payloadNotes } else { $existing.notes })

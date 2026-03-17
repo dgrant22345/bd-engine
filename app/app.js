@@ -733,9 +733,8 @@ async function renderAccountsView() {
   renderLoadingState('Accounts', 'Loading ranked target accounts...');
   setViewTitle('Accounts');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const filters = stateBootstrap.filters || { atsTypes: [], owners: [] };
+  const filters = stateBootstrap.filters || { atsTypes: [] };
   const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
-  const ownerOptions = filters.owners || [];
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
 
@@ -771,14 +770,13 @@ async function renderAccountsView() {
           ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
-          ${renderField('Owner', `<input name="owner" list="owner-filter-options" value="${escapeAttr(appState.accountQuery.owner)}" placeholder="Filter by owner">`)}
+          ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
           ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.accountQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.accountQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.accountQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
         </form>
-        <datalist id="owner-filter-options">${ownerOptions.map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state">No accounts match the current filter set.</div>'}
         ${renderPagination('accounts', result.page, result.pageSize, result.total)}
       </div>
@@ -795,7 +793,7 @@ async function renderAccountsView() {
             ${renderField('Company', '<input name="company" required placeholder="Stripe">')}
             ${renderField('Domain', '<input name="domain" placeholder="stripe.com">')}
             ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://stripe.com/jobs">')}
-            ${renderField('Owner', `<input name="owner" list="owner-options" placeholder="Your name or territory">`)}
+            ${renderField('Owner', renderOwnerSelect('owner', ''))}
             ${renderField('Priority', renderPrioritySelect('priority', 'medium'))}
             ${renderField('Status', renderAccountStatusSelect('status', 'new'))}
             ${renderField('Next action', '<input name="nextAction" placeholder="Message VP Talent or verify ATS">')}
@@ -804,7 +802,6 @@ async function renderAccountsView() {
             <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="4" placeholder="Why this account matters, what team is hiring, who might introduce you"></textarea></div>
             <div><button class="primary-button" type="submit">Add account</button></div>
           </form>
-          <datalist id="owner-options">${ownerOptions.map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         </div>
 
         <div class="form-card">
@@ -883,7 +880,7 @@ async function renderAccountDetail(accountId) {
             ${renderField('Status', renderAccountStatusSelect('status', detail.account.status))}
             ${renderField('Outreach stage', `<select name="outreachStatus">${renderOutreachStageOptions(detail.account.outreachStatus)}</select>`)}
             ${renderField('Priority', renderPrioritySelect('priority', detail.account.priority || 'medium'))}
-            ${renderField('Owner', `<input name="owner" value="${escapeAttr(detail.account.owner || '')}" placeholder="Owner or territory">`)}
+            ${renderField('Owner', renderOwnerSelect('owner', detail.account.owner || ''))}
             ${renderField('Domain', `<input name="domain" value="${escapeAttr(detail.account.domain || '')}" placeholder="company.com">`)}
             ${renderField('Careers URL', `<input name="careersUrl" value="${escapeAttr(detail.account.careersUrl || '')}" placeholder="https://company.com/careers">`)}
             ${renderField('Next action', `<input name="nextAction" value="${escapeAttr(detail.account.nextAction || '')}" placeholder="Reach out to VP Talent">`)}
@@ -1629,6 +1626,15 @@ function renderPrioritySelect(name, currentValue, includeAll = false) {
     `<option value="low" ${selected(currentValue, 'low')}>Low</option>`,
   ].join('');
   return `<select name="${escapeAttr(name)}">${options}</select>`;
+}
+
+function renderOwnerSelect(name, currentValue, includeAll = false) {
+  const roster = (appState.bootstrap && appState.bootstrap.ownerRoster) || [];
+  const allOption = includeAll ? '<option value="">All owners</option>' : '<option value="">Unassigned</option>';
+  const rosterOptions = roster.map((o) =>
+    `<option value="${escapeAttr(o.displayName)}" ${selected(currentValue, o.displayName)}>${escapeHtml(o.displayName)}</option>`
+  ).join('');
+  return `<select name="${escapeAttr(name)}">${allOption}${rosterOptions}</select>`;
 }
 
 function renderAccountStatusSelect(name, currentValue, includeAll = false) {
