@@ -462,7 +462,7 @@ function Resolve-AtsFromUrlValue {
         $candidate.source = if ($lower -match 'jobvite\.com/api/job-list') { $rawUrl } elseif ($candidate.boardId) { "https://jobs.jobvite.com/api/job-list?company=$($candidate.boardId)" } else { '' }
         $candidate.confidenceScore = if ($candidate.boardId) { 86 } else { 68 }
         $candidate.matchedSignatures = @('jobvite')
-    } elseif ($lower -match '/wday/cxs/[^/]+/[^/?#]+' -or $lower -match 'myworkdayjobs\.com|workdayjobs\.com') {
+    } elseif ($lower -match '/wday/cxs/[^/]+/[^/?#]+' -or ($lower -match '(myworkdayjobs\.com|workdayjobs\.com)' -and $lower -match '/wday/cxs/')) {
         $candidate.atsType = 'workday'
         if ($lower -match '/wday/cxs/([^/]+)/([^/?#]+)') {
             $candidate.boardId = ('{0}/{1}' -f $matches[1], $matches[2])
@@ -1850,8 +1850,8 @@ function Test-SupportedBoardCandidate {
             $supportsImport = $true
         }
         'bamboohr' {
-            $url = "https://$candidateSlug.bamboohr.com/careers"
-            $supportsImport = $false
+            $url = "https://$candidateSlug.bamboohr.com/careers/list"
+            $supportsImport = $true
         }
         default {
             return $null
@@ -1913,7 +1913,8 @@ function Test-SupportedBoardCandidate {
             $matched = [bool](
                 $response.ok -and
                 $response.finalUrl -match ([regex]::Escape($expectedHost)) -and
-                $response.finalUrl -match '/careers'
+                $response.finalUrl -match '/careers' -and
+                ($contentText -match 'class="RtesseractJobBoard"' -or $contentText -match 'data-job-id' -or $contentText -match '"result"' -or $contentText -match '"id"\s*:\s*\d+')
             )
         }
     }
@@ -2480,7 +2481,8 @@ function Get-DiscoveryResultForConfig {
             httpSummary = @($httpSummary.ToArray())
         }
     } catch {
-        Write-PipelineDiag -Stage 'discovery_error' -Company $companyName -Message "Exception: $($_.Exception.Message)"
+        $discoveryErrorMsg = [string]$_.Exception.Message
+        Write-PipelineDiag -Stage 'discovery_error' -Company $companyName -Message ('Exception: ' + $discoveryErrorMsg)
         return [ordered]@{
             atsType = ''
             boardId = ''
@@ -2554,15 +2556,15 @@ function Invoke-AtsDiscovery {
         $candidates = @($candidates | Where-Object { $_.id -eq $ConfigId })
     } elseif ($OnlyMissing) {
         $candidates = @($candidates | Where-Object {
-                ([string]$_.discoveryStatus) -notin @('mapped', 'discovered') -or
-                ([string]$_.confidenceBand).ToLowerInvariant() -in @('medium', 'low', 'unresolved')
+                ([string](Get-ObjectValue -Object $_ -Name 'discoveryStatus' -Default '')) -notin @('mapped', 'discovered') -or
+                ([string](Get-ObjectValue -Object $_ -Name 'confidenceBand' -Default '')).ToLowerInvariant() -in @('medium', 'low', 'unresolved')
             })
     }
 
     if (-not $ForceRefresh) {
         $now = Get-Date
         $candidates = @($candidates | Where-Object {
-                $nextAttempt = [string]$(if ($_.nextResolutionAttemptAt) { $_.nextResolutionAttemptAt } else { '' })
+                $nextAttempt = [string](Get-ObjectValue -Object $_ -Name 'nextResolutionAttemptAt' -Default '')
                 if (-not $nextAttempt) {
                     return $true
                 }
@@ -2596,24 +2598,26 @@ function Invoke-AtsDiscovery {
 
     for ($index = 0; $index -lt $candidates.Count; $index++) {
         $config = $candidates[$index]
-        if (([string]$config.discoveryMethod).ToLowerInvariant() -eq 'manual' -and -not $ForceRefresh) {
+        if (([string](Get-ObjectValue -Object $config -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' -and -not $ForceRefresh) {
             continue
         }
 
+        $configCompanyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $configNormalizedName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
         if ($ProgressCallback) {
-            Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Running ATS discovery' -Processed $index -Total $totalCandidates -StartedAt $startedAt -Message ("Resolving {0}" -f [string]$config.companyName)
+            Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Running ATS discovery' -Processed $index -Total $totalCandidates -StartedAt $startedAt -Message ("Resolving {0}" -f $configCompanyName)
         }
 
-        $company = if ($companyByKey.ContainsKey($config.normalizedCompanyName)) { $companyByKey[$config.normalizedCompanyName] } else { [ordered]@{ displayName = $config.companyName; domain = ''; careersUrl = '' } }
+        $company = if ($configNormalizedName -and $companyByKey.ContainsKey($configNormalizedName)) { $companyByKey[$configNormalizedName] } else { [ordered]@{ displayName = $configCompanyName; domain = ''; careersUrl = '' } }
         $result = Get-DiscoveryResultForConfig -Company $company -Config $config -ForceRefresh:$ForceRefresh
         $stats.checked += 1
 
         foreach ($field in 'atsType', 'boardId', 'domain', 'careersUrl', 'resolvedBoardUrl', 'source', 'notes', 'active', 'supportedImport', 'discoveryStatus', 'discoveryMethod', 'confidenceScore', 'confidenceBand', 'evidenceSummary', 'reviewStatus', 'failureReason', 'redirectTarget', 'matchedSignatures', 'attemptedUrls', 'httpSummary') {
-            $config[$field] = $result[$field]
+            [void](Set-ObjectValue -Object $config -Name $field -Value $result[$field])
         }
-        $config.lastCheckedAt = (Get-Date).ToString('o')
-        $config.lastResolutionAttemptAt = $config.lastCheckedAt
-        $config.nextResolutionAttemptAt = Get-ResolverNextAttemptAt -DiscoveryStatus ([string]$result.discoveryStatus) -ConfidenceBand ([string]$result.confidenceBand)
+        [void](Set-ObjectValue -Object $config -Name 'lastCheckedAt' -Value ((Get-Date).ToString('o')))
+        [void](Set-ObjectValue -Object $config -Name 'lastResolutionAttemptAt' -Value (Get-ObjectValue -Object $config -Name 'lastCheckedAt'))
+        [void](Set-ObjectValue -Object $config -Name 'nextResolutionAttemptAt' -Value (Get-ResolverNextAttemptAt -DiscoveryStatus ([string]$result.discoveryStatus) -ConfidenceBand ([string]$result.confidenceBand)))
 
         switch ([string]$result.discoveryStatus) {
             'mapped' { $stats.mapped += 1 }
@@ -2673,7 +2677,7 @@ function Sync-BoardConfigsFromCompanies {
         if (-not $key) {
             continue
         }
-        $config.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
         if (-not $existingByCompany.ContainsKey($key)) {
             $existingByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -2693,7 +2697,7 @@ function Sync-BoardConfigsFromCompanies {
 
         $key = $generated.normalizedCompanyName
         $existingItems = if ($existingByCompany.ContainsKey($key)) { @($existingByCompany[$key].ToArray()) } else { @() }
-        $manualItems = @($existingItems | Where-Object { ([string]$_.source).ToLowerInvariant() -eq 'manual' -or ([string]$_.discoveryMethod).ToLowerInvariant() -eq 'manual' })
+        $manualItems = @($existingItems | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'source' -Default '')).ToLowerInvariant() -eq 'manual' -or ([string](Get-ObjectValue -Object $_ -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' })
 
         if ($manualItems.Count -gt 0) {
             foreach ($item in $existingItems) {
@@ -2821,12 +2825,12 @@ function Get-AshbyJobs {
         foreach ($job in @($payload.jobs)) {
             [ordered]@{
                 jobId = [string](Get-NestedValue -Object $job -Paths @('id', 'jobPostId'))
-                title = if ($job.title) { $job.title } else { '' }
-                location = if ($job.location) { $job.location } else { '' }
-                department = if ($job.departmentName) { $job.departmentName } elseif ($job.department) { $job.department } else { '' }
-                employmentType = if ($job.employmentType) { $job.employmentType } else { '' }
-                url = if ($job.jobUrl) { $job.jobUrl } else { '' }
-                postedAt = if ($job.publishedAt) { Convert-ToDateString $job.publishedAt } else { (Get-Date).ToString('o') }
+                title = [string](Get-NestedValue -Object $job -Paths @('title'))
+                location = [string](Get-NestedValue -Object $job -Paths @('location'))
+                department = [string](Get-NestedValue -Object $job -Paths @('departmentName', 'department'))
+                employmentType = [string](Get-NestedValue -Object $job -Paths @('employmentType'))
+                url = [string](Get-NestedValue -Object $job -Paths @('jobUrl'))
+                postedAt = if (Get-NestedValue -Object $job -Paths @('publishedAt')) { Convert-ToDateString (Get-NestedValue -Object $job -Paths @('publishedAt')) } else { (Get-Date).ToString('o') }
                 sourceUrl = $url
                 rawPayload = $job
             }
@@ -2993,6 +2997,80 @@ function Get-TaleoJobs {
     )
 }
 
+function Get-BamboohrJobs {
+    param($Config)
+
+    $boardId = [string]$Config.boardId
+    if (-not $boardId) {
+        return @()
+    }
+
+    $url = "https://$([uri]::EscapeDataString($boardId)).bamboohr.com/careers/list"
+    $response = Invoke-ResolverProbeRequest -Url $url
+    if (-not $response.ok) {
+        return @()
+    }
+
+    $content = [string]$response.content
+    $jobs = @()
+
+    # BambooHR embeds job data as JSON in the page - try to extract it
+    # Look for the embedded JSON data structure with job listings
+    if ($content -match '"result"\s*:\s*(\[[\s\S]*?\])\s*[,}]') {
+        try {
+            $jobArray = $matches[1] | ConvertFrom-Json
+            foreach ($job in @($jobArray)) {
+                $location = @(
+                    if ($job.PSObject.Properties.Name -contains 'location' -and $job.location) {
+                        if ($job.location.PSObject.Properties.Name -contains 'city' -and $job.location.city) { [string]$job.location.city }
+                        if ($job.location.PSObject.Properties.Name -contains 'state' -and $job.location.state) { [string]$job.location.state }
+                        if ($job.location.PSObject.Properties.Name -contains 'country' -and $job.location.country) { [string]$job.location.country }
+                    }
+                ) | Where-Object { $_ }
+
+                $jobs += [ordered]@{
+                    jobId = [string](Get-NestedValue -Object $job -Paths @('id'))
+                    title = [string](Get-NestedValue -Object $job -Paths @('jobOpeningName', 'title', 'name'))
+                    location = ($location -join ', ')
+                    department = [string](Get-NestedValue -Object $job -Paths @('departmentLabel', 'department'))
+                    employmentType = [string](Get-NestedValue -Object $job -Paths @('employmentStatusLabel', 'employmentType'))
+                    url = ('https://{0}.bamboohr.com/careers/{1}' -f $boardId, (Get-NestedValue -Object $job -Paths @('id')))
+                    postedAt = (Get-Date).ToString('o')
+                    sourceUrl = $url
+                    rawPayload = $job
+                }
+            }
+        }
+        catch {
+            # JSON parse failed, fall through to HTML parsing
+        }
+    }
+
+    # Fallback: try parsing HTML for job links
+    if ($jobs.Count -eq 0) {
+        $htmlMatches = [regex]::Matches($content, '<a[^>]+href="(/careers/(\d+))"[^>]*>([^<]+)</a>')
+        foreach ($m in $htmlMatches) {
+            $jobId = $m.Groups[2].Value
+            $title = $m.Groups[3].Value.Trim()
+            if ($jobId -and $title) {
+                $jobs += [ordered]@{
+                    jobId = $jobId
+                    title = $title
+                    location = ''
+                    department = ''
+                    employmentType = ''
+                    url = ('https://{0}.bamboohr.com{1}' -f $boardId, $m.Groups[1].Value)
+                    postedAt = (Get-Date).ToString('o')
+                    sourceUrl = $url
+                    rawPayload = @{ id = $jobId; title = $title }
+                }
+            }
+        }
+    }
+
+    return @($jobs)
+}
+
 function Get-JobsForConfig {
     param($Config)
 
@@ -3005,6 +3083,7 @@ function Get-JobsForConfig {
         'jobvite' { return Get-JobviteJobs -Config $Config }
         'icims' { return Get-IcimsJobs -Config $Config }
         'taleo' { return Get-TaleoJobs -Config $Config }
+        'bamboohr' { return Get-BamboohrJobs -Config $Config }
         default { return @() }
     }
 }
@@ -3030,7 +3109,7 @@ function Sync-ImportedCompanyData {
     foreach ($job in @($State.jobs)) {
         $key = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
         if (-not $key) { continue }
-        $job.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $job -Name 'normalizedCompanyName' -Value $key)
         if (-not $jobsByCompany.ContainsKey($key)) {
             $jobsByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -3041,7 +3120,7 @@ function Sync-ImportedCompanyData {
     foreach ($config in @($State.boardConfigs)) {
         $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
         if (-not $key) { continue }
-        $config.normalizedCompanyName = $key
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
         if (-not $configsByCompany.ContainsKey($key)) {
             $configsByCompany[$key] = New-Object System.Collections.ArrayList
         }
@@ -3079,11 +3158,11 @@ function Sync-ImportedCompanyData {
 
         $company = Update-CompanyProjection -Company $company -Jobs $jobItems -Configs $configItems
         foreach ($config in @($configItems)) {
-            $config.accountId = $company.id
+            [void](Set-ObjectValue -Object $config -Name 'accountId' -Value $company.id)
         }
         foreach ($job in @($jobItems)) {
-            $job.accountId = $company.id
-            if (-not $job.companyName) { $job.companyName = $company.displayName }
+            [void](Set-ObjectValue -Object $job -Name 'accountId' -Value $company.id)
+            if (-not $job.companyName) { [void](Set-ObjectValue -Object $job -Name 'companyName' -Value $company.displayName) }
         }
     }
 
@@ -3117,19 +3196,19 @@ function Invoke-LiveJobImport {
     $existingByNaturalKey = @{}
     foreach ($job in @($State.jobs)) {
         if (-not $job.retrievedAt -and $job.importedAt) {
-            $job.retrievedAt = $job.importedAt
+            [void](Set-ObjectValue -Object $job -Name 'retrievedAt' -Value $job.importedAt)
         }
         if (-not $job.firstSeenAt -and $job.importedAt) {
-            $job.firstSeenAt = $job.importedAt
+            [void](Set-ObjectValue -Object $job -Name 'firstSeenAt' -Value $job.importedAt)
         }
         if (-not $job.url -and $job.jobUrl) {
-            $job.url = $job.jobUrl
+            [void](Set-ObjectValue -Object $job -Name 'url' -Value $job.jobUrl)
         }
         if (-not $job.jobId) {
-            $job.jobId = ''
+            [void](Set-ObjectValue -Object $job -Name 'jobId' -Value '')
         }
         if (-not $job.naturalKey) {
-            $job.naturalKey = if ($job.dedupeKey) { [string]$job.dedupeKey } else { '{0}|{1}|{2}' -f $job.normalizedCompanyName, $job.atsType, ($job.url) }
+            [void](Set-ObjectValue -Object $job -Name 'naturalKey' -Value $(if ($job.dedupeKey) { [string]$job.dedupeKey } else { '{0}|{1}|{2}' -f $job.normalizedCompanyName, $job.atsType, ($job.url) }))
         }
         $jobMap[$job.id] = $job
         if ($job.naturalKey) {
@@ -3147,9 +3226,9 @@ function Invoke-LiveJobImport {
         if ($ProgressCallback) {
             Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Importing live jobs' -Processed $configIndex -Total $totalConfigs -StartedAt $startedAt -Message ("Fetching {0}" -f [string]$config.companyName)
         }
-        $config.companyName = [string]$config.companyName
-        $config.companyName = Get-CanonicalCompanyDisplayName $config.companyName
-        $config.normalizedCompanyName = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        [void](Set-ObjectValue -Object $config -Name 'companyName' -Value ([string]$config.companyName))
+        [void](Set-ObjectValue -Object $config -Name 'companyName' -Value (Get-CanonicalCompanyDisplayName ([string]$config.companyName)))
+        [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value (Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })))
         if ($config.normalizedCompanyName) {
             [void]$companyKeys.Add($config.normalizedCompanyName)
         }
@@ -3188,37 +3267,37 @@ function Invoke-LiveJobImport {
                 $jobId = if ($existingJob) { [string]$existingJob.id } else { New-DeterministicId -Prefix 'job' -Seed $naturalKey }
 
                 $jobRecord = if ($existingJob) { $existingJob } else { [ordered]@{} }
-                $jobRecord.id = $jobId
-                $jobRecord.workspaceId = $State.workspace.id
-                $jobRecord.accountId = $config.accountId
-                $jobRecord.companyName = $config.companyName
-                $jobRecord.normalizedCompanyName = $config.normalizedCompanyName
-                $jobRecord.title = $job.title
-                $jobRecord.normalizedTitle = Normalize-TextKey $job.title
-                $jobRecord.location = $job.location
-                $jobRecord.department = $job.department
-                $jobRecord.employmentType = $job.employmentType
-                $jobRecord.jobId = $externalJobId
-                $jobRecord.url = $job.url
-                $jobRecord.jobUrl = $job.url
-                $jobRecord.sourceUrl = $job.sourceUrl
-                $jobRecord.atsType = $config.atsType
-                $jobRecord.configKey = $configKey
-                $jobRecord.postedAt = $job.postedAt
-                $jobRecord.retrievedAt = $retrievedAt
-                $jobRecord.lastSeenAt = $retrievedAt
-                if (-not $jobRecord.firstSeenAt) {
-                    $jobRecord.firstSeenAt = $retrievedAt
+                [void](Set-ObjectValue -Object $jobRecord -Name 'id' -Value $jobId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'workspaceId' -Value $State.workspace.id)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'accountId' -Value $config.accountId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'companyName' -Value $config.companyName)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'normalizedCompanyName' -Value $config.normalizedCompanyName)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'title' -Value $job.title)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'normalizedTitle' -Value (Normalize-TextKey $job.title))
+                [void](Set-ObjectValue -Object $jobRecord -Name 'location' -Value $job.location)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'department' -Value $job.department)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'employmentType' -Value $job.employmentType)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'jobId' -Value $externalJobId)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'url' -Value $job.url)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'jobUrl' -Value $job.url)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'sourceUrl' -Value $job.sourceUrl)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'atsType' -Value $config.atsType)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'configKey' -Value $configKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'postedAt' -Value $job.postedAt)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'retrievedAt' -Value $retrievedAt)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'lastSeenAt' -Value $retrievedAt)
+                if (-not (Get-ObjectValue -Object $jobRecord -Name 'firstSeenAt')) {
+                    [void](Set-ObjectValue -Object $jobRecord -Name 'firstSeenAt' -Value $retrievedAt)
                 }
-                if (-not $jobRecord.importedAt) {
-                    $jobRecord.importedAt = $retrievedAt
+                if (-not (Get-ObjectValue -Object $jobRecord -Name 'importedAt')) {
+                    [void](Set-ObjectValue -Object $jobRecord -Name 'importedAt' -Value $retrievedAt)
                 }
-                $jobRecord.naturalKey = $naturalKey
-                $jobRecord.dedupeKey = $naturalKey
-                $jobRecord.rawPayload = $job.rawPayload
-                $jobRecord.active = $true
-                $jobRecord.isGta = (Test-GtaLocation -Location $job.location)
-                $jobRecord.isNew = [bool](-not $existingJob)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'naturalKey' -Value $naturalKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'dedupeKey' -Value $naturalKey)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'rawPayload' -Value $job.rawPayload)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'active' -Value $true)
+                [void](Set-ObjectValue -Object $jobRecord -Name 'isGta' -Value (Test-GtaLocation -Location $job.location))
+                [void](Set-ObjectValue -Object $jobRecord -Name 'isNew' -Value ([bool](-not $existingJob)))
 
                 if (-not $existingJob) {
                     $stats.newJobs += 1
@@ -3233,38 +3312,39 @@ function Invoke-LiveJobImport {
                         $_.active -ne $false
                     })) {
                 if (-not $seenNaturalKeys.Contains([string]$existingJob.naturalKey)) {
-                    $existingJob.active = $false
-                    $existingJob.isNew = $false
-                    $existingJob.retrievedAt = $retrievedAt
+                    [void](Set-ObjectValue -Object $existingJob -Name 'active' -Value $false)
+                    [void](Set-ObjectValue -Object $existingJob -Name 'isNew' -Value $false)
+                    [void](Set-ObjectValue -Object $existingJob -Name 'retrievedAt' -Value $retrievedAt)
                 }
             }
 
             # Log when the location filter drops a significant number of jobs
             if ($configFilteredOut -gt 0) {
-                Write-PipelineDiag -Stage 'job_filter' -Company $config.companyName -Message "Location filter: $configFilteredOut of $fetchedCount jobs dropped (non-Canada)" -Data @{
+                Write-PipelineDiag -Stage 'job_filter' -Company $config.companyName -Message ('Location filter: ' + $configFilteredOut + ' of ' + $fetchedCount + ' jobs dropped (non-Canada)') -Data @{
                     fetched = $fetchedCount; filteredOut = $configFilteredOut; kept = ($fetchedCount - $configFilteredOut)
                     reason = 'Non-Canada location'; atsType = [string]$config.atsType
                 }
             }
             if ($fetchedCount -gt 0 -and $configFilteredOut -eq $fetchedCount) {
-                Write-PipelineDiag -Stage 'job_filter_zero' -Company $config.companyName -Message "ALL $fetchedCount jobs filtered out by Canada location filter — zero imported" -Data @{
+                Write-PipelineDiag -Stage 'job_filter_zero' -Company $config.companyName -Message ('ALL ' + $fetchedCount + ' jobs filtered out by Canada location filter - zero imported') -Data @{
                     atsType = [string]$config.atsType; boardId = [string]$config.boardId
                 }
             }
 
-            $config.lastImportAt = $retrievedAt
-            $config.lastImportStatus = 'success'
+            [void](Set-ObjectValue -Object $config -Name 'lastImportAt' -Value $retrievedAt)
+            [void](Set-ObjectValue -Object $config -Name 'lastImportStatus' -Value 'success')
         } catch {
             $stats.errors += 1
-            $config.lastImportAt = $retrievedAt
-            $config.lastImportStatus = 'error'
-            Write-PipelineDiag -Stage 'job_fetch_error' -Company $config.companyName -Message "Job fetch failed: $($_.Exception.Message)" -Data @{
+            [void](Set-ObjectValue -Object $config -Name 'lastImportAt' -Value $retrievedAt)
+            [void](Set-ObjectValue -Object $config -Name 'lastImportStatus' -Value 'error')
+            $fetchErrorMsg = [string]$_.Exception.Message
+            Write-PipelineDiag -Stage 'job_fetch_error' -Company $config.companyName -Message ('Job fetch failed: ' + $fetchErrorMsg) -Data @{
                 atsType = [string]$config.atsType; boardId = [string]$config.boardId; statusCode = ''
             }
             [void]$errors.Add([ordered]@{
                 company = $config.companyName
                 atsType = $config.atsType
-                message = $_.Exception.Message
+                message = $fetchErrorMsg
             })
         }
 
