@@ -462,7 +462,7 @@ function Resolve-AtsFromUrlValue {
         $candidate.source = if ($lower -match 'jobvite\.com/api/job-list') { $rawUrl } elseif ($candidate.boardId) { "https://jobs.jobvite.com/api/job-list?company=$($candidate.boardId)" } else { '' }
         $candidate.confidenceScore = if ($candidate.boardId) { 86 } else { 68 }
         $candidate.matchedSignatures = @('jobvite')
-    } elseif ($lower -match '/wday/cxs/[^/]+/[^/?#]+' -or $lower -match 'myworkdayjobs\.com|workdayjobs\.com') {
+    } elseif ($lower -match '/wday/cxs/[^/]+/[^/?#]+' -or ($lower -match '(myworkdayjobs\.com|workdayjobs\.com)' -and $lower -match '/wday/cxs/')) {
         $candidate.atsType = 'workday'
         if ($lower -match '/wday/cxs/([^/]+)/([^/?#]+)') {
             $candidate.boardId = ('{0}/{1}' -f $matches[1], $matches[2])
@@ -1850,8 +1850,8 @@ function Test-SupportedBoardCandidate {
             $supportsImport = $true
         }
         'bamboohr' {
-            $url = "https://$candidateSlug.bamboohr.com/careers"
-            $supportsImport = $false
+            $url = "https://$candidateSlug.bamboohr.com/careers/list"
+            $supportsImport = $true
         }
         default {
             return $null
@@ -1913,7 +1913,8 @@ function Test-SupportedBoardCandidate {
             $matched = [bool](
                 $response.ok -and
                 $response.finalUrl -match ([regex]::Escape($expectedHost)) -and
-                $response.finalUrl -match '/careers'
+                $response.finalUrl -match '/careers' -and
+                ($contentText -match 'class="RtesseractJobBoard"' -or $contentText -match 'data-job-id' -or $contentText -match '"result"' -or $contentText -match '"id"\s*:\s*\d+')
             )
         }
     }
@@ -2996,6 +2997,80 @@ function Get-TaleoJobs {
     )
 }
 
+function Get-BamboohrJobs {
+    param($Config)
+
+    $boardId = [string]$Config.boardId
+    if (-not $boardId) {
+        return @()
+    }
+
+    $url = "https://$([uri]::EscapeDataString($boardId)).bamboohr.com/careers/list"
+    $response = Invoke-ResolverProbeRequest -Url $url
+    if (-not $response.ok) {
+        return @()
+    }
+
+    $content = [string]$response.content
+    $jobs = @()
+
+    # BambooHR embeds job data as JSON in the page - try to extract it
+    # Look for the embedded JSON data structure with job listings
+    if ($content -match '"result"\s*:\s*(\[[\s\S]*?\])\s*[,}]') {
+        try {
+            $jobArray = $matches[1] | ConvertFrom-Json
+            foreach ($job in @($jobArray)) {
+                $location = @(
+                    if ($job.PSObject.Properties.Name -contains 'location' -and $job.location) {
+                        if ($job.location.PSObject.Properties.Name -contains 'city' -and $job.location.city) { [string]$job.location.city }
+                        if ($job.location.PSObject.Properties.Name -contains 'state' -and $job.location.state) { [string]$job.location.state }
+                        if ($job.location.PSObject.Properties.Name -contains 'country' -and $job.location.country) { [string]$job.location.country }
+                    }
+                ) | Where-Object { $_ }
+
+                $jobs += [ordered]@{
+                    jobId = [string](Get-NestedValue -Object $job -Paths @('id'))
+                    title = [string](Get-NestedValue -Object $job -Paths @('jobOpeningName', 'title', 'name'))
+                    location = ($location -join ', ')
+                    department = [string](Get-NestedValue -Object $job -Paths @('departmentLabel', 'department'))
+                    employmentType = [string](Get-NestedValue -Object $job -Paths @('employmentStatusLabel', 'employmentType'))
+                    url = ('https://{0}.bamboohr.com/careers/{1}' -f $boardId, (Get-NestedValue -Object $job -Paths @('id')))
+                    postedAt = (Get-Date).ToString('o')
+                    sourceUrl = $url
+                    rawPayload = $job
+                }
+            }
+        }
+        catch {
+            # JSON parse failed, fall through to HTML parsing
+        }
+    }
+
+    # Fallback: try parsing HTML for job links
+    if ($jobs.Count -eq 0) {
+        $htmlMatches = [regex]::Matches($content, '<a[^>]+href="(/careers/(\d+))"[^>]*>([^<]+)</a>')
+        foreach ($m in $htmlMatches) {
+            $jobId = $m.Groups[2].Value
+            $title = $m.Groups[3].Value.Trim()
+            if ($jobId -and $title) {
+                $jobs += [ordered]@{
+                    jobId = $jobId
+                    title = $title
+                    location = ''
+                    department = ''
+                    employmentType = ''
+                    url = ('https://{0}.bamboohr.com{1}' -f $boardId, $m.Groups[1].Value)
+                    postedAt = (Get-Date).ToString('o')
+                    sourceUrl = $url
+                    rawPayload = @{ id = $jobId; title = $title }
+                }
+            }
+        }
+    }
+
+    return @($jobs)
+}
+
 function Get-JobsForConfig {
     param($Config)
 
@@ -3008,6 +3083,7 @@ function Get-JobsForConfig {
         'jobvite' { return Get-JobviteJobs -Config $Config }
         'icims' { return Get-IcimsJobs -Config $Config }
         'taleo' { return Get-TaleoJobs -Config $Config }
+        'bamboohr' { return Get-BamboohrJobs -Config $Config }
         default { return @() }
     }
 }
