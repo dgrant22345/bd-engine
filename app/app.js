@@ -926,7 +926,12 @@ async function renderAccountDetail(accountId) {
 
   // Fetch hiring velocity in background (non-blocking)
   let hiringVelocity = [];
-  try { hiringVelocity = (await api(`/api/accounts/${accountId}/hiring-velocity`)).velocity || []; } catch(e) { /* non-critical */ }
+  try {
+    const vData = await api(`/api/accounts/${accountId}/hiring-velocity`);
+    if (vData.weeks) {
+      hiringVelocity = Object.entries(vData.weeks).map(([label, count]) => ({ label, count }));
+    }
+  } catch(e) { /* non-critical */ }
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--dashboard">
@@ -1061,11 +1066,13 @@ async function renderAccountDetail(accountId) {
           <div class="velocity-chart">
             <p class="small muted" style="margin:8px 0 4px;">Hiring velocity (4-week trend)</p>
             <div class="velocity-bars">
-              ${hiringVelocity.map(v => {
+              ${(() => {
                 const maxCount = Math.max(1, ...hiringVelocity.map(b => b.count || 0));
-                const pct = Math.round(((v.count || 0) / maxCount) * 100);
-                return '<div class="velocity-bar-group"><div class="velocity-bar" style="height:' + pct + '%"><span class="velocity-count">' + (v.count || 0) + '</span></div><span class="velocity-label small muted">' + escapeHtml(v.label || '') + '</span></div>';
-              }).join('')}
+                return hiringVelocity.map(v => {
+                  const pct = Math.round(((v.count || 0) / maxCount) * 100);
+                  return '<div class="velocity-bar-group"><div class="velocity-bar" style="height:' + Math.max(pct, 5) + '%"><span class="velocity-count">' + (v.count || 0) + '</span></div><span class="velocity-label small muted">' + escapeHtml(v.label || '') + '</span></div>';
+                }).join('');
+              })()}
             </div>
           </div>` : ''}
           <div class="timeline">
