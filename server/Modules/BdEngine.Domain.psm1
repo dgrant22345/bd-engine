@@ -2021,6 +2021,12 @@ function Set-AccountFields {
             continue
         }
 
+        foreach ($key in @('canonicalDomain', 'careersUrl', 'domain', 'enrichmentStatus', 'enrichmentSource', 'enrichmentConfidence', 'enrichmentConfidenceScore', 'linkedinCompanySlug', 'aliases', 'tags')) {
+            if ($account -is [System.Collections.IDictionary] -and -not $account.Contains($key)) {
+                $account[$key] = $null
+            }
+        }
+
         foreach ($field in 'status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt') {
             if (@($Patch.Keys) -contains $field) {
                 if ($field -eq 'status') {

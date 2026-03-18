@@ -549,7 +549,7 @@ function Save-SettingsRecord {
     if (@($Payload.Keys) -contains 'geographyFocus') { $State.settings.geographyFocus = [string]$Payload.geographyFocus }
     if (@($Payload.Keys) -contains 'gtaPriority') { $State.settings.gtaPriority = Test-Truthy $Payload.gtaPriority }
     $State.settings.updatedAt = (Get-Date).ToString('o')
-    Save-AppSegment -Segment 'Settings' -Data $State.settings
+    Save-AppSegment -Segment 'Settings' -Data $State.settings -SkipSnapshots
     $State
 }
 
@@ -777,7 +777,7 @@ function Handle-ApiRequest {
         }
         $result = Add-Account -State $state -Payload $payload
         $state = $result.state
-        Save-AppSegment -Segment 'Companies' -Data $state.companies
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
         $account = @($state.companies | Where-Object { $_.id -eq $result.account.id } | Select-Object -First 1)
         return (New-JsonResult $account 201)
     }
@@ -819,13 +819,13 @@ function Handle-ApiRequest {
                 $payload.tags = Convert-ToStringList $payload.tags
             }
             $result = Set-AccountFields -State $state -AccountId $accountId -Patch $payload
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
             return (New-JsonResult $result.account)
         }
         if ($method -eq 'DELETE') {
             $state = Get-AppState
             $result = Remove-Account -State $state -AccountId $accountId
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
             return (New-JsonResult ([ordered]@{ ok = $true }))
         }
     }
@@ -843,7 +843,7 @@ function Handle-ApiRequest {
     if ($path -match '^/api/contacts/([^/]+)$' -and $method -eq 'PATCH') {
         $state = Get-AppState
         $result = Set-ContactFields -State $state -ContactId $matches[1] -Patch (Read-JsonBody -Request $Request)
-        Save-AppSegment -Segment 'Contacts' -Data $result.state.contacts
+        Save-AppSegment -Segment 'Contacts' -Data $result.state.contacts -SkipSnapshots
         return (New-JsonResult $result.contact)
     }
 
@@ -983,7 +983,7 @@ function Handle-ApiRequest {
         $patch.lastVerifiedAt = (Get-Date).ToString('o')
         
         $result = Set-AccountFields -State $state -AccountId $accountId -Patch $patch
-        Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+        Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
         return (New-JsonResult $result.account 200)
     }
     if ($path -eq '/api/enrichment/run' -and $method -eq 'POST') {
@@ -1050,7 +1050,7 @@ function Handle-ApiRequest {
 
         $state = Get-AppStateView -Segments @('BoardConfigs')
         $result = Set-ConfigReviewDecision -State $state -ConfigId $matches[1] -Decision $decision
-        Save-AppSegment -Segment 'BoardConfigs' -Data $result.state.boardConfigs
+        Save-AppSegment -Segment 'BoardConfigs' -Data $result.state.boardConfigs -SkipSnapshots
         return (New-JsonResult ([ordered]@{ ok = $true; config = $result.config }))
     }
     if ($path -match '^/api/configs/([^/]+)/resolve$' -and $method -eq 'POST') {
@@ -1113,10 +1113,10 @@ function Handle-ApiRequest {
         $result = Add-Activity -State $state -Payload $payload
         if ($payload.accountId -and $payload.pipelineStage) {
             $patched = Set-AccountFields -State $result.state -AccountId $payload.accountId -Patch ([ordered]@{ outreachStatus = $payload.pipelineStage })
-            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities
-            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies
+            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities -SkipSnapshots
+            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies -SkipSnapshots
         } else {
-            Save-AppSegment -Segment 'Activities' -Data $result.state.activities
+            Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
         }
         return (New-JsonResult $result.activity 201)
     }
@@ -1142,19 +1142,34 @@ function Handle-ApiRequest {
     }
     if ($path -eq '/api/import/connections-csv' -and $method -eq 'POST') {
         $payload = Read-JsonBody -Request $Request
-        if (-not $payload.csvPath) {
-            return (New-JsonResult ([ordered]@{ error = 'csvPath is required' }) 400)
+
+        # Support file upload (csvContent) or server-side path (csvPath)
+        $csvPath = [string]$payload.csvPath
+        $isTempFile = $false
+        if ($payload.csvContent -and [string]$payload.csvContent -ne '') {
+            $tempFile = Join-Path $env:TEMP ("bd-csv-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            [System.IO.File]::WriteAllText($tempFile, [string]$payload.csvContent, [System.Text.Encoding]::UTF8)
+            $csvPath = $tempFile
+            $isTempFile = $true
+        }
+
+        if (-not $csvPath) {
+            return (New-JsonResult ([ordered]@{ error = 'csvPath or csvContent is required' }) 400)
         }
         if (Test-Truthy $payload.dryRun) {
             $result = Import-BdConnectionsCsv `
-                -CsvPath ([string]$payload.csvPath) `
+                -CsvPath $csvPath `
                 -DryRun:(Test-Truthy $payload.dryRun) `
                 -UseEmptyState:(Test-Truthy $payload.useEmptyState)
+            if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
+                Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+            }
             return (New-JsonResult $result.importRun 201)
         }
 
         $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
-            csvPath = [string]$payload.csvPath
+            csvPath    = $csvPath
+            isTempFile = $isTempFile
         }) -Summary 'Import LinkedIn connections CSV' -ProgressMessage 'Queued connections import'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)

@@ -347,6 +347,10 @@ a {
   align-items: start;
 }
 
+.admin-grid {
+  grid-template-columns: 1fr;
+}
+
 .detail-grid--workspace {
   align-items: stretch;
 }
@@ -626,6 +630,27 @@ a {
   padding: 0;
 }
 
+.inline-field-stack input[type="file"] {
+  padding: 7px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: var(--text);
+  width: 100%;
+}
+
+.inline-field-stack input[type="file"]::-webkit-file-upload-button {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  margin-right: 10px;
+  color: var(--text);
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -750,6 +775,28 @@ a {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--success), var(--accent));
+}
+
+.job-progress-bar {
+  height: 6px;
+  margin: 6px 0 2px;
+}
+
+.job-progress-bar span {
+  transition: width 1s ease;
+}
+
+.job-status-cluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-pct {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .search-results {

@@ -275,6 +275,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(accountId);
+      window.bdLocalApi.setAlert('Account updated.', appAlert);
       return;
     }
 
@@ -286,6 +287,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(payload.accountId);
+      window.bdLocalApi.setAlert('Activity logged.', appAlert);
       return;
     }
 
@@ -1213,7 +1215,8 @@ async function renderAdminView() {
               <h4>Connections CSV</h4>
               <p class="small muted">Validate or import a LinkedIn Connections.csv file. Dry run stays in memory and does not modify local state.</p>
               <div class="inline-field-stack">
-                <input id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}" placeholder="C:\\Users\\...\\Connections.csv">
+                <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
+                <input type="file" id="connections-csv-file" accept=".csv">
                 <div class="button-row">
                   <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
                   <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
@@ -1564,17 +1567,33 @@ function renderDiscoveryList(items) {
   `;
 }
 
+function parseJobProgress(msg) {
+  if (!msg) return null;
+  const match = msg.match(/(\d+)\/(\d+)/);
+  if (!match) return null;
+  const current = parseInt(match[1], 10);
+  const total = parseInt(match[2], 10);
+  if (!total) return null;
+  return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
+}
+
 function renderBackgroundJobItem(job) {
   const tone = job.status === 'completed'
     ? 'success'
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
+  const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+
   return `
     <article class="timeline-item">
       <div class="inline-header">
         <strong>${escapeHtml(humanize(job.type || 'job'))}</strong>
-        ${renderStatusPill(job.status || 'queued', tone)}
+        <div class="job-status-cluster">
+          ${progress ? `<span class="job-pct">${progress.pct}%</span>` : ''}
+          ${renderStatusPill(job.status || 'queued', tone)}
+        </div>
       </div>
+      ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p>${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
         <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${job.recordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
@@ -1862,14 +1881,30 @@ async function runConnectionsCsvImport(dryRun) {
   if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Importing...'; }
 
   try {
-    const csvPath = getConnectionsCsvPath();
+    const fileInput = document.getElementById('connections-csv-file');
+    const file = fileInput?.files?.[0];
+
+    let requestBody;
+    if (file) {
+      const csvContent = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
+      requestBody = JSON.stringify({ csvContent, dryRun, useEmptyState: dryRun });
+    } else {
+      const csvPath = getConnectionsCsvPath();
+      if (!csvPath) {
+        window.bdLocalApi.setAlert('Please select a CSV file using the Browse button.', appAlert);
+        return;
+      }
+      requestBody = JSON.stringify({ csvPath, dryRun, useEmptyState: dryRun });
+    }
+
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
-      body: JSON.stringify({
-        csvPath,
-        dryRun,
-        useEmptyState: dryRun,
-      }),
+      body: requestBody,
     });
     if (!dryRun) {
       window.bdLocalApi.setAlert('Connections import queued.', appAlert);
@@ -1880,9 +1915,7 @@ async function runConnectionsCsvImport(dryRun) {
       return;
     }
     const stats = run?.stats || {};
-    const message = dryRun
-      ? `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`
-      : `Imported ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {
     if (button) { button.disabled = false; button.textContent = originalLabel; }

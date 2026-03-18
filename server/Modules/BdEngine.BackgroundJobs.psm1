@@ -435,6 +435,12 @@ function Invoke-BackgroundConnectionsCsvImportJob {
 
     $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
     $result = Import-BdConnectionsCsv -CsvPath ([string]$Payload.csvPath) -SourceLabel 'linkedin-connections-csv' -SkipPersistence -ProgressCallback $progressCallback
+
+    # Clean up temp file created from uploaded CSV content
+    if ($Payload.isTempFile -and (Test-Path -LiteralPath ([string]$Payload.csvPath))) {
+        Remove-Item -LiteralPath ([string]$Payload.csvPath) -Force -ErrorAction SilentlyContinue
+    }
+
     $persistence = Save-BackgroundJobState -State $result.state -Segments @('Contacts', 'Companies', 'BoardConfigs', 'ImportRuns') -JobId $JobId -OperationName 'connections-csv-import'
     return [ordered]@{
         importRun = $result.importRun
