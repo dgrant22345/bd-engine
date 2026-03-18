@@ -747,6 +747,22 @@ function Handle-ApiRequest {
             owners = @(Get-OwnerRoster)
         })
     }
+    if ($path -eq '/api/dashboard/extended' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Companies', 'Activities', 'BoardConfigs')
+        $playbook = Get-PlaybookAccounts -State $state
+        $overdue = Get-OverdueFollowUps -State $state
+        $stale = Get-StaleAccounts -State $state
+        $activityFeed = Get-GlobalActivityFeed -State $state -Limit 10
+        $enrichmentFunnel = Get-EnrichmentFunnelStats -State $state
+        return (New-JsonResult ([ordered]@{
+            playbook = $playbook
+            overdueFollowUps = $overdue
+            staleAccounts = $stale
+            activityFeed = $activityFeed
+            enrichmentFunnel = $enrichmentFunnel
+        }))
+    }
+
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {
         return (Get-CachedApiResult -Path $path -Query $query -Factory {
             if (Test-AppStoreUsesSqlite) {
@@ -798,6 +814,83 @@ function Handle-ApiRequest {
             accounts = @($result.accounts | Select-Object -First 50)
         }) 201)
     }
+    if ($path -match '^/api/accounts/([^/]+)/generate-outreach$' -and $method -eq 'POST') {
+        $accountId = $matches[1]
+        $payload = Read-JsonBody -Request $Request
+        $bookingLink = if ($payload.bookingLink) { [string]$payload.bookingLink } else { 'https://tinyurl.com/ysdep7cn' }
+
+        # Fetch account detail
+        $detail = if (Test-AppStoreUsesSqlite) {
+            Get-AppAccountDetailFast -AccountId $accountId
+        } else {
+            $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
+            Get-AccountDetail -State $state -AccountId $accountId
+        }
+        if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+
+        # Quick web search for company context
+        $companySnippet = ''
+        try {
+            $searchQuery = "$($detail.account.displayName) company about"
+            $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
+            $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 5 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
+            $snippets = @([regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } | Where-Object { $_.Length -gt 40 } | Select-Object -First 1)
+            if ($snippets.Count -gt 0) {
+                $companySnippet = [string]$snippets[0]
+                if ($companySnippet.Length -gt 200) { $companySnippet = $companySnippet.Substring(0, 197) + '...' }
+            }
+        } catch {
+            # Non-critical, proceed without snippet
+        }
+
+        $outreachParams = @{
+            Account = $detail.account
+            Jobs = $detail.jobs
+            Contacts = $detail.contacts
+            BookingLink = $bookingLink
+            CompanySnippet = $companySnippet
+        }
+        if ($payload.contactName) { $outreachParams.OverrideContactName = [string]$payload.contactName }
+        if ($payload.contactTitle) { $outreachParams.OverrideContactTitle = [string]$payload.contactTitle }
+        if ($payload.template) { $outreachParams.Template = [string]$payload.template }
+        $outreach = Build-SmartOutreachDraft @outreachParams
+
+        return (New-JsonResult ([ordered]@{ outreach = $outreach; companySnippet = $companySnippet }))
+    }
+
+    # Quick update endpoint - lightweight account patch with auto activity log
+    if ($path -match '^/api/accounts/([^/]+)/quick-update$' -and $method -eq 'PATCH') {
+        $accountId = $matches[1]
+        $state = Get-AppState
+        $payload = Read-JsonBody -Request $Request
+        $result = Set-AccountFields -State $state -AccountId $accountId -Patch $payload
+        if ($payload.quickNote) {
+            $activity = Add-Activity -State $state -Payload ([ordered]@{
+                accountId = $accountId
+                normalizedCompanyName = [string]$result.account.normalizedName
+                type = 'note'
+                summary = [string]$payload.quickNote
+            })
+            Save-AppSegment -Segment 'Activities' -Data $state.activities -SkipSnapshots
+        }
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
+        return (New-JsonResult $result.account)
+    }
+
+    # Hiring velocity for an account
+    if ($path -match '^/api/accounts/([^/]+)/hiring-velocity$' -and $method -eq 'GET') {
+        $accountId = $matches[1]
+        $detail = if (Test-AppStoreUsesSqlite) {
+            Get-AppAccountDetailFast -AccountId $accountId
+        } else {
+            $state = Get-AppStateView -Segments @('Companies', 'Jobs')
+            Get-AccountDetail -State $state -AccountId $accountId
+        }
+        if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+        $velocity = Get-HiringVelocity -Jobs $detail.jobs
+        return (New-JsonResult $velocity)
+    }
+
     if ($path -match '^/api/accounts/([^/]+)$') {
         $accountId = $matches[1]
         if ($method -eq 'GET') {
@@ -828,6 +921,42 @@ function Handle-ApiRequest {
             Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
             return (New-JsonResult ([ordered]@{ ok = $true }))
         }
+    }
+
+    # Bulk account update
+    if ($path -eq '/api/accounts/bulk' -and $method -eq 'PATCH') {
+        $state = Get-AppState
+        $payload = Read-JsonBody -Request $Request
+        $ids = @($payload.ids)
+        $patch = [ordered]@{}
+        if ($payload.status) { $patch.status = [string]$payload.status }
+        if ($payload.owner) { $patch.owner = [string]$payload.owner }
+        if ($payload.priority) { $patch.priority = [string]$payload.priority }
+        if ($payload.outreachStatus) { $patch.outreachStatus = [string]$payload.outreachStatus }
+        $result = Invoke-BulkAccountUpdate -State $state -AccountIds $ids -Patch $patch
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
+        return (New-JsonResult $result)
+    }
+
+    # Duplicate contacts
+    if ($path -eq '/api/contacts/duplicates' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Contacts')
+        $duplicates = Find-DuplicateContacts -State $state
+        return (New-JsonResult ([ordered]@{ duplicates = $duplicates }))
+    }
+
+    # Global activity feed
+    if ($path -eq '/api/activity/feed' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Activities', 'Companies')
+        $feed = Get-GlobalActivityFeed -State $state -Limit 15
+        return (New-JsonResult ([ordered]@{ items = $feed }))
+    }
+
+    # Enrichment funnel stats
+    if ($path -eq '/api/enrichment/funnel' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+        $funnel = Get-EnrichmentFunnelStats -State $state
+        return (New-JsonResult $funnel)
     }
 
     if ($path -eq '/api/contacts' -and $method -eq 'GET') {

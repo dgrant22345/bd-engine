@@ -642,6 +642,315 @@ function Get-OutreachDraft {
     return "Hi $topContact, I noticed $($Company.displayName) is actively hiring ($jobs open roles) and I already have a strong network overlap there ($connections connections). I would love to compare notes on where your team is leaning hardest and see where I can help."
 }
 
+function Build-SmartOutreachDraft {
+    param(
+        [Parameter(Mandatory = $true)]$Account,
+        [Parameter(Mandatory = $true)]$Jobs,
+        [Parameter(Mandatory = $true)]$Contacts,
+        [string]$BookingLink = 'https://tinyurl.com/ysdep7cn',
+        [string]$CompanySnippet = '',
+        [string]$OverrideContactName = '',
+        [string]$OverrideContactTitle = '',
+        [string]$Template = 'cold'
+    )
+
+    $companyName = [string]$Account.displayName
+
+    # Contact — use override if provided, else first contact, else account-level
+    $topContact = if ($OverrideContactName) { $OverrideContactName }
+        elseif ($Contacts.Count -gt 0) { [string]$Contacts[0].fullName }
+        elseif ($Account.topContactName) { [string]$Account.topContactName }
+        else { '' }
+    $topContactTitle = if ($OverrideContactTitle) { $OverrideContactTitle }
+        elseif ($OverrideContactName -and $Contacts.Count -gt 0) {
+            $match = $Contacts | Where-Object { [string]$_.fullName -eq $OverrideContactName } | Select-Object -First 1
+            if ($match) { [string]$match.title } else { '' }
+        }
+        elseif ($Contacts.Count -gt 0) { [string]$Contacts[0].title }
+        elseif ($Account.topContactTitle) { [string]$Account.topContactTitle }
+        else { '' }
+
+    $connectionCount = [int](Convert-ToNumber $Account.connectionCount)
+    $openRoles = [int](Convert-ToNumber $Account.openRoleCount)
+    $firstName = if ($topContact) { ($topContact -split ' ')[0] } else { '' }
+
+    # Group jobs by department for theme summary
+    $deptGroups = @{}
+    foreach ($job in @($Jobs)) {
+        $dept = if ([string]::IsNullOrWhiteSpace([string]$job.department)) { 'General' } else { [string]$job.department }
+        if (-not $deptGroups.ContainsKey($dept)) { $deptGroups[$dept] = 0 }
+        $deptGroups[$dept]++
+    }
+    $topDepts = @($deptGroups.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 3)
+
+    # Build a natural hiring theme summary (no exact counts or title lists)
+    $hiringTheme = ''
+    if ($topDepts.Count -ge 2) {
+        $deptNames = @($topDepts | ForEach-Object { $_.Key })
+        $hiringTheme = "across $($deptNames[0]), $($deptNames[1])$(if ($deptNames.Count -ge 3) { ", and $($deptNames[2])" } else { '' })"
+    } elseif ($topDepts.Count -eq 1 -and $topDepts[0].Key -ne 'General') {
+        $hiringTheme = "especially within your $($topDepts[0].Key) team"
+    }
+
+    # Location insight
+    $gtaJobs = @($Jobs | Where-Object { $_.isGta -eq $true })
+    $locationNote = if ($gtaJobs.Count -gt 0 -and $gtaJobs.Count -ge ($Jobs.Count / 2)) {
+        ', many of which are based here in the GTA'
+    } else { '' }
+
+    # Build greeting
+    $greeting = if ($firstName) { "Hi $firstName," } else { "Hi there," }
+
+    # Build the body based on template type
+    $lines = @()
+
+    switch ($Template) {
+        'follow_up' {
+            $lines += "$greeting I reached out a little while ago about how my team could help $companyName with your hiring efforts, and I wanted to follow up."
+            if ($openRoles -gt 0 -and $hiringTheme) {
+                $lines += ""
+                $lines += "I see you still have around $openRoles open roles $hiringTheme$locationNote — that's a lot of seats to fill, and I know how much pressure that puts on internal teams."
+            }
+            $lines += ""
+            $lines += "I completely understand if the timing wasn't right before. Things move fast, and sometimes these things just need the right moment."
+            if ($topContactTitle -and $firstName) {
+                $lines += ""
+                $lines += "As $topContactTitle, I imagine you're juggling a lot — I'd love to take some of the hiring load off your plate."
+            }
+            $lines += ""
+            $lines += "Would a quick 15-minute call make sense this week? Happy to work around your schedule: $BookingLink"
+            $lines += ""
+            $lines += "Best,"
+            $lines += "Derek"
+        }
+        're_engage' {
+            $lines += "$greeting It's been a while since we last connected, and I wanted to check back in with $companyName."
+            if ($CompanySnippet) {
+                $lines += ""
+                $lines += "$CompanySnippet — it looks like things have been moving in a great direction."
+            }
+            if ($openRoles -gt 0 -and $hiringTheme) {
+                $lines += ""
+                $lines += "I noticed you're hiring again — around $openRoles roles $hiringTheme$locationNote. A lot has probably changed since we last spoke, and I'd love to hear what's new on your end."
+            }
+            if ($connectionCount -gt 2) {
+                $lines += ""
+                $lines += "I still have $connectionCount connections at $companyName and have stayed close to what's happening in your space."
+            }
+            $lines += ""
+            $lines += "Would you be up for a quick catch-up? Even 15 minutes would be great: $BookingLink"
+            $lines += ""
+            $lines += "Hope you've been well,"
+            $lines += "Derek"
+        }
+        'warm_intro' {
+            $lines += "$greeting I was introduced to $companyName through some mutual connections and wanted to reach out directly."
+            if ($CompanySnippet) {
+                $lines += ""
+                $lines += "$CompanySnippet — really impressive work."
+            }
+            if ($connectionCount -gt 2) {
+                $lines += ""
+                $lines += "I actually have $connectionCount connections on your team already, so I have a good sense of the culture and the caliber of people you bring on."
+            }
+            if ($openRoles -gt 0 -and $hiringTheme) {
+                $lines += ""
+                $lines += "With around $openRoles roles open $hiringTheme$locationNote, it seems like the team is in a real growth phase. That's exactly the kind of moment where my team tends to make the biggest impact — we specialize in placing talent for companies at your stage."
+            }
+            if ($topContactTitle -and $firstName) {
+                $lines += ""
+                $lines += "Given your role as $topContactTitle, I thought you'd be the ideal person to connect with."
+            }
+            $lines += ""
+            $lines += "Would you have 15 minutes for a quick intro call? Here's my calendar: $BookingLink"
+            $lines += ""
+            $lines += "Looking forward to it,"
+            $lines += "Derek"
+        }
+        default {
+            # 'cold' — original template
+            if ($CompanySnippet) {
+                $lines += "$greeting I came across $companyName and was really impressed by what you're building. $CompanySnippet"
+            } else {
+                $lines += "$greeting I've been keeping an eye on $companyName and wanted to reach out."
+            }
+
+            if ($openRoles -gt 0 -and $hiringTheme) {
+                $lines += ""
+                $lines += "I noticed you're actively growing the team with around $openRoles open roles $hiringTheme$locationNote. That kind of hiring push is exactly where my team tends to add the most value — we specialize in placing talent in those types of functions for companies like yours."
+            } elseif ($openRoles -gt 0) {
+                $lines += ""
+                $lines += "I can see $companyName is actively scaling with around $openRoles open positions$locationNote. My team specializes in helping companies like yours find the right people quickly, especially when hiring across multiple functions at once."
+            }
+
+            if ($connectionCount -gt 2) {
+                $lines += ""
+                $lines += "I already have $connectionCount connections at $companyName, so I have some familiarity with your team and culture — which helps us hit the ground running."
+            } elseif ($connectionCount -gt 0) {
+                $lines += ""
+                $lines += "I have a few existing connections at $companyName and would love to build on that."
+            }
+
+            if ($topContactTitle -and $firstName) {
+                $lines += ""
+                $lines += "Given your role as $topContactTitle, I thought you'd be the best person to connect with on this."
+            }
+
+            $lines += ""
+            $lines += "Would you be open to a quick 15-minute chat? I'd love to share a few ideas on how we've helped similar companies fill critical roles faster."
+            $lines += ""
+            $lines += "Feel free to grab a time that works: $BookingLink"
+            $lines += ""
+            $lines += "Looking forward to connecting,"
+            $lines += "Derek"
+        }
+    }
+
+    return ($lines -join "`n")
+}
+
+function Get-PlaybookAccounts {
+    param($State)
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    $accounts = @($State.companies |
+        Where-Object { $_.status -ne 'paused' -and $_.status -ne 'client' -and $_.status -ne 'archived' } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true } |
+        Select-Object -First 5)
+    return @($accounts | ForEach-Object {
+        $isOverdue = ($_.nextActionAt -and [string]$_.nextActionAt -ne '' -and [string]$_.nextActionAt -lt $today)
+        [ordered]@{
+            id = [string]$_.id
+            displayName = [string]$_.displayName
+            dailyScore = [double](Convert-ToNumber $_.dailyScore)
+            openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
+            topContactName = [string]$_.topContactName
+            recommendedAction = [string]$_.recommendedAction
+            outreachStatus = [string]$_.outreachStatus
+            nextAction = [string]$_.nextAction
+            nextActionAt = $_.nextActionAt
+            isOverdue = $isOverdue
+            staleFlag = [string]$_.staleFlag
+            networkStrength = [string]$_.networkStrength
+            owner = [string]$_.owner
+        }
+    })
+}
+
+function Get-OverdueFollowUps {
+    param($State)
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    return @($State.companies |
+        Where-Object { $_.nextActionAt -and [string]$_.nextActionAt -ne '' -and [string]$_.nextActionAt -lt $today -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
+        Sort-Object @{ Expression = { [string]$_.nextActionAt } } |
+        Select-Object -First 10 |
+        ForEach-Object {
+            [ordered]@{
+                id = [string]$_.id
+                displayName = [string]$_.displayName
+                nextAction = [string]$_.nextAction
+                nextActionAt = $_.nextActionAt
+                outreachStatus = [string]$_.outreachStatus
+                owner = [string]$_.owner
+            }
+        })
+}
+
+function Get-StaleAccounts {
+    param($State)
+    return @($State.companies |
+        Where-Object { $_.staleFlag -eq 'STALE' -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true } |
+        Select-Object -First 10 |
+        ForEach-Object {
+            [ordered]@{
+                id = [string]$_.id
+                displayName = [string]$_.displayName
+                dailyScore = [double](Convert-ToNumber $_.dailyScore)
+                lastContactedAt = $_.lastContactedAt
+                openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
+                owner = [string]$_.owner
+            }
+        })
+}
+
+function Get-GlobalActivityFeed {
+    param($State, [int]$Limit = 15)
+    $companyLookup = @{}
+    foreach ($c in @($State.companies)) { $companyLookup[[string]$c.id] = [string]$c.displayName }
+    return @($State.activities |
+        Sort-Object @{ Expression = { Get-DateSortValue $_.occurredAt }; Descending = $true } |
+        Select-Object -First $Limit |
+        ForEach-Object {
+            $summary = Select-ActivitySummary -Activity $_
+            $summary.companyName = if ($companyLookup[[string]$_.accountId]) { $companyLookup[[string]$_.accountId] } else { [string]$_.normalizedCompanyName }
+            $summary
+        })
+}
+
+function Get-HiringVelocity {
+    param($Jobs)
+    $now = Get-Date
+    $weekBuckets = [ordered]@{}
+    for ($i = 0; $i -lt 4; $i++) {
+        $weekStart = $now.AddDays(-($i * 7 + 7)).ToString('yyyy-MM-dd')
+        $weekEnd = $now.AddDays(-($i * 7)).ToString('yyyy-MM-dd')
+        $label = if ($i -eq 0) { 'This week' } elseif ($i -eq 1) { 'Last week' } else { "$($i+1) weeks ago" }
+        $count = @($Jobs | Where-Object { $_.postedAt -and [string]$_.postedAt -ge $weekStart -and [string]$_.postedAt -lt $weekEnd }).Count
+        $weekBuckets[$label] = $count
+    }
+    $thisWeek = $weekBuckets['This week']
+    $lastWeek = $weekBuckets['Last week']
+    $trend = if ($thisWeek -gt $lastWeek) { 'accelerating' } elseif ($thisWeek -lt $lastWeek) { 'slowing' } else { 'steady' }
+    return [ordered]@{ weeks = $weekBuckets; trend = $trend; thisWeek = $thisWeek; lastWeek = $lastWeek }
+}
+
+function Get-EnrichmentFunnelStats {
+    param($State)
+    $total = @($State.companies).Count
+    $enriched = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'enriched' -or $_.enrichmentStatus -eq 'verified' -or $_.enrichmentStatus -eq 'manual' }).Count
+    $verified = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'verified' -or $_.enrichmentStatus -eq 'manual' }).Count
+    $importing = @($State.boardConfigs | Where-Object { $_.importEnabled -eq $true -or $_.lastImportAt }).Count
+    $unresolved = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'unresolved' -or $_.enrichmentStatus -eq 'failed' }).Count
+    $pending = $total - $enriched - $unresolved
+    return [ordered]@{ total = $total; pending = $pending; enriched = $enriched; verified = $verified; importing = $importing; unresolved = $unresolved }
+}
+
+function Find-DuplicateContacts {
+    param($State)
+    $groups = @{}
+    foreach ($contact in @($State.contacts)) {
+        $key = ([string]$contact.fullName).Trim().ToLowerInvariant()
+        if (-not $key) { continue }
+        if (-not $groups.ContainsKey($key)) { $groups[$key] = @() }
+        $groups[$key] += $contact
+    }
+    return @($groups.GetEnumerator() |
+        Where-Object { $_.Value.Count -gt 1 } |
+        Sort-Object @{ Expression = { $_.Value.Count }; Descending = $true } |
+        Select-Object -First 20 |
+        ForEach-Object {
+            [ordered]@{
+                name = $_.Key
+                count = $_.Value.Count
+                contacts = @($_.Value | ForEach-Object {
+                    [ordered]@{ id = [string]$_.id; fullName = [string]$_.fullName; companyName = [string]$_.companyName; title = [string]$_.title; connectedOn = $_.connectedOn }
+                })
+            }
+        })
+}
+
+function Invoke-BulkAccountUpdate {
+    param($State, [array]$AccountIds, $Patch)
+    $updated = 0
+    foreach ($id in $AccountIds) {
+        try {
+            $result = Set-AccountFields -State $State -AccountId $id -Patch $Patch
+            $updated++
+        } catch { }
+    }
+    return [ordered]@{ updated = $updated; total = $AccountIds.Count }
+}
+
 function Get-RecommendationAction {
     param($Company)
 
