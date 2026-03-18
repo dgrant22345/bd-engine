@@ -2156,11 +2156,18 @@ function Add-Activity {
         }
     }
 
+    # Ensure optional keys exist before access (strict-mode safe)
+    foreach ($optKey in 'contactId', 'type', 'summary', 'notes', 'pipelineStage') {
+        if ($Payload -is [System.Collections.IDictionary] -and -not $Payload.Contains($optKey)) {
+            $Payload[$optKey] = $null
+        }
+    }
+
     $activity = [ordered]@{
         id = New-RandomId -Prefix 'act'
         workspaceId = $State.workspace.id
         accountId = [string]$Payload.accountId
-        contactId = [string]$Payload.contactId
+        contactId = if ($Payload.contactId) { [string]$Payload.contactId } else { '' }
         normalizedCompanyName = $normalizedCompanyName
         type = if ($Payload.type) { [string]$Payload.type } else { 'note' }
         summary = if ($Payload.summary) { [string]$Payload.summary } else { 'Activity note' }
@@ -2174,15 +2181,21 @@ function Add-Activity {
 
     $relatedAccount = $null
     if ($activity.accountId) {
-        $relatedAccount = @($State.companies | Where-Object { $_.id -eq $activity.accountId } | Select-Object -First 1)
+        $relatedAccount = $State.companies | Where-Object { $_.id -eq $activity.accountId } | Select-Object -First 1
     }
     if (-not $relatedAccount -and $normalizedCompanyName) {
-        $relatedAccount = @($State.companies | Where-Object { $_.normalizedName -eq $normalizedCompanyName } | Select-Object -First 1)
+        $relatedAccount = $State.companies | Where-Object { $_.normalizedName -eq $normalizedCompanyName } | Select-Object -First 1
     }
     if ($relatedAccount) {
-        $relatedAccount.lastContactedAt = $activity.occurredAt
+        # Ensure keys exist before writing (strict-mode safe)
+        foreach ($k in 'lastContactedAt', 'outreachStatus') {
+            if ($relatedAccount -is [System.Collections.IDictionary] -and -not $relatedAccount.Contains($k)) {
+                $relatedAccount[$k] = $null
+            }
+        }
+        $relatedAccount['lastContactedAt'] = $activity.occurredAt
         if ($activity.pipelineStage) {
-            $relatedAccount.outreachStatus = $activity.pipelineStage
+            $relatedAccount['outreachStatus'] = $activity.pipelineStage
         }
         $relatedAccount = Update-CompanyProjection -Company $relatedAccount
         $State.companies = Sort-Companies -Companies @($State.companies)
