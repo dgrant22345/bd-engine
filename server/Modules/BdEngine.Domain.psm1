@@ -858,7 +858,7 @@ function Get-OverdueFollowUps {
 function Get-StaleAccounts {
     param($State)
     return @($State.companies |
-        Where-Object { $_.staleFlag -eq 'STALE' -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
+        Where-Object { [string](Get-ObjectValue -Object $_ -Name 'staleFlag') -eq 'STALE' -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
         Sort-Object @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true } |
         Select-Object -First 10 |
         ForEach-Object {
@@ -907,11 +907,12 @@ function Get-HiringVelocity {
 function Get-EnrichmentFunnelStats {
     param($State)
     $total = @($State.companies).Count
-    $enriched = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'enriched' -or $_.enrichmentStatus -eq 'verified' -or $_.enrichmentStatus -eq 'manual' }).Count
-    $verified = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'verified' -or $_.enrichmentStatus -eq 'manual' }).Count
-    $importing = @($State.boardConfigs | Where-Object { $_.importEnabled -eq $true -or $_.lastImportAt }).Count
-    $unresolved = @($State.companies | Where-Object { $_.enrichmentStatus -eq 'unresolved' -or $_.enrichmentStatus -eq 'failed' }).Count
+    $enriched = @($State.companies | Where-Object { $es = [string](Get-ObjectValue -Object $_ -Name 'enrichmentStatus'); $es -eq 'enriched' -or $es -eq 'verified' -or $es -eq 'manual' }).Count
+    $verified = @($State.companies | Where-Object { $es = [string](Get-ObjectValue -Object $_ -Name 'enrichmentStatus'); $es -eq 'verified' -or $es -eq 'manual' }).Count
+    $importing = @($State.boardConfigs | Where-Object { (Get-ObjectValue -Object $_ -Name 'importEnabled') -eq $true -or (Get-ObjectValue -Object $_ -Name 'lastImportAt') }).Count
+    $unresolved = @($State.companies | Where-Object { $es = [string](Get-ObjectValue -Object $_ -Name 'enrichmentStatus'); $es -eq 'unresolved' -or $es -eq 'failed' }).Count
     $pending = $total - $enriched - $unresolved
+    if ($pending -lt 0) { $pending = 0 }
     return [ordered]@{ total = $total; pending = $pending; enriched = $enriched; verified = $verified; importing = $importing; unresolved = $unresolved }
 }
 
