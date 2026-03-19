@@ -1171,16 +1171,38 @@ async function renderJobsView() {
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
   setViewTitle('Admin');
-  const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const [configs, runtime, resolverReport, enrichmentReport, unresolvedQueue, mediumQueue, enrichmentQueue] = await Promise.all([
-    api(`/api/configs${buildQuery(appState.configQuery)}`),
-    loadRuntimeStatus(true),
-    api('/api/configs/report'),
-    api('/api/enrichment/report'),
-    api(`/api/configs${buildQuery({ page: 1, pageSize: 8, confidenceBand: 'unresolved', reviewStatus: 'pending' })}`),
-    api(`/api/configs${buildQuery({ page: 1, pageSize: 8, confidenceBand: 'medium', reviewStatus: 'pending' })}`),
-    api(`/api/enrichment/queue${buildQuery(appState.enrichmentQuery)}`),
-  ]);
+  const batchQuery = {};
+  const cq = appState.configQuery;
+  if (cq.page) batchQuery.configPage = cq.page;
+  if (cq.pageSize) batchQuery.configPageSize = cq.pageSize;
+  if (cq.q) batchQuery.configQ = cq.q;
+  if (cq.ats) batchQuery.configAts = cq.ats;
+  if (cq.active) batchQuery.configActive = cq.active;
+  if (cq.discoveryStatus) batchQuery.configDiscoveryStatus = cq.discoveryStatus;
+  if (cq.confidenceBand) batchQuery.configConfidenceBand = cq.confidenceBand;
+  if (cq.reviewStatus) batchQuery.configReviewStatus = cq.reviewStatus;
+  const eq = appState.enrichmentQuery;
+  if (eq.page) batchQuery.enrichmentPage = eq.page;
+  if (eq.pageSize) batchQuery.enrichmentPageSize = eq.pageSize;
+  if (eq.confidence) batchQuery.enrichmentConfidence = eq.confidence;
+  if (eq.missingDomain) batchQuery.enrichmentMissingDomain = eq.missingDomain;
+  if (eq.missingCareersUrl) batchQuery.enrichmentMissingCareersUrl = eq.missingCareersUrl;
+  if (eq.hasConnections) batchQuery.enrichmentHasConnections = eq.hasConnections;
+  if (eq.minTargetScore) batchQuery.enrichmentMinTargetScore = eq.minTargetScore;
+  if (eq.topN) batchQuery.enrichmentTopN = eq.topN;
+  const batch = await api(`/api/admin/bootstrap${buildQuery(batchQuery)}`);
+  const stateBootstrap = batch.bootstrap;
+  appState.bootstrap = { ...(appState.bootstrap || {}), ...stateBootstrap };
+  workspaceName.textContent = stateBootstrap?.workspace?.name || 'BD Engine Workspace';
+  window.bdLocalApi.setAlert('', appAlert);
+  const configs = batch.configs;
+  const runtime = batch.runtime;
+  appState.runtimeStatus = runtime;
+  const resolverReport = batch.resolverReport;
+  const enrichmentReport = batch.enrichmentReport;
+  const unresolvedQueue = batch.unresolvedQueue;
+  const mediumQueue = batch.mediumQueue;
+  const enrichmentQueue = batch.enrichmentQueue;
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
 

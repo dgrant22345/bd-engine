@@ -709,6 +709,81 @@ function Handle-ApiRequest {
         }
         return (New-JsonResult $job)
     }
+    if ($path -eq '/api/admin/bootstrap' -and $method -eq 'GET') {
+        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+            $workspace = Get-AppSegment -Segment 'Workspace'
+            $settings = Get-AppSegment -Segment 'Settings'
+            $filters = if (Test-AppStoreUsesSqlite) {
+                $snapshot = Get-AppFilterSnapshotResult
+                Write-SnapshotLog -Name 'filters' -SnapshotResult $snapshot
+                $snapshot.payload
+            } else {
+                $state = Get-AppStateView -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs')
+                Get-AccountFilterOptions -State $state
+            }
+
+            $configQuery = @{
+                page = if ($query.configPage) { $query.configPage } else { '1' }
+                pageSize = if ($query.configPageSize) { $query.configPageSize } else { '20' }
+                q = if ($query.configQ) { $query.configQ } else { '' }
+                ats = if ($query.configAts) { $query.configAts } else { '' }
+                active = if ($query.configActive) { $query.configActive } else { '' }
+                discoveryStatus = if ($query.configDiscoveryStatus) { $query.configDiscoveryStatus } else { '' }
+                confidenceBand = if ($query.configConfidenceBand) { $query.configConfidenceBand } else { '' }
+                reviewStatus = if ($query.configReviewStatus) { $query.configReviewStatus } else { '' }
+            }
+            $enrichmentQuery = @{
+                page = if ($query.enrichmentPage) { $query.enrichmentPage } else { '1' }
+                pageSize = if ($query.enrichmentPageSize) { $query.enrichmentPageSize } else { '20' }
+                confidence = if ($query.enrichmentConfidence) { $query.enrichmentConfidence } else { '' }
+                missingDomain = if ($query.enrichmentMissingDomain) { $query.enrichmentMissingDomain } else { '' }
+                missingCareersUrl = if ($query.enrichmentMissingCareersUrl) { $query.enrichmentMissingCareersUrl } else { '' }
+                hasConnections = if ($query.enrichmentHasConnections) { $query.enrichmentHasConnections } else { '' }
+                minTargetScore = if ($query.enrichmentMinTargetScore) { $query.enrichmentMinTargetScore } else { '' }
+                topN = if ($query.enrichmentTopN) { $query.enrichmentTopN } else { '' }
+            }
+
+            $runtime = Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt
+
+            if (Test-AppStoreUsesSqlite) {
+                $configs = Find-AppConfigsFast -Query $configQuery
+                $resolverReport = Get-AppResolverCoverageReportFast
+                $enrichmentReport = Get-AppEnrichmentCoverageReportFast
+                $unresolvedQueue = Find-AppConfigsFast -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'unresolved'; reviewStatus = 'pending' }
+                $mediumQueue = Find-AppConfigsFast -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'medium'; reviewStatus = 'pending' }
+                $enrichmentQueue = Find-AppEnrichmentQueueFast -Query $enrichmentQuery
+            } else {
+                $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+                $configs = Get-ConfigResults -State $state -Query $configQuery
+                $resolverReport = [ordered]@{ summary = [ordered]@{}; byAtsType = @(); byConfidenceBand = @(); topFailureReasons = @(); history = @() }
+                $enrichmentReport = [ordered]@{ summary = [ordered]@{}; byConfidence = @(); bySource = @(); resolutionByEnrichmentPresence = @(); topUnresolvedReasons = @(); history = @() }
+                $unresolvedQueue = Get-ConfigResults -State $state -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'unresolved'; reviewStatus = 'pending' }
+                $mediumQueue = Get-ConfigResults -State $state -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'medium'; reviewStatus = 'pending' }
+                $enrichmentQueue = [ordered]@{ items = @(); total = 0; page = 1; pageSize = 20 }
+            }
+
+            New-JsonResult ([ordered]@{
+                bootstrap = [ordered]@{
+                    workspace = $workspace
+                    settings = $settings
+                    filters = $filters
+                    ownerRoster = @(Get-OwnerRoster)
+                    defaults = [ordered]@{
+                        workbookPath = $defaultWorkbookPath
+                        connectionsCsvPath = $defaultConnectionsCsvPath
+                        spreadsheetId = $defaultSpreadsheetId
+                    }
+                }
+                configs = $configs
+                runtime = $runtime
+                resolverReport = $resolverReport
+                enrichmentReport = $enrichmentReport
+                unresolvedQueue = $unresolvedQueue
+                mediumQueue = $mediumQueue
+                enrichmentQueue = $enrichmentQueue
+            })
+        })
+    }
     if ($path -eq '/api/bootstrap' -and $method -eq 'GET') {
         return (Get-CachedApiResult -Path $path -Query $query -Factory {
             $includeFilters = Test-Truthy $query.includeFilters
