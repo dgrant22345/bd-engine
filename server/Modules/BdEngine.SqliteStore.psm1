@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 
 $script:SqliteAssemblyLoaded = $false
 $script:JsonSerializer = $null
+$script:CompanySummaryColumns = 'id, sort_order, normalized_name, display_name, display_name_normalized, industry, location, domain, careers_url, owner, owner_normalized, priority, priority_tier, status, outreach_status, connection_count, senior_contact_count, talent_contact_count, buyer_title_count, target_score, daily_score, follow_up_score, job_count, open_role_count, new_role_count_7d, stale_role_count_30d, department_focus, department_focus_count, department_concentration, hiring_spike_score, network_strength, hiring_status, last_job_posted_at, last_contacted_at, days_since_contact, stale_flag, next_action, next_action_at, recommended_action, outreach_draft, top_contact_name, top_contact_title, ats_types_text, tags_text, notes, search_text, canonical_domain, linkedin_company_slug, aliases_text, enrichment_status, enrichment_source, enrichment_confidence, enrichment_confidence_score, enrichment_notes, enrichment_evidence, enrichment_failure_reason, enrichment_attempted_urls_text, last_enriched_at, last_verified_at, next_enrichment_attempt_at'
 
 function Get-BdSqliteProjectRoot {
     return (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -2876,7 +2877,7 @@ function Find-BdSqliteAccounts {
             default { 'daily_score DESC, job_count DESC, connection_count DESC, display_name ASC' }
         }
 
-        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'companies' -SelectColumns '*' -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy $orderBy -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
+        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'companies' -SelectColumns $script:CompanySummaryColumns -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy $orderBy -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
         $result.items = @($result.items | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
         return $result
     } finally {
@@ -3523,13 +3524,14 @@ function Find-BdSqliteEnrichmentQueue {
             $parameters.now = (Get-Date).ToString('o')
         }
 
-        $selectColumns = @'
-companies.*,
+        $companyCols = ($script:CompanySummaryColumns -split ',\s*' | ForEach-Object { "companies.$_" }) -join ', '
+        $selectColumns = @"
+$companyCols,
 cfg.config_id AS primary_config_id,
 cfg.discovery_status AS config_discovery_status,
 cfg.review_status AS config_review_status,
 cfg.ats_type AS config_ats_type
-'@
+"@
 
         $fromSql = @'
 companies
@@ -3720,7 +3722,7 @@ function Get-BdSqliteDashboardModelInternal {
         }
     }
     $todayQueue = Invoke-BdSqliteTimedStep -Name 'todayQueueMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies WHERE status NOT IN (''paused'', ''client'') AND connection_count >= @minConnections AND job_count >= @minJobs ORDER BY daily_score DESC LIMIT @limit;' -Parameters @{ minConnections = $minConnections; minJobs = $minJobs; limit = $maxCompanies }) | Select-Object -First 10 | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('paused', 'client') AND connection_count >= @minConnections AND job_count >= @minJobs ORDER BY daily_score DESC LIMIT @limit;" -Parameters @{ minConnections = $minConnections; minJobs = $minJobs; limit = $maxCompanies }) | Select-Object -First 10 | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $newJobsToday = Invoke-BdSqliteTimedStep -Name 'newJobsTodayMs' -TimingBag $TimingBag -Action {
         @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM jobs WHERE imported_at IS NOT NULL AND imported_at >= @cutoff ORDER BY COALESCE(retrieved_at, imported_at) DESC, posted_at DESC LIMIT 12;' -Parameters @{ cutoff = (Get-Date).AddHours(-24).ToString('o') }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
@@ -3729,10 +3731,10 @@ function Get-BdSqliteDashboardModelInternal {
         @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT * FROM board_configs WHERE last_checked_at IS NOT NULL AND discovery_status IN ('mapped', 'discovered') ORDER BY last_checked_at DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteConfigRowToSummary $_ })
     }
     $followUpAccounts = Invoke-BdSqliteTimedStep -Name 'followUpAccountsMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies WHERE status NOT IN (''client'', ''paused'') AND ((next_action_at IS NOT NULL AND next_action_at <= @nextActionCutoff) OR stale_flag = ''STALE'' OR follow_up_score > 0) ORDER BY follow_up_score DESC, daily_score DESC LIMIT 8;' -Parameters @{ nextActionCutoff = (Get-Date).AddDays(2).ToString('o') }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('client', 'paused') AND ((next_action_at IS NOT NULL AND next_action_at <= @nextActionCutoff) OR stale_flag = 'STALE' OR follow_up_score > 0) ORDER BY follow_up_score DESC, daily_score DESC LIMIT 8;" -Parameters @{ nextActionCutoff = (Get-Date).AddDays(2).ToString('o') }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $networkLeaders = Invoke-BdSqliteTimedStep -Name 'networkLeadersMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies ORDER BY connection_count DESC, daily_score DESC LIMIT 8;') | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies ORDER BY connection_count DESC, daily_score DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $recommendedActions = Invoke-BdSqliteTimedStep -Name 'recommendedActionsMs' -TimingBag $TimingBag -Action {
         @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT id, display_name, recommended_action, daily_score, outreach_status FROM companies ORDER BY daily_score DESC LIMIT 8;') | ForEach-Object {
@@ -4006,7 +4008,7 @@ function Find-BdSqliteSearchResults {
     $connection = Open-BdSqliteConnection
     try {
         return [ordered]@{
-            accounts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM companies WHERE search_text LIKE @search ORDER BY daily_score DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+            accounts = @((Invoke-BdSqliteRows -Connection $connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE search_text LIKE @search ORDER BY daily_score DESC LIMIT 5;" -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
             contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM contacts WHERE search_text LIKE @search ORDER BY priority_score DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteContactRowToSummary $_ })
             jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE search_text LIKE @search ORDER BY posted_at DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
         }
