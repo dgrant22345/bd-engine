@@ -205,6 +205,31 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'generate-outreach') {
+      await generateSmartOutreach(action.dataset.id, action);
+      return;
+    }
+
+    if (actionName === 'quick-log-inline') {
+      const row = document.getElementById('quick-log-' + action.dataset.id);
+      if (row) {
+        document.querySelectorAll('.quick-log-row').forEach(r => { if (r !== row) r.classList.add('hidden'); });
+        row.classList.toggle('hidden');
+      }
+      return;
+    }
+
+    if (actionName === 'close-quick-log') {
+      const row = document.getElementById('quick-log-' + action.dataset.id);
+      if (row) row.classList.add('hidden');
+      return;
+    }
+
+    if (actionName === 'apply-bulk-update') {
+      await applyBulkUpdate();
+      return;
+    }
+
     if (actionName === 'rerun-enrichment-resolution') {
       await rerunEnrichmentResolution(action.dataset.id);
       return;
@@ -275,6 +300,21 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(accountId);
+      window.bdLocalApi.setAlert('Account updated.', appAlert);
+      return;
+    }
+
+    if (form.classList.contains('quick-log-form')) {
+      const accountId = form.dataset.accountId;
+      const payload = getFormValues(form);
+      await api('/api/accounts/' + accountId + '/quick-update', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      invalidateAppData();
+      const row = document.getElementById('quick-log-' + accountId);
+      if (row) row.classList.add('hidden');
+      window.bdLocalApi.setAlert('Quick update saved.', appAlert);
       return;
     }
 
@@ -286,6 +326,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(payload.accountId);
+      window.bdLocalApi.setAlert('Activity logged.', appAlert);
       return;
     }
 
@@ -599,6 +640,8 @@ async function renderDashboardView() {
   renderLoadingState('Dashboard', 'Building today’s hiring radar...');
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
+  let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {} };
+  try { extended = await api('/api/dashboard/extended'); } catch(e) { /* non-critical */ }
   const topCompany = dashboard.todayQueue[0];
   const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
 
@@ -643,6 +686,38 @@ async function renderDashboardView() {
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
     </section>
 
+    ${extended.playbook.length ? `
+    <section class="detail-card playbook-section">
+      <div class="panel-header">
+        <div><h3>Today's playbook</h3><p class="muted small">Your top 5 accounts to work right now, ranked by daily score.</p></div>
+      </div>
+      <div class="playbook-grid">
+        ${extended.playbook.map((item) => `
+          <div class="playbook-card ${item.isOverdue ? 'playbook-card--overdue' : ''} ${item.staleFlag === 'STALE' ? 'playbook-card--stale' : ''}">
+            <div class="inline-header">
+              <strong>${escapeHtml(item.displayName)}</strong>
+              <span class="small muted">${formatNumber(item.dailyScore)} pts</span>
+            </div>
+            <p class="small">${escapeHtml(item.recommendedAction || 'Review account')}</p>
+            <div class="small muted">${item.topContactName ? 'Contact: ' + escapeHtml(item.topContactName) : ''}${item.openRoleCount ? ' \u00b7 ' + formatNumber(item.openRoleCount) + ' roles' : ''}</div>
+            ${item.isOverdue ? '<span class="status-pill danger">Overdue</span>' : ''}
+            ${item.staleFlag === 'STALE' ? '<span class="status-pill warning">Stale</span>' : ''}
+            <div class="button-row" style="margin-top:8px;">
+              <button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+    ` : ''}
+
+    ${extended.overdueFollowUps.length || extended.staleAccounts.length ? `
+    <section class="alert-bar">
+      ${extended.overdueFollowUps.length ? `<div class="alert-item alert-item--danger"><strong>${extended.overdueFollowUps.length} overdue follow-up${extended.overdueFollowUps.length > 1 ? 's' : ''}</strong> \u2014 ${extended.overdueFollowUps.slice(0,3).map(a => escapeHtml(a.displayName)).join(', ')}${extended.overdueFollowUps.length > 3 ? '...' : ''}</div>` : ''}
+      ${extended.staleAccounts.length ? `<div class="alert-item alert-item--warning"><strong>${extended.staleAccounts.length} stale account${extended.staleAccounts.length > 1 ? 's' : ''}</strong> \u2014 haven't been touched in 14+ days</div>` : ''}
+    </section>
+    ` : ''}
+
     <section class="dashboard-grid">
       <div class="table-card emphasis-card">
         <div class="panel-header">
@@ -685,6 +760,27 @@ async function renderDashboardView() {
       </div>
     </section>
 
+    ${extended.enrichmentFunnel && extended.enrichmentFunnel.total ? `
+    <section class="detail-card" style="margin-bottom:20px;">
+      <div class="panel-header"><div><h3>Enrichment pipeline</h3><p class="muted small">Account data completeness at a glance.</p></div></div>
+      <div class="funnel-bar-container">
+        ${(() => {
+          const ef = extended.enrichmentFunnel;
+          const total = ef.total || 1;
+          const stages = [
+            { label: 'Total', count: ef.total || 0, cls: 'funnel-total' },
+            { label: 'Enriched', count: ef.enriched || 0, cls: 'funnel-enriched' },
+            { label: 'Verified', count: ef.verified || 0, cls: 'funnel-verified' },
+            { label: 'Importing', count: ef.importing || 0, cls: 'funnel-importing' },
+            { label: 'Pending', count: ef.pending || 0, cls: 'funnel-pending' },
+            { label: 'Unresolved', count: ef.unresolved || 0, cls: 'funnel-unresolved' },
+          ];
+          return stages.map(s => '<div class="funnel-stage ' + s.cls + '"><span class="funnel-stage-count">' + s.count + '</span><span class="funnel-stage-label small">' + s.label + '</span><div class="funnel-fill" style="width:' + Math.round((s.count / total) * 100) + '%"></div></div>').join('');
+        })()}
+      </div>
+    </section>
+    ` : ''}
+
     <section class="dashboard-grid">
       <div class="table-card">
         <div class="panel-header">
@@ -700,19 +796,19 @@ async function renderDashboardView() {
         <div class="chart-card">
           <div class="panel-header">
             <div>
-              <h3>Network overlap leaders</h3>
-              <p class="muted small">Where your relationship graph is deepest right now.</p>
+              <h3>Recent activity</h3>
+              <p class="muted small">Latest outreach, notes, and pipeline changes across all accounts.</p>
             </div>
           </div>
-          <div class="spark-list">
-            ${dashboard.networkLeaders.map((item) => `
-              <div class="spark-row">
-                <strong>${escapeHtml(item.displayName)}</strong>
-                <div class="spark-bar"><span style="width:${Math.max(6, (item.connectionCount / maxNetwork) * 100)}%"></span></div>
-                <span class="small">${formatNumber(item.connectionCount)}</span>
+          ${extended.activityFeed.length ? `<div class="timeline">${extended.activityFeed.map((item) => `
+            <article class="timeline-item">
+              <div class="inline-header">
+                <strong>${escapeHtml(item.companyName || item.summary || 'Activity')}</strong>
+                <span class="small muted">${formatDate(item.occurredAt)}</span>
               </div>
-            `).join('')}
-          </div>
+              <p class="small">${escapeHtml(item.summary || '')}</p>
+            </article>
+          `).join('')}</div>` : '<div class="empty-state">No activity logged yet.</div>'}
         </div>
         <div class="list-card detail-card">
           <div class="panel-header">
@@ -733,9 +829,8 @@ async function renderAccountsView() {
   renderLoadingState('Accounts', 'Loading ranked target accounts...');
   setViewTitle('Accounts');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const filters = stateBootstrap.filters || { atsTypes: [], owners: [] };
+  const filters = stateBootstrap.filters || { atsTypes: [] };
   const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
-  const ownerOptions = filters.owners || [];
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
 
@@ -771,14 +866,13 @@ async function renderAccountsView() {
           ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
-          ${renderField('Owner', `<input name="owner" list="owner-filter-options" value="${escapeAttr(appState.accountQuery.owner)}" placeholder="Filter by owner">`)}
+          ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
           ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.accountQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.accountQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.accountQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
         </form>
-        <datalist id="owner-filter-options">${ownerOptions.map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state">No accounts match the current filter set.</div>'}
         ${renderPagination('accounts', result.page, result.pageSize, result.total)}
       </div>
@@ -795,7 +889,7 @@ async function renderAccountsView() {
             ${renderField('Company', '<input name="company" required placeholder="Stripe">')}
             ${renderField('Domain', '<input name="domain" placeholder="stripe.com">')}
             ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://stripe.com/jobs">')}
-            ${renderField('Owner', `<input name="owner" list="owner-options" placeholder="Your name or territory">`)}
+            ${renderField('Owner', renderOwnerSelect('owner', ''))}
             ${renderField('Priority', renderPrioritySelect('priority', 'medium'))}
             ${renderField('Status', renderAccountStatusSelect('status', 'new'))}
             ${renderField('Next action', '<input name="nextAction" placeholder="Message VP Talent or verify ATS">')}
@@ -804,7 +898,6 @@ async function renderAccountsView() {
             <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="4" placeholder="Why this account matters, what team is hiring, who might introduce you"></textarea></div>
             <div><button class="primary-button" type="submit">Add account</button></div>
           </form>
-          <datalist id="owner-options">${ownerOptions.map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         </div>
 
         <div class="form-card">
@@ -830,6 +923,15 @@ async function renderAccountDetail(accountId) {
   appState.accountDetail = detail;
   setViewTitle(detail.account.displayName);
   const scoreBreakdown = detail.account.scoreBreakdown || {};
+
+  // Fetch hiring velocity in background (non-blocking)
+  let hiringVelocity = [];
+  try {
+    const vData = await api(`/api/accounts/${accountId}/hiring-velocity`);
+    if (vData.weeks) {
+      hiringVelocity = Object.entries(vData.weeks).map(([label, count]) => ({ label, count }));
+    }
+  } catch(e) { /* non-critical */ }
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--dashboard">
@@ -869,69 +971,113 @@ async function renderAccountDetail(accountId) {
       ${renderMetricCard('Stale roles 30d+', detail.account.staleRoleCount30d || 0, 'Older roles can signal harder-to-fill demand')}
     </section>
 
+    <section class="action-zone">
+      <div class="action-zone-col">
+        <div class="detail-card" id="outreach-prompt-card">
+          <div class="panel-header"><div><h3>Outreach & next moves</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div></div>
+          <div class="outreach-controls outreach-controls--stacked">
+            <select id="outreach-contact-select" class="inline-select">
+              ${detail.contacts.length
+                ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
+                : '<option value="">No contacts</option>'}
+            </select>
+            <select id="outreach-template-select" class="inline-select">
+              <option value="cold" selected>Cold outreach</option>
+              <option value="follow_up">Follow-up</option>
+              <option value="re_engage">Re-engage</option>
+              <option value="warm_intro">Warm intro</option>
+            </select>
+            <button class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate outreach</button>
+          </div>
+          <div id="outreach-prompt-body" class="empty-state empty-state--compact">${escapeHtml(detail.account.outreachDraft)}</div>
+          <div class="next-action-bar">
+            <div class="next-action-display">
+              <strong>Next:</strong> <span>${escapeHtml(detail.account.nextAction || 'No next action set')}</span>
+              ${detail.account.nextActionAt ? '<span class="small muted" style="margin-left:8px">' + formatDate(detail.account.nextActionAt) + '</span>' : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="action-zone-col">
+        <div class="table-card">
+          <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to select for outreach.</p></div></div>
+          ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>' +
+            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td><strong>' + escapeHtml(c.fullName || '') + '</strong></td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
+            '</tbody></table></div>' : '<div class="empty-state">No contacts imported yet.</div>'}
+        </div>
+      </div>
+
+      <div class="action-zone-col">
+        <div class="detail-card">
+          <div class="panel-header"><div><h3>Activity & pipeline</h3><p class="muted small">Log outreach and track the conversation.</p></div></div>
+          <form id="activity-form" class="compact-activity-form">
+            <input type="hidden" name="accountId" value="${detail.account.id}">
+            <input type="hidden" name="normalizedCompanyName" value="${escapeAttr(detail.account.normalizedName)}">
+            <input name="summary" placeholder="Quick note..." class="compact-input">
+            <select name="type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
+            <select name="pipelineStage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
+            <button class="secondary-button compact-btn" type="submit">Log</button>
+          </form>
+          <div class="timeline" style="max-height:400px;overflow-y:auto;">
+            ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : '<div class="empty-state">No activity yet.</div>'}
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="detail-grid detail-grid--workspace">
       <div class="panel-stack">
         <div class="detail-card">
           <div class="panel-header">
-            <div>
-              <h3>Account controls</h3>
-              <p class="muted small">Manage ownership, outreach motion, and next steps from one place.</p>
-            </div>
+            <div><h3>Account controls</h3><p class="muted small">Manage ownership, outreach motion, and next steps.</p></div>
             <button class="ghost-button" data-action="archive-account" data-id="${detail.account.id}">Pause account</button>
           </div>
           <form id="account-edit-form" class="detail-form" data-account-id="${detail.account.id}">
-            ${renderField('Status', renderAccountStatusSelect('status', detail.account.status))}
-            ${renderField('Outreach stage', `<select name="outreachStatus">${renderOutreachStageOptions(detail.account.outreachStatus)}</select>`)}
-            ${renderField('Priority', renderPrioritySelect('priority', detail.account.priority || 'medium'))}
-            ${renderField('Owner', `<input name="owner" value="${escapeAttr(detail.account.owner || '')}" placeholder="Owner or territory">`)}
-            ${renderField('Domain', `<input name="domain" value="${escapeAttr(detail.account.domain || '')}" placeholder="company.com">`)}
-            ${renderField('Careers URL', `<input name="careersUrl" value="${escapeAttr(detail.account.careersUrl || '')}" placeholder="https://company.com/careers">`)}
-            ${renderField('Next action', `<input name="nextAction" value="${escapeAttr(detail.account.nextAction || '')}" placeholder="Reach out to VP Talent">`)}
-            ${renderField('Next action date', `<input name="nextActionAt" type="date" value="${formatDateInput(detail.account.nextActionAt)}">`)}
-            ${renderField('Location', `<input name="location" value="${escapeAttr(detail.account.location || '')}">`)}
-            ${renderField('Industry', `<input name="industry" value="${escapeAttr(detail.account.industry || '')}">`)}
-            ${renderField('Tags', `<input name="tags" value="${escapeAttr((detail.account.tags || []).join(', '))}" placeholder="fintech, warm intro, canada">`)}
-            <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="5">${escapeHtml(detail.account.notes || '')}</textarea></div>
+            <div class="field-row-4">
+              ${renderField('Status', renderAccountStatusSelect('status', detail.account.status))}
+              ${renderField('Outreach stage', '<select name="outreachStatus">' + renderOutreachStageOptions(detail.account.outreachStatus) + '</select>')}
+              ${renderField('Priority', renderPrioritySelect('priority', detail.account.priority || 'medium'))}
+              ${renderField('Owner', renderOwnerSelect('owner', detail.account.owner || ''))}
+            </div>
+            ${renderField('Next action', '<input name="nextAction" value="' + escapeAttr(detail.account.nextAction || '') + '" placeholder="Reach out to VP Talent">')}
+            ${renderField('Next action date', '<input name="nextActionAt" type="date" value="' + formatDateInput(detail.account.nextActionAt) + '">')}
+            ${renderField('Domain', '<input name="domain" value="' + escapeAttr(detail.account.domain || '') + '" placeholder="company.com">')}
+            ${renderField('Careers URL', '<input name="careersUrl" value="' + escapeAttr(detail.account.careersUrl || '') + '" placeholder="https://company.com/careers">')}
+            ${renderField('Location', '<input name="location" value="' + escapeAttr(detail.account.location || '') + '">')}
+            ${renderField('Industry', '<input name="industry" value="' + escapeAttr(detail.account.industry || '') + '">')}
+            ${renderField('Tags', '<input name="tags" value="' + escapeAttr((detail.account.tags || []).join(', ')) + '" placeholder="fintech, warm intro, canada">')}
+            <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="4">${escapeHtml(detail.account.notes || '')}</textarea></div>
             <div><button class="primary-button" type="submit">Save account updates</button></div>
-          </form>
-        </div>
-
-        <div class="detail-card">
-          <div class="panel-header"><div><h3>Hiring radar</h3><p class="muted small">Why this account is ranked where it is right now.</p></div></div>
-          <div class="kpi-ribbon">
-            ${renderMetricTile('Open roles', formatNumber(detail.account.openRoleCount || detail.account.jobCount))}
-            ${renderMetricTile('Roles older than 30d', formatNumber(detail.account.staleRoleCount30d || 0))}
-            ${renderMetricTile('Dept focus', detail.account.departmentFocus ? escapeHtml(detail.account.departmentFocus) : '—')}
-            ${renderMetricTile('Follow-up score', formatNumber(detail.account.followUpScore || 0))}
-          </div>
-          <div class="timeline">
-            ${Object.entries(scoreBreakdown).map(([key, value]) => `<article class="timeline-item"><div class="inline-header"><strong>${escapeHtml(humanize(key))}</strong><span class="small muted">${formatNumber(value)}</span></div></article>`).join('') || '<div class="empty-state">No score breakdown available yet.</div>'}
-          </div>
-        </div>
-
-        <div class="detail-card">
-          <div class="panel-header"><div><h3>Outreach prompt</h3><p class="muted small">A quick note to anchor your next conversation.</p></div></div>
-          <div class="empty-state empty-state--compact">${escapeHtml(detail.account.outreachDraft)}</div>
-        </div>
-
-        <div class="detail-card">
-          <div class="panel-header"><div><h3>Add activity</h3><p class="muted small">Log outreach, notes, and pipeline updates without leaving the account.</p></div></div>
-          <form id="activity-form" class="detail-form">
-            <input type="hidden" name="accountId" value="${detail.account.id}">
-            <input type="hidden" name="normalizedCompanyName" value="${escapeAttr(detail.account.normalizedName)}">
-            ${renderField('Summary', '<input name="summary" placeholder="Reached out to recruiting lead">')}
-            ${renderField('Type', `<select name="type"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline update</option></select>`)}
-            ${renderField('Pipeline stage', `<select name="pipelineStage"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>`)}
-            <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="4" placeholder="Context, follow-up timing, objections, decision makers"></textarea></div>
-            <div><button class="secondary-button" type="submit">Add activity</button></div>
           </form>
         </div>
       </div>
 
       <div class="panel-stack">
-        <div class="table-card">
-          <div class="panel-header"><div><h3>ATS configs</h3><p class="muted small">Discovery results and import sources tied to this account.</p></div></div>
-          ${detail.configs.length ? renderAccountConfigsTable(detail.configs) : '<div class="empty-state">No ATS config rows for this account yet.</div>'}
+        <div class="detail-card">
+          <div class="panel-header"><div><h3>Hiring radar</h3><p class="muted small">Score breakdown and hiring pattern.</p></div></div>
+          <div class="kpi-ribbon">
+            ${renderMetricTile('Open roles', formatNumber(detail.account.openRoleCount || detail.account.jobCount))}
+            ${renderMetricTile('Roles older than 30d', formatNumber(detail.account.staleRoleCount30d || 0))}
+            ${renderMetricTile('Dept focus', detail.account.departmentFocus ? escapeHtml(detail.account.departmentFocus) : '\u2014')}
+            ${renderMetricTile('Follow-up score', formatNumber(detail.account.followUpScore || 0))}
+          </div>
+          ${hiringVelocity.length ? `
+          <div class="velocity-chart">
+            <p class="small muted" style="margin:8px 0 4px;">Hiring velocity (4-week trend)</p>
+            <div class="velocity-bars">
+              ${(() => {
+                const maxCount = Math.max(1, ...hiringVelocity.map(b => b.count || 0));
+                return hiringVelocity.map(v => {
+                  const pct = Math.round(((v.count || 0) / maxCount) * 100);
+                  return '<div class="velocity-bar-group"><div class="velocity-bar" style="height:' + Math.max(pct, 5) + '%"><span class="velocity-count">' + (v.count || 0) + '</span></div><span class="velocity-label small muted">' + escapeHtml(v.label || '') + '</span></div>';
+                }).join('');
+              })()}
+            </div>
+          </div>` : ''}
+          <div class="timeline">
+            ${Object.entries(scoreBreakdown).map(([key, value]) => '<article class="timeline-item"><div class="inline-header"><strong>' + escapeHtml(humanize(key)) + '</strong><span class="small muted">' + formatNumber(value) + '</span></div></article>').join('') || '<div class="empty-state">No score breakdown available yet.</div>'}
+          </div>
         </div>
 
         <div class="table-card">
@@ -940,13 +1086,8 @@ async function renderAccountDetail(accountId) {
         </div>
 
         <div class="table-card">
-          <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Best people to route outreach through at this account.</p></div></div>
-          ${detail.contacts.length ? renderAccountContactsTable(detail.contacts) : '<div class="empty-state">No contacts imported for this company yet.</div>'}
-        </div>
-
-        <div class="detail-card">
-          <div class="panel-header"><div><h3>Activity timeline</h3><p class="muted small">Recent outreach, notes, and stage changes for this company.</p></div></div>
-          ${detail.activity.length ? `<div class="timeline">${detail.activity.map(renderTimelineItem).join('')}</div>` : '<div class="empty-state">No activity yet.</div>'}
+          <div class="panel-header"><div><h3>ATS configs</h3><p class="muted small">Discovery results and import sources.</p></div></div>
+          ${detail.configs.length ? renderAccountConfigsTable(detail.configs) : '<div class="empty-state">No ATS config rows for this account yet.</div>'}
         </div>
       </div>
     </section>
@@ -1030,16 +1171,38 @@ async function renderJobsView() {
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
   setViewTitle('Admin');
-  const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const [configs, runtime, resolverReport, enrichmentReport, unresolvedQueue, mediumQueue, enrichmentQueue] = await Promise.all([
-    api(`/api/configs${buildQuery(appState.configQuery)}`),
-    loadRuntimeStatus(true),
-    api('/api/configs/report'),
-    api('/api/enrichment/report'),
-    api(`/api/configs${buildQuery({ page: 1, pageSize: 8, confidenceBand: 'unresolved', reviewStatus: 'pending' })}`),
-    api(`/api/configs${buildQuery({ page: 1, pageSize: 8, confidenceBand: 'medium', reviewStatus: 'pending' })}`),
-    api(`/api/enrichment/queue${buildQuery(appState.enrichmentQuery)}`),
-  ]);
+  const batchQuery = {};
+  const cq = appState.configQuery;
+  if (cq.page) batchQuery.configPage = cq.page;
+  if (cq.pageSize) batchQuery.configPageSize = cq.pageSize;
+  if (cq.q) batchQuery.configQ = cq.q;
+  if (cq.ats) batchQuery.configAts = cq.ats;
+  if (cq.active) batchQuery.configActive = cq.active;
+  if (cq.discoveryStatus) batchQuery.configDiscoveryStatus = cq.discoveryStatus;
+  if (cq.confidenceBand) batchQuery.configConfidenceBand = cq.confidenceBand;
+  if (cq.reviewStatus) batchQuery.configReviewStatus = cq.reviewStatus;
+  const eq = appState.enrichmentQuery;
+  if (eq.page) batchQuery.enrichmentPage = eq.page;
+  if (eq.pageSize) batchQuery.enrichmentPageSize = eq.pageSize;
+  if (eq.confidence) batchQuery.enrichmentConfidence = eq.confidence;
+  if (eq.missingDomain) batchQuery.enrichmentMissingDomain = eq.missingDomain;
+  if (eq.missingCareersUrl) batchQuery.enrichmentMissingCareersUrl = eq.missingCareersUrl;
+  if (eq.hasConnections) batchQuery.enrichmentHasConnections = eq.hasConnections;
+  if (eq.minTargetScore) batchQuery.enrichmentMinTargetScore = eq.minTargetScore;
+  if (eq.topN) batchQuery.enrichmentTopN = eq.topN;
+  const batch = await api(`/api/admin/bootstrap${buildQuery(batchQuery)}`);
+  const stateBootstrap = batch.bootstrap;
+  appState.bootstrap = { ...(appState.bootstrap || {}), ...stateBootstrap };
+  workspaceName.textContent = stateBootstrap?.workspace?.name || 'BD Engine Workspace';
+  window.bdLocalApi.setAlert('', appAlert);
+  const configs = batch.configs;
+  const runtime = batch.runtime;
+  appState.runtimeStatus = runtime;
+  const resolverReport = batch.resolverReport;
+  const enrichmentReport = batch.enrichmentReport;
+  const unresolvedQueue = batch.unresolvedQueue;
+  const mediumQueue = batch.mediumQueue;
+  const enrichmentQueue = batch.enrichmentQueue;
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
 
@@ -1216,7 +1379,8 @@ async function renderAdminView() {
               <h4>Connections CSV</h4>
               <p class="small muted">Validate or import a LinkedIn Connections.csv file. Dry run stays in memory and does not modify local state.</p>
               <div class="inline-field-stack">
-                <input id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}" placeholder="C:\\Users\\...\\Connections.csv">
+                <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
+                <input type="file" id="connections-csv-file" accept=".csv">
                 <div class="button-row">
                   <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
                   <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
@@ -1303,17 +1467,34 @@ function renderRecentJobsTable(items) {
 
 function renderAccountsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>Score</th><th>Hiring radar</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
+    <div id="bulk-action-bar" class="bulk-action-bar hidden">
+      <span id="bulk-count">0 selected</span>
+      <select id="bulk-status"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="outreach">Outreach</option><option value="engaged">Engaged</option><option value="client">Client</option><option value="paused">Paused</option></select>
+      <select id="bulk-priority"><option value="">Change priority...</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
+    </div>
+    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Score</th><th>Hiring radar</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
-        <tr>
+        <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
+          <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
           <td>${formatNumber(item.dailyScore)}<div class="small muted">${escapeHtml(humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.openRoleCount || item.jobCount)} open<div class="small muted">${formatNumber(item.newRoleCount7d || 0)} new / 7d · ${escapeHtml(item.departmentFocus || 'No clear cluster')}</div></td>
+          <td>${formatNumber(item.openRoleCount || item.jobCount)} open<div class="small muted">${formatNumber(item.newRoleCount7d || 0)} new / 7d \u00b7 ${escapeHtml(item.departmentFocus || 'No clear cluster')}</div></td>
           <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}</td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
           <td>${(item.atsTypes || []).map((type) => renderStatusPill(type, 'neutral')).join(' ') || '<span class="small muted">None</span>'}</td>
-          <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="archive-account" data-id="${item.id}">Pause</button></div></td>
+          <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Log</button></div></td>
+        </tr>
+        <tr id="quick-log-${item.id}" class="quick-log-row hidden">
+          <td colspan="9">
+            <form class="quick-log-form" data-account-id="${item.id}">
+              <input name="quickNote" placeholder="Quick note..." class="compact-input">
+              <select name="outreachStatus" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
+              <button class="secondary-button compact-btn" type="submit">Save</button>
+              <button type="button" class="ghost-button compact-btn" data-action="close-quick-log" data-id="${item.id}">Cancel</button>
+            </form>
+          </td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -1567,17 +1748,33 @@ function renderDiscoveryList(items) {
   `;
 }
 
+function parseJobProgress(msg) {
+  if (!msg) return null;
+  const match = msg.match(/(\d+)\/(\d+)/);
+  if (!match) return null;
+  const current = parseInt(match[1], 10);
+  const total = parseInt(match[2], 10);
+  if (!total) return null;
+  return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
+}
+
 function renderBackgroundJobItem(job) {
   const tone = job.status === 'completed'
     ? 'success'
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
+  const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+
   return `
     <article class="timeline-item">
       <div class="inline-header">
         <strong>${escapeHtml(humanize(job.type || 'job'))}</strong>
-        ${renderStatusPill(job.status || 'queued', tone)}
+        <div class="job-status-cluster">
+          ${progress ? `<span class="job-pct">${progress.pct}%</span>` : ''}
+          ${renderStatusPill(job.status || 'queued', tone)}
+        </div>
       </div>
+      ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p>${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
         <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${job.recordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
@@ -1629,6 +1826,15 @@ function renderPrioritySelect(name, currentValue, includeAll = false) {
     `<option value="low" ${selected(currentValue, 'low')}>Low</option>`,
   ].join('');
   return `<select name="${escapeAttr(name)}">${options}</select>`;
+}
+
+function renderOwnerSelect(name, currentValue, includeAll = false) {
+  const roster = (appState.bootstrap && appState.bootstrap.ownerRoster) || [];
+  const allOption = includeAll ? '<option value="">All owners</option>' : '<option value="">Unassigned</option>';
+  const rosterOptions = roster.map((o) =>
+    `<option value="${escapeAttr(o.displayName)}" ${selected(currentValue, o.displayName)}>${escapeHtml(o.displayName)}</option>`
+  ).join('');
+  return `<select name="${escapeAttr(name)}">${allOption}${rosterOptions}</select>`;
 }
 
 function renderAccountStatusSelect(name, currentValue, includeAll = false) {
@@ -1856,14 +2062,30 @@ async function runConnectionsCsvImport(dryRun) {
   if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Importing...'; }
 
   try {
-    const csvPath = getConnectionsCsvPath();
+    const fileInput = document.getElementById('connections-csv-file');
+    const file = fileInput?.files?.[0];
+
+    let requestBody;
+    if (file) {
+      const csvContent = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
+      requestBody = JSON.stringify({ csvContent, dryRun, useEmptyState: dryRun });
+    } else {
+      const csvPath = getConnectionsCsvPath();
+      if (!csvPath) {
+        window.bdLocalApi.setAlert('Please select a CSV file using the Browse button.', appAlert);
+        return;
+      }
+      requestBody = JSON.stringify({ csvPath, dryRun, useEmptyState: dryRun });
+    }
+
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
-      body: JSON.stringify({
-        csvPath,
-        dryRun,
-        useEmptyState: dryRun,
-      }),
+      body: requestBody,
     });
     if (!dryRun) {
       window.bdLocalApi.setAlert('Connections import queued.', appAlert);
@@ -1874,9 +2096,7 @@ async function runConnectionsCsvImport(dryRun) {
       return;
     }
     const stats = run?.stats || {};
-    const message = dryRun
-      ? `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`
-      : `Imported ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {
     if (button) { button.disabled = false; button.textContent = originalLabel; }
@@ -1911,6 +2131,114 @@ async function cancelBackgroundJob(jobId) {
   const runtime = await loadRuntimeStatus(true);
   hydrateAdminRuntimePanels(runtime);
   window.bdLocalApi.setAlert('Queued background job cancelled.', appAlert);
+}
+
+document.addEventListener('change', (event) => {
+  if (event.target.id === 'bulk-select-all') {
+    const checked = event.target.checked;
+    document.querySelectorAll('.bulk-checkbox').forEach(cb => { cb.checked = checked; });
+    updateBulkBar();
+    return;
+  }
+  if (event.target.classList.contains('bulk-checkbox')) {
+    updateBulkBar();
+    return;
+  }
+});
+
+document.addEventListener('click', (event) => {
+  const contactRow = event.target.closest('.contact-row-selectable');
+  if (contactRow) {
+    const name = contactRow.dataset.contactName;
+    const sel = document.getElementById('outreach-contact-select');
+    if (sel) {
+      sel.value = name;
+      document.querySelectorAll('.contact-row-selectable').forEach(r => r.classList.remove('selected'));
+      contactRow.classList.add('selected');
+    }
+  }
+});
+
+function updateBulkBar() {
+  const checked = document.querySelectorAll('.bulk-checkbox:checked');
+  const bar = document.getElementById('bulk-action-bar');
+  const count = document.getElementById('bulk-count');
+  if (bar) {
+    if (checked.length > 0) {
+      bar.classList.remove('hidden');
+      if (count) count.textContent = checked.length + ' selected';
+    } else {
+      bar.classList.add('hidden');
+    }
+  }
+}
+
+async function applyBulkUpdate() {
+  const checked = document.querySelectorAll('.bulk-checkbox:checked');
+  const ids = Array.from(checked).map(cb => cb.value);
+  if (!ids.length) return;
+  const status = document.getElementById('bulk-status')?.value || '';
+  const priority = document.getElementById('bulk-priority')?.value || '';
+  const patch = {};
+  if (status) patch.status = status;
+  if (priority) patch.priority = priority;
+  if (!Object.keys(patch).length) {
+    window.bdLocalApi.setAlert('Select a status or priority to apply.', appAlert);
+    return;
+  }
+  await api('/api/accounts/bulk', {
+    method: 'PATCH',
+    body: JSON.stringify({ ids, ...patch }),
+  });
+  invalidateAppData();
+  await renderAccountsView();
+  window.bdLocalApi.setAlert('Updated ' + ids.length + ' accounts.', appAlert);
+}
+
+async function generateSmartOutreach(accountId, buttonEl) {
+  if (!accountId) return;
+  const origText = buttonEl.textContent;
+  buttonEl.textContent = 'Generating...';
+  buttonEl.disabled = true;
+
+  try {
+    // Get selected contact from dropdown
+    const contactSelect = document.getElementById('outreach-contact-select');
+    const selectedOption = contactSelect?.selectedOptions?.[0];
+    const contactName = selectedOption?.value || '';
+    const contactTitle = selectedOption?.dataset?.title || '';
+
+    const result = await api(`/api/accounts/${accountId}/generate-outreach`, {
+      method: 'POST',
+      body: JSON.stringify({ bookingLink: 'https://tinyurl.com/ysdep7cn', contactName, contactTitle, template: document.getElementById('outreach-template-select')?.value || 'cold' }),
+    });
+
+    // Update the outreach prompt card with the generated message
+    const body = document.getElementById('outreach-prompt-body');
+    if (body && result.outreach) {
+      body.className = 'outreach-generated';
+      const contactSelect = document.getElementById('outreach-contact-select');
+      const selName = contactSelect?.selectedOptions?.[0]?.value || '';
+      const gmailSubject = encodeURIComponent('Quick intro — ' + (appState.accountDetail?.account?.displayName || ''));
+      const gmailBody = encodeURIComponent(result.outreach);
+      body.innerHTML = `
+        <pre class="outreach-text">${escapeHtml(result.outreach)}</pre>
+        <div class="button-row" style="margin-top:12px;">
+          <button class="secondary-button" onclick="navigator.clipboard.writeText(document.querySelector('.outreach-text').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy to clipboard',1500)">Copy to clipboard</button>
+          <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+        </div>
+      `;
+      // Scroll the outreach card into view
+      const card = document.getElementById('outreach-prompt-card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    window.bdLocalApi.setAlert('Outreach message generated! Check the Outreach prompt section.', appAlert);
+  } catch (err) {
+    window.bdLocalApi.setAlert('Failed to generate outreach: ' + (err.message || err), appAlert);
+  } finally {
+    buttonEl.textContent = origText;
+    buttonEl.disabled = false;
+  }
 }
 
 async function archiveAccount(accountId) {

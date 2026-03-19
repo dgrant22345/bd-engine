@@ -293,7 +293,12 @@ function Get-ResolverKnownMappingOverrides {
         $parsed = if ([string]::IsNullOrWhiteSpace($raw)) { @{} } else { $raw | ConvertFrom-Json -Depth 20 }
         $overrides = @{}
         foreach ($property in @($parsed.PSObject.Properties)) {
-            $overrides[[string]$property.Name] = Convert-ToPlainObject -InputObject $property.Value
+            $pso = $property.Value
+            $hash = [ordered]@{}
+            foreach ($p in @($pso.PSObject.Properties)) {
+                $hash[[string]$p.Name] = $p.Value
+            }
+            $overrides[[string]$property.Name] = $hash
         }
         $script:ResolverKnownMappingOverrides = $overrides
     } catch {
@@ -665,7 +670,7 @@ function New-GeneratedBoardConfig {
     $templateDiscoveryStatus = [string](Get-ObjectValue -Object $template -Name 'discoveryStatus')
     if ($templateDiscoveryMethod -in @('known_map', 'repair_seed')) {
         $template.discoveryStatus = 'mapped'
-        $template.confidenceScore = if ($template.confidenceScore) { $template.confidenceScore } else { 100 }
+        $template.confidenceScore = if (Test-ObjectHasKey -Object $template -Name 'confidenceScore' | Where-Object { $_ }) { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 100 }
         $template.confidenceBand = 'high'
         $template.supportedImport = [bool](Test-ImportCapableAtsType -AtsType ([string]$template.atsType))
         $template.active = [bool]($template.supportedImport -and $template.active)
@@ -719,11 +724,11 @@ function Merge-BoardConfigRecord {
         $Generated
     )
 
-    $existingMethod = ([string]$Existing.discoveryMethod).ToLowerInvariant()
-    $existingReview = ([string]$Existing.reviewStatus).ToLowerInvariant()
-    $existingConfidence = ([string]$Existing.confidenceBand).ToLowerInvariant()
-    $existingResolved = -not [string]::IsNullOrWhiteSpace([string]$Existing.boardId) -or -not [string]::IsNullOrWhiteSpace([string]$Existing.resolvedBoardUrl)
-    $isProtected = ([string]$Existing.source).ToLowerInvariant() -eq 'manual' -or $existingMethod -in @('manual', 'known_map', 'known_override') -or $existingReview -in @('approved', 'promoted', 'rejected') -or ($existingResolved -and $existingConfidence -eq 'high')
+    $existingMethod = ([string](Get-ObjectValue -Object $Existing -Name 'discoveryMethod')).ToLowerInvariant()
+    $existingReview = ([string](Get-ObjectValue -Object $Existing -Name 'reviewStatus')).ToLowerInvariant()
+    $existingConfidence = ([string](Get-ObjectValue -Object $Existing -Name 'confidenceBand')).ToLowerInvariant()
+    $existingResolved = -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'boardId')) -or -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'resolvedBoardUrl'))
+    $isProtected = ([string](Get-ObjectValue -Object $Existing -Name 'source')).ToLowerInvariant() -eq 'manual' -or $existingMethod -in @('manual', 'known_map', 'known_override') -or $existingReview -in @('approved', 'promoted', 'rejected') -or ($existingResolved -and $existingConfidence -eq 'high')
     $merged = [ordered]@{}
     foreach ($property in $Existing.Keys) {
         $merged[$property] = $Existing[$property]
@@ -2701,27 +2706,27 @@ function Sync-BoardConfigsFromCompanies {
 
         if ($manualItems.Count -gt 0) {
             foreach ($item in $existingItems) {
-                $item.accountId = $company.id
-                $item.companyName = $company.displayName
-                $item.normalizedCompanyName = $key
-                $itemDomain = if ($item.PSObject.Properties.Name -contains 'domain') { [string]$item.domain } else { '' }
-                $itemLastCheckedAt = if ($item.PSObject.Properties.Name -contains 'lastCheckedAt') { [string]$item.lastCheckedAt } else { '' }
-                $itemDiscoveryStatus = if ($item.PSObject.Properties.Name -contains 'discoveryStatus') { [string]$item.discoveryStatus } else { '' }
-                $itemDiscoveryMethod = if ($item.PSObject.Properties.Name -contains 'discoveryMethod') { [string]$item.discoveryMethod } else { '' }
+                [void](Set-ObjectValue -Object $item -Name 'accountId' -Value $company.id)
+                [void](Set-ObjectValue -Object $item -Name 'companyName' -Value $company.displayName)
+                [void](Set-ObjectValue -Object $item -Name 'normalizedCompanyName' -Value $key)
+                $itemDomain = [string](Get-ObjectValue -Object $item -Name 'domain')
+                $itemLastCheckedAt = [string](Get-ObjectValue -Object $item -Name 'lastCheckedAt')
+                $itemDiscoveryStatus = [string](Get-ObjectValue -Object $item -Name 'discoveryStatus')
+                $itemDiscoveryMethod = [string](Get-ObjectValue -Object $item -Name 'discoveryMethod')
 
-                if (-not $itemDomain) { $item.domain = $generated.domain }
-                if (-not $itemLastCheckedAt) { $item.lastCheckedAt = $generated.lastCheckedAt }
-                if (-not $itemDiscoveryStatus) { $item.discoveryStatus = 'manual' }
-                if (-not $itemDiscoveryMethod) { $item.discoveryMethod = 'manual' }
-                if (-not $item.resolvedBoardUrl) { $item.resolvedBoardUrl = $generated.resolvedBoardUrl }
-                if ($null -eq $item.supportedImport) { $item.supportedImport = Test-ImportCapableAtsType -AtsType ([string]$item.atsType) }
-                if (-not $item.confidenceScore) { $item.confidenceScore = 100 }
-                if (-not $item.confidenceBand) { $item.confidenceBand = 'high' }
-                if (-not $item.evidenceSummary) { $item.evidenceSummary = 'Manual ATS config preserved during sync' }
-                if (-not $item.reviewStatus) { $item.reviewStatus = 'approved' }
-                if ($null -eq $item.matchedSignatures) { $item.matchedSignatures = @('manual') }
-                if ($null -eq $item.attemptedUrls) { $item.attemptedUrls = @() }
-                if ($null -eq $item.httpSummary) { $item.httpSummary = @() }
+                if (-not $itemDomain) { [void](Set-ObjectValue -Object $item -Name 'domain' -Value (Get-ObjectValue -Object $generated -Name 'domain')) }
+                if (-not $itemLastCheckedAt) { [void](Set-ObjectValue -Object $item -Name 'lastCheckedAt' -Value (Get-ObjectValue -Object $generated -Name 'lastCheckedAt')) }
+                if (-not $itemDiscoveryStatus) { [void](Set-ObjectValue -Object $item -Name 'discoveryStatus' -Value 'manual') }
+                if (-not $itemDiscoveryMethod) { [void](Set-ObjectValue -Object $item -Name 'discoveryMethod' -Value 'manual') }
+                if (-not (Get-ObjectValue -Object $item -Name 'resolvedBoardUrl')) { [void](Set-ObjectValue -Object $item -Name 'resolvedBoardUrl' -Value (Get-ObjectValue -Object $generated -Name 'resolvedBoardUrl')) }
+                if ($null -eq (Get-ObjectValue -Object $item -Name 'supportedImport' -Default $null)) { [void](Set-ObjectValue -Object $item -Name 'supportedImport' -Value (Test-ImportCapableAtsType -AtsType ([string](Get-ObjectValue -Object $item -Name 'atsType')))) }
+                if (-not (Get-ObjectValue -Object $item -Name 'confidenceScore' -Default $null)) { [void](Set-ObjectValue -Object $item -Name 'confidenceScore' -Value 100) }
+                if (-not (Get-ObjectValue -Object $item -Name 'confidenceBand')) { [void](Set-ObjectValue -Object $item -Name 'confidenceBand' -Value 'high') }
+                if (-not (Get-ObjectValue -Object $item -Name 'evidenceSummary')) { [void](Set-ObjectValue -Object $item -Name 'evidenceSummary' -Value 'Manual ATS config preserved during sync') }
+                if (-not (Get-ObjectValue -Object $item -Name 'reviewStatus')) { [void](Set-ObjectValue -Object $item -Name 'reviewStatus' -Value 'approved') }
+                if ($null -eq (Get-ObjectValue -Object $item -Name 'matchedSignatures' -Default $null)) { [void](Set-ObjectValue -Object $item -Name 'matchedSignatures' -Value @('manual')) }
+                if ($null -eq (Get-ObjectValue -Object $item -Name 'attemptedUrls' -Default $null)) { [void](Set-ObjectValue -Object $item -Name 'attemptedUrls' -Value @()) }
+                if ($null -eq (Get-ObjectValue -Object $item -Name 'httpSummary' -Default $null)) { [void](Set-ObjectValue -Object $item -Name 'httpSummary' -Value @()) }
                 [void]$mergedConfigs.Add($item)
             }
             continue
@@ -2793,13 +2798,16 @@ function Get-LeverJobs {
     $payload = Get-JsonFromUrl -Url $url
     return @(
         foreach ($job in @($payload)) {
+            $location = [string](Get-NestedValue -Object $job -Paths @('categories.location', 'location'))
+            $department = [string](Get-NestedValue -Object $job -Paths @('categories.team', 'team'))
+            $employmentType = [string](Get-NestedValue -Object $job -Paths @('categories.commitment', 'categories.workplaceType', 'commitment'))
             [ordered]@{
                 jobId = [string]$(Get-NestedValue -Object $job -Paths @('id', 'requisitionCode'))
-                title = if ($job.text) { $job.text } else { '' }
-                location = if ($job.categories -and $job.categories.location) { $job.categories.location } else { '' }
-                department = if ($job.categories -and $job.categories.team) { $job.categories.team } else { '' }
-                employmentType = if ($job.categories -and $job.categories.commitment) { $job.categories.commitment } else { '' }
-                url = if ($job.hostedUrl) { $job.hostedUrl } elseif ($job.applyUrl) { $job.applyUrl } else { '' }
+                title = [string](Get-NestedValue -Object $job -Paths @('text', 'title'))
+                location = $location
+                department = $department
+                employmentType = $employmentType
+                url = [string](Get-NestedValue -Object $job -Paths @('hostedUrl', 'applyUrl', 'url'))
                 postedAt = if ($job.createdAt) { Convert-ToDateString ([datetimeoffset]::FromUnixTimeMilliseconds([int64]$job.createdAt).DateTime) } else { (Get-Date).ToString('o') }
                 sourceUrl = $url
                 rawPayload = $job
@@ -2850,18 +2858,18 @@ function Get-SmartRecruitersJobs {
     return @(
         foreach ($job in @($payload.content)) {
             $locationParts = @(
-                if ($job.location -and $job.location.city) { [string]$job.location.city }
-                if ($job.location -and $job.location.region) { [string]$job.location.region }
-                if ($job.location -and $job.location.country) { [string]$job.location.country }
+                [string](Get-NestedValue -Object $job -Paths @('location.city'))
+                [string](Get-NestedValue -Object $job -Paths @('location.region'))
+                [string](Get-NestedValue -Object $job -Paths @('location.country'))
             ) | Where-Object { $_ }
             [ordered]@{
                 jobId = [string](Get-NestedValue -Object $job -Paths @('id', 'ref'))
-                title = if ($job.name) { $job.name } else { '' }
+                title = [string](Get-NestedValue -Object $job -Paths @('name', 'title'))
                 location = ($locationParts -join ', ')
-                department = if ($job.department -and $job.department.label) { $job.department.label } else { '' }
-                employmentType = if ($job.typeOfEmployment -and $job.typeOfEmployment.label) { $job.typeOfEmployment.label } else { '' }
-                url = if ($job.ref) { $job.ref } elseif ($job.applyUrl) { $job.applyUrl } else { '' }
-                postedAt = if ($job.releasedDate) { Convert-ToDateString $job.releasedDate } elseif ($job.createdOn) { Convert-ToDateString $job.createdOn } else { (Get-Date).ToString('o') }
+                department = [string](Get-NestedValue -Object $job -Paths @('department.label', 'department.name', 'department'))
+                employmentType = [string](Get-NestedValue -Object $job -Paths @('typeOfEmployment.label', 'typeOfEmployment.name', 'typeOfEmployment'))
+                url = [string](Get-NestedValue -Object $job -Paths @('ref', 'applyUrl', 'jobAd.publicUrl'))
+                postedAt = if (Get-NestedValue -Object $job -Paths @('releasedDate', 'createdOn')) { Convert-ToDateString (Get-NestedValue -Object $job -Paths @('releasedDate', 'createdOn')) } else { (Get-Date).ToString('o') }
                 sourceUrl = $url
                 rawPayload = $job
             }
@@ -2894,18 +2902,37 @@ function Get-WorkdayJobs {
     }
 
     $payload = Get-JsonFromUrl -Url $url
+    $jobCollections = @(
+        (Get-NestedValue -Object $payload -Paths @('jobPostings')),
+        (Get-NestedValue -Object $payload -Paths @('jobPostingInfo')),
+        (Get-NestedValue -Object $payload -Paths @('listItems')),
+        (Get-NestedValue -Object $payload -Paths @('jobs')),
+        $(if ($payload -is [System.Collections.IEnumerable] -and $payload -isnot [string]) { $payload } else { $null })
+    )
+    $jobs = @()
+    foreach ($candidateJobs in $jobCollections) {
+        if ($null -eq $candidateJobs) {
+            continue
+        }
+
+        $jobs = @($candidateJobs)
+        if ($jobs.Count -gt 0) {
+            break
+        }
+    }
+
     return @(
-        foreach ($job in @($payload.jobPostings)) {
+        foreach ($job in @($jobs)) {
             $externalPath = [string](Get-NestedValue -Object $job -Paths @('externalPath'))
             $jobUrl = if ($externalPath -and $url -match '^(https?://[^/]+)') { "$($matches[1])$externalPath" } else { $externalPath }
             [ordered]@{
-                jobId = [string](Get-NestedValue -Object $job -Paths @('bulletFields', 'externalPath', 'id'))
+                jobId = [string](Get-NestedValue -Object $job -Paths @('bulletFields', 'externalPath', 'id', 'jobPostingId'))
                 title = [string](Get-NestedValue -Object $job -Paths @('title'))
-                location = [string](Get-NestedValue -Object $job -Paths @('locationsText'))
-                department = [string](Get-NestedValue -Object $job -Paths @('bulletFields'))
-                employmentType = [string](Get-NestedValue -Object $job -Paths @('timeType'))
-                url = $jobUrl
-                postedAt = Convert-ToDateString (Get-NestedValue -Object $job -Paths @('postedOn', 'postedOnDate'))
+                location = [string](Get-NestedValue -Object $job -Paths @('locationsText', 'location'))
+                department = [string](Get-NestedValue -Object $job -Paths @('bulletFields', 'jobFamily', 'department'))
+                employmentType = [string](Get-NestedValue -Object $job -Paths @('timeType', 'workerSubType', 'employmentType'))
+                url = if ($jobUrl) { $jobUrl } else { [string](Get-NestedValue -Object $job -Paths @('externalUrl', 'url')) }
+                postedAt = Convert-ToDateString (Get-NestedValue -Object $job -Paths @('postedOn', 'postedOnDate', 'startDate'))
                 sourceUrl = $url
                 rawPayload = $job
             }
@@ -3218,7 +3245,21 @@ function Invoke-LiveJobImport {
 
     $companyKeys = New-Object 'System.Collections.Generic.HashSet[string]'
     $retrievedAt = (Get-Date).ToString('o')
-    $activeConfigs = @($State.boardConfigs | Where-Object { $_.active -ne $false })
+    $activeConfigs = @(
+        $State.boardConfigs |
+            Where-Object {
+                if ((Get-ObjectValue -Object $_ -Name 'active' -Default $true) -eq $false) {
+                    return $false
+                }
+
+                $supportedImport = Get-ObjectValue -Object $_ -Name 'supportedImport' -Default $null
+                if ($null -ne $supportedImport) {
+                    return (Test-Truthy $supportedImport)
+                }
+
+                return (Test-ImportCapableAtsType -AtsType ([string](Get-ObjectValue -Object $_ -Name 'atsType')))
+            }
+    )
     $totalConfigs = @($activeConfigs).Count
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Importing live jobs' -Processed 0 -Total $totalConfigs -StartedAt $startedAt -Message 'Fetching active ATS job feeds'
     for ($configIndex = 0; $configIndex -lt $activeConfigs.Count; $configIndex++) {

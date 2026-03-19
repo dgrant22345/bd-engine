@@ -1,147 +1,132 @@
-﻿# BD Engine Web App MVP
+# BD Engine
 
-BD Engine turns the spreadsheet-based business development workflow into a lightweight web app with a clean dashboard, ranked accounts, contact intelligence, job ingestion, and ATS config management.
+Business development operating system. Daily account prioritization, contact intelligence, and ATS import orchestration in one place.
 
-## What This Repo Contains
+## Quick Start
 
-- `app/`
-  - browser UI for dashboard, accounts, contacts, jobs, and admin
-- `server/Server.ps1`
-  - local HTTP server and JSON API
-- `server/Modules/BdEngine.Domain.psm1`
-  - scoring, ranking, search, filters, and account-detail models
-- `server/Modules/BdEngine.Import.psm1`
-  - workbook parser and seed import
-- `server/Modules/BdEngine.JobImport.psm1`
-  - live Greenhouse, Lever, and Ashby importers
-- `server/Modules/BdEngine.State.psm1`
-  - file-backed persistence
-- `data/`
-  - persisted workspace state
-- `docs/migration-plan.md`
-  - spreadsheet audit, app architecture, and schema
+**Windows:**
 
-## Workbook Audit Summary
-
-The workbook at `C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx` exports these visible sheets:
-
-- `Setup`
-- `Connections`
-- `Hiring_Import`
-- `Target_Accounts`
-- `Daily_Hot_List`
-- `Today_View`
-- `Top_Contacts`
-- `Outreach_Templates`
-- `History`
-
-Important findings from the audit:
-
-- `Setup` contains the live operating thresholds the app now imports:
-  - min company connections: `3`
-  - min jobs posted: `2`
-  - contact priority threshold: `55`
-  - max companies to review: `25`
-- `Connections` is the real source of truth in this export. It contains 20k+ people rows plus formula-driven flags for title relevance, company overlap, years connected, and contact priority.
-- `Hiring_Import` in this `.xlsx` only contains placeholder/example rows, not a real jobs snapshot.
-- `Target_Accounts`, `Today_View`, `Top_Contacts`, and `History` are mostly empty in the exported file because the live Google Sheets workflow depended on formulas/scripts that do not survive the `.xlsx` export cleanly.
-- There is no visible `Job_Boards_Config` sheet in this workbook export, so ATS config data starts empty and is managed in the app admin UI.
-
-## What The App Preserves
-
-- contact title classification and priority scoring from `Connections`
-- setup-driven threshold controls from `Setup`
-- ranked account rollups derived from company overlap and contact quality
-- `Daily_Hot_List` style scoring as an app-native service
-- `Today_View` style shortlist logic
-- admin-managed ATS config and live job refresh flow
-- outreach stages, notes, and activity tracking
-
-## Current Seed State
-
-The repo is currently seeded from your workbook and now contains:
-
-- `12,261` accounts
-- `20,736` contacts
-- `0` jobs
-- `0` ATS config rows
-- `0` activity history rows
-
-That is expected for this workbook export. To populate jobs in the app, add ATS config rows in **Admin** and run **Run job import**.
-
-## Stack
-
-This MVP stays intentionally lightweight in this environment:
-
-- frontend: static HTML/CSS/vanilla JS
-- backend: PowerShell HTTP server
-- persistence: JSON files in `data/`
-- import layer: Open XML workbook parsing plus live ATS HTTP importers
-
-The product model is structured so it can later move to a React/Next.js + relational database stack without changing the core workflow.
-
-## Run The App
-
-Windows:
-
-```powershell
-.\Start-App.cmd
+```
+Double-click Start-BDEngine.bat
 ```
 
-Or directly:
+Or from PowerShell:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-App.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File server\Server.ps1 -Port 8173 -OpenBrowser
 ```
 
-Optional port override:
+Open [http://localhost:8173](http://localhost:8173).
+
+## What It Does
+
+BD Engine replaces the spreadsheet-based BD workflow with a web app that:
+
+- **Ranks accounts** by hiring signals, contact density, and engagement score
+- **Scores contacts** by title relevance, seniority, and relationship strength
+- **Imports live jobs** from ATS platforms (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite)
+- **Discovers job boards** automatically via slug-based ATS probing
+- **Tracks outreach** with activity logging and stage management
+- **Assigns ownership** across a fixed roster (Derek Grant, Alex Chong, Danny Chung)
+
+## App Views
+
+| View | What it shows |
+|------|---------------|
+| **Dashboard** | Today's prioritized account list with hiring signals and scores |
+| **Accounts** | Full account list with search, filters, and detail drilldowns |
+| **Contacts** | Contact directory with priority scoring and title classification |
+| **Jobs** | Live job postings imported from connected ATS boards |
+| **Admin** | ATS board config management, enrichment tools, and import controls |
+
+## Architecture
+
+```
+app/                    Frontend (static HTML/CSS/vanilla JS)
+server/Server.ps1       HTTP server (PowerShell, port 8173)
+server/Modules/         Business logic modules
+  BdEngine.Domain.psm1    Scoring, ranking, search, filters
+  BdEngine.Import.psm1    Workbook parser and seed import
+  BdEngine.JobImport.psm1 Live ATS importers + discovery pipeline
+  BdEngine.State.psm1     File-backed persistence
+  BdEngine.SqliteStore.psm1  SQLite storage adapter
+  BdEngine.GoogleSheetSync.psm1  Google Sheets integration
+data/                   Persisted state (JSON + SQLite)
+scripts/                Utility and maintenance scripts
+```
+
+## ATS Board Discovery
+
+The app automatically discovers which ATS platform each company uses. Current coverage: **609/839 companies resolved (72.6%)**.
+
+Discovery methods:
+- **Slug probing** — tests company name variants against Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite APIs
+- **Workday probing** — tests against Workday subdomain variants (wd1-wd12)
+- **Known enterprise mappings** — curated career page URLs for 400+ major companies
+- **Google Sheets sync** — imports config from a shared Google Sheet
+
+### Running Discovery Scripts
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-App.ps1 -Port 8188
+# Main ATS probe (Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite)
+powershell -NoProfile -File scripts\Fast-Probe.ps1
+
+# Workday subdomain probing
+powershell -NoProfile -File scripts\Fast-Probe-Extra.ps1
+
+# Additional ATS types (Workable, Recruitee, Rippling)
+powershell -NoProfile -File scripts\Fast-Probe-More.ps1
+
+# Apply known enterprise career page mappings
+powershell -NoProfile -File scripts\Apply-Known-Enterprise.ps1
+powershell -NoProfile -File scripts\Apply-Known-Enterprise-2.ps1
+powershell -NoProfile -File scripts\Apply-Known-Enterprise-3.ps1
+
+# Check resolution stats
+powershell -NoProfile -File scripts\check-stats.ps1
 ```
-
-Then open [http://localhost:8173](http://localhost:8173).
-
-## Import Behavior
-
-Default workbook path:
-
-- `C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx`
-
-The workbook import is now resilient to:
-
-- missing `Job_Boards_Config` tabs
-- formula cells exported as literal `=...` strings
-- placeholder rows in `Hiring_Import`
-- empty history/config/job sections
-- clean reseeds where collections are empty
 
 ## Live Job Import
 
-Supported live ATS sources:
+1. Open **Admin** in the app
+2. Verify ATS configs are resolved (green status)
+3. Click **Run job import**
+4. Jobs appear in the **Jobs** view
 
-- Greenhouse
-- Lever
-- Ashby
-- SmartRecruiters
+Supported import sources: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite.
 
-Workflow:
+## Data
 
-1. Open **Admin**.
-2. Add or edit ATS config rows.
-3. Click **Run job import**.
-4. Refresh the dashboard/accounts/jobs views.
+- **SQLite database**: `data/bd-engine.db` — board configs, discovery state
+- **JSON files**: `data/*.json` — accounts, contacts, settings, workspace state
+- **Known mappings**: `data/resolver-known-mappings.json` — curated ATS mappings
 
-## Google Sheets API Access
+## Sharing the App
 
-Service-account based Google Sheets access is now scaffolded for this project.
+**Local distribution**: Run `scripts\Package-Distribution.ps1` to create `BD-Engine.zip`. Recipients unzip and double-click `Start-BDEngine.bat`.
 
-- setup guide: `docs/google-sheets-api-setup.md`
-- test script: `scripts/Test-GoogleSheetsAccess.ps1`
-- server endpoint: `POST /api/google-sheets/test`
+**Network sharing (Tailscale)**: The server binds to all interfaces by default. Install [Tailscale](https://tailscale.com/) on all machines, then share the Tailscale URL shown at startup. Use `-LocalOnly` flag to restrict to localhost.
 
-## Notes
+## API
 
-- Reads are served from the JSON snapshot in `data/`. Workbook imports and live ATS refreshes use the PowerShell API, while day-to-day UI edits are stored locally in the browser for this MVP.
-- The app is single-user at runtime today, but the data model keeps `workspaceId` on major entities for future SaaS expansion.
-- Because the provided workbook export does not carry real job/config/history rows, the first meaningful “hiring” dashboard experience depends on adding ATS configs and running a live import.
+Key endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | Health check |
+| `GET /api/dashboard` | Prioritized account list |
+| `GET /api/accounts` | Account data with search/filter |
+| `GET /api/contacts` | Contact directory |
+| `GET /api/jobs` | Imported job postings |
+| `GET /api/configs` | ATS board configurations |
+| `GET /api/owners` | Owner roster |
+| `POST /api/import/jobs` | Trigger live job import |
+| `POST /api/discovery/run` | Run ATS discovery pipeline |
+| `POST /api/enrichment/run` | Run company enrichment |
+
+## Stack
+
+- **Frontend**: Static HTML/CSS/vanilla JS (no build step)
+- **Backend**: PowerShell HTTP server (.NET TcpListener)
+- **Database**: SQLite + JSON file persistence
+- **Dependencies**: PowerShell 5.1+, .NET Framework (included with Windows)

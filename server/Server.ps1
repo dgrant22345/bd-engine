@@ -1,6 +1,7 @@
 param(
     [int]$Port = 8173,
-    [switch]$OpenBrowser
+    [switch]$OpenBrowser,
+    [switch]$LocalOnly
 )
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -19,9 +20,16 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') 
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 
 function Get-DefaultWorkbookPath {
+    $userProfile = [Environment]::GetFolderPath('UserProfile')
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $downloads = Join-Path $userProfile 'Downloads'
+    $oneDriveDesktop = Join-Path $userProfile 'OneDrive\Desktop'
+
     $candidates = @(
-        'C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx',
-        'C:\Users\ddere\Downloads\BD Engine - Final v 1.6 (1).xlsx'
+        (Join-Path $oneDriveDesktop 'Google_Sheets_Daily_BD_Engine (1).xlsx'),
+        (Join-Path $desktop 'Google_Sheets_Daily_BD_Engine (1).xlsx'),
+        (Join-Path $downloads 'BD Engine - Final v 1.6 (1).xlsx'),
+        (Join-Path $dataRoot 'workbook.xlsx')
     )
 
     foreach ($candidate in $candidates) {
@@ -34,10 +42,15 @@ function Get-DefaultWorkbookPath {
 }
 
 function Get-DefaultConnectionsCsvPath {
+    $userProfile = [Environment]::GetFolderPath('UserProfile')
+    $downloads = Join-Path $userProfile 'Downloads'
+    $oneDriveDownloads = Join-Path $userProfile 'OneDrive\Downloads'
+
     $candidates = @(
-        'C:\Users\ddere\Downloads\Connections.csv',
-        'C:\Users\ddere\Downloads\connections.csv',
-        'C:\Users\ddere\OneDrive\Downloads\Connections.csv'
+        (Join-Path $downloads 'Connections.csv'),
+        (Join-Path $downloads 'connections.csv'),
+        (Join-Path $oneDriveDownloads 'Connections.csv'),
+        (Join-Path $dataRoot 'Connections.csv')
     )
 
     foreach ($candidate in $candidates) {
@@ -536,7 +549,7 @@ function Save-SettingsRecord {
     if (@($Payload.Keys) -contains 'geographyFocus') { $State.settings.geographyFocus = [string]$Payload.geographyFocus }
     if (@($Payload.Keys) -contains 'gtaPriority') { $State.settings.gtaPriority = Test-Truthy $Payload.gtaPriority }
     $State.settings.updatedAt = (Get-Date).ToString('o')
-    Save-AppSegment -Segment 'Settings' -Data $State.settings
+    Save-AppSegment -Segment 'Settings' -Data $State.settings -SkipSnapshots
     $State
 }
 
@@ -696,6 +709,81 @@ function Handle-ApiRequest {
         }
         return (New-JsonResult $job)
     }
+    if ($path -eq '/api/admin/bootstrap' -and $method -eq 'GET') {
+        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+            $workspace = Get-AppSegment -Segment 'Workspace'
+            $settings = Get-AppSegment -Segment 'Settings'
+            $filters = if (Test-AppStoreUsesSqlite) {
+                $snapshot = Get-AppFilterSnapshotResult
+                Write-SnapshotLog -Name 'filters' -SnapshotResult $snapshot
+                $snapshot.payload
+            } else {
+                $state = Get-AppStateView -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs')
+                Get-AccountFilterOptions -State $state
+            }
+
+            $configQuery = @{
+                page = if ($query.configPage) { $query.configPage } else { '1' }
+                pageSize = if ($query.configPageSize) { $query.configPageSize } else { '20' }
+                q = if ($query.configQ) { $query.configQ } else { '' }
+                ats = if ($query.configAts) { $query.configAts } else { '' }
+                active = if ($query.configActive) { $query.configActive } else { '' }
+                discoveryStatus = if ($query.configDiscoveryStatus) { $query.configDiscoveryStatus } else { '' }
+                confidenceBand = if ($query.configConfidenceBand) { $query.configConfidenceBand } else { '' }
+                reviewStatus = if ($query.configReviewStatus) { $query.configReviewStatus } else { '' }
+            }
+            $enrichmentQuery = @{
+                page = if ($query.enrichmentPage) { $query.enrichmentPage } else { '1' }
+                pageSize = if ($query.enrichmentPageSize) { $query.enrichmentPageSize } else { '20' }
+                confidence = if ($query.enrichmentConfidence) { $query.enrichmentConfidence } else { '' }
+                missingDomain = if ($query.enrichmentMissingDomain) { $query.enrichmentMissingDomain } else { '' }
+                missingCareersUrl = if ($query.enrichmentMissingCareersUrl) { $query.enrichmentMissingCareersUrl } else { '' }
+                hasConnections = if ($query.enrichmentHasConnections) { $query.enrichmentHasConnections } else { '' }
+                minTargetScore = if ($query.enrichmentMinTargetScore) { $query.enrichmentMinTargetScore } else { '' }
+                topN = if ($query.enrichmentTopN) { $query.enrichmentTopN } else { '' }
+            }
+
+            $runtime = Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt
+
+            if (Test-AppStoreUsesSqlite) {
+                $configs = Find-AppConfigsFast -Query $configQuery
+                $resolverReport = Get-AppResolverCoverageReportFast
+                $enrichmentReport = Get-AppEnrichmentCoverageReportFast
+                $unresolvedQueue = Find-AppConfigsFast -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'unresolved'; reviewStatus = 'pending' }
+                $mediumQueue = Find-AppConfigsFast -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'medium'; reviewStatus = 'pending' }
+                $enrichmentQueue = Find-AppEnrichmentQueueFast -Query $enrichmentQuery
+            } else {
+                $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+                $configs = Get-ConfigResults -State $state -Query $configQuery
+                $resolverReport = [ordered]@{ summary = [ordered]@{}; byAtsType = @(); byConfidenceBand = @(); topFailureReasons = @(); history = @() }
+                $enrichmentReport = [ordered]@{ summary = [ordered]@{}; byConfidence = @(); bySource = @(); resolutionByEnrichmentPresence = @(); topUnresolvedReasons = @(); history = @() }
+                $unresolvedQueue = Get-ConfigResults -State $state -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'unresolved'; reviewStatus = 'pending' }
+                $mediumQueue = Get-ConfigResults -State $state -Query @{ page = '1'; pageSize = '8'; confidenceBand = 'medium'; reviewStatus = 'pending' }
+                $enrichmentQueue = [ordered]@{ items = @(); total = 0; page = 1; pageSize = 20 }
+            }
+
+            New-JsonResult ([ordered]@{
+                bootstrap = [ordered]@{
+                    workspace = $workspace
+                    settings = $settings
+                    filters = $filters
+                    ownerRoster = @(Get-OwnerRoster)
+                    defaults = [ordered]@{
+                        workbookPath = $defaultWorkbookPath
+                        connectionsCsvPath = $defaultConnectionsCsvPath
+                        spreadsheetId = $defaultSpreadsheetId
+                    }
+                }
+                configs = $configs
+                runtime = $runtime
+                resolverReport = $resolverReport
+                enrichmentReport = $enrichmentReport
+                unresolvedQueue = $unresolvedQueue
+                mediumQueue = $mediumQueue
+                enrichmentQueue = $enrichmentQueue
+            })
+        })
+    }
     if ($path -eq '/api/bootstrap' -and $method -eq 'GET') {
         return (Get-CachedApiResult -Path $path -Query $query -Factory {
             $includeFilters = Test-Truthy $query.includeFilters
@@ -720,6 +808,7 @@ function Handle-ApiRequest {
                 workspace = $workspace
                 settings = $settings
                 filters = $filters
+                ownerRoster = @(Get-OwnerRoster)
                 defaults = [ordered]@{
                     workbookPath = $defaultWorkbookPath
                     connectionsCsvPath = $defaultConnectionsCsvPath
@@ -728,6 +817,27 @@ function Handle-ApiRequest {
             })
         })
     }
+    if ($path -eq '/api/owners' -and $method -eq 'GET') {
+        return New-JsonResult ([ordered]@{
+            owners = @(Get-OwnerRoster)
+        })
+    }
+    if ($path -eq '/api/dashboard/extended' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Companies', 'Activities', 'BoardConfigs')
+        $playbook = Get-PlaybookAccounts -State $state
+        $overdue = Get-OverdueFollowUps -State $state
+        $stale = Get-StaleAccounts -State $state
+        $activityFeed = Get-GlobalActivityFeed -State $state -Limit 10
+        $enrichmentFunnel = Get-EnrichmentFunnelStats -State $state
+        return (New-JsonResult ([ordered]@{
+            playbook = $playbook
+            overdueFollowUps = $overdue
+            staleAccounts = $stale
+            activityFeed = $activityFeed
+            enrichmentFunnel = $enrichmentFunnel
+        }))
+    }
+
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {
         return (Get-CachedApiResult -Path $path -Query $query -Factory {
             if (Test-AppStoreUsesSqlite) {
@@ -758,7 +868,7 @@ function Handle-ApiRequest {
         }
         $result = Add-Account -State $state -Payload $payload
         $state = $result.state
-        Save-AppSegment -Segment 'Companies' -Data $state.companies
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
         $account = @($state.companies | Where-Object { $_.id -eq $result.account.id } | Select-Object -First 1)
         return (New-JsonResult $account 201)
     }
@@ -779,6 +889,83 @@ function Handle-ApiRequest {
             accounts = @($result.accounts | Select-Object -First 50)
         }) 201)
     }
+    if ($path -match '^/api/accounts/([^/]+)/generate-outreach$' -and $method -eq 'POST') {
+        $accountId = $matches[1]
+        $payload = Read-JsonBody -Request $Request
+        $bookingLink = if ($payload.bookingLink) { [string]$payload.bookingLink } else { 'https://tinyurl.com/ysdep7cn' }
+
+        # Fetch account detail
+        $detail = if (Test-AppStoreUsesSqlite) {
+            Get-AppAccountDetailFast -AccountId $accountId
+        } else {
+            $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
+            Get-AccountDetail -State $state -AccountId $accountId
+        }
+        if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+
+        # Quick web search for company context
+        $companySnippet = ''
+        try {
+            $searchQuery = "$($detail.account.displayName) company about"
+            $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
+            $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 5 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
+            $snippets = @([regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } | Where-Object { $_.Length -gt 40 } | Select-Object -First 1)
+            if ($snippets.Count -gt 0) {
+                $companySnippet = [string]$snippets[0]
+                if ($companySnippet.Length -gt 200) { $companySnippet = $companySnippet.Substring(0, 197) + '...' }
+            }
+        } catch {
+            # Non-critical, proceed without snippet
+        }
+
+        $outreachParams = @{
+            Account = $detail.account
+            Jobs = $detail.jobs
+            Contacts = $detail.contacts
+            BookingLink = $bookingLink
+            CompanySnippet = $companySnippet
+        }
+        if ($payload.contactName) { $outreachParams.OverrideContactName = [string]$payload.contactName }
+        if ($payload.contactTitle) { $outreachParams.OverrideContactTitle = [string]$payload.contactTitle }
+        if ($payload.template) { $outreachParams.Template = [string]$payload.template }
+        $outreach = Build-SmartOutreachDraft @outreachParams
+
+        return (New-JsonResult ([ordered]@{ outreach = $outreach; companySnippet = $companySnippet }))
+    }
+
+    # Quick update endpoint - lightweight account patch with auto activity log
+    if ($path -match '^/api/accounts/([^/]+)/quick-update$' -and $method -eq 'PATCH') {
+        $accountId = $matches[1]
+        $state = Get-AppState
+        $payload = Read-JsonBody -Request $Request
+        $result = Set-AccountFields -State $state -AccountId $accountId -Patch $payload
+        if ($payload.quickNote) {
+            $activity = Add-Activity -State $state -Payload ([ordered]@{
+                accountId = $accountId
+                normalizedCompanyName = [string]$result.account.normalizedName
+                type = 'note'
+                summary = [string]$payload.quickNote
+            })
+            Save-AppSegment -Segment 'Activities' -Data $state.activities -SkipSnapshots
+        }
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
+        return (New-JsonResult $result.account)
+    }
+
+    # Hiring velocity for an account
+    if ($path -match '^/api/accounts/([^/]+)/hiring-velocity$' -and $method -eq 'GET') {
+        $accountId = $matches[1]
+        $detail = if (Test-AppStoreUsesSqlite) {
+            Get-AppAccountDetailFast -AccountId $accountId
+        } else {
+            $state = Get-AppStateView -Segments @('Companies', 'Jobs')
+            Get-AccountDetail -State $state -AccountId $accountId
+        }
+        if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+        $velocity = Get-HiringVelocity -Jobs $detail.jobs
+        return (New-JsonResult $velocity)
+    }
+
     if ($path -match '^/api/accounts/([^/]+)$') {
         $accountId = $matches[1]
         if ($method -eq 'GET') {
@@ -800,15 +987,51 @@ function Handle-ApiRequest {
                 $payload.tags = Convert-ToStringList $payload.tags
             }
             $result = Set-AccountFields -State $state -AccountId $accountId -Patch $payload
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
             return (New-JsonResult $result.account)
         }
         if ($method -eq 'DELETE') {
             $state = Get-AppState
             $result = Remove-Account -State $state -AccountId $accountId
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
             return (New-JsonResult ([ordered]@{ ok = $true }))
         }
+    }
+
+    # Bulk account update
+    if ($path -eq '/api/accounts/bulk' -and $method -eq 'PATCH') {
+        $state = Get-AppState
+        $payload = Read-JsonBody -Request $Request
+        $ids = @($payload.ids)
+        $patch = [ordered]@{}
+        if ($payload.status) { $patch.status = [string]$payload.status }
+        if ($payload.owner) { $patch.owner = [string]$payload.owner }
+        if ($payload.priority) { $patch.priority = [string]$payload.priority }
+        if ($payload.outreachStatus) { $patch.outreachStatus = [string]$payload.outreachStatus }
+        $result = Invoke-BulkAccountUpdate -State $state -AccountIds $ids -Patch $patch
+        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
+        return (New-JsonResult $result)
+    }
+
+    # Duplicate contacts
+    if ($path -eq '/api/contacts/duplicates' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Contacts')
+        $duplicates = Find-DuplicateContacts -State $state
+        return (New-JsonResult ([ordered]@{ duplicates = $duplicates }))
+    }
+
+    # Global activity feed
+    if ($path -eq '/api/activity/feed' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Activities', 'Companies')
+        $feed = Get-GlobalActivityFeed -State $state -Limit 15
+        return (New-JsonResult ([ordered]@{ items = $feed }))
+    }
+
+    # Enrichment funnel stats
+    if ($path -eq '/api/enrichment/funnel' -and $method -eq 'GET') {
+        $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+        $funnel = Get-EnrichmentFunnelStats -State $state
+        return (New-JsonResult $funnel)
     }
 
     if ($path -eq '/api/contacts' -and $method -eq 'GET') {
@@ -824,7 +1047,7 @@ function Handle-ApiRequest {
     if ($path -match '^/api/contacts/([^/]+)$' -and $method -eq 'PATCH') {
         $state = Get-AppState
         $result = Set-ContactFields -State $state -ContactId $matches[1] -Patch (Read-JsonBody -Request $Request)
-        Save-AppSegment -Segment 'Contacts' -Data $result.state.contacts
+        Save-AppSegment -Segment 'Contacts' -Data $result.state.contacts -SkipSnapshots
         return (New-JsonResult $result.contact)
     }
 
@@ -964,7 +1187,7 @@ function Handle-ApiRequest {
         $patch.lastVerifiedAt = (Get-Date).ToString('o')
         
         $result = Set-AccountFields -State $state -AccountId $accountId -Patch $patch
-        Save-AppSegment -Segment 'Companies' -Data $result.state.companies
+        Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
         return (New-JsonResult $result.account 200)
     }
     if ($path -eq '/api/enrichment/run' -and $method -eq 'POST') {
@@ -1031,7 +1254,7 @@ function Handle-ApiRequest {
 
         $state = Get-AppStateView -Segments @('BoardConfigs')
         $result = Set-ConfigReviewDecision -State $state -ConfigId $matches[1] -Decision $decision
-        Save-AppSegment -Segment 'BoardConfigs' -Data $result.state.boardConfigs
+        Save-AppSegment -Segment 'BoardConfigs' -Data $result.state.boardConfigs -SkipSnapshots
         return (New-JsonResult ([ordered]@{ ok = $true; config = $result.config }))
     }
     if ($path -match '^/api/configs/([^/]+)/resolve$' -and $method -eq 'POST') {
@@ -1094,10 +1317,10 @@ function Handle-ApiRequest {
         $result = Add-Activity -State $state -Payload $payload
         if ($payload.accountId -and $payload.pipelineStage) {
             $patched = Set-AccountFields -State $result.state -AccountId $payload.accountId -Patch ([ordered]@{ outreachStatus = $payload.pipelineStage })
-            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities
-            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies
+            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities -SkipSnapshots
+            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies -SkipSnapshots
         } else {
-            Save-AppSegment -Segment 'Activities' -Data $result.state.activities
+            Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
         }
         return (New-JsonResult $result.activity 201)
     }
@@ -1123,19 +1346,34 @@ function Handle-ApiRequest {
     }
     if ($path -eq '/api/import/connections-csv' -and $method -eq 'POST') {
         $payload = Read-JsonBody -Request $Request
-        if (-not $payload.csvPath) {
-            return (New-JsonResult ([ordered]@{ error = 'csvPath is required' }) 400)
+
+        # Support file upload (csvContent) or server-side path (csvPath)
+        $csvPath = [string]$payload.csvPath
+        $isTempFile = $false
+        if ($payload.csvContent -and [string]$payload.csvContent -ne '') {
+            $tempFile = Join-Path $env:TEMP ("bd-csv-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            [System.IO.File]::WriteAllText($tempFile, [string]$payload.csvContent, [System.Text.Encoding]::UTF8)
+            $csvPath = $tempFile
+            $isTempFile = $true
+        }
+
+        if (-not $csvPath) {
+            return (New-JsonResult ([ordered]@{ error = 'csvPath or csvContent is required' }) 400)
         }
         if (Test-Truthy $payload.dryRun) {
             $result = Import-BdConnectionsCsv `
-                -CsvPath ([string]$payload.csvPath) `
+                -CsvPath $csvPath `
                 -DryRun:(Test-Truthy $payload.dryRun) `
                 -UseEmptyState:(Test-Truthy $payload.useEmptyState)
+            if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
+                Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+            }
             return (New-JsonResult $result.importRun 201)
         }
 
         $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
-            csvPath = [string]$payload.csvPath
+            csvPath    = $csvPath
+            isTempFile = $isTempFile
         }) -Summary 'Import LinkedIn connections CSV' -ProgressMessage 'Queued connections import'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
@@ -1246,10 +1484,21 @@ if (Test-AppStoreUsesSqlite) {
     $script:ServerWarmedAt = (Get-Date).ToString('o')
 }
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+$bindAddr = if ($LocalOnly) { [System.Net.IPAddress]::Loopback } else { [System.Net.IPAddress]::Any }
+$listener = [System.Net.Sockets.TcpListener]::new($bindAddr, $Port)
 $listener.Start()
 $prefix = "http://localhost:$Port/"
-Write-ServerLog "BD Engine app listening at $prefix"
+if (-not $LocalOnly) {
+    $tailscaleIp = try { (Get-NetIPAddress -InterfaceAlias 'Tailscale' -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress } catch { $null }
+    if ($tailscaleIp) {
+        Write-ServerLog "BD Engine app listening at $prefix"
+        Write-ServerLog "Tailscale URL: http://${tailscaleIp}:$Port/"
+    } else {
+        Write-ServerLog "BD Engine app listening at $prefix (all interfaces on port $Port)"
+    }
+} else {
+    Write-ServerLog "BD Engine app listening at $prefix (localhost only)"
+}
 Write-ServerLog 'Press Ctrl+C to stop.'
 if ($OpenBrowser) { Start-Process $prefix | Out-Null }
 
