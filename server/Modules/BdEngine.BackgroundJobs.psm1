@@ -875,8 +875,8 @@ function Start-BackgroundWorkerLoop {
                 continue
             }
 
-            $idleDeadline = (Get-Date).AddSeconds($IdleTimeoutSeconds)
             Invoke-BackgroundJobHandler -Job $job
+            $idleDeadline = (Get-Date).AddSeconds($IdleTimeoutSeconds)
         }
     } finally {
         Write-BackgroundJobLog ("WORKER stop pid={0}" -f $PID)

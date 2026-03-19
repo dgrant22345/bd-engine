@@ -743,11 +743,9 @@ function Get-JsonAppStateInternal {
         }
     }
 
-    if (-not (Test-CollectionHasFields -Items $boardConfigs -Fields @('discoveryStatus', 'lastImportStatus', 'lastCheckedAt'))) {
-        $boardConfigDefaults = Get-BoardConfigDefaults
-        foreach ($config in @($boardConfigs)) {
-            Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
-        }
+    $boardConfigDefaults = Get-BoardConfigDefaults
+    foreach ($config in @($boardConfigs)) {
+        Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
     }
 
     return [ordered]@{
