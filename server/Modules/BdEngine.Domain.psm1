@@ -50,6 +50,81 @@ function Normalize-TextKey {
     return $normalized.Trim()
 }
 
+$script:CanadaLocationHints = @(
+    'canada', 'toronto', 'ontario', 'vancouver', 'british columbia', 'montreal', 'quebec', 'quebec city',
+    'calgary', 'alberta', 'edmonton', 'ottawa', 'mississauga', 'markham', 'halifax', 'nova scotia', 'gatineau',
+    'kitchener', 'waterloo', 'longueuil', 'manitoba', 'saskatchewan', 'new brunswick', 'newfoundland', 'labrador',
+    'prince edward island', 'pei', 'yukon', 'nunavut', 'northwest territories'
+)
+
+$script:UsLocationHints = @(
+    'united states', 'usa', 'new york', 'california', 'san francisco', 'los angeles', 'chicago', 'denver',
+    'bethesda', 'philadelphia', 'connecticut', 'new jersey', 'dallas', 'texas', 'pennsylvania', 'washington',
+    'seattle', 'massachusetts', 'boston', 'atlanta', 'georgia', 'colorado', 'virginia', 'north carolina',
+    'florida', 'illinois', 'remote usa', 'remote united states'
+)
+
+function Get-LocationMarketFlags {
+    param([string]$Location)
+
+    $text = ([string]$Location).Trim().ToLowerInvariant()
+    if (-not $text) {
+        return [ordered]@{
+            hasCanada = $false
+            hasUs = $false
+        }
+    }
+
+    $hasCanada = $false
+    foreach ($hint in @($script:CanadaLocationHints)) {
+        if ($text.Contains([string]$hint)) {
+            $hasCanada = $true
+            break
+        }
+    }
+
+    $hasUs = $false
+    foreach ($hint in @($script:UsLocationHints)) {
+        if ($text.Contains([string]$hint)) {
+            $hasUs = $true
+            break
+        }
+    }
+
+    return [ordered]@{
+        hasCanada = $hasCanada
+        hasUs = $hasUs
+    }
+}
+
+function Test-LocationMatchesGeography {
+    param(
+        [string]$Location,
+        [string]$Geography
+    )
+
+    $scope = ([string]$Geography).Trim().ToLowerInvariant()
+    if (-not $scope) {
+        return $true
+    }
+
+    $flags = Get-LocationMarketFlags -Location $Location
+    switch ($scope) {
+        'canada' {
+            return ([bool]$flags.hasCanada -and -not [bool]$flags.hasUs)
+        }
+        'canada_us' {
+            return ([bool]$flags.hasCanada -or [bool]$flags.hasUs)
+        }
+        'us' {
+            return ([bool]$flags.hasUs -and -not [bool]$flags.hasCanada)
+        }
+        default {
+            return $true
+        }
+    }
+}
+
 function Publish-EngineProgress {
     param(
         [scriptblock]$ProgressCallback,
@@ -3661,6 +3736,7 @@ function Get-AccountFilterOptions {
     $statuses = @{}
     $owners = @{}
     $outreachStatuses = @{}
+    $industries = @{}
     $configDiscoveryStatuses = @{}
     $configImportStatuses = @{}
 
@@ -3670,6 +3746,7 @@ function Get-AccountFilterOptions {
         Add-UniqueTextValue -Map $statuses -Value (Get-ObjectValue -Object $company -Name 'status')
         Add-UniqueTextValue -Map $owners -Value (Get-ObjectValue -Object $company -Name 'owner')
         Add-UniqueTextValue -Map $outreachStatuses -Value (Get-ObjectValue -Object $company -Name 'outreachStatus')
+        Add-UniqueTextValue -Map $industries -Value (Get-ObjectValue -Object $company -Name 'industry')
     }
 
     foreach ($config in @($State.boardConfigs)) {
@@ -3685,6 +3762,7 @@ function Get-AccountFilterOptions {
         statuses = Get-SortedUniqueTextValues -Map $statuses
         owners = @(($script:OwnerRoster | ForEach-Object { $_.displayName }) + @(Get-SortedUniqueTextValues -Map $owners) | Select-Object -Unique)
         outreachStatuses = Get-SortedUniqueTextValues -Map $outreachStatuses
+        industries = Get-SortedUniqueTextValues -Map $industries
         configDiscoveryStatuses = Get-SortedUniqueTextValues -Map $configDiscoveryStatuses
         configImportStatuses = Get-SortedUniqueTextValues -Map $configImportStatuses
     }
@@ -3744,6 +3822,8 @@ function Find-Accounts {
     $statusQuery = [string]$Query['status']
     $ownerQuery = [string]$Query['owner']
     $outreachStatusQuery = [string]$Query['outreachStatus']
+    $industryQuery = [string]$Query['industry']
+    $geographyQuery = [string]$Query['geography']
     $recencyDaysQuery = [string]$Query['recencyDays']
     $sortByQuery = [string]$Query['sortBy']
 
@@ -3796,6 +3876,15 @@ function Find-Accounts {
 
     if ($outreachStatusQuery) {
         $items = @($items | Where-Object { $_.outreachStatus -eq $outreachStatusQuery })
+    }
+
+    if ($industryQuery) {
+        $needle = Normalize-TextKey $industryQuery
+        $items = @($items | Where-Object { (Normalize-TextKey $_.industry) -like "*$needle*" })
+    }
+
+    if ($geographyQuery) {
+        $items = @($items | Where-Object { Test-LocationMatchesGeography -Location ([string]$_.location) -Geography $geographyQuery })
     }
 
     if ($recencyDaysQuery) {

@@ -4,6 +4,18 @@ $script:SqliteAssemblyLoaded = $false
 $script:JsonSerializer = $null
 $script:SqliteSchemaInitialized = $false
 $script:CompanySummaryColumns = 'id, sort_order, normalized_name, display_name, display_name_normalized, industry, location, domain, careers_url, owner, owner_normalized, priority, priority_tier, status, outreach_status, connection_count, senior_contact_count, talent_contact_count, buyer_title_count, target_score, target_score_explanation_json, daily_score, follow_up_score, job_count, open_role_count, jobs_last_30_days, jobs_last_90_days, new_role_count_7d, stale_role_count_30d, avg_role_seniority_score, hiring_spike_ratio, external_recruiter_likelihood_score, company_growth_signal_score, company_growth_signal_summary, engagement_score, engagement_summary, hiring_velocity, department_focus, department_focus_count, department_concentration, hiring_spike_score, network_strength, hiring_status, last_job_posted_at, last_contacted_at, days_since_contact, stale_flag, next_action, next_action_at, alert_priority_score, relationship_strength_score, sequence_status, sequence_next_step, sequence_next_step_at, recommended_action, outreach_draft, top_contact_name, top_contact_title, ats_types_text, tags_text, notes, search_text, canonical_domain, linkedin_company_slug, aliases_text, enrichment_status, enrichment_source, enrichment_confidence, enrichment_confidence_score, enrichment_notes, enrichment_evidence, enrichment_failure_reason, enrichment_attempted_urls_text, last_enriched_at, last_verified_at, next_enrichment_attempt_at'
+$script:CanadaLocationHints = @(
+    'canada', 'toronto', 'ontario', 'vancouver', 'british columbia', 'montreal', 'quebec', 'quebec city',
+    'calgary', 'alberta', 'edmonton', 'ottawa', 'mississauga', 'markham', 'halifax', 'nova scotia', 'gatineau',
+    'kitchener', 'waterloo', 'longueuil', 'manitoba', 'saskatchewan', 'new brunswick', 'newfoundland', 'labrador',
+    'prince edward island', 'pei', 'yukon', 'nunavut', 'northwest territories'
+)
+$script:UsLocationHints = @(
+    'united states', 'usa', 'new york', 'california', 'san francisco', 'los angeles', 'chicago', 'denver',
+    'bethesda', 'philadelphia', 'connecticut', 'new jersey', 'dallas', 'texas', 'pennsylvania', 'washington',
+    'seattle', 'massachusetts', 'boston', 'atlanta', 'georgia', 'colorado', 'virginia', 'north carolina',
+    'florida', 'illinois', 'remote usa', 'remote united states'
+)
 
 function Get-BdSqliteProjectRoot {
     return (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -120,6 +132,66 @@ function Normalize-BdSqliteText {
     $normalized = $normalized -replace '&', ' and '
     $normalized = $normalized -replace '[^a-z0-9]+', ' '
     return $normalized.Trim()
+}
+
+function New-BdSqliteLocationPatternClause {
+    param(
+        [string]$ColumnName,
+        [string[]]$Patterns,
+        [string]$ParameterPrefix,
+        [hashtable]$Parameters
+    )
+
+    $normalizedPatterns = @($Patterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    if ($normalizedPatterns.Count -eq 0) {
+        return ''
+    }
+
+    $clauses = New-Object System.Collections.ArrayList
+    for ($index = 0; $index -lt $normalizedPatterns.Count; $index++) {
+        $name = '{0}{1}' -f $ParameterPrefix, $index
+        $Parameters[$name] = '%' + ([string]$normalizedPatterns[$index]).ToLowerInvariant() + '%'
+        [void]$clauses.Add(("LOWER(COALESCE({0}, '')) LIKE @{1}" -f $ColumnName, $name))
+    }
+
+    return '(' + ([string]::Join(' OR ', @($clauses))) + ')'
+}
+
+function Add-BdSqliteGeographyFilterClauses {
+    param(
+        [System.Collections.ArrayList]$WhereClauses,
+        [hashtable]$Parameters,
+        [string]$Geography
+    )
+
+    $scope = ([string]$Geography).Trim().ToLowerInvariant()
+    if (-not $scope) {
+        return
+    }
+
+    $canadaClause = New-BdSqliteLocationPatternClause -ColumnName 'location' -Patterns $script:CanadaLocationHints -ParameterPrefix 'geoCanada' -Parameters $Parameters
+    $usClause = New-BdSqliteLocationPatternClause -ColumnName 'location' -Patterns $script:UsLocationHints -ParameterPrefix 'geoUs' -Parameters $Parameters
+    switch ($scope) {
+        'canada' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($canadaClause AND NOT $usClause)")
+            }
+        }
+        'canada_us' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($canadaClause OR $usClause)")
+            } elseif ($canadaClause) {
+                [void]$WhereClauses.Add($canadaClause)
+            } elseif ($usClause) {
+                [void]$WhereClauses.Add($usClause)
+            }
+        }
+        'us' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($usClause AND NOT $canadaClause)")
+            }
+        }
+    }
 }
 
 function Get-BdSqliteRecordValue {
@@ -3283,6 +3355,9 @@ function Get-BdSqliteFilterOptionsInternal {
                         Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT owner AS value FROM companies WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner ASC;"
                     }) | ForEach-Object { [string]$_.value }) | Select-Object -Unique
                 )
+        industries = @((Invoke-BdSqliteTimedStep -Name 'industriesMs' -TimingBag $TimingBag -Action {
+                    Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT industry AS value FROM companies WHERE industry IS NOT NULL AND industry <> '' ORDER BY industry ASC;"
+                }) | ForEach-Object { [string]$_.value })
         outreachStatuses = @((Invoke-BdSqliteTimedStep -Name 'outreachStatusesMs' -TimingBag $TimingBag -Action {
                     Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT outreach_status AS value FROM companies WHERE outreach_status IS NOT NULL AND outreach_status <> '' ORDER BY outreach_status ASC;"
                 }) | ForEach-Object { [string]$_.value })
@@ -3333,6 +3408,8 @@ function Find-BdSqliteAccounts {
         $statusQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'status')
         $ownerQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'owner')
         $outreachStatusQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'outreachStatus')
+        $industryQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'industry')
+        $geographyQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'geography')
         $recencyDaysQuery = Get-BdSqliteQueryValue -Query $Query -Name 'recencyDays'
         $sortByQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'sortBy')
         $pageQuery = Get-BdSqliteQueryValue -Query $Query -Name 'page'
@@ -3376,6 +3453,13 @@ function Find-BdSqliteAccounts {
         if ($outreachStatusQuery) {
             [void]$whereClauses.Add('outreach_status = @outreachStatus')
             $parameters.outreachStatus = $outreachStatusQuery
+        }
+        if ($industryQuery) {
+            [void]$whereClauses.Add('LOWER(COALESCE(industry, '''')) LIKE @industry')
+            $parameters.industry = '%' + $industryQuery.Trim().ToLowerInvariant() + '%'
+        }
+        if ($geographyQuery) {
+            Add-BdSqliteGeographyFilterClauses -WhereClauses $whereClauses -Parameters $parameters -Geography $geographyQuery
         }
         if ($recencyDaysQuery) {
             [void]$whereClauses.Add('last_job_posted_at >= @recencyCutoff')

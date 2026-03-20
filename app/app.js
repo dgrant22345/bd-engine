@@ -3,7 +3,7 @@ const appState = {
   localData: null,
   localOverlays: null,
   activeView: 'dashboard',
-  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', sortBy: '' },
+  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -994,7 +994,7 @@ async function renderAccountsView() {
   renderLoadingState('Accounts', 'Loading ranked target accounts...');
   setViewTitle('Accounts');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const filters = stateBootstrap.filters || { atsTypes: [] };
+  const filters = stateBootstrap.filters || { atsTypes: [], industries: [] };
   const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
@@ -1032,6 +1032,8 @@ async function renderAccountsView() {
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
           ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
+          ${renderField('Geography', `<select name="geography"><option value="">Any location</option><option value="canada" ${selected(appState.accountQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.accountQuery.geography, 'canada_us')}>Canada + US</option><option value="us" ${selected(appState.accountQuery.geography, 'us')}>US only</option></select>`)}
+          ${renderField('Industry', `<input name="industry" list="industry-filter-options" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`)}
           ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.accountQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.accountQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.accountQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Min target score', `<input name="minTargetScore" type="number" min="0" max="100" value="${escapeAttr(appState.accountQuery.minTargetScore)}">`)}
@@ -1039,6 +1041,7 @@ async function renderAccountsView() {
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
         </form>
+        <datalist id="industry-filter-options">${(filters.industries || []).map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state">No accounts match the current filter set.</div>'}
         ${renderPagination('accounts', result.page, result.pageSize, result.total)}
       </div>
