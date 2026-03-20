@@ -4456,7 +4456,12 @@ function Get-BdSqliteAccountDetail {
         $accountRecord = ConvertFrom-BdSqliteJsonText $accountRow.data_json
         $configs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM board_configs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY company_name ASC;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteConfigRowToSummary $_ })
         $contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM contacts WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY priority_score DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteContactRowToSummary $_ })
-        $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY posted_at DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
+        $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY posted_at DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object {
+                $summary = Convert-BdSqliteJobRowToSummary $_
+                $jobRecord = ConvertFrom-BdSqliteJsonText ([string]$_.data_json)
+                $summary.rawPayload = Get-BdSqliteRecordValue -Record $jobRecord -Name 'rawPayload' -Default $null
+                $summary
+            })
         $activity = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM activities WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY occurred_at DESC LIMIT 12;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteActivityRowToSummary $_ })
 
         $summary = Convert-BdSqliteCompanyRowToSummary $accountRow

@@ -635,11 +635,169 @@ function Get-RecencyBonus {
 function Get-OutreachDraft {
     param($Company)
 
-    $jobs = [int](Convert-ToNumber $Company.jobCount)
-    $connections = [int](Convert-ToNumber $Company.connectionCount)
-    $topContact = if ($Company.topContactName) { $Company.topContactName } else { '[Top contact]' }
+    $draft = Build-SmartOutreachDraft -Account $Company -Jobs @() -Contacts @()
+    return [string](Get-ObjectValue -Object $draft -Name 'message_body' -Default '')
+}
 
-    return "Hi $topContact, I noticed $($Company.displayName) is actively hiring ($jobs open roles) and I already have a strong network overlap there ($connections connections). I would love to compare notes on where your team is leaning hardest and see where I can help."
+function Join-NaturalLanguageList {
+    param([string[]]$Values)
+
+    $items = @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    switch ($items.Count) {
+        0 { return '' }
+        1 { return [string]$items[0] }
+        2 { return ('{0} and {1}' -f $items[0], $items[1]) }
+        default {
+            $leading = @($items | Select-Object -First ($items.Count - 1))
+            return ('{0}, and {1}' -f ([string]::Join(', ', $leading)), $items[-1])
+        }
+    }
+}
+
+function Limit-TextWords {
+    param(
+        [string]$Text,
+        [int]$MaxWords = 75
+    )
+
+    $value = [string]$Text
+    if ([string]::IsNullOrWhiteSpace($value) -or $MaxWords -le 0) {
+        return $value.Trim()
+    }
+
+    $words = @([regex]::Matches($value.Trim(), '\S+') | ForEach-Object { $_.Value })
+    if ($words.Count -le $MaxWords) {
+        return $value.Trim()
+    }
+
+    return ([string]::Join(' ', @($words | Select-Object -First $MaxWords))).Trim()
+}
+
+function Get-OutreachRoleTitleInsights {
+    param(
+        $Jobs,
+        [int]$Limit = 3
+    )
+
+    $titleCounts = @{}
+    foreach ($job in @($Jobs)) {
+        $title = [string](Get-ObjectValue -Object $job -Name 'title' -Default '')
+        if ([string]::IsNullOrWhiteSpace($title)) { continue }
+        $cleanTitle = $title.Trim()
+        if (-not $titleCounts.ContainsKey($cleanTitle)) {
+            $titleCounts[$cleanTitle] = 0
+        }
+        $titleCounts[$cleanTitle] += 1
+    }
+
+    $titles = @(
+        $titleCounts.GetEnumerator() |
+            Sort-Object @{ Expression = { [int]$_.Value }; Descending = $true }, @{ Expression = { [string]$_.Key }; Descending = $false } |
+            Select-Object -First $Limit |
+            ForEach-Object { [string]$_.Key }
+    )
+
+    return [ordered]@{
+        items = $titles
+        summary = Join-NaturalLanguageList -Values $titles
+    }
+}
+
+function Get-OutreachPatternInsights {
+    param(
+        $Jobs,
+        [hashtable]$PatternMap,
+        [hashtable]$JobSignalTextCache = $null,
+        [int]$Limit = 3
+    )
+
+    $scores = @{}
+    foreach ($label in @($PatternMap.Keys)) {
+        $scores[[string]$label] = 0
+    }
+
+    foreach ($job in @($Jobs)) {
+        $jobText = Get-CachedJobSignalText -Job $job -Cache $JobSignalTextCache -MaxLength 2200
+        if ([string]::IsNullOrWhiteSpace($jobText)) { continue }
+        foreach ($label in @($PatternMap.Keys)) {
+            $pattern = [string]$PatternMap[$label]
+            if ($jobText -match $pattern) {
+                $scores[[string]$label] += 1
+            }
+        }
+    }
+
+    $items = @(
+        $scores.GetEnumerator() |
+            Where-Object { [int]$_.Value -gt 0 } |
+            Sort-Object @{ Expression = { [int]$_.Value }; Descending = $true }, @{ Expression = { [string]$_.Key }; Descending = $false } |
+            Select-Object -First $Limit |
+            ForEach-Object { [string]$_.Key }
+    )
+
+    return [ordered]@{
+        items = $items
+        summary = Join-NaturalLanguageList -Values $items
+    }
+}
+
+function Get-OutreachKeywordInsights {
+    param(
+        $Jobs,
+        [hashtable]$JobSignalTextCache = $null,
+        [int]$Limit = 3
+    )
+
+    $patternMap = [ordered]@{
+        'platform engineering' = '\b(platform|backend|distributed systems?|api|microservices?)\b'
+        'data engineering' = '\b(data engineering|data platform|etl|analytics engineering|warehouse|bi|snowflake|databricks|spark)\b'
+        'cloud infrastructure' = '\b(cloud|infrastructure|sre|site reliability|devops|terraform|kubernetes|observability)\b'
+        'security' = '\b(security|iam|identity|compliance|risk|soc 2|iso 27001|privacy)\b'
+        'machine learning' = '\b(machine learning|ml|ai|artificial intelligence|llm|model)\b'
+        'product and design' = '\b(product manager|product management|ux|ui|design|research)\b'
+        'go-to-market' = '\b(account executive|sales|revenue operations|revops|marketing|growth|demand generation|customer success)\b'
+        'finance systems' = '\b(finance|accounting|controller|fp&a|netsuite|sap|erp|billing)\b'
+        'talent acquisition' = '\b(recruiter|talent acquisition|sourcer|people operations|hris)\b'
+    }
+
+    return (Get-OutreachPatternInsights -Jobs $Jobs -PatternMap $patternMap -JobSignalTextCache $JobSignalTextCache -Limit $Limit)
+}
+
+function Get-OutreachTechStackInsights {
+    param(
+        $Jobs,
+        [hashtable]$JobSignalTextCache = $null,
+        [int]$Limit = 3
+    )
+
+    $patternMap = [ordered]@{
+        'TypeScript' = '\btypescript\b'
+        'JavaScript' = '\bjavascript\b'
+        'React' = '\breact\b'
+        'Node' = '\bnode(\.js)?\b'
+        '.NET' = '\b\.net\b|\bdotnet\b'
+        'C#' = '\bc#\b'
+        'Java' = '\bjava\b'
+        'Python' = '\bpython\b'
+        'Go' = '\bgo(lang)?\b'
+        'AWS' = '\baws\b|amazon web services'
+        'Azure' = '\bazure\b'
+        'GCP' = '\bgcp\b|google cloud'
+        'Kubernetes' = '\bkubernetes\b|\bk8s\b'
+        'Terraform' = '\bterraform\b'
+        'Snowflake' = '\bsnowflake\b'
+        'Databricks' = '\bdatabricks\b'
+        'Salesforce' = '\bsalesforce\b'
+        'NetSuite' = '\bnetsuite\b'
+        'Workday' = '\bworkday\b'
+        'ServiceNow' = '\bservicenow\b'
+        'Kafka' = '\bkafka\b'
+        'PostgreSQL' = '\bpostgres(ql)?\b'
+        'MongoDB' = '\bmongodb\b'
+        'Docker' = '\bdocker\b'
+    }
+
+    return (Get-OutreachPatternInsights -Jobs $Jobs -PatternMap $patternMap -JobSignalTextCache $JobSignalTextCache -Limit $Limit)
 }
 
 function Build-SmartOutreachDraft {
@@ -655,158 +813,82 @@ function Build-SmartOutreachDraft {
     )
 
     $companyName = [string]$Account.displayName
+    $industry = [string](Get-ObjectValue -Object $Account -Name 'industry' -Default '')
+    $jobSignalTextCache = @{}
+    $activeJobs = @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
+    $openRoles = if ($activeJobs.Count -gt 0) { $activeJobs.Count } else { [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'openRoleCount' -Default 0)) }
+    $jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'jobsLast30Days' -Default 0))
+    $jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'jobsLast90Days' -Default 0))
+    $hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'hiringSpikeRatio' -Default 0))
+    $roleTitleInsights = Get-OutreachRoleTitleInsights -Jobs $activeJobs
+    $roleKeywordInsights = Get-OutreachKeywordInsights -Jobs $activeJobs -JobSignalTextCache $jobSignalTextCache
+    $techStackInsights = Get-OutreachTechStackInsights -Jobs $activeJobs -JobSignalTextCache $jobSignalTextCache
 
-    # Contact — use override if provided, else first contact, else account-level
-    $topContact = if ($OverrideContactName) { $OverrideContactName }
-        elseif ($Contacts.Count -gt 0) { [string]$Contacts[0].fullName }
-        elseif ($Account.topContactName) { [string]$Account.topContactName }
-        else { '' }
-    $topContactTitle = if ($OverrideContactTitle) { $OverrideContactTitle }
-        elseif ($OverrideContactName -and $Contacts.Count -gt 0) {
-            $match = $Contacts | Where-Object { [string]$_.fullName -eq $OverrideContactName } | Select-Object -First 1
-            if ($match) { [string]$match.title } else { '' }
-        }
-        elseif ($Contacts.Count -gt 0) { [string]$Contacts[0].title }
-        elseif ($Account.topContactTitle) { [string]$Account.topContactTitle }
-        else { '' }
-
-    $connectionCount = [int](Convert-ToNumber $Account.connectionCount)
-    $openRoles = [int](Convert-ToNumber $Account.openRoleCount)
-    $firstName = if ($topContact) { ($topContact -split ' ')[0] } else { '' }
-
-    # Group jobs by department for theme summary
-    $deptGroups = @{}
-    foreach ($job in @($Jobs)) {
-        $dept = if ([string]::IsNullOrWhiteSpace([string]$job.department)) { 'General' } else { [string]$job.department }
-        if (-not $deptGroups.ContainsKey($dept)) { $deptGroups[$dept] = 0 }
-        $deptGroups[$dept]++
+    $subjectFocus = if ($roleTitleInsights.items.Count -gt 0) {
+        [string]$roleTitleInsights.items[0]
+    } elseif ($roleKeywordInsights.items.Count -gt 0) {
+        [string]$roleKeywordInsights.items[0]
+    } elseif ($techStackInsights.items.Count -gt 0) {
+        [string]$techStackInsights.items[0]
+    } elseif ($openRoles -gt 0) {
+        ('{0} open role{1}' -f $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }))
+    } else {
+        'hiring signal'
     }
-    $topDepts = @($deptGroups.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 3)
-
-    # Build a natural hiring theme summary (no exact counts or title lists)
-    $hiringTheme = ''
-    if ($topDepts.Count -ge 2) {
-        $deptNames = @($topDepts | ForEach-Object { $_.Key })
-        $hiringTheme = "across $($deptNames[0]), $($deptNames[1])$(if ($deptNames.Count -ge 3) { ", and $($deptNames[2])" } else { '' })"
-    } elseif ($topDepts.Count -eq 1 -and $topDepts[0].Key -ne 'General') {
-        $hiringTheme = "especially within your $($topDepts[0].Key) team"
+    $subjectLine = if ($subjectFocus -match 'open role') {
+        '{0}: {1}' -f $companyName, $subjectFocus
+    } else {
+        '{0}: {1} hiring' -f $companyName, $subjectFocus
     }
 
-    # Location insight
-    $gtaJobs = @($Jobs | Where-Object { $_.isGta -eq $true })
-    $locationNote = if ($gtaJobs.Count -gt 0 -and $gtaJobs.Count -ge ($Jobs.Count / 2)) {
-        ', many of which are based here in the GTA'
-    } else { '' }
-
-    # Build greeting
-    $greeting = if ($firstName) { "Hi $firstName," } else { "Hi there," }
-
-    # Build the body based on template type
-    $lines = @()
-
-    switch ($Template) {
-        'follow_up' {
-            $lines += "$greeting I reached out a little while ago about how my team could help $companyName with your hiring efforts, and I wanted to follow up."
-            if ($openRoles -gt 0 -and $hiringTheme) {
-                $lines += ""
-                $lines += "I see you still have around $openRoles open roles $hiringTheme$locationNote — that's a lot of seats to fill, and I know how much pressure that puts on internal teams."
-            }
-            $lines += ""
-            $lines += "I completely understand if the timing wasn't right before. Things move fast, and sometimes these things just need the right moment."
-            if ($topContactTitle -and $firstName) {
-                $lines += ""
-                $lines += "As $topContactTitle, I imagine you're juggling a lot — I'd love to take some of the hiring load off your plate."
-            }
-            $lines += ""
-            $lines += "Would a quick 15-minute call make sense this week? Happy to work around your schedule: $BookingLink"
-            $lines += ""
-            $lines += "Best,"
-            $lines += "Derek"
-        }
-        're_engage' {
-            $lines += "$greeting It's been a while since we last connected, and I wanted to check back in with $companyName."
-            if ($CompanySnippet) {
-                $lines += ""
-                $lines += "$CompanySnippet — it looks like things have been moving in a great direction."
-            }
-            if ($openRoles -gt 0 -and $hiringTheme) {
-                $lines += ""
-                $lines += "I noticed you're hiring again — around $openRoles roles $hiringTheme$locationNote. A lot has probably changed since we last spoke, and I'd love to hear what's new on your end."
-            }
-            if ($connectionCount -gt 2) {
-                $lines += ""
-                $lines += "I still have $connectionCount connections at $companyName and have stayed close to what's happening in your space."
-            }
-            $lines += ""
-            $lines += "Would you be up for a quick catch-up? Even 15 minutes would be great: $BookingLink"
-            $lines += ""
-            $lines += "Hope you've been well,"
-            $lines += "Derek"
-        }
-        'warm_intro' {
-            $lines += "$greeting I was introduced to $companyName through some mutual connections and wanted to reach out directly."
-            if ($CompanySnippet) {
-                $lines += ""
-                $lines += "$CompanySnippet — really impressive work."
-            }
-            if ($connectionCount -gt 2) {
-                $lines += ""
-                $lines += "I actually have $connectionCount connections on your team already, so I have a good sense of the culture and the caliber of people you bring on."
-            }
-            if ($openRoles -gt 0 -and $hiringTheme) {
-                $lines += ""
-                $lines += "With around $openRoles roles open $hiringTheme$locationNote, it seems like the team is in a real growth phase. That's exactly the kind of moment where my team tends to make the biggest impact — we specialize in placing talent for companies at your stage."
-            }
-            if ($topContactTitle -and $firstName) {
-                $lines += ""
-                $lines += "Given your role as $topContactTitle, I thought you'd be the ideal person to connect with."
-            }
-            $lines += ""
-            $lines += "Would you have 15 minutes for a quick intro call? Here's my calendar: $BookingLink"
-            $lines += ""
-            $lines += "Looking forward to it,"
-            $lines += "Derek"
-        }
-        default {
-            # 'cold' — original template
-            if ($CompanySnippet) {
-                $lines += "$greeting I came across $companyName and was really impressed by what you're building. $CompanySnippet"
-            } else {
-                $lines += "$greeting I've been keeping an eye on $companyName and wanted to reach out."
-            }
-
-            if ($openRoles -gt 0 -and $hiringTheme) {
-                $lines += ""
-                $lines += "I noticed you're actively growing the team with around $openRoles open roles $hiringTheme$locationNote. That kind of hiring push is exactly where my team tends to add the most value — we specialize in placing talent in those types of functions for companies like yours."
-            } elseif ($openRoles -gt 0) {
-                $lines += ""
-                $lines += "I can see $companyName is actively scaling with around $openRoles open positions$locationNote. My team specializes in helping companies like yours find the right people quickly, especially when hiring across multiple functions at once."
-            }
-
-            if ($connectionCount -gt 2) {
-                $lines += ""
-                $lines += "I already have $connectionCount connections at $companyName, so I have some familiarity with your team and culture — which helps us hit the ground running."
-            } elseif ($connectionCount -gt 0) {
-                $lines += ""
-                $lines += "I have a few existing connections at $companyName and would love to build on that."
-            }
-
-            if ($topContactTitle -and $firstName) {
-                $lines += ""
-                $lines += "Given your role as $topContactTitle, I thought you'd be the best person to connect with on this."
-            }
-
-            $lines += ""
-            $lines += "Would you be open to a quick 15-minute chat? I'd love to share a few ideas on how we've helped similar companies fill critical roles faster."
-            $lines += ""
-            $lines += "Feel free to grab a time that works: $BookingLink"
-            $lines += ""
-            $lines += "Looking forward to connecting,"
-            $lines += "Derek"
-        }
+    if ($jobsLast30Days -gt 0 -and $roleTitleInsights.summary -and $techStackInsights.summary -and $hiringSpikeRatio -ge 1.4) {
+        $firstSentence = 'Noticed {0} opened {1} roles in the last 30 days, with a clear spike across {2} and repeated mentions of {3}.' -f $companyName, $jobsLast30Days, $roleTitleInsights.summary, $techStackInsights.summary
+    } elseif ($jobsLast30Days -gt 0 -and $roleTitleInsights.summary) {
+        $firstSentence = 'Noticed {0} opened {1} roles in the last 30 days, concentrated across {2}.' -f $companyName, $jobsLast30Days, $roleTitleInsights.summary
+    } elseif ($openRoles -gt 0 -and $roleTitleInsights.summary -and $techStackInsights.summary) {
+        $firstSentence = 'Noticed {0} has {1} open role{2} across {3}, with repeated mentions of {4}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleTitleInsights.summary, $techStackInsights.summary
+    } elseif ($openRoles -gt 0 -and $roleTitleInsights.summary) {
+        $firstSentence = 'Noticed {0} has {1} open role{2} across {3}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleTitleInsights.summary
+    } elseif ($openRoles -gt 0 -and $roleKeywordInsights.summary) {
+        $firstSentence = 'Noticed {0} has {1} open role{2} clustered around {3}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleKeywordInsights.summary
+    } elseif ($jobsLast90Days -gt 0) {
+        $firstSentence = 'Noticed {0} has kept hiring active with {1} roles over the last 90 days.' -f $companyName, $jobsLast90Days
+    } elseif ($openRoles -gt 0) {
+        $firstSentence = 'Noticed {0} is carrying {1} open role{2} right now.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' })
+    } elseif ($roleKeywordInsights.summary) {
+        $firstSentence = 'Noticed {0}''s hiring pattern is concentrated around {1}.' -f $companyName, $roleKeywordInsights.summary
+    } else {
+        $firstSentence = 'Noticed live hiring activity at {0}.' -f $companyName
     }
 
-    return ($lines -join "`n")
+    if ($industry -and $roleKeywordInsights.summary -and $techStackInsights.summary) {
+        $contextSentence = 'In {0}, that mix usually means the team is scaling real capability on {1}, not just backfilling.' -f $industry, $techStackInsights.summary
+    } elseif ($techStackInsights.summary -and $roleKeywordInsights.summary) {
+        $contextSentence = 'The mix of {0} hiring around {1} usually means the team is tightening a core build, not just filling seats.' -f $roleKeywordInsights.summary, $techStackInsights.summary
+    } elseif ($industry -and $roleKeywordInsights.summary) {
+        $contextSentence = 'In {0}, that mix usually means the team is adding capability quickly, not just backfilling.' -f $industry
+    } elseif ($techStackInsights.summary) {
+        $contextSentence = 'That usually signals a team standardizing the stack while delivery pressure is rising.'
+    } elseif ($roleTitleInsights.summary) {
+        $contextSentence = 'That usually points to a team building real capability, not just adding headcount.'
+    } else {
+        $contextSentence = 'That usually points to real execution pressure, not a routine hiring cycle.'
+    }
+
+    $closeSentence = switch (([string]$Template).ToLowerInvariant()) {
+        'follow_up' { 'Happy to compare notes on which search in that mix tends to bottleneck first.'; break }
+        're_engage' { 'Happy to compare notes on which seat in that cluster tends to bottleneck first.'; break }
+        'warm_intro' { 'Happy to compare notes if that pattern is a priority this quarter.'; break }
+        default { 'Happy to compare notes on where that hiring mix usually gets hardest.' }
+    }
+
+    $messageBody = Limit-TextWords -Text ([string]::Join(' ', @($firstSentence, $contextSentence, $closeSentence))) -MaxWords 75
+
+    return [ordered]@{
+        subject_line = $subjectLine.Trim()
+        message_body = $messageBody.Trim()
+        outreach = $messageBody.Trim()
+    }
 }
 
 function Get-PlaybookAccounts {
@@ -1703,6 +1785,7 @@ function Select-JobSummary {
         retrievedAt = $Job.retrievedAt
         importedAt = $Job.importedAt
         lastSeenAt = $Job.lastSeenAt
+        rawPayload = Get-ObjectValue -Object $Job -Name 'rawPayload' -Default $null
         active = [bool](Test-Truthy $Job.active)
         isGta = [bool](Test-Truthy $Job.isGta)
         isNew = [bool](Test-Truthy $Job.isNew)

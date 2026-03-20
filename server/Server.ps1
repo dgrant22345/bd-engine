@@ -935,7 +935,12 @@ function Handle-ApiRequest {
         if ($payload.template) { $outreachParams.Template = [string]$payload.template }
         $outreach = Build-SmartOutreachDraft @outreachParams
 
-        return (New-JsonResult ([ordered]@{ outreach = $outreach; companySnippet = $companySnippet }))
+        return (New-JsonResult ([ordered]@{
+            outreach = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
+            subject_line = [string](Get-ObjectValue -Object $outreach -Name 'subject_line' -Default '')
+            message_body = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
+            companySnippet = $companySnippet
+        }))
     }
 
     # Quick update endpoint - lightweight account patch with auto activity log
@@ -1549,4 +1554,3 @@ try {
 } finally {
     $listener.Stop()
 }
-

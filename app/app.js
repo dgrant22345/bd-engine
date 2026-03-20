@@ -2359,21 +2359,33 @@ async function generateSmartOutreach(accountId, buttonEl) {
       body: JSON.stringify({ bookingLink: 'https://tinyurl.com/ysdep7cn', contactName, contactTitle, template: document.getElementById('outreach-template-select')?.value || 'cold' }),
     });
 
+    const subjectLine = result.subject_line || result.subjectLine || `Hiring signal at ${appState.accountDetail?.account?.displayName || 'this company'}`;
+    const messageBody = result.message_body || result.messageBody || result.outreach || '';
+    const copyText = `Subject: ${subjectLine}\n\n${messageBody}`.trim();
+
     // Update the outreach prompt card with the generated message
     const body = document.getElementById('outreach-prompt-body');
-    if (body && result.outreach) {
+    if (body && messageBody) {
       body.className = 'outreach-generated';
-      const contactSelect = document.getElementById('outreach-contact-select');
-      const selName = contactSelect?.selectedOptions?.[0]?.value || '';
+      if (subjectLine) {
+        const gmailSubjectStructured = encodeURIComponent(subjectLine);
+        const gmailBodyStructured = encodeURIComponent(messageBody);
+        body.innerHTML = `
+          <div class="outreach-generated__field">
+            <div class="outreach-generated__label">Subject</div>
+            <pre class="outreach-subject">${escapeHtml(subjectLine)}</pre>
+          </div>
+          <div class="outreach-generated__field">
+            <div class="outreach-generated__label">Message</div>
+            <pre class="outreach-text">${escapeHtml(messageBody)}</pre>
+          </div>
+          <div class="button-row" style="margin-top:12px;">
+            <button class="secondary-button" onclick="const subject=document.querySelector('.outreach-subject')?.textContent||'';const message=document.querySelector('.outreach-text')?.textContent||'';navigator.clipboard.writeText((subject ? 'Subject: ' + subject + '\\n\\n' : '') + message);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy to clipboard',1500)">Copy to clipboard</button>
+            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+          </div>
+        `;
+      }
       const gmailSubject = encodeURIComponent('Quick intro — ' + (appState.accountDetail?.account?.displayName || ''));
-      const gmailBody = encodeURIComponent(result.outreach);
-      body.innerHTML = `
-        <pre class="outreach-text">${escapeHtml(result.outreach)}</pre>
-        <div class="button-row" style="margin-top:12px;">
-          <button class="secondary-button" onclick="navigator.clipboard.writeText(document.querySelector('.outreach-text').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy to clipboard',1500)">Copy to clipboard</button>
-          <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
-        </div>
-      `;
       // Scroll the outreach card into view
       const card = document.getElementById('outreach-prompt-card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
