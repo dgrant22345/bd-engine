@@ -1325,12 +1325,9 @@ function Handle-ApiRequest {
         $state = Get-AppState
         $payload = Read-JsonBody -Request $Request
         $result = Add-Activity -State $state -Payload $payload
-        if ($payload.accountId -and $payload.pipelineStage) {
-            $patched = Set-AccountFields -State $result.state -AccountId $payload.accountId -Patch ([ordered]@{ outreachStatus = $payload.pipelineStage })
-            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities -SkipSnapshots
-            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies -SkipSnapshots
-        } else {
-            Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
+        Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
+        if ($payload.accountId) {
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
         }
         return (New-JsonResult $result.activity 201)
     }

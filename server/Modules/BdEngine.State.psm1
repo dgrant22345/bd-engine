@@ -291,6 +291,12 @@ function Get-CompanyRecordDefaults {
         topContactTitle = ''
         recommendedAction = ''
         outreachDraft = ''
+        pipelineState = @{}
+        connectionGraph = @{}
+        triggerAlerts = @()
+        sequenceState = @{}
+        relationshipStrengthScore = 0
+        alertPriorityScore = 0
         nextAction = ''
         nextActionAt = $null
     }

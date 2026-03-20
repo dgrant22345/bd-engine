@@ -3032,6 +3032,8 @@ function Convert-BdSqliteCompanyRowToSummary {
 function Convert-BdSqliteContactRowToSummary {
     param($Row)
 
+    $record = ConvertFrom-BdSqliteJsonText ([string]$Row.data_json)
+
     return [ordered]@{
         id = [string]$Row.id
         accountId = [string]$Row.account_id
@@ -3039,7 +3041,15 @@ function Convert-BdSqliteContactRowToSummary {
         fullName = [string]$Row.full_name
         title = [string]$Row.title
         linkedinUrl = [string]$Row.linkedin_url
+        email = [string](Get-BdSqliteRecordValue -Record $record -Name 'email' -Default '')
         connectedOn = $Row.connected_on
+        yearsConnected = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'yearsConnected' -Default 0))
+        companyOverlapCount = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'companyOverlapCount' -Default 0))
+        buyerFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'buyerFlag' -Default 0))
+        seniorFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'seniorFlag' -Default 0))
+        talentFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'talentFlag' -Default 0))
+        techFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'techFlag' -Default 0))
+        financeFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'financeFlag' -Default 0))
         priorityScore = [int](ConvertTo-BdSqliteNumber $Row.priority_score)
         outreachStatus = [string]$Row.outreach_status
         notes = [string]$Row.notes
@@ -3285,6 +3295,7 @@ function Find-BdSqliteAccounts {
         $hiringQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'hiring')
         $atsQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'ats')
         $minContactsQuery = Get-BdSqliteQueryValue -Query $Query -Name 'minContacts'
+        $minTargetScoreQuery = Get-BdSqliteQueryValue -Query $Query -Name 'minTargetScore'
         $priorityTierQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'priorityTier')
         $priorityQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'priority')
         $statusQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'status')
@@ -3309,6 +3320,10 @@ function Find-BdSqliteAccounts {
         if ($minContactsQuery) {
             [void]$whereClauses.Add('connection_count >= @minContacts')
             $parameters.minContacts = [int](ConvertTo-BdSqliteNumber $minContactsQuery)
+        }
+        if ($minTargetScoreQuery) {
+            [void]$whereClauses.Add('target_score >= @minTargetScore')
+            $parameters.minTargetScore = [double](ConvertTo-BdSqliteNumber $minTargetScoreQuery)
         }
         if ($priorityTierQuery) {
             [void]$whereClauses.Add('priority_tier = @priorityTier')
@@ -3370,6 +3385,10 @@ WHERE COALESCE(target_score, 0) > 100
    OR external_recruiter_likelihood_score IS NULL
    OR company_growth_signal_score IS NULL
    OR engagement_score IS NULL
+   OR INSTR(COALESCE(data_json, ''), '"pipelineState"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"connectionGraph"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"triggerAlerts"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"sequenceState"') = 0
    OR COALESCE(target_score_explanation_json, '') = ''
 ORDER BY COALESCE(target_score, 0) DESC, sort_order ASC
 LIMIT @limit;
@@ -4480,6 +4499,60 @@ function Get-BdSqliteAccountDetail {
         $summary.companyGrowthSignalSummary = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'companyGrowthSignalSummary' -Default '')
         $summary.engagementSummary = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'engagementSummary' -Default '')
         $summary.lastContactedAt = Get-BdSqliteRecordValue -Record $accountRecord -Name 'lastContactedAt'
+        $summary.pipelineState = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'pipelineState' -Default ([ordered]@{
+                    stage = 'not_started'
+                    stageRank = 0
+                    stageSource = 'account'
+                    activityCount = 0
+                    recentActivityCount30d = 0
+                    lastInteractionAt = $null
+                    lastInteractionType = ''
+                    recentSignals = @()
+                }))
+        $summary.connectionGraph = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'connectionGraph' -Default ([ordered]@{
+                    shortestPathToDecisionMaker = [ordered]@{
+                        pathLength = 0
+                        summary = 'No warm intro path mapped yet.'
+                        path = @()
+                        confidence = 'low'
+                    }
+                    warmIntroCandidates = @()
+                    relationshipStrengthScore = 0
+                    pastPlacementCount = 0
+                    decisionMakerCount = 0
+                }))
+        $summary.triggerAlerts = @(
+            @($(ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'triggerAlerts' -Default @()))) |
+                Where-Object { $null -ne $_ }
+        )
+        $summary.sequenceState = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'sequenceState' -Default ([ordered]@{
+                    status = 'idle'
+                    nextStep = 'step_1'
+                    nextStepLabel = 'Email'
+                    nextStepAt = $null
+                    adaptiveDelayDays = 2
+                    adaptiveTimingReason = 'Default cadence because no live engagement has been captured yet.'
+                    stopReason = ''
+                    replyDetected = $false
+                    steps = @()
+                }))
+        $summary.relationshipStrengthScore = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'relationshipStrengthScore' -Default 0))
+        $summary.alertPriorityScore = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'alertPriorityScore' -Default 0))
+        $needsDerivedDetail = -not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'pipelineState' -Default $null)
+        if (-not $needsDerivedDetail) {
+            $needsDerivedDetail = (-not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'connectionGraph' -Default $null))
+        }
+        if (-not $needsDerivedDetail) {
+            $needsDerivedDetail = (-not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'sequenceState' -Default $null))
+        }
+        if ($needsDerivedDetail) {
+            try {
+                $derivedAccount = Update-CompanyProjection -Company (ConvertTo-BdSqlitePlainObject -InputObject $accountRecord) -Contacts $contacts -Jobs $jobs -Configs $configs -Activities $activity
+                $summary = Select-AccountDetailModel -Company $derivedAccount
+            } catch {
+                # Keep the persisted summary when on-read recompute fails.
+            }
+        }
 
         return [ordered]@{
             account = $summary

@@ -3,7 +3,7 @@ const appState = {
   localData: null,
   localOverlays: null,
   activeView: 'dashboard',
-  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', priority: '', status: '', owner: '', outreachStatus: '', sortBy: '' },
+  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -928,6 +928,7 @@ async function renderAccountsView() {
           ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
           ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.accountQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.accountQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.accountQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
+          ${renderField('Min target score', `<input name="minTargetScore" type="number" min="0" max="100" value="${escapeAttr(appState.accountQuery.minTargetScore)}">`)}
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
@@ -983,6 +984,11 @@ async function renderAccountDetail(accountId) {
   setViewTitle(detail.account.displayName);
   const targetScore = getTargetScore(detail.account);
   const targetScoreExplanation = getTargetScoreExplanation(detail.account) || detail.account.recommendedAction || 'No target-score explanation available yet.';
+  const connectionGraph = detail.account.connectionGraph || { shortestPathToDecisionMaker: { summary: 'No warm intro path mapped yet.', pathLength: 0 }, warmIntroCandidates: [], relationshipStrengthScore: 0 };
+  const shortestPath = connectionGraph.shortestPathToDecisionMaker || { summary: 'No warm intro path mapped yet.', pathLength: 0 };
+  const warmIntroCandidates = connectionGraph.warmIntroCandidates || [];
+  const triggerAlerts = detail.account.triggerAlerts || [];
+  const sequenceState = detail.account.sequenceState || { status: 'idle', nextStepLabel: 'Email', nextStepAt: null, adaptiveTimingReason: '', steps: [] };
 
   // Fetch hiring velocity in background (non-blocking)
   let hiringVelocity = [];
@@ -1143,6 +1149,45 @@ async function renderAccountDetail(accountId) {
               ['Growth signal', detail.account.companyGrowthSignalScore || 0, `Avg role seniority ${formatNumber(detail.account.avgRoleSeniorityScore || 0)}`],
             ].map(([label, value, meta]) => '<article class="timeline-item"><div class="inline-header"><strong>' + escapeHtml(label) + '</strong><span class="small muted">' + formatNumber(value) + '</span></div><p class="small muted">' + escapeHtml(meta) + '</p></article>').join('')}
           </div>
+        </div>
+
+        <div class="detail-card">
+          <div class="panel-header"><div><h3>Connection graph & triggers</h3><p class="muted small">Warm paths, live alerts, and the next sequence move for this account.</p></div></div>
+          <div class="timeline">
+            <article class="timeline-item">
+              <div class="inline-header"><strong>Shortest path to decision maker</strong><span class="small muted">${formatNumber(shortestPath.pathLength || 0)} hop${(shortestPath.pathLength || 0) === 1 ? '' : 's'}</span></div>
+              <p class="small muted">${escapeHtml(shortestPath.summary || 'No warm intro path mapped yet.')}</p>
+            </article>
+            <article class="timeline-item">
+              <div class="inline-header"><strong>Sequence status</strong><span class="small muted">${escapeHtml(humanize(sequenceState.status || 'idle'))}</span></div>
+              <p class="small muted">${escapeHtml(sequenceState.nextStepLabel ? `${sequenceState.nextStepLabel}${sequenceState.nextStepAt ? ` due ${formatDate(sequenceState.nextStepAt)}` : ''}` : 'Sequence is paused until the account moves again.')}</p>
+              ${sequenceState.adaptiveTimingReason ? `<p class="small muted">${escapeHtml(sequenceState.adaptiveTimingReason)}</p>` : ''}
+            </article>
+            ${triggerAlerts.length ? triggerAlerts.slice(0, 3).map((alert) => `
+              <article class="timeline-item">
+                <div class="inline-header"><strong>${escapeHtml(alert.title || humanize(alert.type || 'Alert'))}</strong><span class="small muted">${formatNumber(alert.priorityScore || 0)}</span></div>
+                <p class="small muted">${escapeHtml(alert.summary || '')}</p>
+                ${alert.recommendedAction ? `<p>${escapeHtml(alert.recommendedAction)}</p>` : ''}
+              </article>
+            `).join('') : '<div class="empty-state empty-state--compact">No live trigger alerts on this account yet.</div>'}
+          </div>
+          ${warmIntroCandidates.length ? `
+            <div class="table-scroll" style="margin-top:12px;">
+              <table class="table">
+                <thead><tr><th>Warm intro</th><th>Title</th><th>Relationship</th><th>Path</th></tr></thead>
+                <tbody>
+                  ${warmIntroCandidates.slice(0, 5).map((candidate) => `
+                    <tr>
+                      <td><strong>${escapeHtml(candidate.fullName || '')}</strong><div class="small muted">${escapeHtml(candidate.why || '')}</div></td>
+                      <td>${escapeHtml(candidate.title || '')}</td>
+                      <td>${formatNumber(candidate.relationshipStrengthScore || 0)}</td>
+                      <td>${escapeHtml(candidate.introPath || '')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : ''}
         </div>
 
         <div class="table-card">

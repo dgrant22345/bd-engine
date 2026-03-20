@@ -1536,6 +1536,603 @@ function Get-CompanyTargetScoreMetrics {
     }
 }
 
+function Get-EmptyConnectionGraph {
+    return [ordered]@{
+        shortestPathToDecisionMaker = [ordered]@{
+            pathLength = 0
+            summary = 'No warm intro path mapped yet.'
+            path = @()
+            confidence = 'low'
+        }
+        warmIntroCandidates = @()
+        relationshipStrengthScore = 0
+        pastPlacementCount = 0
+        decisionMakerCount = 0
+    }
+}
+
+function Get-EmptySequenceState {
+    return [ordered]@{
+        status = 'idle'
+        nextStep = 'step_1'
+        nextStepLabel = 'Email'
+        nextStepAt = $null
+        adaptiveDelayDays = 2
+        adaptiveTimingReason = 'Default cadence because no live engagement has been captured yet.'
+        stopReason = ''
+        replyDetected = $false
+        steps = @()
+    }
+}
+
+function Get-EmptyPipelineState {
+    return [ordered]@{
+        stage = 'not_started'
+        stageRank = 0
+        stageSource = 'account'
+        activityCount = 0
+        recentActivityCount30d = 0
+        lastInteractionAt = $null
+        lastInteractionType = ''
+        recentSignals = @()
+    }
+}
+
+function Get-NormalizedOutreachStage {
+    param([string]$Stage)
+
+    $key = Normalize-TextKey $Stage
+    switch -Regex ($key) {
+        '^$' { return '' }
+        'not started|not_started' { return 'not_started' }
+        'research' { return 'researching' }
+        'ready to contact|ready_to_contact|warm intro|warm_intro' { return 'ready_to_contact' }
+        'contacted|outreach|emailed|email sent|sent email' { return 'contacted' }
+        'replied|reply|responded|response|interested' { return 'replied' }
+        'opportunity|meeting|call|demo|proposal|qualified|client|in conversation|in_conversation' { return 'opportunity' }
+        default { return ($key -replace ' ', '_') }
+    }
+}
+
+function Get-PipelineStageRank {
+    param([string]$Stage)
+
+    switch (Get-NormalizedOutreachStage $Stage) {
+        'not_started' { return 0 }
+        'researching' { return 1 }
+        'ready_to_contact' { return 2 }
+        'contacted' { return 3 }
+        'replied' { return 4 }
+        'opportunity' { return 5 }
+        default { return -1 }
+    }
+}
+
+function Get-ActivitySignalText {
+    param($Activity)
+
+    $metadata = Get-ObjectValue -Object $Activity -Name 'metadata' -Default $null
+    $metadataParts = @()
+    if ($metadata -is [System.Collections.IDictionary]) {
+        $metadataParts = @($metadata.Values | ForEach-Object { [string]$_ })
+    } elseif ($metadata -is [System.Collections.IEnumerable] -and $metadata -isnot [string]) {
+        $metadataParts = @($metadata | ForEach-Object { [string]$_ })
+    } elseif ($null -ne $metadata) {
+        $metadataParts = @([string]$metadata)
+    }
+
+    return (Normalize-TextKey ([string]::Join(' ', @(
+                [string](Get-ObjectValue -Object $Activity -Name 'type' -Default ''),
+                [string](Get-ObjectValue -Object $Activity -Name 'summary' -Default ''),
+                [string](Get-ObjectValue -Object $Activity -Name 'notes' -Default ''),
+                [string](Get-ObjectValue -Object $Activity -Name 'pipelineStage' -Default ''),
+                [string]::Join(' ', @($metadataParts))
+            ))))
+}
+
+function Resolve-ActivityPipelineStage {
+    param($Activity)
+
+    $explicitStage = Get-NormalizedOutreachStage ([string](Get-ObjectValue -Object $Activity -Name 'pipelineStage' -Default ''))
+    if ($explicitStage) {
+        return $explicitStage
+    }
+
+    $signalText = Get-ActivitySignalText -Activity $Activity
+    if (-not $signalText) {
+        return ''
+    }
+
+    if ($signalText -match '\b(reply|replied|responded|response|interested|accepted)\b') {
+        return 'replied'
+    }
+    if ($signalText -match '\b(meeting|met|call|phone|demo|proposal|qualified|opportunity|intro call|screen)\b') {
+        return 'opportunity'
+    }
+    if ($signalText -match '\b(outreach|email|emailed|sent|message|intro)\b') {
+        return 'contacted'
+    }
+    if ($signalText -match '\b(linkedin|profile view|viewed profile|warm intro|mutual)\b') {
+        return 'ready_to_contact'
+    }
+    if ($signalText -match '\b(research|mapped|sourced|identified)\b') {
+        return 'researching'
+    }
+
+    return ''
+}
+
+function Get-CompanyPastPlacementCount {
+    param(
+        $Company,
+        $Activities = $null
+    )
+
+    $count = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'pastPlacementCount' -Default 0))
+    $placements = Get-ObjectValue -Object $Company -Name 'pastPlacements' -Default @()
+    if ($placements -is [System.Collections.IEnumerable] -and $placements -isnot [string]) {
+        $count += @($placements).Count
+    } elseif ($placements) {
+        $count += [int](Convert-ToNumber $placements)
+    }
+
+    foreach ($activity in @($Activities)) {
+        $signalText = Get-ActivitySignalText -Activity $activity
+        if ($signalText -match '\bplacement|placed|candidate placed|hired through\b') {
+            $count += 1
+        }
+    }
+
+    return $count
+}
+
+function Get-DecisionMakerFitScore {
+    param($Contact)
+
+    $title = Normalize-TextKey ([string](Get-ObjectValue -Object $Contact -Name 'title' -Default ''))
+    $score = 0
+    if (Test-Truthy (Get-ObjectValue -Object $Contact -Name 'buyerFlag' -Default $false)) { $score += 35 }
+    if (Test-Truthy (Get-ObjectValue -Object $Contact -Name 'seniorFlag' -Default $false)) { $score += 25 }
+    if (Test-Truthy (Get-ObjectValue -Object $Contact -Name 'talentFlag' -Default $false)) { $score += 12 }
+
+    if ($title -match 'chief|founder|coo|ceo|cfo|cto|president|vice president|vp|head|director') {
+        $score += 28
+    } elseif ($title -match 'manager|lead|principal|staff') {
+        $score += 16
+    }
+
+    if ($title -match 'talent|people|recruit|staffing|human resources|hr|hiring') {
+        $score += 22
+    } elseif ($title -match 'engineering|product|sales|marketing|operations|data|finance') {
+        $score += 8
+    }
+
+    return [int][Math]::Min(100, $score)
+}
+
+function Get-ContactRelationshipStrengthScore {
+    param(
+        $Contact,
+        [int]$PastPlacementCount = 0
+    )
+
+    $yearsConnected = [double](Convert-ToNumber (Get-ObjectValue -Object $Contact -Name 'yearsConnected' -Default 0))
+    $priorityScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Contact -Name 'priorityScore' -Default 0))
+    $companyOverlapCount = [double](Convert-ToNumber (Get-ObjectValue -Object $Contact -Name 'companyOverlapCount' -Default 0))
+    $decisionMakerFitScore = Get-DecisionMakerFitScore -Contact $Contact
+    $score =
+        ([Math]::Min(35, ($priorityScore * 0.55))) +
+        ([Math]::Min(24, ($yearsConnected * 4))) +
+        ([Math]::Min(14, ($companyOverlapCount * 2))) +
+        ([Math]::Min(16, ($PastPlacementCount * 6))) +
+        ([Math]::Round($decisionMakerFitScore * 0.18, 0))
+
+    if (Test-Truthy (Get-ObjectValue -Object $Contact -Name 'seniorFlag' -Default $false)) { $score += 8 }
+    if (Test-Truthy (Get-ObjectValue -Object $Contact -Name 'buyerFlag' -Default $false)) { $score += 10 }
+    if (Get-ObjectValue -Object $Contact -Name 'linkedinUrl' -Default '') { $score += 4 }
+    if (Get-ObjectValue -Object $Contact -Name 'email' -Default '') { $score += 3 }
+
+    return [int][Math]::Min(100, [Math]::Round($score, 0))
+}
+
+function Get-ConnectionGraphInsights {
+    param(
+        $Company,
+        $Contacts = $null,
+        $Activities = $null
+    )
+
+    if ($null -eq $Contacts) {
+        $existing = Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default $null
+        if ($existing) {
+            return (ConvertTo-PlainObject -InputObject $existing)
+        }
+        return (Get-EmptyConnectionGraph)
+    }
+
+    $pastPlacementCount = Get-CompanyPastPlacementCount -Company $Company -Activities $Activities
+    $rankedCandidates = @(
+        @($Contacts | Where-Object { $null -ne $_ }) |
+            ForEach-Object {
+                $decisionMakerFitScore = Get-DecisionMakerFitScore -Contact $_
+                $relationshipStrengthScore = Get-ContactRelationshipStrengthScore -Contact $_ -PastPlacementCount $pastPlacementCount
+                $title = [string](Get-ObjectValue -Object $_ -Name 'title' -Default '')
+                $fullName = [string](Get-ObjectValue -Object $_ -Name 'fullName' -Default '')
+                $pathLength = if ($decisionMakerFitScore -ge 60) { 1 } else { 2 }
+                $why = @()
+                if ((Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'yearsConnected' -Default 0)) -gt 0) {
+                    $why += ('{0}y connection' -f [string]([Math]::Round((Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'yearsConnected' -Default 0)), 1)))
+                }
+                if (Test-Truthy (Get-ObjectValue -Object $_ -Name 'seniorFlag' -Default $false)) { $why += 'senior contact' }
+                if (Test-Truthy (Get-ObjectValue -Object $_ -Name 'buyerFlag' -Default $false)) { $why += 'buyer-side title' }
+                if (Test-Truthy (Get-ObjectValue -Object $_ -Name 'talentFlag' -Default $false)) { $why += 'talent access' }
+                if ($pastPlacementCount -gt 0) { $why += ('{0} prior placement signal{1}' -f $pastPlacementCount, $(if ($pastPlacementCount -eq 1) { '' } else { 's' })) }
+                [ordered]@{
+                    id = [string](Get-ObjectValue -Object $_ -Name 'id' -Default '')
+                    fullName = $fullName
+                    title = $title
+                    relationshipStrengthScore = [int]$relationshipStrengthScore
+                    decisionMakerFitScore = [int]$decisionMakerFitScore
+                    pathLength = $pathLength
+                    introPath = if ($pathLength -eq 1) { 'Direct path to a likely decision maker' } else { 'Best direct connection to broker an intro' }
+                    connectedOn = Get-ObjectValue -Object $_ -Name 'connectedOn' -Default $null
+                    why = [string]([string]::Join(', ', @($why)))
+                }
+            } |
+            Sort-Object @(
+                @{ Expression = { [double](Convert-ToNumber $_.relationshipStrengthScore) }; Descending = $true },
+                @{ Expression = { [double](Convert-ToNumber $_.decisionMakerFitScore) }; Descending = $true },
+                @{ Expression = { [string]$_.fullName }; Descending = $false }
+            )
+    )
+
+    $warmIntroCandidates = @($rankedCandidates | Select-Object -First 5)
+    $directDecisionMaker = @($warmIntroCandidates | Where-Object { (Convert-ToNumber $_.pathLength) -eq 1 } | Select-Object -First 1)
+    $shortestPath = if ($directDecisionMaker) {
+        [ordered]@{
+            pathLength = 1
+            summary = ('You are directly connected to {0}, a likely hiring decision maker at {1}.' -f $directDecisionMaker.fullName, [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default 'this company'))
+            path = @('You', [string]$directDecisionMaker.fullName)
+            confidence = 'high'
+        }
+    } elseif (@($warmIntroCandidates).Count -gt 0) {
+        [ordered]@{
+            pathLength = 2
+            summary = ('Best warm route is through {0} into a hiring leader at {1}.' -f [string]$warmIntroCandidates[0].fullName, [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default 'this company'))
+            path = @('You', [string]$warmIntroCandidates[0].fullName, ('Hiring leader at {0}' -f [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default 'the account')))
+            confidence = 'medium'
+        }
+    } elseif ($pastPlacementCount -gt 0) {
+        [ordered]@{
+            pathLength = 2
+            summary = ('No direct warm intro is mapped yet, but {0} prior placement signal{1} give you a credible way in.' -f $pastPlacementCount, $(if ($pastPlacementCount -eq 1) { '' } else { 's' }))
+            path = @('You', 'Placement history', ('Decision maker at {0}' -f [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default 'the account')))
+            confidence = 'medium'
+        }
+    } else {
+        (Get-EmptyConnectionGraph).shortestPathToDecisionMaker
+    }
+
+    $relationshipStrengthScore = if (@($warmIntroCandidates).Count -gt 0) {
+        [int][Math]::Min(100, [Math]::Round(
+                ((Convert-ToNumber $warmIntroCandidates[0].relationshipStrengthScore) * 0.68) +
+                (@($warmIntroCandidates).Count * 6) +
+                ($pastPlacementCount * 7) +
+                $(if ($directDecisionMaker) { 12 } else { 0 }),
+                0
+            ))
+    } else {
+        [int][Math]::Min(100, ($pastPlacementCount * 10))
+    }
+
+    return [ordered]@{
+        shortestPathToDecisionMaker = $shortestPath
+        warmIntroCandidates = $warmIntroCandidates
+        relationshipStrengthScore = $relationshipStrengthScore
+        pastPlacementCount = [int]$pastPlacementCount
+        decisionMakerCount = [int]@($rankedCandidates | Where-Object { (Convert-ToNumber $_.decisionMakerFitScore) -ge 60 }).Count
+    }
+}
+
+function Get-CompanyTriggerAlerts {
+    param(
+        $Company,
+        $Jobs = $null,
+        $Contacts = $null,
+        $Activities = $null,
+        [datetime]$ReferenceNow = (Get-Date)
+    )
+
+    if ($null -eq $Jobs -and $null -eq $Contacts -and $null -eq $Activities) {
+        $existing = Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default $null
+        if ($existing) {
+            return @(ConvertTo-PlainObject -InputObject $existing)
+        }
+        return @()
+    }
+
+    $alerts = New-Object System.Collections.ArrayList
+    $newRoleCount7d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'newRoleCount7d' -Default 0))
+    $jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast90Days' -Default 0))
+    $jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast30Days' -Default 0))
+    $hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeRatio' -Default 0))
+    $staleRoleCount30d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'staleRoleCount30d' -Default 0))
+    $jobSpikeThreshold = [Math]::Max(3, [Math]::Min(8, [Math]::Ceiling($jobsLast90Days / 6.0)))
+
+    if ($newRoleCount7d -ge $jobSpikeThreshold -or ($hiringSpikeRatio -ge 1.6 -and $newRoleCount7d -ge 3)) {
+        [void]$alerts.Add([ordered]@{
+                id = 'job_spike'
+                type = 'job_spike'
+                title = 'Hiring spike'
+                summary = ('{0} new roles in the last 7 days versus a {1}x recent baseline.' -f $newRoleCount7d, [string]([Math]::Round($hiringSpikeRatio, 2)))
+                priorityScore = [int][Math]::Min(100, [Math]::Round(($newRoleCount7d * 11) + ([Math]::Max(0, $hiringSpikeRatio - 1) * 28), 0))
+                recommendedAction = 'Lead with the current hiring burst while the signal is still fresh.'
+            })
+    }
+
+    if ($staleRoleCount30d -gt 0) {
+        $staleJobs = @()
+        if ($null -ne $Jobs) {
+            $staleJobs = @(
+                $Jobs |
+                    Where-Object {
+                        $postedAt = Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'postedAt' -Default ''))
+                        $postedAt -gt [DateTime]::MinValue -and $postedAt -lt $ReferenceNow.AddDays(-30)
+                    } |
+                    Sort-Object @{ Expression = { Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'postedAt' -Default '')) } } |
+                    Select-Object -First 3
+            )
+        }
+        $oldestAgeDays = if (@($staleJobs).Count -gt 0) {
+            [int][Math]::Floor(($ReferenceNow - (Get-DateSortValue ([string](Get-ObjectValue -Object $staleJobs[0] -Name 'postedAt' -Default '')))).TotalDays)
+        } else {
+            30
+        }
+        [void]$alerts.Add([ordered]@{
+                id = 'stale_roles'
+                type = 'stale_roles'
+                title = 'Stale open roles'
+                summary = ('{0} open role{1} have been live for 30+ days; oldest signal is about {2} days old.' -f $staleRoleCount30d, $(if ($staleRoleCount30d -eq 1) { '' } else { 's' }), $oldestAgeDays)
+                priorityScore = [int][Math]::Min(100, [Math]::Round(($staleRoleCount30d * 14) + ([Math]::Min(25, $oldestAgeDays / 2)), 0))
+                recommendedAction = 'Reference the age of the search and position yourself around hard-to-fill roles.'
+            })
+    }
+
+    if ($null -ne $Jobs) {
+        $repeatedPostings = @(
+            @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false }) |
+                Group-Object -Property { [string](Get-ObjectValue -Object $_ -Name 'normalizedTitle' -Default (Normalize-TextKey ([string](Get-ObjectValue -Object $_ -Name 'title' -Default '')))) } |
+                Where-Object { $_.Count -ge 2 } |
+                Sort-Object @{ Expression = { $_.Count }; Descending = $true } |
+                Select-Object -First 1
+        )
+        if (@($repeatedPostings).Count -gt 0) {
+            $sampleJob = @($repeatedPostings[0].Group | Select-Object -First 1)
+            [void]$alerts.Add([ordered]@{
+                    id = 'repeated_postings'
+                    type = 'repeated_postings'
+                    title = 'Repeated postings'
+                    summary = ('{0} active postings are clustered around "{1}", which usually means the team still has not closed the gap.' -f $repeatedPostings[0].Count, [string](Get-ObjectValue -Object $sampleJob -Name 'title' -Default 'that role'))
+                    priorityScore = [int][Math]::Min(100, [Math]::Round(($repeatedPostings[0].Count * 18) + ([Math]::Min(24, $jobsLast30Days * 2)), 0))
+                    recommendedAction = 'Use the repeated title pattern as proof of sustained hiring pressure.'
+                })
+        }
+    }
+
+    if ($null -ne $Contacts) {
+        $recentManagers = @(
+            @($Contacts | Where-Object { $null -ne $_ }) |
+                ForEach-Object {
+                    $decisionMakerFitScore = Get-DecisionMakerFitScore -Contact $_
+                    $connectedAt = Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'connectedOn' -Default ''))
+                    [ordered]@{
+                        fullName = [string](Get-ObjectValue -Object $_ -Name 'fullName' -Default '')
+                        title = [string](Get-ObjectValue -Object $_ -Name 'title' -Default '')
+                        decisionMakerFitScore = $decisionMakerFitScore
+                        isRecent = ($connectedAt -gt [DateTime]::MinValue -and $connectedAt -ge $ReferenceNow.AddDays(-180))
+                    }
+                } |
+                Where-Object { $_.decisionMakerFitScore -ge 60 -and $_.isRecent } |
+                Sort-Object @{ Expression = { [double](Convert-ToNumber $_.decisionMakerFitScore) }; Descending = $true } |
+                Select-Object -First 1
+        )
+        if (@($recentManagers).Count -gt 0) {
+            [void]$alerts.Add([ordered]@{
+                    id = 'new_hiring_manager_detected'
+                    type = 'new_hiring_manager_detected'
+                    title = 'New hiring manager detected'
+                    summary = ('{0} looks like a recent hiring-side connection at {1}.' -f [string]$recentManagers[0].fullName, [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default 'this company'))
+                    priorityScore = [int][Math]::Min(100, [Math]::Round(45 + (Convert-ToNumber $recentManagers[0].decisionMakerFitScore * 0.45), 0))
+                    recommendedAction = ('Use {0} as the first route into the account.' -f [string]$recentManagers[0].fullName)
+                })
+        }
+    }
+
+    return @(
+        $alerts |
+            Sort-Object @(
+                @{ Expression = { [double](Convert-ToNumber $_.priorityScore) }; Descending = $true },
+                @{ Expression = { [string]$_.title }; Descending = $false }
+            )
+    )
+}
+
+function Get-AccountSequenceState {
+    param(
+        $Company,
+        $Activities = $null,
+        [datetime]$ReferenceNow = (Get-Date),
+        $ConnectionGraph = $null
+    )
+
+    if ($null -eq $Activities) {
+        $existing = Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null
+        if ($existing) {
+            return (ConvertTo-PlainObject -InputObject $existing)
+        }
+        return (Get-EmptySequenceState)
+    }
+
+    $existingConnectionGraph = if ($ConnectionGraph) { $ConnectionGraph } else { Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default (Get-EmptyConnectionGraph) }
+    $engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore' -Default 0))
+    $relationshipStrengthScore = [double](Convert-ToNumber (Get-ObjectValue -Object $existingConnectionGraph -Name 'relationshipStrengthScore' -Default 0))
+    $adaptiveDelayDays = if ($engagementScore -ge 55 -or $relationshipStrengthScore -ge 70) {
+        1
+    } elseif ($engagementScore -le 12 -and $relationshipStrengthScore -lt 35) {
+        3
+    } else {
+        2
+    }
+    $adaptiveTimingReason = if ($adaptiveDelayDays -eq 1) {
+        'Cadence is compressed because the account is warm or already showing engagement.'
+    } elseif ($adaptiveDelayDays -eq 3) {
+        'Cadence is spaced out because the account is still cold.'
+    } else {
+        'Cadence is using the default mixed-intent timing.'
+    }
+
+    $orderedActivities = @(
+        $Activities |
+            Sort-Object @{ Expression = { Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'occurredAt' -Default '')) } }
+    )
+
+    $emailEvents = @($orderedActivities | Where-Object { (Get-ActivitySignalText -Activity $_) -match '\b(outreach|email|emailed|sent|message)\b' })
+    $linkedinEvents = @($orderedActivities | Where-Object { (Get-ActivitySignalText -Activity $_) -match '\b(linkedin|profile view|viewed profile)\b' })
+    $replyEvents = @($orderedActivities | Where-Object { (Get-ActivitySignalText -Activity $_) -match '\b(reply|replied|responded|response|interested)\b' })
+    $followUpEvents = @($orderedActivities | Where-Object { (Get-ActivitySignalText -Activity $_) -match '\bfollow up|follow-up\b' })
+    if (@($followUpEvents).Count -eq 0 -and @($emailEvents).Count -ge 2) {
+        $followUpEvents = @($emailEvents | Select-Object -Skip 1)
+    }
+    $callEvents = @($orderedActivities | Where-Object { (Get-ActivitySignalText -Activity $_) -match '\b(call|phone|voicemail)\b' })
+
+    $stepDefinitions = @(
+        [ordered]@{ key = 'step_1'; label = 'Email'; channel = 'email'; completedAt = $(if (@($emailEvents).Count -gt 0) { Get-ObjectValue -Object $emailEvents[0] -Name 'occurredAt' -Default $null } else { $null }) },
+        [ordered]@{ key = 'step_2'; label = 'LinkedIn view'; channel = 'linkedin'; completedAt = $(if (@($linkedinEvents).Count -gt 0) { Get-ObjectValue -Object $linkedinEvents[0] -Name 'occurredAt' -Default $null } else { $null }) },
+        [ordered]@{ key = 'step_3'; label = 'Follow-up email'; channel = 'email'; completedAt = $(if (@($followUpEvents).Count -gt 0) { Get-ObjectValue -Object $followUpEvents[0] -Name 'occurredAt' -Default $null } else { $null }) },
+        [ordered]@{ key = 'step_4'; label = 'Call reminder'; channel = 'call'; completedAt = $(if (@($callEvents).Count -gt 0) { Get-ObjectValue -Object $callEvents[0] -Name 'occurredAt' -Default $null } else { $null }) }
+    )
+
+    $baseTimeline = @(
+        [ordered]@{ key = 'step_1'; offsetDays = 0 },
+        [ordered]@{ key = 'step_2'; offsetDays = $adaptiveDelayDays },
+        [ordered]@{ key = 'step_3'; offsetDays = $adaptiveDelayDays + 2 },
+        [ordered]@{ key = 'step_4'; offsetDays = ($adaptiveDelayDays * 2) + 4 }
+    )
+
+    $sequenceAnchor = if (@($orderedActivities).Count -gt 0) {
+        Get-DateSortValue ([string](Get-ObjectValue -Object $orderedActivities[0] -Name 'occurredAt' -Default ''))
+    } else {
+        $ReferenceNow
+    }
+
+    $steps = New-Object System.Collections.ArrayList
+    foreach ($definition in @($stepDefinitions)) {
+        $timeline = @($baseTimeline | Where-Object { $_.key -eq $definition.key } | Select-Object -First 1)
+        $recommendedAt = if ($timeline) { $sequenceAnchor.AddDays([double](Convert-ToNumber $timeline.offsetDays)).ToString('o') } else { $null }
+        [void]$steps.Add([ordered]@{
+                key = [string]$definition.key
+                label = [string]$definition.label
+                channel = [string]$definition.channel
+                status = $(if ($definition.completedAt) { 'completed' } else { 'pending' })
+                completedAt = $definition.completedAt
+                recommendedAt = $recommendedAt
+            })
+    }
+
+    $replyDetected = (@($replyEvents).Count -gt 0) -or ((Get-PipelineStageRank (Get-ObjectValue -Object $Company -Name 'outreachStatus' -Default '')) -ge (Get-PipelineStageRank 'replied'))
+    if ($replyDetected) {
+        return [ordered]@{
+            status = 'stopped'
+            nextStep = ''
+            nextStepLabel = ''
+            nextStepAt = $null
+            adaptiveDelayDays = [int]$adaptiveDelayDays
+            adaptiveTimingReason = $adaptiveTimingReason
+            stopReason = 'reply_detected'
+            replyDetected = $true
+            steps = @($steps.ToArray())
+        }
+    }
+
+    $nextPendingStep = @($steps.ToArray() | Where-Object { $_.status -eq 'pending' } | Select-Object -First 1)
+    return [ordered]@{
+        status = $(if ($nextPendingStep) { 'active' } else { 'completed' })
+        nextStep = [string]$(if ($nextPendingStep) { $nextPendingStep.key } else { '' })
+        nextStepLabel = [string]$(if ($nextPendingStep) { $nextPendingStep.label } else { '' })
+        nextStepAt = $(if ($nextPendingStep) { $nextPendingStep.recommendedAt } else { $null })
+        adaptiveDelayDays = [int]$adaptiveDelayDays
+        adaptiveTimingReason = $adaptiveTimingReason
+        stopReason = ''
+        replyDetected = $false
+        steps = @($steps.ToArray())
+    }
+}
+
+function Get-AccountPipelineState {
+    param(
+        $Company,
+        $Activities = $null,
+        [datetime]$ReferenceNow = (Get-Date)
+    )
+
+    if ($null -eq $Activities) {
+        $existing = Get-ObjectValue -Object $Company -Name 'pipelineState' -Default $null
+        if ($existing) {
+            return (ConvertTo-PlainObject -InputObject $existing)
+        }
+        return (Get-EmptyPipelineState)
+    }
+
+    $normalizedStages = @()
+    $recentSignals = New-Object System.Collections.ArrayList
+    $recentActivityCount30d = 0
+    $latestActivity = @(
+        $Activities |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'occurredAt' -Default '')) }; Descending = $true }
+    ) | Select-Object -First 1
+
+    foreach ($activity in @($Activities)) {
+        $stage = Resolve-ActivityPipelineStage -Activity $activity
+        if ($stage) {
+            $normalizedStages += $stage
+        }
+        $occurredAt = Get-DateSortValue ([string](Get-ObjectValue -Object $activity -Name 'occurredAt' -Default ''))
+        if ($occurredAt -gt [DateTime]::MinValue -and $occurredAt -ge $ReferenceNow.AddDays(-30)) {
+            $recentActivityCount30d += 1
+        }
+        $summary = [string](Get-ObjectValue -Object $activity -Name 'summary' -Default '')
+        if ($summary -and $recentSignals.Count -lt 4) {
+            [void]$recentSignals.Add($summary)
+        }
+    }
+
+    $resolvedStage = Get-NormalizedOutreachStage ([string](Get-ObjectValue -Object $Company -Name 'outreachStatus' -Default ''))
+    $resolvedRank = Get-PipelineStageRank $resolvedStage
+    foreach ($stage in @($normalizedStages)) {
+        $rank = Get-PipelineStageRank $stage
+        if ($rank -gt $resolvedRank) {
+            $resolvedStage = $stage
+            $resolvedRank = $rank
+        }
+    }
+    if (-not $resolvedStage) {
+        $resolvedStage = 'not_started'
+        $resolvedRank = 0
+    }
+
+    return [ordered]@{
+        stage = $resolvedStage
+        stageRank = [int]$resolvedRank
+        stageSource = $(if (@($normalizedStages).Count -gt 0) { 'activity' } else { 'account' })
+        activityCount = [int]@($Activities).Count
+        recentActivityCount30d = [int]$recentActivityCount30d
+        lastInteractionAt = $(if ($latestActivity) { Get-ObjectValue -Object $latestActivity -Name 'occurredAt' -Default $null } else { $null })
+        lastInteractionType = $(if ($latestActivity) { [string](Get-ObjectValue -Object $latestActivity -Name 'type' -Default '') } else { '' })
+        recentSignals = @($recentSignals.ToArray())
+    }
+}
+
 function Get-EnrichmentFunnelStats {
     param($State)
     $total = @($State.companies).Count
@@ -1589,6 +2186,37 @@ function Get-RecommendationAction {
 
     if ($Company.nextAction) {
         return [string]$Company.nextAction
+    }
+
+    $triggerAlerts = @($(if (Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default $null) { Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default @() } else { @() }))
+    $topAlert = @($triggerAlerts | Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'priorityScore' -Default 0)) }; Descending = $true } | Select-Object -First 1)
+    $sequenceState = Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null
+    $connectionGraph = Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default $null
+    $warmIntroCandidates = @($(if ($connectionGraph) { Get-ObjectValue -Object $connectionGraph -Name 'warmIntroCandidates' -Default @() } else { @() }))
+    $shortestPath = if ($connectionGraph) { Get-ObjectValue -Object $connectionGraph -Name 'shortestPathToDecisionMaker' -Default $null } else { $null }
+
+    if ($sequenceState -and [string](Get-ObjectValue -Object $sequenceState -Name 'stopReason' -Default '') -eq 'reply_detected') {
+        return "Reply detected at $($Company.displayName). Pause outbound steps and work the response."
+    }
+
+    if ($topAlert) {
+        $alertType = [string](Get-ObjectValue -Object $topAlert -Name 'type' -Default '')
+        if ($alertType -eq 'job_spike' -and @($warmIntroCandidates).Count -gt 0) {
+            return ('Ask {0} for the warmest intro while hiring is spiking at {1}.' -f [string](Get-ObjectValue -Object $warmIntroCandidates[0] -Name 'fullName' -Default 'your best contact'), $Company.displayName)
+        }
+        if ($alertType -eq 'new_hiring_manager_detected') {
+            return [string](Get-ObjectValue -Object $topAlert -Name 'recommendedAction' -Default ('Lead with the new hiring-side contact at {0}.' -f $Company.displayName))
+        }
+        if ($alertType -eq 'stale_roles') {
+            return "Use the stale-role pattern at $($Company.displayName) to anchor a sharper outreach angle."
+        }
+        if ($alertType -eq 'repeated_postings') {
+            return "Reference the repeated opening pattern at $($Company.displayName) to show you understand the pain point."
+        }
+    }
+
+    if ($shortestPath -and (Convert-ToNumber (Get-ObjectValue -Object $shortestPath -Name 'pathLength' -Default 0)) -eq 1 -and @($warmIntroCandidates).Count -gt 0) {
+        return ('Start with your direct connection {0} at {1}.' -f [string](Get-ObjectValue -Object $warmIntroCandidates[0] -Name 'fullName' -Default 'there'), $Company.displayName)
     }
 
     if ($Company.staleFlag -eq 'STALE') {
@@ -1739,6 +2367,15 @@ function Select-AccountDetailModel {
     $summary.companyGrowthSignalSummary = [string](Get-ObjectValue -Object $Company -Name 'companyGrowthSignalSummary' -Default '')
     $summary.engagementSummary = [string](Get-ObjectValue -Object $Company -Name 'engagementSummary' -Default '')
     $summary.lastContactedAt = $Company.lastContactedAt
+    $summary.pipelineState = if (Get-ObjectValue -Object $Company -Name 'pipelineState' -Default $null) { ConvertTo-PlainObject -InputObject (Get-ObjectValue -Object $Company -Name 'pipelineState' -Default $null) } else { Get-EmptyPipelineState }
+    $summary.connectionGraph = if (Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default $null) { ConvertTo-PlainObject -InputObject (Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default $null) } else { Get-EmptyConnectionGraph }
+    $summary.triggerAlerts = @(
+        @($(if (Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default $null) { ConvertTo-PlainObject -InputObject (Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default @()) } else { @() })) |
+            Where-Object { $null -ne $_ }
+    )
+    $summary.sequenceState = if (Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null) { ConvertTo-PlainObject -InputObject (Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null) } else { Get-EmptySequenceState }
+    $summary.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'relationshipStrengthScore' -Default 0))
+    $summary.alertPriorityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'alertPriorityScore' -Default 0))
     return $summary
 }
 
@@ -1755,7 +2392,15 @@ function Select-ContactSummary {
         fullName = [string]$Contact.fullName
         title = [string]$Contact.title
         linkedinUrl = [string]$Contact.linkedinUrl
+        email = [string](Get-ObjectValue -Object $Contact -Name 'email' -Default '')
         connectedOn = $Contact.connectedOn
+        yearsConnected = [double](Convert-ToNumber (Get-ObjectValue -Object $Contact -Name 'yearsConnected' -Default 0))
+        companyOverlapCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Contact -Name 'companyOverlapCount' -Default 0))
+        buyerFlag = [bool](Test-Truthy (Get-ObjectValue -Object $Contact -Name 'buyerFlag' -Default $false))
+        seniorFlag = [bool](Test-Truthy (Get-ObjectValue -Object $Contact -Name 'seniorFlag' -Default $false))
+        talentFlag = [bool](Test-Truthy (Get-ObjectValue -Object $Contact -Name 'talentFlag' -Default $false))
+        techFlag = [bool](Test-Truthy (Get-ObjectValue -Object $Contact -Name 'techFlag' -Default $false))
+        financeFlag = [bool](Test-Truthy (Get-ObjectValue -Object $Contact -Name 'financeFlag' -Default $false))
         priorityScore = [int](Convert-ToNumber $Contact.priorityScore)
         outreachStatus = [string]$Contact.outreachStatus
         notes = [string]$Contact.notes
@@ -1935,6 +2580,12 @@ function New-CompanyProjection {
         topContactTitle = ''
         recommendedAction = ''
         outreachDraft = ''
+        pipelineState = [ordered]@{}
+        connectionGraph = [ordered]@{}
+        triggerAlerts = @()
+        sequenceState = [ordered]@{}
+        relationshipStrengthScore = 0
+        alertPriorityScore = 0
         createdAt = $timestamp
         updatedAt = $timestamp
     }
@@ -1951,25 +2602,27 @@ function Update-CompanyProjection {
     )
 
     $now = Get-Date
-    $companyName = if ($Company.displayName) { [string]$Company.displayName } elseif ($Company.normalizedName) { [string]$Company.normalizedName } else { 'Unknown company' }
+    $existingDisplayName = [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default '')
+    $existingNormalizedName = [string](Get-ObjectValue -Object $Company -Name 'normalizedName' -Default '')
+    $companyName = if ($existingDisplayName) { $existingDisplayName } elseif ($existingNormalizedName) { $existingNormalizedName } else { 'Unknown company' }
     $Company.displayName = Get-CanonicalCompanyDisplayName $companyName
-    $Company.normalizedName = Get-CanonicalCompanyKey $(if ($Company.normalizedName) { $Company.normalizedName } else { $companyName })
-    if (-not $Company.id) {
+    $Company.normalizedName = Get-CanonicalCompanyKey $(if ($existingNormalizedName) { $existingNormalizedName } else { $companyName })
+    if (-not (Get-ObjectValue -Object $Company -Name 'id' -Default '')) {
         $Company.id = New-DeterministicId -Prefix 'acct' -Seed $(if ($Company.normalizedName) { $Company.normalizedName } else { $Company.displayName })
     }
-    $Company.tags = @(Get-StringList $Company.tags)
-    $Company.connectionCount = [int](Convert-ToNumber $Company.connectionCount)
-    $Company.seniorContactCount = [int](Convert-ToNumber $Company.seniorContactCount)
-    $Company.talentContactCount = [int](Convert-ToNumber $Company.talentContactCount)
-    $Company.buyerTitleCount = [int](Convert-ToNumber $Company.buyerTitleCount)
-    $Company.targetScore = [int](Convert-ToNumber $Company.targetScore)
+    $Company.tags = @(Get-StringList (Get-ObjectValue -Object $Company -Name 'tags' -Default @()))
+    $Company.connectionCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'connectionCount' -Default 0))
+    $Company.seniorContactCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'seniorContactCount' -Default 0))
+    $Company.talentContactCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'talentContactCount' -Default 0))
+    $Company.buyerTitleCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'buyerTitleCount' -Default 0))
+    $Company.targetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'targetScore' -Default 0))
     $Company.normalizedTargetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'normalizedTargetScore' -Default $Company.targetScore))
-    $Company.priority = Normalize-AccountPriority $Company.priority
-    $Company.status = Normalize-AccountStatus $Company.status
-    if (-not $Company.outreachStatus) { $Company.outreachStatus = 'not_started' }
-    if (-not $Company.notes) { $Company.notes = '' }
-    if (-not $Company.industry) { $Company.industry = '' }
-    if (-not $Company.location) { $Company.location = '' }
+    $Company.priority = Normalize-AccountPriority (Get-ObjectValue -Object $Company -Name 'priority' -Default '')
+    $Company.status = Normalize-AccountStatus (Get-ObjectValue -Object $Company -Name 'status' -Default '')
+    if (-not (Get-ObjectValue -Object $Company -Name 'outreachStatus' -Default '')) { $Company.outreachStatus = 'not_started' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'notes' -Default '')) { $Company.notes = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'industry' -Default '')) { $Company.industry = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'location' -Default '')) { $Company.location = '' }
     $domain = [string](Get-ObjectValue -Object $Company -Name 'domain')
     $canonicalDomain = [string](Get-ObjectValue -Object $Company -Name 'canonicalDomain')
     $careersUrl = [string](Get-ObjectValue -Object $Company -Name 'careersUrl')
@@ -2035,14 +2688,14 @@ function Update-CompanyProjection {
     [void](Set-ObjectValue -Object $Company -Name 'lastEnrichedAt' -Value $lastEnrichedAt)
     [void](Set-ObjectValue -Object $Company -Name 'lastVerifiedAt' -Value $lastVerifiedAt)
     [void](Set-ObjectValue -Object $Company -Name 'nextEnrichmentAttemptAt' -Value $nextEnrichmentAttemptAt)
-    if (-not $Company.owner) { $Company.owner = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'owner' -Default '')) { $Company.owner = '' }
     if (-not (Get-ObjectValue -Object $Company -Name 'ownerId' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerId' -Value '') }
     if (-not (Get-ObjectValue -Object $Company -Name 'ownerAssignedAt' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerAssignedAt' -Value '') }
     if (-not (Get-ObjectValue -Object $Company -Name 'ownerAssignedBy' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerAssignedBy' -Value '') }
-    if (-not $Company.nextAction) { $Company.nextAction = '' }
-    if (-not $Company.topContactName) { $Company.topContactName = '' }
-    if (-not $Company.topContactTitle) { $Company.topContactTitle = '' }
-    if (-not $Company.createdAt) { $Company.createdAt = $now.ToString('o') }
+    if (-not (Get-ObjectValue -Object $Company -Name 'nextAction' -Default '')) { $Company.nextAction = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'topContactName' -Default '')) { $Company.topContactName = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'topContactTitle' -Default '')) { $Company.topContactTitle = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'createdAt' -Default '')) { $Company.createdAt = $now.ToString('o') }
 
     if ($PSBoundParameters.ContainsKey('Contacts')) {
         $contactList = @($Contacts | Where-Object { $null -ne $_ })
@@ -2118,12 +2771,12 @@ function Update-CompanyProjection {
             }
         }
     } else {
-        $Company.jobCount = [int](Convert-ToNumber $Company.jobCount)
-        $Company.openRoleCount = [int](Convert-ToNumber $Company.openRoleCount)
+        $Company.jobCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobCount' -Default 0))
+        $Company.openRoleCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'openRoleCount' -Default 0))
         $Company.jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast30Days' -Default 0))
         $Company.jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast90Days' -Default 0))
-        $Company.newRoleCount7d = [int](Convert-ToNumber $Company.newRoleCount7d)
-        $Company.staleRoleCount30d = [int](Convert-ToNumber $Company.staleRoleCount30d)
+        $Company.newRoleCount7d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'newRoleCount7d' -Default 0))
+        $Company.staleRoleCount30d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'staleRoleCount30d' -Default 0))
         $Company.avgRoleSeniorityScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'avgRoleSeniorityScore' -Default 0))
         $Company.hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeRatio' -Default 0))
         $Company.externalRecruiterLikelihoodScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'externalRecruiterLikelihoodScore' -Default 0))
@@ -2132,11 +2785,11 @@ function Update-CompanyProjection {
         $Company.engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore' -Default 0))
         $Company.engagementSummary = [string](Get-ObjectValue -Object $Company -Name 'engagementSummary' -Default '')
         $Company.hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringVelocity' -Default 0))
-        $Company.departmentFocus = [string]$Company.departmentFocus
-        $Company.departmentFocusCount = [int](Convert-ToNumber $Company.departmentFocusCount)
-        $Company.departmentConcentration = [double](Convert-ToNumber $Company.departmentConcentration)
-        $Company.hiringSpikeScore = [double](Convert-ToNumber $Company.hiringSpikeScore)
-        $Company.targetScoreExplanation = if ($Company.targetScoreExplanation) { $Company.targetScoreExplanation } else { [ordered]@{} }
+        $Company.departmentFocus = [string](Get-ObjectValue -Object $Company -Name 'departmentFocus' -Default '')
+        $Company.departmentFocusCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'departmentFocusCount' -Default 0))
+        $Company.departmentConcentration = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'departmentConcentration' -Default 0))
+        $Company.hiringSpikeScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeScore' -Default 0))
+        $Company.targetScoreExplanation = if (Get-ObjectValue -Object $Company -Name 'targetScoreExplanation' -Default $null) { Get-ObjectValue -Object $Company -Name 'targetScoreExplanation' -Default ([ordered]@{}) } else { [ordered]@{} }
     }
 
     if ($PSBoundParameters.ContainsKey('Configs')) {
@@ -2154,8 +2807,8 @@ function Update-CompanyProjection {
             $Company.domain = $primaryDomain[0]
         }
     } else {
-        $Company.atsTypes = @(Get-StringList $Company.atsTypes)
-        if (-not $Company.careersUrl) { $Company.careersUrl = '' }
+        $Company.atsTypes = @(Get-StringList (Get-ObjectValue -Object $Company -Name 'atsTypes' -Default @()))
+        if (-not (Get-ObjectValue -Object $Company -Name 'careersUrl' -Default '')) { $Company.careersUrl = '' }
     }
 
     $activitiesList = @()
@@ -2168,7 +2821,7 @@ function Update-CompanyProjection {
         ) | Select-Object -First 1
         if ($latestActivity) {
             $Company.lastContactedAt = Get-ObjectValue -Object $latestActivity -Name 'occurredAt' -Default $Company.lastContactedAt
-            $latestStage = [string](Get-ObjectValue -Object $latestActivity -Name 'pipelineStage' -Default '')
+            $latestStage = Resolve-ActivityPipelineStage -Activity $latestActivity
             if ($latestStage) {
                 $Company.outreachStatus = $latestStage
             }
@@ -2202,6 +2855,14 @@ function Update-CompanyProjection {
     $Company.hiringVelocity = [double](Convert-ToNumber $targetMetrics.hiringVelocity)
     $Company.scoreBreakdown = if ($targetMetrics.scoreBreakdown) { $targetMetrics.scoreBreakdown } else { [ordered]@{} }
     $Company.targetScoreExplanation = if ($targetMetrics.targetScoreExplanation) { $targetMetrics.targetScoreExplanation } else { [ordered]@{} }
+    $Company.pipelineState = Get-AccountPipelineState -Company $Company -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now
+    $Company.outreachStatus = Get-NormalizedOutreachStage ([string](Get-ObjectValue -Object $Company.pipelineState -Name 'stage' -Default $Company.outreachStatus))
+    if (-not $Company.outreachStatus) { $Company.outreachStatus = 'not_started' }
+    $Company.connectionGraph = Get-ConnectionGraphInsights -Company $Company -Contacts $(if ($PSBoundParameters.ContainsKey('Contacts')) { $contactList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null })
+    $Company.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company.connectionGraph -Name 'relationshipStrengthScore' -Default 0))
+    $Company.sequenceState = Get-AccountSequenceState -Company $Company -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now -ConnectionGraph $Company.connectionGraph
+    $Company.triggerAlerts = @(Get-CompanyTriggerAlerts -Company $Company -Jobs $(if ($PSBoundParameters.ContainsKey('Jobs')) { $jobList } else { $null }) -Contacts $(if ($PSBoundParameters.ContainsKey('Contacts')) { $contactList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now)
+    $Company.alertPriorityScore = if (@($Company.triggerAlerts).Count -gt 0) { [int](Convert-ToNumber (Get-ObjectValue -Object $Company.triggerAlerts[0] -Name 'priorityScore' -Default 0)) } else { 0 }
     if (-not $Company.priorityTier) {
         $Company.priorityTier = Get-PriorityTierFromScore -TargetScore $Company.targetScore
     }
@@ -2235,10 +2896,10 @@ function Sort-Companies {
 
     return @(
         $Companies | Sort-Object @(
-            @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true },
-            @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true },
-            @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true },
-            @{ Expression = { [string]$_.displayName }; Descending = $false }
+            @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true },
+            @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0)) }; Descending = $true },
+            @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'engagementScore' -Default 0)) }; Descending = $true },
+            @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'displayName' -Default '') }; Descending = $false }
         )
     )
 }
@@ -2705,6 +3366,7 @@ function Find-Accounts {
     $hiringQuery = [string]$Query['hiring']
     $atsQuery = [string]$Query['ats']
     $minContactsQuery = [string]$Query['minContacts']
+    $minTargetScoreQuery = [string]$Query['minTargetScore']
     $priorityTierQuery = [string]$Query['priorityTier']
     $priorityQuery = [string]$Query['priority']
     $statusQuery = [string]$Query['status']
@@ -2736,6 +3398,11 @@ function Find-Accounts {
     if ($minContactsQuery) {
         $minContacts = Convert-ToNumber $minContactsQuery
         $items = @($items | Where-Object { (Convert-ToNumber $_.connectionCount) -ge $minContacts })
+    }
+
+    if ($minTargetScoreQuery) {
+        $minTargetScore = Convert-ToNumber $minTargetScoreQuery
+        $items = @($items | Where-Object { (Convert-ToNumber $_.targetScore) -ge $minTargetScore })
     }
 
     if ($priorityTierQuery) {
@@ -3043,6 +3710,8 @@ function Set-AccountFields {
             if (@($Patch.Keys) -contains $field) {
                 if ($field -eq 'status') {
                     $account[$field] = Normalize-AccountStatus $Patch[$field]
+                } elseif ($field -eq 'outreachStatus') {
+                    $account[$field] = Get-NormalizedOutreachStage ([string]$Patch[$field])
                 } else {
                     $account[$field] = [string]$Patch[$field]
                 }
@@ -3187,6 +3856,10 @@ function Add-Activity {
         pipelineStage = if ($Payload.pipelineStage) { [string]$Payload.pipelineStage } else { '' }
         occurredAt = (Get-Date).ToString('o')
         metadata = if ($Payload.metadata) { ConvertTo-PlainObject -InputObject $Payload.metadata } else { [ordered]@{} }
+    }
+    $resolvedPipelineStage = Resolve-ActivityPipelineStage -Activity $activity
+    if ($resolvedPipelineStage) {
+        $activity.pipelineStage = $resolvedPipelineStage
     }
 
     $State.activities = @(@($State.activities) + @($activity))
