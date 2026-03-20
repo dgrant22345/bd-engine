@@ -998,6 +998,10 @@ async function renderAccountsView() {
   const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
+  const industryOptions = filters.industries || [];
+  const industryField = industryOptions.length
+    ? `<select name="industry"><option value="">All industries</option>${industryOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.industry, value)}>${escapeHtml(value)}</option>`).join('')}</select>`
+    : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -1032,8 +1036,8 @@ async function renderAccountsView() {
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
           ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
-          ${renderField('Geography', `<select name="geography"><option value="">Any location</option><option value="canada" ${selected(appState.accountQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.accountQuery.geography, 'canada_us')}>Canada + US</option><option value="us" ${selected(appState.accountQuery.geography, 'us')}>US only</option></select>`)}
-          ${renderField('Industry', `<input name="industry" list="industry-filter-options" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`)}
+          ${renderField('Geography', `<select name="geography"><option value="">Any location</option><option value="canada" ${selected(appState.accountQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.accountQuery.geography, 'canada_us')}>Include US</option><option value="us" ${selected(appState.accountQuery.geography, 'us')}>US only</option></select>`)}
+          ${renderField('Industry', industryField)}
           ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.accountQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.accountQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.accountQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Min target score', `<input name="minTargetScore" type="number" min="0" max="100" value="${escapeAttr(appState.accountQuery.minTargetScore)}">`)}
@@ -1041,7 +1045,6 @@ async function renderAccountsView() {
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
         </form>
-        <datalist id="industry-filter-options">${(filters.industries || []).map((value) => `<option value="${escapeAttr(value)}"></option>`).join('')}</datalist>
         ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state">No accounts match the current filter set.</div>'}
         ${renderPagination('accounts', result.page, result.pageSize, result.total)}
       </div>
