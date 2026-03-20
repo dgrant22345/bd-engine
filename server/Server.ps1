@@ -19,9 +19,16 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheets.psm1') -Fo
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 
-$targetScoreRepair = Repair-AppTargetScoreRollout -Persist -SkipSnapshots
+$targetScoreRepair = Repair-AppTargetScoreRollout -Limit 100 -Persist -MaxBatches 1 -SkipSnapshots
 if ($targetScoreRepair.needed) {
     Write-Host ("Target-score rollout repair refreshed {0} accounts across {1} batch{2} in {3}ms derive / {4}ms scope / {5}ms persist / {6}ms snapshots (remaining={7}, maxTargetScore={8})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.batchCount, $(if ([int]$targetScoreRepair.batchCount -eq 1) { '' } else { 'es' }), [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.snapshotRefreshMs, [int]$targetScoreRepair.remainingCount, [int]$targetScoreRepair.maxTargetScore)
+}
+if ((Test-AppStoreUsesSqlite) -and [int]$targetScoreRepair.remainingCount -gt 0) {
+    $targetScoreRolloutJob = Enqueue-BackgroundJob -Type 'target-score-rollout' -Payload ([ordered]@{
+            limit = 150
+            maxBatches = 6
+        }) -Summary 'Repair target-score intelligence backlog' -ProgressMessage 'Queued target-score rollout'
+    Write-Host ("Target-score rollout worker job {0} queued for {1} remaining accounts." -f [string]$targetScoreRolloutJob.id, [int]$targetScoreRepair.remainingCount)
 }
 
 function Get-DefaultWorkbookPath {
@@ -749,6 +756,16 @@ function Handle-ApiRequest {
             }
 
             $runtime = Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt
+            $activeTargetScoreRolloutJob = @($runtime.activeJobs | Where-Object { [string](Get-ObjectValue -Object $_ -Name 'type' -Default '') -eq 'target-score-rollout' } | Select-Object -First 1)
+            $targetScoreRollout = [ordered]@{
+                remainingCount = [int](Convert-ToNumber (Get-AppTargetScoreBackfillCount))
+                defaultLimit = 150
+                defaultMaxBatches = 6
+                hasActiveJob = [bool]$activeTargetScoreRolloutJob
+                activeJobId = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'id' -Default '') } else { '' }
+                activeJobStatus = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'status' -Default '') } else { '' }
+                activeJobProgressMessage = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'progressMessage' -Default '') } else { '' }
+            }
 
             if (Test-AppStoreUsesSqlite) {
                 $configs = Find-AppConfigsFast -Query $configQuery
@@ -781,6 +798,7 @@ function Handle-ApiRequest {
                 }
                 configs = $configs
                 runtime = $runtime
+                targetScoreRollout = $targetScoreRollout
                 resolverReport = $resolverReport
                 enrichmentReport = $enrichmentReport
                 unresolvedQueue = $unresolvedQueue
@@ -788,6 +806,21 @@ function Handle-ApiRequest {
                 enrichmentQueue = $enrichmentQueue
             })
         })
+    }
+    if ($path -eq '/api/admin/target-score-rollout' -and $method -eq 'POST') {
+        $payload = Read-JsonBody -Request $Request
+        $limit = [int](Convert-ToNumber $payload.limit)
+        if ($limit -lt 1) { $limit = 150 }
+        if ($limit -gt 500) { $limit = 500 }
+        $maxBatches = [int](Convert-ToNumber $payload.maxBatches)
+        if ($maxBatches -lt 1) { $maxBatches = 6 }
+        if ($maxBatches -gt 25) { $maxBatches = 25 }
+        $job = Enqueue-BackgroundJob -Type 'target-score-rollout' -Payload ([ordered]@{
+            limit = $limit
+            maxBatches = $maxBatches
+        }) -Summary 'Repair target-score intelligence backlog' -ProgressMessage 'Queued target-score rollout'
+        Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
+        return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
     if ($path -eq '/api/bootstrap' -and $method -eq 'GET') {
         return (Get-CachedApiResult -Path $path -Query $query -Factory {

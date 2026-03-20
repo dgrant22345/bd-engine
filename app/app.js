@@ -169,6 +169,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-target-score-rollout') {
+      await runTargetScoreRollout();
+      return;
+    }
+
     if (actionName === 'sync-google-sheets') {
       await runGoogleSheetSync();
       return;
@@ -1378,11 +1383,21 @@ async function renderAdminView() {
   const configs = batch.configs;
   const runtime = batch.runtime;
   appState.runtimeStatus = runtime;
+  const targetScoreRollout = batch.targetScoreRollout || {};
+  appState.targetScoreRollout = targetScoreRollout;
   const resolverReport = batch.resolverReport;
   const enrichmentReport = batch.enrichmentReport;
   const unresolvedQueue = batch.unresolvedQueue;
   const mediumQueue = batch.mediumQueue;
   const enrichmentQueue = batch.enrichmentQueue;
+  const rolloutRemainingCount = Number(targetScoreRollout.remainingCount || 0);
+  const rolloutActive = Boolean(targetScoreRollout.hasActiveJob);
+  const rolloutButtonLabel = rolloutActive ? 'Monitor rollout' : (rolloutRemainingCount > 0 ? 'Run rollout' : 'No rollout needed');
+  const rolloutHint = rolloutActive
+    ? (targetScoreRollout.activeJobProgressMessage || 'A rollout job is already draining the backlog in the background worker.')
+    : (rolloutRemainingCount > 0
+      ? 'Run partial batches through the worker so the remaining intelligence backfill does not block startup.'
+      : 'The target-score intelligence backlog is fully caught up.');
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
   const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
@@ -1405,6 +1420,12 @@ async function renderAdminView() {
       description: `${formatNumber(runtime.queuedJobs || 0)} queued jobs are waiting for the worker.`,
       tone: 'accent',
     },
+    {
+      label: 'Score rollout',
+      value: rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`,
+      description: rolloutHint,
+      tone: rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'),
+    },
   ];
 
   appRoot.innerHTML = `
@@ -1419,6 +1440,7 @@ async function renderAdminView() {
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
             ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
             ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
+            ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
           </div>
           <div class="story-strip">
             ${adminStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
@@ -1485,7 +1507,7 @@ async function renderAdminView() {
         </div>
 
         <div class="form-card" id="enrichment-queue-panel">
-          <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(result.total || 0)} companies in queue.</p></div></div>
+          <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.</p></div></div>
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         </div>
@@ -1557,6 +1579,18 @@ async function renderAdminView() {
                 <label class="field"><span class="small muted">Force refresh</span><select id="enrichment-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
                 <div class="button-row">
                   <button class="secondary-button" type="button" data-action="run-enrichment">Run enrichment</button>
+                </div>
+              </div>
+            </div>
+            <div class="action-card">
+              <p class="eyebrow">Intelligence rollout</p>
+              <h4>Repair target scoring backlog</h4>
+              <p class="small muted">${formatNumber(rolloutRemainingCount)} accounts still need the new target score, trigger, sequence, or connection-graph intelligence fields. ${rolloutHint}</p>
+              <div class="inline-field-stack">
+                <input id="target-score-rollout-limit" type="number" min="1" max="500" value="${escapeAttr(String(targetScoreRollout.defaultLimit || 150))}" placeholder="Accounts per batch">
+                <label class="field"><span class="small muted">Batches</span><input id="target-score-rollout-batches" type="number" min="1" max="25" value="${escapeAttr(String(targetScoreRollout.defaultMaxBatches || 6))}"></label>
+                <div class="button-row">
+                  <button class="primary-button" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutButtonLabel}</button>
                 </div>
               </div>
             </div>
@@ -2235,6 +2269,29 @@ async function runEnrichment() {
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Run enrichment'; }
+  }
+}
+
+async function runTargetScoreRollout() {
+  const button = document.querySelector('[data-action="run-target-score-rollout"]');
+  if (button) { button.disabled = true; button.textContent = 'Queueing rollout...'; }
+  try {
+    const limit = Number(document.getElementById('target-score-rollout-limit')?.value || appState.targetScoreRollout?.defaultLimit || 150);
+    const maxBatches = Number(document.getElementById('target-score-rollout-batches')?.value || appState.targetScoreRollout?.defaultMaxBatches || 6);
+    const accepted = await api('/api/admin/target-score-rollout', {
+      method: 'POST',
+      body: JSON.stringify({ limit, maxBatches }),
+    });
+    window.bdLocalApi.setAlert('Target-score rollout queued.', appAlert);
+    const job = await watchBackgroundJob(accepted.jobId, { label: 'Target-score rollout' });
+    const result = job?.result || {};
+    const timings = result.timings || {};
+    window.bdLocalApi.setAlert(
+      `Target-score rollout refreshed ${formatNumber(result.accountCount || result.count || 0)} accounts across ${formatNumber(result.batchCount || 0)} batches. ${formatNumber(result.remainingCount || 0)} remain. Derive ${formatNumber(timings.deriveMs || 0)}ms, scope ${formatNumber(timings.scopeLoadMs || 0)}ms, persist ${formatNumber(timings.persistMs || 0)}ms.`,
+      appAlert
+    );
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Run rollout'; }
   }
 }
 

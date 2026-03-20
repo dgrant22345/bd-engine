@@ -234,6 +234,9 @@ function Get-BackgroundJobDedupeSignature {
         'config-sync' {
             return 'config-sync|global'
         }
+        'target-score-rollout' {
+            return 'target-score-rollout|global'
+        }
         'live-job-import' {
             $discoverFirst = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'discoverFirst' -Default $false))
             return ('live-job-import|discoverFirst={0}' -f [int]$discoverFirst)
@@ -987,6 +990,59 @@ function Invoke-BackgroundAtsDiscoveryJob {
     }
 }
 
+function Invoke-BackgroundTargetScoreRolloutJob {
+    param($Payload, [string]$JobId)
+
+    $limit = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'limit' -Default 150))
+    if ($limit -lt 1) { $limit = 150 }
+    $maxBatches = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'maxBatches' -Default 6))
+    if ($maxBatches -lt 1) { $maxBatches = 6 }
+
+    if ($JobId) {
+        Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage ('Repairing target-score intelligence backlog - 0/{0}' -f $maxBatches) | Out-Null
+    }
+
+    $result = Repair-AppTargetScoreRollout -Limit $limit -Persist -MaxBatches $maxBatches -SkipSnapshots -BatchCallback {
+        param($Batch)
+
+        $deriveDetails = Get-ObjectValue -Object $Batch -Name 'deriveDetails' -Default $null
+        Write-BackgroundJobLog ("JOB rollout-batch id={0} batch={1} accountCount={2} remaining={3} scopeLoadMs={4} deriveMs={5} persistMs={6} groupingMs={7} projectionMs={8} sortMs={9}" -f `
+                $JobId,
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'batch' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'accountCount' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'remainingCount' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'scopeLoadMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'deriveMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'persistMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $deriveDetails -Name 'groupingMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $deriveDetails -Name 'projectionMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $deriveDetails -Name 'sortMs' -Default 0)))
+
+        if ($JobId) {
+            Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage ('Repairing target-score intelligence backlog - batch {0}/{1} - {2} accounts - {3} remaining' -f `
+                    [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'batch' -Default 0)),
+                    $maxBatches,
+                    [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'accountCount' -Default 0)),
+                    [int](Convert-ToNumber (Get-ObjectValue -Object $Batch -Name 'remainingCount' -Default 0))) | Out-Null
+        }
+    }
+
+    return [ordered]@{
+        count = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'accountCount' -Default 0))
+        accountCount = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'accountCount' -Default 0))
+        batchCount = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'batchCount' -Default 0))
+        remainingCount = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'remainingCount' -Default 0))
+        maxTargetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'maxTargetScore' -Default 0))
+        batches = @(Get-ObjectValue -Object $result -Name 'batches' -Default @())
+        timings = [ordered]@{
+            scopeLoadMs = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'scopeLoadMs' -Default 0))
+            deriveMs = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'deriveMs' -Default 0))
+            persistMs = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'persistMs' -Default 0))
+            snapshotRefreshMs = [int](Convert-ToNumber (Get-ObjectValue -Object $result -Name 'snapshotRefreshMs' -Default 0))
+        }
+    }
+}
+
 function Invoke-BackgroundLiveJobImportJob {
     param($Payload, [string]$JobId)
 
@@ -1186,6 +1242,10 @@ function Invoke-BackgroundJobHandler {
             }
             'ats-discovery' {
                 Invoke-BackgroundAtsDiscoveryJob -Payload $payload -JobId $Job.id
+            }
+            'target-score-rollout' {
+                Update-AppBackgroundJobProgress -JobId $Job.id -ProgressMessage 'Repairing target-score intelligence backlog' | Out-Null
+                Invoke-BackgroundTargetScoreRolloutJob -Payload $payload -JobId $Job.id
             }
             'live-job-import' {
                 Invoke-BackgroundLiveJobImportJob -Payload $payload -JobId $Job.id
