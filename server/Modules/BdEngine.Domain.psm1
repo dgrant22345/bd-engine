@@ -895,28 +895,32 @@ function Get-PlaybookAccounts {
     param($State)
     $today = (Get-Date).ToString('yyyy-MM-dd')
     $accounts = @($State.companies |
-        Where-Object { $_.status -ne 'paused' -and $_.status -ne 'client' -and $_.status -ne 'archived' } |
-        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true } |
+        Where-Object {
+            $status = [string](Get-ObjectValue -Object $_ -Name 'status' -Default '')
+            $status -ne 'paused' -and $status -ne 'client' -and $status -ne 'archived'
+        } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'engagementScore' -Default 0)) }; Descending = $true } |
         Select-Object -First 5)
     return @($accounts | ForEach-Object {
-        $isOverdue = ($_.nextActionAt -and [string]$_.nextActionAt -ne '' -and [string]$_.nextActionAt -lt $today)
+        $nextActionAt = Get-ObjectValue -Object $_ -Name 'nextActionAt' -Default $null
+        $isOverdue = ($nextActionAt -and [string]$nextActionAt -ne '' -and [string]$nextActionAt -lt $today)
         [ordered]@{
-            id = [string]$_.id
-            displayName = [string]$_.displayName
-            dailyScore = [double](Convert-ToNumber $_.dailyScore)
-            targetScore = [double](Convert-ToNumber $_.targetScore)
-            hiringVelocity = [double](Convert-ToNumber $_.hiringVelocity)
-            engagementScore = [double](Convert-ToNumber $_.engagementScore)
-            openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
-            topContactName = [string]$_.topContactName
-            recommendedAction = [string]$_.recommendedAction
-            outreachStatus = [string]$_.outreachStatus
-            nextAction = [string]$_.nextAction
-            nextActionAt = $_.nextActionAt
+            id = [string](Get-ObjectValue -Object $_ -Name 'id' -Default '')
+            displayName = [string](Get-ObjectValue -Object $_ -Name 'displayName' -Default '')
+            dailyScore = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'dailyScore' -Default 0))
+            targetScore = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0))
+            hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0))
+            engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'engagementScore' -Default 0))
+            openRoleCount = [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'openRoleCount' -Default 0))
+            topContactName = [string](Get-ObjectValue -Object $_ -Name 'topContactName' -Default '')
+            recommendedAction = [string](Get-ObjectValue -Object $_ -Name 'recommendedAction' -Default '')
+            outreachStatus = [string](Get-ObjectValue -Object $_ -Name 'outreachStatus' -Default '')
+            nextAction = [string](Get-ObjectValue -Object $_ -Name 'nextAction' -Default '')
+            nextActionAt = $nextActionAt
             isOverdue = $isOverdue
-            staleFlag = [string]$_.staleFlag
-            networkStrength = [string]$_.networkStrength
-            owner = [string]$_.owner
+            staleFlag = [string](Get-ObjectValue -Object $_ -Name 'staleFlag' -Default '')
+            networkStrength = [string](Get-ObjectValue -Object $_ -Name 'networkStrength' -Default '')
+            owner = [string](Get-ObjectValue -Object $_ -Name 'owner' -Default '')
         }
     })
 }
@@ -925,17 +929,21 @@ function Get-OverdueFollowUps {
     param($State)
     $today = (Get-Date).ToString('yyyy-MM-dd')
     return @($State.companies |
-        Where-Object { $_.nextActionAt -and [string]$_.nextActionAt -ne '' -and [string]$_.nextActionAt -lt $today -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
-        Sort-Object @{ Expression = { [string]$_.nextActionAt } } |
+        Where-Object {
+            $nextActionAt = Get-ObjectValue -Object $_ -Name 'nextActionAt' -Default $null
+            $status = [string](Get-ObjectValue -Object $_ -Name 'status' -Default '')
+            $nextActionAt -and [string]$nextActionAt -ne '' -and [string]$nextActionAt -lt $today -and $status -ne 'paused' -and $status -ne 'archived'
+        } |
+        Sort-Object @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'nextActionAt' -Default '') } } |
         Select-Object -First 10 |
         ForEach-Object {
             [ordered]@{
-                id = [string]$_.id
-                displayName = [string]$_.displayName
-                nextAction = [string]$_.nextAction
-                nextActionAt = $_.nextActionAt
-                outreachStatus = [string]$_.outreachStatus
-                owner = [string]$_.owner
+                id = [string](Get-ObjectValue -Object $_ -Name 'id' -Default '')
+                displayName = [string](Get-ObjectValue -Object $_ -Name 'displayName' -Default '')
+                nextAction = [string](Get-ObjectValue -Object $_ -Name 'nextAction' -Default '')
+                nextActionAt = Get-ObjectValue -Object $_ -Name 'nextActionAt' -Default $null
+                outreachStatus = [string](Get-ObjectValue -Object $_ -Name 'outreachStatus' -Default '')
+                owner = [string](Get-ObjectValue -Object $_ -Name 'owner' -Default '')
             }
         })
 }
@@ -943,20 +951,157 @@ function Get-OverdueFollowUps {
 function Get-StaleAccounts {
     param($State)
     return @($State.companies |
-        Where-Object { [string](Get-ObjectValue -Object $_ -Name 'staleFlag') -eq 'STALE' -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
-        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true } |
+        Where-Object {
+            [string](Get-ObjectValue -Object $_ -Name 'staleFlag' -Default '') -eq 'STALE' -and
+            [string](Get-ObjectValue -Object $_ -Name 'status' -Default '') -ne 'paused' -and
+            [string](Get-ObjectValue -Object $_ -Name 'status' -Default '') -ne 'archived'
+        } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0)) }; Descending = $true } |
         Select-Object -First 10 |
         ForEach-Object {
             [ordered]@{
-                id = [string]$_.id
-                displayName = [string]$_.displayName
-                dailyScore = [double](Convert-ToNumber $_.dailyScore)
-                targetScore = [double](Convert-ToNumber $_.targetScore)
-                lastContactedAt = $_.lastContactedAt
-                openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
-                owner = [string]$_.owner
+                id = [string](Get-ObjectValue -Object $_ -Name 'id' -Default '')
+                displayName = [string](Get-ObjectValue -Object $_ -Name 'displayName' -Default '')
+                dailyScore = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'dailyScore' -Default 0))
+                targetScore = [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0))
+                lastContactedAt = Get-ObjectValue -Object $_ -Name 'lastContactedAt' -Default $null
+                openRoleCount = [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'openRoleCount' -Default 0))
+                owner = [string](Get-ObjectValue -Object $_ -Name 'owner' -Default '')
             }
         })
+}
+
+function Get-TopCompanyTriggerAlert {
+    param($Company)
+
+    $triggerAlerts = @($(if (Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default $null) { Get-ObjectValue -Object $Company -Name 'triggerAlerts' -Default @() } else { @() }))
+    return @(
+        $triggerAlerts |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'priorityScore' -Default 0)) }; Descending = $true }, @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'title' -Default '') }; Descending = $false } |
+            Select-Object -First 1
+    )
+}
+
+function Get-CommandCenterAlertQueue {
+    param(
+        $State,
+        [int]$Limit = 8
+    )
+
+    return @(
+        @($State.companies | Where-Object {
+                $status = [string](Get-ObjectValue -Object $_ -Name 'status' -Default '')
+                $status -notin @('paused', 'client', 'archived')
+            }) |
+            ForEach-Object {
+                $summary = Select-AccountSummary -Company $_
+                $topAlert = @(Get-TopCompanyTriggerAlert -Company $_ | Select-Object -First 1)
+                if ($topAlert) {
+                    [ordered]@{
+                        accountId = [string](Get-ObjectValue -Object $summary -Name 'id' -Default '')
+                        displayName = [string](Get-ObjectValue -Object $summary -Name 'displayName' -Default '')
+                        targetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'targetScore' -Default 0))
+                        hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'hiringVelocity' -Default 0))
+                        engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'engagementScore' -Default 0))
+                        alertPriorityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'alertPriorityScore' -Default (Get-ObjectValue -Object $topAlert -Name 'priorityScore' -Default 0)))
+                        outreachStatus = [string](Get-ObjectValue -Object $summary -Name 'outreachStatus' -Default '')
+                        owner = [string](Get-ObjectValue -Object $summary -Name 'owner' -Default '')
+                        type = [string](Get-ObjectValue -Object $topAlert -Name 'type' -Default '')
+                        title = [string](Get-ObjectValue -Object $topAlert -Name 'title' -Default '')
+                        summary = [string](Get-ObjectValue -Object $topAlert -Name 'summary' -Default '')
+                        recommendedAction = [string](Get-ObjectValue -Object $topAlert -Name 'recommendedAction' -Default '')
+                    }
+                }
+            } |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'alertPriorityScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0)) }; Descending = $true } |
+            Select-Object -First $Limit
+    )
+}
+
+function Get-CommandCenterSequenceQueue {
+    param(
+        $State,
+        [int]$Limit = 8
+    )
+
+    return @(
+        @($State.companies | Where-Object {
+                $status = [string](Get-ObjectValue -Object $_ -Name 'status' -Default '')
+                $status -notin @('paused', 'client', 'archived')
+            }) |
+            ForEach-Object {
+                $summary = Select-AccountSummary -Company $_
+                $sequenceState = Get-ObjectValue -Object $_ -Name 'sequenceState' -Default $null
+                if ($sequenceState) {
+                    $status = [string](Get-ObjectValue -Object $sequenceState -Name 'status' -Default (Get-ObjectValue -Object $summary -Name 'sequenceStatus' -Default ''))
+                    $nextStepAt = Get-ObjectValue -Object $sequenceState -Name 'nextStepAt' -Default (Get-ObjectValue -Object $summary -Name 'sequenceNextStepAt' -Default $null)
+                    if ($status -eq 'active' -and $nextStepAt) {
+                        [ordered]@{
+                            accountId = [string](Get-ObjectValue -Object $summary -Name 'id' -Default '')
+                            displayName = [string](Get-ObjectValue -Object $summary -Name 'displayName' -Default '')
+                            targetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'targetScore' -Default 0))
+                            engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'engagementScore' -Default 0))
+                            relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'relationshipStrengthScore' -Default 0))
+                            owner = [string](Get-ObjectValue -Object $summary -Name 'owner' -Default '')
+                            outreachStatus = [string](Get-ObjectValue -Object $summary -Name 'outreachStatus' -Default '')
+                            status = $status
+                            nextStep = [string](Get-ObjectValue -Object $sequenceState -Name 'nextStep' -Default (Get-ObjectValue -Object $summary -Name 'sequenceNextStep' -Default ''))
+                            nextStepLabel = [string](Get-ObjectValue -Object $sequenceState -Name 'nextStepLabel' -Default '')
+                            nextStepAt = $nextStepAt
+                            adaptiveTimingReason = [string](Get-ObjectValue -Object $sequenceState -Name 'adaptiveTimingReason' -Default '')
+                            isOverdue = ((Get-DateSortValue ([string]$nextStepAt)) -le (Get-Date))
+                        }
+                    }
+                }
+            } |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { Get-DateSortValue ([string](Get-ObjectValue -Object $_ -Name 'nextStepAt' -Default '')) } }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'relationshipStrengthScore' -Default 0)) }; Descending = $true } |
+            Select-Object -First $Limit
+    )
+}
+
+function Get-CommandCenterIntroQueue {
+    param(
+        $State,
+        [int]$Limit = 8
+    )
+
+    return @(
+        @($State.companies | Where-Object {
+                $status = [string](Get-ObjectValue -Object $_ -Name 'status' -Default '')
+                $status -notin @('paused', 'client', 'archived')
+            }) |
+            ForEach-Object {
+                $summary = Select-AccountSummary -Company $_
+                $connectionGraph = Get-ObjectValue -Object $_ -Name 'connectionGraph' -Default $null
+                if ($connectionGraph) {
+                    $warmIntroCandidates = @($(Get-ObjectValue -Object $connectionGraph -Name 'warmIntroCandidates' -Default @()))
+                    if (@($warmIntroCandidates).Count -gt 0) {
+                        $shortestPath = Get-ObjectValue -Object $connectionGraph -Name 'shortestPathToDecisionMaker' -Default $null
+                        $candidate = @($warmIntroCandidates | Select-Object -First 1)
+                        [ordered]@{
+                            accountId = [string](Get-ObjectValue -Object $summary -Name 'id' -Default '')
+                            displayName = [string](Get-ObjectValue -Object $summary -Name 'displayName' -Default '')
+                            targetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'targetScore' -Default 0))
+                            alertPriorityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'alertPriorityScore' -Default 0))
+                            relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $summary -Name 'relationshipStrengthScore' -Default 0))
+                            owner = [string](Get-ObjectValue -Object $summary -Name 'owner' -Default '')
+                            contactName = [string](Get-ObjectValue -Object $candidate -Name 'fullName' -Default '')
+                            contactTitle = [string](Get-ObjectValue -Object $candidate -Name 'title' -Default '')
+                            contactWhy = [string](Get-ObjectValue -Object $candidate -Name 'why' -Default '')
+                            pathLength = [int](Convert-ToNumber (Get-ObjectValue -Object $candidate -Name 'pathLength' -Default (Get-ObjectValue -Object $shortestPath -Name 'pathLength' -Default 0)))
+                            confidence = [string](Get-ObjectValue -Object $shortestPath -Name 'confidence' -Default '')
+                            introSummary = [string](Get-ObjectValue -Object $shortestPath -Name 'summary' -Default '')
+                        }
+                    }
+                }
+            } |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'relationshipStrengthScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'alertPriorityScore' -Default 0)) }; Descending = $true } |
+            Select-Object -First $Limit
+    )
 }
 
 function Get-GlobalActivityFeed {
@@ -2334,7 +2479,13 @@ function Select-AccountSummary {
         networkStrength = [string](Get-ObjectValue -Object $Company -Name 'networkStrength')
         hiringStatus = [string](Get-ObjectValue -Object $Company -Name 'hiringStatus')
         lastJobPostedAt = Get-ObjectValue -Object $Company -Name 'lastJobPostedAt' -Default $null
+        lastContactedAt = Get-ObjectValue -Object $Company -Name 'lastContactedAt' -Default $null
         followUpScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'followUpScore'))
+        relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'relationshipStrengthScore' -Default 0))
+        alertPriorityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'alertPriorityScore' -Default 0))
+        sequenceStatus = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null) -Name 'status' -Default '')
+        sequenceNextStep = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null) -Name 'nextStep' -Default '')
+        sequenceNextStepAt = Get-ObjectValue -Object (Get-ObjectValue -Object $Company -Name 'sequenceState' -Default $null) -Name 'nextStepAt' -Default $null
         daysSinceContact = Get-ObjectValue -Object $Company -Name 'daysSinceContact' -Default $null
         staleFlag = [string]$Company.staleFlag
         recommendedAction = [string]$Company.recommendedAction
@@ -3047,64 +3198,131 @@ function Update-DerivedData {
 function Repair-AppTargetScoreRollout {
     param(
         [int]$Limit = 250,
-        [switch]$Persist
+        [switch]$Persist,
+        [int]$MaxBatches = 1,
+        [switch]$SkipSnapshots
     )
 
-    $accountIds = @(Get-AppTargetScoreBackfillAccountIds -Limit $Limit)
-    if ($accountIds.Count -eq 0) {
+    if ($Limit -lt 1) {
+        $Limit = 250
+    }
+    if ($MaxBatches -lt 1) {
+        $MaxBatches = 1
+    }
+    if (-not $Persist) {
+        $MaxBatches = 1
+    }
+    if ($Persist -and $MaxBatches -gt 1) {
+        $SkipSnapshots = $true
+    }
+
+    $totalScopeLoadMs = 0
+    $totalDeriveMs = 0
+    $totalPersistMs = 0
+    $totalAccountCount = 0
+    $maxTargetScore = 0
+    $batchCount = 0
+    $snapshotRefreshMs = 0
+    $lastDataRevision = ''
+    $batchSummaries = New-Object System.Collections.ArrayList
+
+    while ($batchCount -lt $MaxBatches) {
+        $accountIds = @(Get-AppTargetScoreBackfillAccountIds -Limit $Limit)
+        if ($accountIds.Count -eq 0) {
+            break
+        }
+
+        $scopeLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $state = Get-AppScopedStateForAccounts -AccountIds $accountIds -IncludeActivities
+        $scopeLoadWatch.Stop()
+
+        $deriveWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $state = Update-DerivedData -State $state
+        $deriveWatch.Stop()
+
+        $persistMs = 0
+        $dataRevision = ''
+        if ($Persist) {
+            $persistWatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $persistence = Sync-AppStateSegmentsPartial -State $state -Segments @('Companies') -SkipSnapshots:$SkipSnapshots
+            $persistWatch.Stop()
+            $persistMs = [int]$persistWatch.Elapsed.TotalMilliseconds
+            $dataRevision = [string](Get-ObjectValue -Object $persistence -Name 'dataRevision' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($dataRevision)) {
+                $lastDataRevision = $dataRevision
+            }
+        }
+
+        $batchMaxTargetScore = 0
+        if (@($state.companies).Count -gt 0) {
+            foreach ($company in @($state.companies)) {
+                $score = [int](Convert-ToNumber (Get-ObjectValue -Object $company -Name 'targetScore' -Default 0))
+                if ($score -gt $batchMaxTargetScore) {
+                    $batchMaxTargetScore = $score
+                }
+            }
+        }
+
+        $batchCount += 1
+        $totalAccountCount += @($state.companies).Count
+        $totalScopeLoadMs += [int]$scopeLoadWatch.Elapsed.TotalMilliseconds
+        $totalDeriveMs += [int]$deriveWatch.Elapsed.TotalMilliseconds
+        $totalPersistMs += $persistMs
+        if ($batchMaxTargetScore -gt $maxTargetScore) {
+            $maxTargetScore = $batchMaxTargetScore
+        }
+
+        [void]$batchSummaries.Add([ordered]@{
+                batch = $batchCount
+                accountCount = @($state.companies).Count
+                scopeLoadMs = [int]$scopeLoadWatch.Elapsed.TotalMilliseconds
+                deriveMs = [int]$deriveWatch.Elapsed.TotalMilliseconds
+                persistMs = $persistMs
+                maxTargetScore = $batchMaxTargetScore
+            })
+
+        if (-not $Persist) {
+            break
+        }
+    }
+
+    if ($batchCount -eq 0) {
         return [ordered]@{
             needed = $false
             accountCount = 0
+            batchCount = 0
             deriveMs = 0
+            scopeLoadMs = 0
             persistMs = 0
+            snapshotRefreshMs = 0
+            remainingCount = 0
+            batches = @()
         }
     }
 
-    $scopeLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $state = Get-AppScopedStateForAccounts -AccountIds $accountIds
-    $companyKeySet = @{}
-    foreach ($company in @($state.companies)) {
-        $key = [string](Get-ObjectValue -Object $company -Name 'normalizedName' -Default '')
-        if (-not [string]::IsNullOrWhiteSpace($key)) {
-            $companyKeySet[$key] = $true
+    if ($Persist -and $SkipSnapshots -and -not [string]::IsNullOrWhiteSpace($lastDataRevision)) {
+        $snapshotWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            Update-AppSqliteSnapshots -Names @('filters', 'dashboard') | Out-Null
+        } finally {
+            $snapshotWatch.Stop()
         }
-    }
-    $activities = @(Read-AppSegment -Segment 'Activities' | Where-Object {
-            $companyKey = [string](Get-ObjectValue -Object $_ -Name 'normalizedCompanyName' -Default '')
-            $companyKey -and $companyKeySet.ContainsKey($companyKey)
-        })
-    $state.activities = $activities
-    $scopeLoadWatch.Stop()
-
-    $deriveWatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $state = Update-DerivedData -State $state
-    $deriveWatch.Stop()
-
-    $persistMs = 0
-    if ($Persist) {
-        $persistWatch = [System.Diagnostics.Stopwatch]::StartNew()
-        Sync-AppStateSegmentsPartial -State $state -Segments @('Companies') | Out-Null
-        $persistWatch.Stop()
-        $persistMs = [int]$persistWatch.Elapsed.TotalMilliseconds
+        $snapshotRefreshMs = [int]$snapshotWatch.Elapsed.TotalMilliseconds
     }
 
-    $maxTargetScore = 0
-    if (@($state.companies).Count -gt 0) {
-        foreach ($company in @($state.companies)) {
-            $score = [int](Convert-ToNumber (Get-ObjectValue -Object $company -Name 'targetScore' -Default 0))
-            if ($score -gt $maxTargetScore) {
-                $maxTargetScore = $score
-            }
-        }
-    }
+    $remainingCount = [int](Convert-ToNumber (Get-AppTargetScoreBackfillCount))
 
     return [ordered]@{
         needed = $true
-        accountCount = @($state.companies).Count
-        scopeLoadMs = [int]$scopeLoadWatch.Elapsed.TotalMilliseconds
-        deriveMs = [int]$deriveWatch.Elapsed.TotalMilliseconds
-        persistMs = $persistMs
+        accountCount = $totalAccountCount
+        batchCount = $batchCount
+        scopeLoadMs = $totalScopeLoadMs
+        deriveMs = $totalDeriveMs
+        persistMs = $totalPersistMs
+        snapshotRefreshMs = $snapshotRefreshMs
         maxTargetScore = $maxTargetScore
+        remainingCount = $remainingCount
+        batches = @($batchSummaries)
     }
 }
 
@@ -3273,6 +3491,24 @@ function Get-DashboardModel {
     $script:DashboardCache = $result
     $script:DashboardCacheSignature = $signature
     return $result
+}
+
+function Get-DashboardExtendedModel {
+    param(
+        [Parameter(Mandatory = $true)]
+        $State
+    )
+
+    return [ordered]@{
+        playbook = @(Get-PlaybookAccounts -State $State)
+        overdueFollowUps = @(Get-OverdueFollowUps -State $State)
+        staleAccounts = @(Get-StaleAccounts -State $State)
+        activityFeed = @(Get-GlobalActivityFeed -State $State -Limit 10)
+        enrichmentFunnel = Get-EnrichmentFunnelStats -State $State
+        alertQueue = @(Get-CommandCenterAlertQueue -State $State)
+        sequenceQueue = @(Get-CommandCenterSequenceQueue -State $State)
+        introQueue = @(Get-CommandCenterIntroQueue -State $State)
+    }
 }
 
 function Get-AccountFilterOptions {

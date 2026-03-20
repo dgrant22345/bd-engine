@@ -653,7 +653,7 @@ async function renderDashboardView() {
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
-  let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {} };
+  let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
   try { extended = await api('/api/dashboard/extended'); } catch(e) { /* non-critical */ }
   const topCompany = dashboard.todayQueue[0];
   const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
@@ -774,6 +774,76 @@ async function renderDashboardView() {
     <section class="alert-bar">
       ${extended.overdueFollowUps.length ? `<div class="alert-item alert-item--danger"><strong>${extended.overdueFollowUps.length} overdue follow-up${extended.overdueFollowUps.length > 1 ? 's' : ''}</strong> \u2014 ${extended.overdueFollowUps.slice(0,3).map(a => escapeHtml(a.displayName)).join(', ')}${extended.overdueFollowUps.length > 3 ? '...' : ''}</div>` : ''}
       ${extended.staleAccounts.length ? `<div class="alert-item alert-item--warning"><strong>${extended.staleAccounts.length} stale account${extended.staleAccounts.length > 1 ? 's' : ''}</strong> \u2014 haven't been touched in 14+ days</div>` : ''}
+    </section>
+    ` : ''}
+
+    ${extended.alertQueue.length || extended.sequenceQueue.length || extended.introQueue.length ? `
+    <section class="dashboard-grid">
+      <div class="list-card detail-card">
+        <div class="panel-header">
+          <div>
+            <h3>Hiring trigger board</h3>
+            <p class="muted small">Live account alerts ranked by hiring urgency and commercial upside.</p>
+          </div>
+        </div>
+        ${extended.alertQueue.length ? `<div class="timeline">${extended.alertQueue.map((item) => `
+          <article class="timeline-item">
+            <div class="inline-header">
+              <strong>${escapeHtml(item.displayName)}</strong>
+              ${renderStatusPill(item.title || item.type || 'alert', item.alertPriorityScore >= 80 ? 'danger' : 'warning')}
+            </div>
+            <p>${escapeHtml(item.summary || item.recommendedAction || 'Review live hiring signals.')}</p>
+            <div class="small muted">${formatNumber(item.alertPriorityScore || 0)} priority · ${formatNumber(item.targetScore || 0)}/100 target score · ${formatNumber(item.hiringVelocity || 0)} velocity</div>
+            <div class="button-row" style="margin-top:8px;">
+              <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
+            </div>
+          </article>
+        `).join('')}</div>` : '<div class="empty-state">No trigger alerts are active right now.</div>'}
+      </div>
+      <div class="list-card detail-card">
+        <div class="panel-header">
+          <div>
+            <h3>Sequence next steps</h3>
+            <p class="muted small">The outreach steps that should happen next, ordered by due time.</p>
+          </div>
+        </div>
+        ${extended.sequenceQueue.length ? `<div class="timeline">${extended.sequenceQueue.map((item) => `
+          <article class="timeline-item">
+            <div class="inline-header">
+              <strong>${escapeHtml(item.displayName)}</strong>
+              ${renderStatusPill(item.isOverdue ? 'overdue' : (item.status || 'active'), item.isOverdue ? 'danger' : 'accent')}
+            </div>
+            <p>${escapeHtml(item.nextStepLabel || humanize(item.nextStep || 'next step'))} ${item.nextStepAt ? '· ' + escapeHtml(formatDate(item.nextStepAt)) : ''}</p>
+            <div class="small muted">${formatNumber(item.targetScore || 0)}/100 target score · ${formatNumber(item.relationshipStrengthScore || 0)} relationship strength</div>
+            ${item.adaptiveTimingReason ? `<div class="small muted">${escapeHtml(item.adaptiveTimingReason)}</div>` : ''}
+            <div class="button-row" style="margin-top:8px;">
+              <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
+            </div>
+          </article>
+        `).join('')}</div>` : '<div class="empty-state">No active sequence steps are queued yet.</div>'}
+      </div>
+      <div class="list-card detail-card">
+        <div class="panel-header">
+          <div>
+            <h3>Warm intro board</h3>
+            <p class="muted small">The strongest relationship paths into active hiring accounts.</p>
+          </div>
+        </div>
+        ${extended.introQueue.length ? `<div class="timeline">${extended.introQueue.map((item) => `
+          <article class="timeline-item">
+            <div class="inline-header">
+              <strong>${escapeHtml(item.displayName)}</strong>
+              ${renderStatusPill(`${formatNumber(item.relationshipStrengthScore || 0)} strength`, item.relationshipStrengthScore >= 80 ? 'success' : 'accent')}
+            </div>
+            <p>${escapeHtml(item.introSummary || `Best path is through ${item.contactName || 'a mapped contact'}.`)}</p>
+            <div class="small muted">${escapeHtml(item.contactName || 'Mapped contact')}${item.contactTitle ? ' · ' + escapeHtml(item.contactTitle) : ''}${item.pathLength ? ' · path ' + formatNumber(item.pathLength) : ''}</div>
+            ${item.contactWhy ? `<div class="small muted">${escapeHtml(item.contactWhy)}</div>` : ''}
+            <div class="button-row" style="margin-top:8px;">
+              <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
+            </div>
+          </article>
+        `).join('')}</div>` : '<div class="empty-state">No warm intro opportunities are mapped yet.</div>'}
+      </div>
     </section>
     ` : ''}
 

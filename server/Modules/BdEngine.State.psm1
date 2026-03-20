@@ -673,14 +673,21 @@ function Get-AppStateView {
 }
 
 function Get-AppScopedStateForAccounts {
-    param([string[]]$AccountIds)
+    param(
+        [string[]]$AccountIds,
+        [switch]$IncludeActivities
+    )
 
     Initialize-DataStore
     if (Test-AppStoreUsesSqlite) {
-        return (Get-BdSqliteScopedStateForAccountIds -AccountIds $AccountIds)
+        return (Get-BdSqliteScopedStateForAccountIds -AccountIds $AccountIds -IncludeActivities:$IncludeActivities)
     }
 
-    $state = Get-AppStateView -Segments @('Workspace', 'Settings', 'Companies', 'Contacts', 'Jobs', 'BoardConfigs')
+    $requestedSegments = @('Workspace', 'Settings', 'Companies', 'Contacts', 'Jobs', 'BoardConfigs')
+    if ($IncludeActivities) {
+        $requestedSegments += 'Activities'
+    }
+    $state = Get-AppStateView -Segments $requestedSegments
     $accountSet = @{}
     foreach ($accountId in @($AccountIds)) {
         if ($accountId) {
@@ -698,6 +705,9 @@ function Get-AppScopedStateForAccounts {
     $state.contacts = @($state.contacts | Where-Object { $accountSet.ContainsKey([string]$_.accountId) -or ($_.normalizedCompanyName -and $normalizedSet.ContainsKey([string]$_.normalizedCompanyName)) })
     $state.jobs = @($state.jobs | Where-Object { $accountSet.ContainsKey([string]$_.accountId) -or ($_.normalizedCompanyName -and $normalizedSet.ContainsKey([string]$_.normalizedCompanyName)) })
     $state.boardConfigs = @($state.boardConfigs | Where-Object { $accountSet.ContainsKey([string]$_.accountId) -or ($_.normalizedCompanyName -and $normalizedSet.ContainsKey([string]$_.normalizedCompanyName)) })
+    if ($IncludeActivities) {
+        $state.activities = @($state.activities | Where-Object { $accountSet.ContainsKey([string]$_.accountId) -or ($_.normalizedCompanyName -and $normalizedSet.ContainsKey([string]$_.normalizedCompanyName)) })
+    }
     return $state
 }
 
@@ -1225,6 +1235,14 @@ function Get-AppDashboardModelFast {
     return (Get-BdSqliteDashboardModel)
 }
 
+function Get-AppDashboardExtendedFast {
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return $null
+    }
+
+    return (Get-BdSqliteDashboardExtendedModel)
+}
+
 function Get-AppDashboardSnapshotResult {
     if (-not (Test-AppStoreUsesSqlite)) {
         return $null
@@ -1414,6 +1432,14 @@ function Get-AppTargetScoreBackfillAccountIds {
     }
 
     return @(Get-BdSqliteTargetScoreBackfillAccountIds -Limit $Limit)
+}
+
+function Get-AppTargetScoreBackfillCount {
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Get-BdSqliteTargetScoreBackfillCount)
 }
 
 function Find-AppContactsFast {

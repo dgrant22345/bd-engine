@@ -19,9 +19,9 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheets.psm1') -Fo
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 
-$targetScoreRepair = Repair-AppTargetScoreRollout -Persist
+$targetScoreRepair = Repair-AppTargetScoreRollout -Persist -SkipSnapshots
 if ($targetScoreRepair.needed) {
-    Write-Host ("Target-score rollout repair refreshed {0} accounts in {1}ms (scope={2}ms, persist={3}ms, maxTargetScore={4})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.maxTargetScore)
+    Write-Host ("Target-score rollout repair refreshed {0} accounts across {1} batch{2} in {3}ms derive / {4}ms scope / {5}ms persist / {6}ms snapshots (remaining={7}, maxTargetScore={8})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.batchCount, $(if ([int]$targetScoreRepair.batchCount -eq 1) { '' } else { 'es' }), [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.snapshotRefreshMs, [int]$targetScoreRepair.remainingCount, [int]$targetScoreRepair.maxTargetScore)
 }
 
 function Get-DefaultWorkbookPath {
@@ -828,19 +828,12 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/dashboard/extended' -and $method -eq 'GET') {
+        if (Test-AppStoreUsesSqlite) {
+            return (New-JsonResult (Get-AppDashboardExtendedFast))
+        }
+
         $state = Get-AppStateView -Segments @('Companies', 'Activities', 'BoardConfigs')
-        $playbook = Get-PlaybookAccounts -State $state
-        $overdue = Get-OverdueFollowUps -State $state
-        $stale = Get-StaleAccounts -State $state
-        $activityFeed = Get-GlobalActivityFeed -State $state -Limit 10
-        $enrichmentFunnel = Get-EnrichmentFunnelStats -State $state
-        return (New-JsonResult ([ordered]@{
-            playbook = $playbook
-            overdueFollowUps = $overdue
-            staleAccounts = $stale
-            activityFeed = $activityFeed
-            enrichmentFunnel = $enrichmentFunnel
-        }))
+        return (New-JsonResult (Get-DashboardExtendedModel -State $state))
     }
 
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {
