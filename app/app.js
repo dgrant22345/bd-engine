@@ -448,6 +448,24 @@ function getFormValues(form) {
   return output;
 }
 
+function getContactLinkedInHref(contact, companyName = '') {
+  const directUrl = String(contact?.linkedinUrl || '').trim();
+  if (directUrl) {
+    return directUrl;
+  }
+
+  const searchTerms = [
+    String(contact?.fullName || '').trim(),
+    String(contact?.title || '').trim(),
+    String(companyName || contact?.companyName || '').trim(),
+  ].filter(Boolean).join(' ');
+  if (!searchTerms) {
+    return '';
+  }
+
+  return `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchTerms)}`;
+}
+
 function splitTags(value) {
   if (!value) return [];
   return value.split(',').map((tag) => tag.trim()).filter(Boolean);
@@ -1163,7 +1181,7 @@ async function renderAccountDetail(accountId) {
         <div class="table-card">
           <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
           ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>' +
-            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (c.linkedinUrl ? '<a class="row-link" href="' + escapeAttr(c.linkedinUrl) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>') + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
+            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
             '</tbody></table></div>' : '<div class="empty-state">No contacts imported yet.</div>'}
         </div>
       </div>
@@ -2486,6 +2504,9 @@ document.addEventListener('change', (event) => {
 document.addEventListener('click', (event) => {
   const contactRow = event.target.closest('.contact-row-selectable');
   if (contactRow) {
+    if (event.target.closest('a')) {
+      return;
+    }
     const name = contactRow.dataset.contactName;
     const sel = document.getElementById('outreach-contact-select');
     if (sel) {
