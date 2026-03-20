@@ -309,6 +309,19 @@ function bindEvents() {
       return;
     }
 
+    if (form.id === 'next-action-form') {
+      const accountId = form.dataset.accountId;
+      const payload = getFormValues(form);
+      await api(`/api/accounts/${accountId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      invalidateAppData();
+      await renderAccountDetail(accountId);
+      window.bdLocalApi.setAlert('Next action updated.', appAlert);
+      return;
+    }
+
     if (form.classList.contains('quick-log-form')) {
       const accountId = form.dataset.accountId;
       const payload = getFormValues(form);
@@ -1137,14 +1150,20 @@ async function renderAccountDetail(accountId) {
               ${detail.account.nextActionAt ? '<span class="small muted" style="margin-left:8px">' + formatDate(detail.account.nextActionAt) + '</span>' : ''}
             </div>
           </div>
+          <form id="next-action-form" class="compact-activity-form" data-account-id="${detail.account.id}">
+            <input name="nextAction" placeholder="Set the next move..." class="compact-input" value="${escapeAttr(detail.account.nextAction || '')}">
+            <input name="nextActionAt" type="date" class="compact-input" value="${formatDateInput(detail.account.nextActionAt)}">
+            <button class="secondary-button compact-btn" type="submit">Save next action</button>
+          </form>
+          <p class="small muted">You can update it here, or in Account controls further down the page.</p>
         </div>
       </div>
 
       <div class="action-zone-col">
         <div class="table-card">
-          <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to select for outreach.</p></div></div>
+          <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
           ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>' +
-            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td><strong>' + escapeHtml(c.fullName || '') + '</strong></td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
+            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (c.linkedinUrl ? '<a class="row-link" href="' + escapeAttr(c.linkedinUrl) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>') + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
             '</tbody></table></div>' : '<div class="empty-state">No contacts imported yet.</div>'}
         </div>
       </div>
