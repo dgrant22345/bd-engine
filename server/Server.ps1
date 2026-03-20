@@ -19,6 +19,11 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheets.psm1') -Fo
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 
+$targetScoreRepair = Repair-AppTargetScoreRollout -Persist
+if ($targetScoreRepair.needed) {
+    Write-Host ("Target-score rollout repair refreshed {0} accounts in {1}ms (scope={2}ms, persist={3}ms, maxTargetScore={4})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.maxTargetScore)
+}
+
 function Get-DefaultWorkbookPath {
     $userProfile = [Environment]::GetFolderPath('UserProfile')
     $desktop = [Environment]::GetFolderPath('Desktop')
@@ -1544,5 +1549,4 @@ try {
 } finally {
     $listener.Stop()
 }
-
 

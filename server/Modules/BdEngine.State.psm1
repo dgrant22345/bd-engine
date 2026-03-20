@@ -241,18 +241,30 @@ function Get-CompanyRecordDefaults {
         talentContactCount = 0
         buyerTitleCount = 0
         targetScore = 0
+        normalizedTargetScore = 0
         dailyScore = 0
         networkStrength = 'Cold'
         jobCount = 0
         openRoleCount = 0
+        jobsLast30Days = 0
+        jobsLast90Days = 0
         newRoleCount7d = 0
         staleRoleCount30d = 0
+        avgRoleSeniorityScore = 0
+        hiringSpikeRatio = 0
+        externalRecruiterLikelihoodScore = 0
+        companyGrowthSignalScore = 0
+        companyGrowthSignalSummary = ''
+        engagementScore = 0
+        engagementSummary = ''
+        hiringVelocity = 0
         departmentFocus = ''
         departmentFocusCount = 0
         departmentConcentration = 0
         hiringSpikeScore = 0
         followUpScore = 0
         scoreBreakdown = @{}
+        targetScoreExplanation = @{}
         lastJobPostedAt = $null
         hiringStatus = 'No active jobs'
         lastContactedAt = $null
@@ -367,6 +379,21 @@ function Get-BoardConfigDefaults {
         httpSummary = @()
         lastImportAt = $null
         lastImportStatus = ''
+    }
+}
+
+function Get-ActivityRecordDefaults {
+    return @{
+        workspaceId = ''
+        accountId = $null
+        contactId = ''
+        normalizedCompanyName = ''
+        type = 'note'
+        summary = 'Activity note'
+        notes = ''
+        pipelineStage = ''
+        occurredAt = $null
+        metadata = @{}
     }
 }
 
@@ -699,6 +726,103 @@ function Get-AppScopedStateForConfigs {
     return $state
 }
 
+function Get-AppScopedStateForCompanyKeys {
+    param([string[]]$CompanyKeys)
+
+    Initialize-DataStore
+    if (Test-AppStoreUsesSqlite) {
+        return (Get-BdSqliteScopedStateForCompanyKeys -CompanyKeys $CompanyKeys)
+    }
+
+    $state = Get-AppStateView -Segments @('Workspace', 'Settings', 'Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
+    $companyKeySet = @{}
+    foreach ($companyKey in @($CompanyKeys)) {
+        if ($companyKey) {
+            $companyKeySet[[string]$companyKey] = $true
+        }
+    }
+
+    $state.companies = @($state.companies | Where-Object { $_.normalizedName -and $companyKeySet.ContainsKey([string]$_.normalizedName) })
+    $state.contacts = @($state.contacts | Where-Object { $_.normalizedCompanyName -and $companyKeySet.ContainsKey([string]$_.normalizedCompanyName) })
+    $state.jobs = @($state.jobs | Where-Object { $_.normalizedCompanyName -and $companyKeySet.ContainsKey([string]$_.normalizedCompanyName) })
+    $state.boardConfigs = @($state.boardConfigs | Where-Object { $_.normalizedCompanyName -and $companyKeySet.ContainsKey([string]$_.normalizedCompanyName) })
+    $state.activities = @($state.activities | Where-Object { $_.normalizedCompanyName -and $companyKeySet.ContainsKey([string]$_.normalizedCompanyName) })
+    return $state
+}
+
+function Get-AppResolverProbeCacheRecords {
+    param(
+        [string[]]$Urls,
+        [switch]$IncludeExpired
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return @()
+    }
+
+    return @(Get-BdSqliteResolverProbeCacheRecords -Urls $Urls -IncludeExpired:$IncludeExpired)
+}
+
+function Save-AppResolverProbeCacheRecords {
+    param([object[]]$Records)
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Save-BdSqliteResolverProbeCacheRecords -Records $Records)
+}
+
+function Clear-AppResolverProbeCacheExpired {
+    param([string]$Before = '')
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Clear-BdSqliteExpiredResolverProbeCache -Before $Before)
+}
+
+function Get-AppResolverSearchCacheRecord {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CacheKey,
+        [switch]$IncludeExpired
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return $null
+    }
+
+    return (Get-BdSqliteResolverSearchCacheRecord -CacheKey $CacheKey -IncludeExpired:$IncludeExpired)
+}
+
+function Save-AppResolverSearchCacheRecord {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CacheKey,
+        [string[]]$Urls = @(),
+        [string]$FetchedAt = '',
+        [string]$ExpiresAt = ''
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Save-BdSqliteResolverSearchCacheRecord -CacheKey $CacheKey -Urls $Urls -FetchedAt $FetchedAt -ExpiresAt $ExpiresAt)
+}
+
+function Clear-AppResolverSearchCacheExpired {
+    param([string]$Before = '')
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Clear-BdSqliteExpiredResolverSearchCache -Before $Before)
+}
+
 function Get-JsonAppStateInternal {
     $map = Get-StorageMap
     $workspace = Read-JsonFile -Path $map.Workspace -Default (New-DefaultWorkspace)
@@ -717,7 +841,7 @@ function Get-JsonAppStateInternal {
     $activities = @($activities | ForEach-Object { Convert-ToShallowPlainObject $_ })
     $importRuns = @($importRuns | ForEach-Object { Convert-ToShallowPlainObject $_ })
 
-    if (-not (Test-CollectionHasFields -Items $companies -Fields @('priority', 'scoreBreakdown', 'atsTypes', 'nextAction'))) {
+    if (-not (Test-CollectionHasFields -Items $companies -Fields @('priority', 'scoreBreakdown', 'atsTypes', 'nextAction', 'jobsLast30Days', 'engagementScore', 'hiringVelocity', 'targetScoreExplanation'))) {
         $companyDefaults = Get-CompanyRecordDefaults
         foreach ($company in @($companies)) {
             Ensure-RecordDefaults -Record $company -Defaults $companyDefaults | Out-Null
@@ -1274,6 +1398,16 @@ function Find-AppAccountsFast {
     }
 
     return (Find-BdSqliteAccounts -Query $Query)
+}
+
+function Get-AppTargetScoreBackfillAccountIds {
+    param([int]$Limit = 250)
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return @()
+    }
+
+    return @(Get-BdSqliteTargetScoreBackfillAccountIds -Limit $Limit)
 }
 
 function Find-AppContactsFast {

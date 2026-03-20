@@ -467,8 +467,8 @@ function Get-HiringStatus {
 function Get-PriorityTierFromScore {
     param([double]$TargetScore)
 
-    if ($TargetScore -ge 600) { return 'Tier 1' }
-    if ($TargetScore -ge 150) { return 'Tier 2' }
+    if ($TargetScore -ge 80) { return 'Tier 1' }
+    if ($TargetScore -ge 55) { return 'Tier 2' }
     return 'Tier 3'
 }
 
@@ -553,7 +553,7 @@ function Get-DepartmentInsights {
 
     $counts = @{}
     foreach ($job in @($Jobs)) {
-        $department = ([string]$(if ($job.department) { $job.department } else { 'General' })).Trim()
+        $department = ([string](Get-ObjectValue -Object $job -Name 'department' -Default 'General')).Trim()
         if (-not $department) {
             $department = 'General'
         }
@@ -814,7 +814,7 @@ function Get-PlaybookAccounts {
     $today = (Get-Date).ToString('yyyy-MM-dd')
     $accounts = @($State.companies |
         Where-Object { $_.status -ne 'paused' -and $_.status -ne 'client' -and $_.status -ne 'archived' } |
-        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true } |
         Select-Object -First 5)
     return @($accounts | ForEach-Object {
         $isOverdue = ($_.nextActionAt -and [string]$_.nextActionAt -ne '' -and [string]$_.nextActionAt -lt $today)
@@ -822,6 +822,9 @@ function Get-PlaybookAccounts {
             id = [string]$_.id
             displayName = [string]$_.displayName
             dailyScore = [double](Convert-ToNumber $_.dailyScore)
+            targetScore = [double](Convert-ToNumber $_.targetScore)
+            hiringVelocity = [double](Convert-ToNumber $_.hiringVelocity)
+            engagementScore = [double](Convert-ToNumber $_.engagementScore)
             openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
             topContactName = [string]$_.topContactName
             recommendedAction = [string]$_.recommendedAction
@@ -859,13 +862,14 @@ function Get-StaleAccounts {
     param($State)
     return @($State.companies |
         Where-Object { [string](Get-ObjectValue -Object $_ -Name 'staleFlag') -eq 'STALE' -and $_.status -ne 'paused' -and $_.status -ne 'archived' } |
-        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true } |
+        Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true } |
         Select-Object -First 10 |
         ForEach-Object {
             [ordered]@{
                 id = [string]$_.id
                 displayName = [string]$_.displayName
                 dailyScore = [double](Convert-ToNumber $_.dailyScore)
+                targetScore = [double](Convert-ToNumber $_.targetScore)
                 lastContactedAt = $_.lastContactedAt
                 openRoleCount = [int](Convert-ToNumber $_.openRoleCount)
                 owner = [string]$_.owner
@@ -901,7 +905,553 @@ function Get-HiringVelocity {
     $thisWeek = $weekBuckets['This week']
     $lastWeek = $weekBuckets['Last week']
     $trend = if ($thisWeek -gt $lastWeek) { 'accelerating' } elseif ($thisWeek -lt $lastWeek) { 'slowing' } else { 'steady' }
-    return [ordered]@{ weeks = $weekBuckets; trend = $trend; thisWeek = $thisWeek; lastWeek = $lastWeek }
+    $signalMetrics = Get-CompanyHiringSignalMetrics -Jobs $Jobs -ReferenceNow $now
+    return [ordered]@{
+        weeks = $weekBuckets
+        trend = $trend
+        thisWeek = $thisWeek
+        lastWeek = $lastWeek
+        score = [int](Convert-ToNumber $signalMetrics.hiringVelocity)
+        jobsLast30Days = [int](Convert-ToNumber $signalMetrics.jobsLast30Days)
+        jobsLast90Days = [int](Convert-ToNumber $signalMetrics.jobsLast90Days)
+        hiringSpikeRatio = [double](Convert-ToNumber $signalMetrics.hiringSpikeRatio)
+    }
+}
+
+function Get-JobSignalTimestamp {
+    param($Job)
+
+    foreach ($field in 'postedAt', 'retrievedAt', 'importedAt', 'lastSeenAt') {
+        $value = [string](Get-ObjectValue -Object $Job -Name $field -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $parsed = Get-DateSortValue $value
+            if ($parsed -gt [DateTime]::MinValue) {
+                return $parsed
+            }
+        }
+    }
+
+    return [DateTime]::MinValue
+}
+
+function Get-JobSignalCacheKey {
+    param($Job)
+
+    foreach ($field in 'id', 'dedupeKey', 'jobId', 'url', 'jobUrl', 'sourceUrl') {
+        $value = [string](Get-ObjectValue -Object $Job -Name $field -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return [string]::Join('|', @(
+            [string](Get-ObjectValue -Object $Job -Name 'companyName' -Default ''),
+            [string](Get-ObjectValue -Object $Job -Name 'title' -Default ''),
+            [string](Get-ObjectValue -Object $Job -Name 'postedAt' -Default ''),
+            [string](Get-ObjectValue -Object $Job -Name 'importedAt' -Default '')
+        ))
+}
+
+function Get-PatternHitCount {
+    param(
+        [string]$Text,
+        [string[]]$Patterns
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return 0
+    }
+
+    $count = 0
+    foreach ($pattern in @($Patterns)) {
+        if ($Text -match $pattern) {
+            $count += 1
+        }
+    }
+
+    return $count
+}
+
+function Get-RoleSeniorityScore {
+    param([string]$Title)
+
+    $needle = Normalize-TextKey $Title
+    if (-not $needle) { return 0 }
+
+    if ($needle -match '\b(chief|ceo|coo|cto|cfo|cio|cro|cmo|chief [a-z]+ officer|president|founder|cofounder|general counsel)\b') { return 96 }
+    if ($needle -match '\b(svp|evp|vp|vice president|head of|general manager|gm)\b') { return 88 }
+    if ($needle -match '\bdirector|managing director\b') { return 76 }
+    if ($needle -match '\b(principal|staff|lead|manager|architect|supervisor)\b') { return 66 }
+    if ($needle -match '\b(senior|sr\.?)\b') { return 56 }
+    if ($needle -match '\b(intern|junior|jr\.?|entry level|apprentice)\b') { return 18 }
+    if ($needle -match '\b(associate|specialist|analyst|coordinator|administrator|recruiter|sourcer)\b') { return 34 }
+    return 45
+}
+
+function Get-SignalTextSnippet {
+    param(
+        [string]$Value,
+        [int]$MaxLength = 0
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    $text = [string]$Value
+    if ($MaxLength -gt 0 -and $text.Length -gt $MaxLength) {
+        return $text.Substring(0, $MaxLength)
+    }
+
+    return $text
+}
+
+function Get-JobSignalText {
+    param(
+        $Job,
+        [int]$MaxLength = 4000
+    )
+
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($field in 'title', 'department', 'location', 'employmentType') {
+        $value = Get-SignalTextSnippet -Value ([string](Get-ObjectValue -Object $Job -Name $field -Default '')) -MaxLength 200
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            [void]$parts.Add($value)
+        }
+    }
+
+    $rawPayload = Get-ObjectValue -Object $Job -Name 'rawPayload' -Default $null
+    if ($rawPayload -is [string]) {
+        $rawText = Get-SignalTextSnippet -Value $rawPayload -MaxLength $MaxLength
+        if (-not [string]::IsNullOrWhiteSpace($rawText)) {
+            [void]$parts.Add($rawText)
+        }
+    } elseif ($rawPayload) {
+        foreach ($field in 'description', 'descriptionHtml', 'content', 'text', 'jobDescription', 'shortDescription', 'details', 'requirements', 'responsibilities') {
+            $value = Get-SignalTextSnippet -Value ([string](Get-ObjectValue -Object $rawPayload -Name $field -Default '')) -MaxLength ([Math]::Max(300, [Math]::Floor($MaxLength / 3)))
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                [void]$parts.Add($value)
+            }
+        }
+    }
+
+    return Normalize-TextKey ([string]::Join(' ', @($parts.ToArray())))
+}
+
+function Get-CachedJobSignalTimestamp {
+    param(
+        $Job,
+        [hashtable]$Cache = $null
+    )
+
+    $cacheKey = Get-JobSignalCacheKey -Job $Job
+    if ($Cache -and $cacheKey -and $Cache.ContainsKey($cacheKey)) {
+        return [DateTime]$Cache[$cacheKey]
+    }
+
+    $jobTimestamp = Get-JobSignalTimestamp -Job $Job
+    if ($Cache -and $cacheKey) {
+        $Cache[$cacheKey] = $jobTimestamp
+    }
+
+    return $jobTimestamp
+}
+
+function Get-CachedJobSignalText {
+    param(
+        $Job,
+        [hashtable]$Cache = $null,
+        [int]$MaxLength = 4000
+    )
+
+    $cacheKey = Get-JobSignalCacheKey -Job $Job
+    $cacheLookupKey = if ($cacheKey) { '{0}|{1}' -f $cacheKey, $MaxLength } else { '' }
+    if ($Cache -and $cacheLookupKey -and $Cache.ContainsKey($cacheLookupKey)) {
+        return [string]$Cache[$cacheLookupKey]
+    }
+
+    $jobText = Get-JobSignalText -Job $Job -MaxLength $MaxLength
+    if ($Cache -and $cacheLookupKey) {
+        $Cache[$cacheLookupKey] = $jobText
+    }
+
+    return $jobText
+}
+
+function Get-ActivityMetadataNumber {
+    param(
+        $Metadata,
+        [string[]]$Names
+    )
+
+    if (-not $Metadata) {
+        return 0
+    }
+
+    foreach ($name in @($Names)) {
+        $value = Get-ObjectValue -Object $Metadata -Name $name -Default $null
+        if ($null -ne $value -and $value -ne '') {
+            return [double](Convert-ToNumber $value)
+        }
+    }
+
+    return 0
+}
+
+function Get-CompanyHiringSignalMetrics {
+    param(
+        $Company,
+        $Jobs = $null,
+        [datetime]$ReferenceNow = (Get-Date),
+        [hashtable]$JobSignalTextCache = $null,
+        [hashtable]$JobSignalTimestampCache = $null
+    )
+
+    if ($null -eq $Jobs) {
+        return [ordered]@{
+            jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast30Days' -Default 0))
+            jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast90Days' -Default 0))
+            avgRoleSeniorityScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'avgRoleSeniorityScore' -Default 0))
+            hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeRatio' -Default 0))
+            externalRecruiterLikelihoodScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'externalRecruiterLikelihoodScore' -Default 0))
+            hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringVelocity' -Default 0))
+        }
+    }
+
+    $activeJobs = @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
+    $jobsLast30Days = 0
+    $jobsLast90Days = 0
+    $seniorityTotal = 0.0
+    $seniorityCount = 0
+    $recruiterTotal = 0.0
+    $recruiterCount = 0
+    $cutoff30 = $ReferenceNow.AddDays(-30)
+    $cutoff90 = $ReferenceNow.AddDays(-90)
+
+    foreach ($job in @($activeJobs)) {
+        $jobTimestamp = Get-CachedJobSignalTimestamp -Job $job -Cache $JobSignalTimestampCache
+        if ($jobTimestamp -gt [DateTime]::MinValue) {
+            if ($jobTimestamp -ge $cutoff30) { $jobsLast30Days += 1 }
+            if ($jobTimestamp -ge $cutoff90) { $jobsLast90Days += 1 }
+        }
+
+        $title = [string](Get-ObjectValue -Object $job -Name 'title' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($title)) {
+            $seniorityTotal += (Get-RoleSeniorityScore -Title $title)
+            $seniorityCount += 1
+        }
+
+    }
+
+    $jobsForTextAnalysis = if (@($activeJobs).Count -gt 12) {
+        @(
+            $activeJobs |
+                Sort-Object @{ Expression = { Get-CachedJobSignalTimestamp -Job $_ -Cache $JobSignalTimestampCache }; Descending = $true } |
+                Select-Object -First 12
+        )
+    } else {
+        @($activeJobs)
+    }
+
+    foreach ($job in @($jobsForTextAnalysis)) {
+        $title = [string](Get-ObjectValue -Object $job -Name 'title' -Default '')
+        $jobText = Get-CachedJobSignalText -Job $job -Cache $JobSignalTextCache -MaxLength 2400
+        if ($jobText) {
+            $urgencyHits = Get-PatternHitCount -Text $jobText -Patterns @('\burgent\b', '\bimmediately\b', '\basap\b', '\bhigh volume\b', '\bmultiple openings\b', '\bscale quickly\b', '\bhypergrowth\b', '\bbuild(ing)? out\b')
+            $hardRoleHits = Get-PatternHitCount -Text $jobText -Patterns @('\bprincipal\b', '\bstaff\b', '\barchitect\b', '\bsecurity\b', '\bmachine learning\b', '\bai\b', '\bdata platform\b', '\bsite reliability\b', '\bembedded\b', '\bbilingual\b', '\blicensed\b', '\bclearance\b')
+            $partnerFriendlyHits = Get-PatternHitCount -Text $jobText -Patterns @('\bcontract\b', '\bconsultant\b', '\bproject based\b', '\bsearch\b', '\bpartner\b', '\boutside support\b')
+            $negativeHits = Get-PatternHitCount -Text $jobText -Patterns @('\bno agencies\b', '\bno recruiters\b', '\bunsolicited resumes\b', '\bthird[- ]party\b', '\bagency resumes\b')
+            $remoteHits = Get-PatternHitCount -Text $jobText -Patterns @('\bremote\b', '\bhybrid\b', '\bmultiple locations\b', '\bcanada\b', '\bunited states\b')
+            $jobScore = 18 + ($urgencyHits * 10) + ($hardRoleHits * 7) + ($partnerFriendlyHits * 9) + ($remoteHits * 4) - ($negativeHits * 24)
+            if ($title -match 'recruiter|talent acquisition|sourcer') { $jobScore += 6 }
+            if ($title -match 'director|vp|vice president|head|chief|lead|principal|staff|architect') { $jobScore += 6 }
+            $recruiterTotal += [Math]::Min(100, [Math]::Max(0, $jobScore))
+            $recruiterCount += 1
+        }
+    }
+
+    $avgRoleSeniorityScore = if ($seniorityCount -gt 0) { [Math]::Round($seniorityTotal / $seniorityCount, 1) } else { 0 }
+    $externalRecruiterLikelihoodScore = if ($recruiterCount -gt 0) { [Math]::Round($recruiterTotal / $recruiterCount, 1) } else { 0 }
+    $baseline30Days = [Math]::Max(1.0, ($jobsLast90Days / 3.0))
+    $hiringSpikeRatio = if ($jobsLast30Days -gt 0) { [Math]::Round(($jobsLast30Days / $baseline30Days), 2) } else { 0 }
+    $hiringVelocity = [Math]::Min(100, [Math]::Round(([Math]::Min(60, ($jobsLast30Days * 8))) + ([Math]::Min(20, ($jobsLast90Days * 1.5))) + ([Math]::Min(20, ([Math]::Max(0, $hiringSpikeRatio - 1) * 25))), 0))
+
+    return [ordered]@{
+        jobsLast30Days = [int]$jobsLast30Days
+        jobsLast90Days = [int]$jobsLast90Days
+        avgRoleSeniorityScore = [double]$avgRoleSeniorityScore
+        hiringSpikeRatio = [double]$hiringSpikeRatio
+        externalRecruiterLikelihoodScore = [double]$externalRecruiterLikelihoodScore
+        hiringVelocity = [double]$hiringVelocity
+    }
+}
+
+function Get-CompanyEngagementMetrics {
+    param(
+        $Company,
+        $Activities = $null,
+        [datetime]$ReferenceNow = (Get-Date)
+    )
+
+    if ($null -eq $Activities) {
+        return [ordered]@{
+            score = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore' -Default 0))
+            summary = [string](Get-ObjectValue -Object $Company -Name 'engagementSummary' -Default '')
+        }
+    }
+
+    $openCount = 0
+    $clickCount = 0
+    $replyCount = 0
+    $meetingCount = 0
+    $activityCount = 0
+    $recentSignalBonus = 0
+
+    foreach ($activity in @($Activities)) {
+        $occurredAt = Get-DateSortValue ([string](Get-ObjectValue -Object $activity -Name 'occurredAt' -Default ''))
+        $ageDays = if ($occurredAt -gt [DateTime]::MinValue) { ($ReferenceNow - $occurredAt).TotalDays } else { 9999 }
+        if ($ageDays -le 120) {
+            $activityCount += 1
+        }
+
+        $type = [string](Get-ObjectValue -Object $activity -Name 'type' -Default '')
+        $summary = [string](Get-ObjectValue -Object $activity -Name 'summary' -Default '')
+        $notes = [string](Get-ObjectValue -Object $activity -Name 'notes' -Default '')
+        $pipelineStage = [string](Get-ObjectValue -Object $activity -Name 'pipelineStage' -Default '')
+        $metadata = Get-ObjectValue -Object $activity -Name 'metadata' -Default $null
+        $activityText = Normalize-TextKey ([string]::Join(' ', @($type, $summary, $notes, $pipelineStage)))
+
+        $openCount += [int](Get-ActivityMetadataNumber -Metadata $metadata -Names @('opens', 'openCount', 'emailOpens'))
+        $clickCount += [int](Get-ActivityMetadataNumber -Metadata $metadata -Names @('clicks', 'clickCount', 'emailClicks'))
+        $replyCount += [int](Get-ActivityMetadataNumber -Metadata $metadata -Names @('replies', 'replyCount', 'emailReplies'))
+
+        if ($activityText -match '\bopen(ed)?\b') { $openCount += 1 }
+        if ($activityText -match '\b(click|clicked|link)\b') { $clickCount += 1 }
+        if ($activityText -match '\b(reply|replied|responded|response)\b') { $replyCount += 1 }
+        if ($activityText -match '\b(meeting|met|call|zoom|intro|screen|interested|opportunity)\b') { $meetingCount += 1 }
+
+        if ($ageDays -le 7) {
+            $recentSignalBonus += 6
+        } elseif ($ageDays -le 30) {
+            $recentSignalBonus += 3
+        }
+    }
+
+    $stageBonus = switch -Regex (Normalize-TextKey ([string](Get-ObjectValue -Object $Company -Name 'outreachStatus' -Default ''))) {
+        'opportunity' { 24; break }
+        'replied|interested' { 18; break }
+        'contacted' { 10; break }
+        'ready_to_contact|researching' { 6; break }
+        default { 0 }
+    }
+
+    $score = [Math]::Min(100, [Math]::Round(($openCount * 3) + ($clickCount * 8) + ($replyCount * 22) + ($meetingCount * 20) + ([Math]::Min(12, ($activityCount * 2))) + $recentSignalBonus + $stageBonus, 0))
+    $summaryParts = New-Object System.Collections.ArrayList
+    if ($replyCount -gt 0) { [void]$summaryParts.Add(('{0} repl{1}' -f $replyCount, $(if ($replyCount -eq 1) { 'y' } else { 'ies' }))) }
+    if ($meetingCount -gt 0) { [void]$summaryParts.Add(('{0} high-intent touch{1}' -f $meetingCount, $(if ($meetingCount -eq 1) { '' } else { 'es' }))) }
+    if ($clickCount -gt 0) { [void]$summaryParts.Add(('{0} click{1}' -f $clickCount, $(if ($clickCount -eq 1) { '' } else { 's' }))) }
+    if ($openCount -gt 0) { [void]$summaryParts.Add(('{0} open{1}' -f $openCount, $(if ($openCount -eq 1) { '' } else { 's' }))) }
+    if ($summaryParts.Count -eq 0) { [void]$summaryParts.Add('No live engagement captured yet') }
+
+    return [ordered]@{
+        score = [int]$score
+        summary = [string]([string]::Join(', ', @($summaryParts.ToArray())))
+    }
+}
+
+function Get-CompanyGrowthSignalMetrics {
+    param(
+        $Company,
+        $Jobs = $null,
+        [int]$JobsLast30Days = 0,
+        [double]$HiringSpikeRatio = 0,
+        [hashtable]$JobSignalTextCache = $null,
+        [hashtable]$JobSignalTimestampCache = $null
+    )
+
+    $companyTextParts = New-Object System.Collections.ArrayList
+    foreach ($value in @(
+            [string](Get-ObjectValue -Object $Company -Name 'notes' -Default ''),
+            [string](Get-ObjectValue -Object $Company -Name 'enrichmentNotes' -Default ''),
+            [string](Get-ObjectValue -Object $Company -Name 'enrichmentEvidence' -Default ''),
+            [string]([string]::Join(' ', @(Get-StringList (Get-ObjectValue -Object $Company -Name 'tags' -Default @()))))
+        )) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            [void]$companyTextParts.Add($value)
+        }
+    }
+
+    $signalText = Normalize-TextKey ([string]::Join(' ', @($companyTextParts.ToArray())))
+    if (-not $signalText -and -not $Jobs) {
+        return [ordered]@{
+            score = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'companyGrowthSignalScore' -Default 0))
+            summary = [string](Get-ObjectValue -Object $Company -Name 'companyGrowthSignalSummary' -Default '')
+        }
+    }
+
+    $fundingPatterns = @('\bseries [a-z]+\b', '\bseed\b', '\bfunding\b', '\braised\b', '\bventure backed\b', '\bbacked by\b', '\bprivate equity\b', '\bacquisition\b')
+    $growthPatterns = @('\bhypergrowth\b', '\brapid(ly)? growing\b', '\bscal(e|ing)\b', '\bexpan(d|sion)\b', '\bnew office\b', '\bnew market\b', '\bhiring surge\b', '\bbuild(ing)? out\b', '\bgrowth stage\b')
+    $fundingHits = Get-PatternHitCount -Text $signalText -Patterns $fundingPatterns
+    $growthHits = Get-PatternHitCount -Text $signalText -Patterns $growthPatterns
+    if ($Jobs) {
+        $jobsForGrowthSignals = @(
+            @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false } |
+                Sort-Object @{ Expression = { Get-CachedJobSignalTimestamp -Job $_ -Cache $JobSignalTimestampCache }; Descending = $true } |
+                Select-Object -First 6)
+        )
+        foreach ($job in @($jobsForGrowthSignals)) {
+            $jobText = Get-CachedJobSignalText -Job $job -Cache $JobSignalTextCache -MaxLength 1800
+            if (-not [string]::IsNullOrWhiteSpace($jobText)) {
+                $fundingHits += Get-PatternHitCount -Text $jobText -Patterns $fundingPatterns
+                $growthHits += Get-PatternHitCount -Text $jobText -Patterns $growthPatterns
+            }
+        }
+    }
+    $fundingScore = [Math]::Min(45, ($fundingHits * 14) + ($growthHits * 6))
+    $hiringSurgeScore = [Math]::Min(55, ($JobsLast30Days * 5) + ([Math]::Max(0, $HiringSpikeRatio - 1) * 25))
+    $score = [Math]::Min(100, [Math]::Round($fundingScore + $hiringSurgeScore, 0))
+
+    $summaryParts = New-Object System.Collections.ArrayList
+    if ($fundingHits -gt 0) { [void]$summaryParts.Add('Funding or expansion language detected') }
+    if ($growthHits -gt 0) { [void]$summaryParts.Add('Growth-stage hiring language detected') }
+    if ($JobsLast30Days -gt 0) { [void]$summaryParts.Add(('{0} recent role{1}' -f $JobsLast30Days, $(if ($JobsLast30Days -eq 1) { '' } else { 's' }))) }
+    if ($summaryParts.Count -eq 0) { [void]$summaryParts.Add('Signals driven mainly by hiring volume') }
+
+    return [ordered]@{
+        score = [int]$score
+        summary = [string]([string]::Join(', ', @($summaryParts.ToArray())))
+    }
+}
+
+function Get-TargetScoreExplanation {
+    param($Components)
+
+    $topDrivers = @(
+        @($Components |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'contribution' -Default 0)) }; Descending = $true } |
+            Select-Object -First 3) |
+            ForEach-Object {
+                [ordered]@{
+                    key = [string](Get-ObjectValue -Object $_ -Name 'key' -Default '')
+                    label = [string](Get-ObjectValue -Object $_ -Name 'label' -Default '')
+                    contribution = [int][Math]::Round((Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'contribution' -Default 0)))
+                    score = [int][Math]::Round((Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)))
+                    value = [string](Get-ObjectValue -Object $_ -Name 'value' -Default '')
+                    summary = [string](Get-ObjectValue -Object $_ -Name 'summary' -Default '')
+                }
+            }
+    )
+
+    $summary = if ($topDrivers.Count -gt 0) {
+        [string]::Join('; ', @($topDrivers | ForEach-Object { '{0}: {1}' -f $_.label, $_.summary }))
+    } else {
+        'No strong target-score drivers yet.'
+    }
+
+    return [ordered]@{
+        model = 'target-score-v2'
+        generatedAt = (Get-Date).ToString('o')
+        topDrivers = $topDrivers
+        summary = $summary
+    }
+}
+
+function Get-CompanyTargetScoreMetrics {
+    param(
+        $Company,
+        $Jobs = $null,
+        $Activities = $null,
+        [datetime]$ReferenceNow = (Get-Date)
+    )
+
+    $jobSignalTextCache = @{}
+    $jobSignalTimestampCache = @{}
+    $hiringMetrics = Get-CompanyHiringSignalMetrics -Company $Company -Jobs $Jobs -ReferenceNow $ReferenceNow -JobSignalTextCache $jobSignalTextCache -JobSignalTimestampCache $jobSignalTimestampCache
+    $engagementMetrics = Get-CompanyEngagementMetrics -Company $Company -Activities $Activities -ReferenceNow $ReferenceNow
+    $growthMetrics = Get-CompanyGrowthSignalMetrics -Company $Company -Jobs $Jobs -JobsLast30Days ([int](Convert-ToNumber $hiringMetrics.jobsLast30Days)) -HiringSpikeRatio ([double](Convert-ToNumber $hiringMetrics.hiringSpikeRatio)) -JobSignalTextCache $jobSignalTextCache -JobSignalTimestampCache $jobSignalTimestampCache
+
+    $volumeScore = [Math]::Min(100, [Math]::Round(([Math]::Min(70, ((Convert-ToNumber $hiringMetrics.jobsLast30Days) * 10))) + ([Math]::Min(30, ((Convert-ToNumber $hiringMetrics.jobsLast90Days) * 2))), 0))
+    $spikeScore = [Math]::Min(100, [Math]::Round(([Math]::Max(0, (Convert-ToNumber $hiringMetrics.hiringSpikeRatio)) * 50), 0))
+
+    $components = @(
+        [ordered]@{
+            key = 'hiringVolume'
+            label = 'Fresh hiring volume'
+            score = $volumeScore
+            weight = 0.26
+            value = '{0} / {1}' -f ([int](Convert-ToNumber $hiringMetrics.jobsLast30Days)), ([int](Convert-ToNumber $hiringMetrics.jobsLast90Days))
+            summary = '{0} jobs in 30d and {1} in 90d' -f ([int](Convert-ToNumber $hiringMetrics.jobsLast30Days)), ([int](Convert-ToNumber $hiringMetrics.jobsLast90Days))
+        },
+        [ordered]@{
+            key = 'roleSeniority'
+            label = 'Role seniority mix'
+            score = [double](Convert-ToNumber $hiringMetrics.avgRoleSeniorityScore)
+            weight = 0.14
+            value = [string]([Math]::Round((Convert-ToNumber $hiringMetrics.avgRoleSeniorityScore), 1))
+            summary = 'Average role seniority {0}/100' -f ([string]([Math]::Round((Convert-ToNumber $hiringMetrics.avgRoleSeniorityScore), 1)))
+        },
+        [ordered]@{
+            key = 'hiringSpike'
+            label = 'Hiring spike'
+            score = $spikeScore
+            weight = 0.18
+            value = '{0}x' -f ([string]([Math]::Round((Convert-ToNumber $hiringMetrics.hiringSpikeRatio), 2)))
+            summary = '{0}x versus the 90-day baseline' -f ([string]([Math]::Round((Convert-ToNumber $hiringMetrics.hiringSpikeRatio), 2)))
+        },
+        [ordered]@{
+            key = 'externalRecruiter'
+            label = 'External recruiter fit'
+            score = [double](Convert-ToNumber $hiringMetrics.externalRecruiterLikelihoodScore)
+            weight = 0.16
+            value = [string]([Math]::Round((Convert-ToNumber $hiringMetrics.externalRecruiterLikelihoodScore), 1))
+            summary = 'JD patterns suggest a {0}/100 partner-likelihood' -f ([string]([Math]::Round((Convert-ToNumber $hiringMetrics.externalRecruiterLikelihoodScore), 1)))
+        },
+        [ordered]@{
+            key = 'growthSignals'
+            label = 'Growth signals'
+            score = [double](Convert-ToNumber $growthMetrics.score)
+            weight = 0.14
+            value = [string](Convert-ToNumber $growthMetrics.score)
+            summary = [string]$growthMetrics.summary
+        },
+        [ordered]@{
+            key = 'engagement'
+            label = 'Engagement'
+            score = [double](Convert-ToNumber $engagementMetrics.score)
+            weight = 0.12
+            value = [string](Convert-ToNumber $engagementMetrics.score)
+            summary = [string]$engagementMetrics.summary
+        }
+    )
+
+    $scoreBreakdown = [ordered]@{}
+    $weightedTotal = 0.0
+    foreach ($component in @($components)) {
+        $contribution = [Math]::Round(((Convert-ToNumber $component.score) * [double]$component.weight), 1)
+        $component.contribution = $contribution
+        $weightedTotal += $contribution
+        $scoreBreakdown[[string]$component.key] = [int][Math]::Round($contribution)
+    }
+
+    $normalizedTargetScore = [Math]::Min(100, [Math]::Round($weightedTotal, 0))
+    $explanation = Get-TargetScoreExplanation -Components $components
+
+    return [ordered]@{
+        targetScore = [int]$normalizedTargetScore
+        normalizedTargetScore = [int]$normalizedTargetScore
+        jobsLast30Days = [int](Convert-ToNumber $hiringMetrics.jobsLast30Days)
+        jobsLast90Days = [int](Convert-ToNumber $hiringMetrics.jobsLast90Days)
+        avgRoleSeniorityScore = [double](Convert-ToNumber $hiringMetrics.avgRoleSeniorityScore)
+        hiringSpikeRatio = [double](Convert-ToNumber $hiringMetrics.hiringSpikeRatio)
+        externalRecruiterLikelihoodScore = [double](Convert-ToNumber $hiringMetrics.externalRecruiterLikelihoodScore)
+        companyGrowthSignalScore = [double](Convert-ToNumber $growthMetrics.score)
+        companyGrowthSignalSummary = [string]$growthMetrics.summary
+        engagementScore = [double](Convert-ToNumber $engagementMetrics.score)
+        engagementSummary = [string]$engagementMetrics.summary
+        hiringVelocity = [double](Convert-ToNumber $hiringMetrics.hiringVelocity)
+        scoreBreakdown = $scoreBreakdown
+        targetScoreExplanation = $explanation
+    }
 }
 
 function Get-EnrichmentFunnelStats {
@@ -919,7 +1469,7 @@ function Get-EnrichmentFunnelStats {
 function Find-DuplicateContacts {
     param($State)
     $groups = @{}
-    foreach ($contact in @($State.contacts)) {
+    foreach ($contact in @($State.contacts | Where-Object { $null -ne $_ })) {
         $key = ([string]$contact.fullName).Trim().ToLowerInvariant()
         if (-not $key) { continue }
         if (-not $groups.ContainsKey($key)) { $groups[$key] = @() }
@@ -1054,13 +1604,22 @@ function Select-AccountSummary {
         nextActionAt = Get-ObjectValue -Object $Company -Name 'nextActionAt' -Default $null
         dailyScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'dailyScore'))
         targetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'targetScore'))
+        normalizedTargetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'normalizedTargetScore' -Default (Get-ObjectValue -Object $Company -Name 'targetScore' -Default 0)))
         connectionCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'connectionCount'))
         seniorContactCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'seniorContactCount'))
         talentContactCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'talentContactCount'))
         jobCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobCount'))
         openRoleCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'openRoleCount'))
+        jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast30Days'))
+        jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast90Days'))
         newRoleCount7d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'newRoleCount7d'))
         staleRoleCount30d = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'staleRoleCount30d'))
+        avgRoleSeniorityScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'avgRoleSeniorityScore'))
+        hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeRatio'))
+        externalRecruiterLikelihoodScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'externalRecruiterLikelihoodScore'))
+        companyGrowthSignalScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'companyGrowthSignalScore'))
+        engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore'))
+        hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringVelocity'))
         departmentFocus = [string](Get-ObjectValue -Object $Company -Name 'departmentFocus')
         networkStrength = [string](Get-ObjectValue -Object $Company -Name 'networkStrength')
         hiringStatus = [string](Get-ObjectValue -Object $Company -Name 'hiringStatus')
@@ -1094,6 +1653,9 @@ function Select-AccountDetailModel {
     $summary.departmentConcentration = [double](Convert-ToNumber $Company.departmentConcentration)
     $summary.hiringSpikeScore = [double](Convert-ToNumber $Company.hiringSpikeScore)
     $summary.scoreBreakdown = if ($Company.scoreBreakdown) { ConvertTo-PlainObject -InputObject $Company.scoreBreakdown } else { [ordered]@{} }
+    $summary.targetScoreExplanation = if ($Company.targetScoreExplanation) { ConvertTo-PlainObject -InputObject $Company.targetScoreExplanation } else { [ordered]@{} }
+    $summary.companyGrowthSignalSummary = [string](Get-ObjectValue -Object $Company -Name 'companyGrowthSignalSummary' -Default '')
+    $summary.engagementSummary = [string](Get-ObjectValue -Object $Company -Name 'engagementSummary' -Default '')
     $summary.lastContactedAt = $Company.lastContactedAt
     return $summary
 }
@@ -1199,6 +1761,7 @@ function Select-ActivitySummary {
         occurredAt = $Activity.occurredAt
         pipelineStage = [string]$Activity.pipelineStage
         accountId = [string]$Activity.accountId
+        metadata = if ($Activity.metadata) { ConvertTo-PlainObject -InputObject $Activity.metadata } else { [ordered]@{} }
     }
 }
 
@@ -1240,16 +1803,28 @@ function New-CompanyProjection {
         talentContactCount = 0
         buyerTitleCount = 0
         targetScore = 0
+        normalizedTargetScore = 0
         dailyScore = 0
         openRoleCount = 0
+        jobsLast30Days = 0
+        jobsLast90Days = 0
         newRoleCount7d = 0
         staleRoleCount30d = 0
+        avgRoleSeniorityScore = 0
+        hiringSpikeRatio = 0
+        externalRecruiterLikelihoodScore = 0
+        companyGrowthSignalScore = 0
+        companyGrowthSignalSummary = ''
+        engagementScore = 0
+        engagementSummary = ''
+        hiringVelocity = 0
         departmentFocus = ''
         departmentFocusCount = 0
         departmentConcentration = 0
         hiringSpikeScore = 0
         followUpScore = 0
         scoreBreakdown = [ordered]@{}
+        targetScoreExplanation = [ordered]@{}
         networkStrength = 'Cold'
         jobCount = 0
         lastJobPostedAt = $null
@@ -1286,25 +1861,27 @@ function Update-CompanyProjection {
     param(
         [Parameter(Mandatory = $true)]
         $Company,
+        $Contacts = $null,
         $Jobs = $null,
-        $Configs = $null
+        $Configs = $null,
+        $Activities = $null
     )
 
     $now = Get-Date
     $companyName = if ($Company.displayName) { [string]$Company.displayName } elseif ($Company.normalizedName) { [string]$Company.normalizedName } else { 'Unknown company' }
     $Company.displayName = Get-CanonicalCompanyDisplayName $companyName
     $Company.normalizedName = Get-CanonicalCompanyKey $(if ($Company.normalizedName) { $Company.normalizedName } else { $companyName })
+    if (-not $Company.id) {
+        $Company.id = New-DeterministicId -Prefix 'acct' -Seed $(if ($Company.normalizedName) { $Company.normalizedName } else { $Company.displayName })
+    }
     $Company.tags = @(Get-StringList $Company.tags)
     $Company.connectionCount = [int](Convert-ToNumber $Company.connectionCount)
     $Company.seniorContactCount = [int](Convert-ToNumber $Company.seniorContactCount)
     $Company.talentContactCount = [int](Convert-ToNumber $Company.talentContactCount)
     $Company.buyerTitleCount = [int](Convert-ToNumber $Company.buyerTitleCount)
     $Company.targetScore = [int](Convert-ToNumber $Company.targetScore)
+    $Company.normalizedTargetScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'normalizedTargetScore' -Default $Company.targetScore))
     $Company.priority = Normalize-AccountPriority $Company.priority
-
-    if (-not $Company.priorityTier) {
-        $Company.priorityTier = Get-PriorityTierFromScore -TargetScore $Company.targetScore
-    }
     $Company.status = Normalize-AccountStatus $Company.status
     if (-not $Company.outreachStatus) { $Company.outreachStatus = 'not_started' }
     if (-not $Company.notes) { $Company.notes = '' }
@@ -1376,16 +1953,51 @@ function Update-CompanyProjection {
     [void](Set-ObjectValue -Object $Company -Name 'lastVerifiedAt' -Value $lastVerifiedAt)
     [void](Set-ObjectValue -Object $Company -Name 'nextEnrichmentAttemptAt' -Value $nextEnrichmentAttemptAt)
     if (-not $Company.owner) { $Company.owner = '' }
+    if (-not (Get-ObjectValue -Object $Company -Name 'ownerId' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerId' -Value '') }
+    if (-not (Get-ObjectValue -Object $Company -Name 'ownerAssignedAt' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerAssignedAt' -Value '') }
+    if (-not (Get-ObjectValue -Object $Company -Name 'ownerAssignedBy' -Default '')) { [void](Set-ObjectValue -Object $Company -Name 'ownerAssignedBy' -Value '') }
     if (-not $Company.nextAction) { $Company.nextAction = '' }
     if (-not $Company.topContactName) { $Company.topContactName = '' }
     if (-not $Company.topContactTitle) { $Company.topContactTitle = '' }
     if (-not $Company.createdAt) { $Company.createdAt = $now.ToString('o') }
 
+    if ($PSBoundParameters.ContainsKey('Contacts')) {
+        $contactList = @($Contacts | Where-Object { $null -ne $_ })
+        $Company.connectionCount = @($contactList).Count
+        $Company.seniorContactCount = (@($contactList | Where-Object { Test-Truthy (Get-ObjectValue -Object $_ -Name 'seniorFlag' -Default $false) })).Count
+        $Company.talentContactCount = (@($contactList | Where-Object { Test-Truthy (Get-ObjectValue -Object $_ -Name 'talentFlag' -Default $false) })).Count
+        $Company.buyerTitleCount = (@($contactList | Where-Object { Test-Truthy (Get-ObjectValue -Object $_ -Name 'buyerFlag' -Default $false) })).Count
+        foreach ($contact in @($contactList)) {
+            if ($null -eq $contact) { continue }
+            [void](Set-ObjectValue -Object $contact -Name 'accountId' -Value ([string]$Company.id))
+            [void](Set-ObjectValue -Object $contact -Name 'companyOverlapCount' -Value ([int]$Company.connectionCount))
+            $priorityScore = Get-ContactPriorityScore -Contact $contact -CompanyContacts $Company.connectionCount
+            [void](Set-ObjectValue -Object $contact -Name 'priorityScore' -Value $priorityScore)
+            [void](Set-ObjectValue -Object $contact -Name 'relevanceScore' -Value $priorityScore)
+        }
+        $topContact = @(
+            $contactList |
+                Sort-Object @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'priorityScore' -Default 0)) }; Descending = $true }
+        ) | Select-Object -First 1
+        $Company.topContactName = if ($topContact) { [string](Get-ObjectValue -Object $topContact -Name 'fullName' -Default '') } else { '' }
+        $Company.topContactTitle = if ($topContact) { [string](Get-ObjectValue -Object $topContact -Name 'title' -Default '') } else { '' }
+    } else {
+        $Company.topContactName = [string](Get-ObjectValue -Object $Company -Name 'topContactName' -Default '')
+        $Company.topContactTitle = [string](Get-ObjectValue -Object $Company -Name 'topContactTitle' -Default '')
+    }
+
+    $jobList = @()
     if ($PSBoundParameters.ContainsKey('Jobs')) {
-        $jobList = @($Jobs | Where-Object { $_.active -ne $false })
+        $jobList = @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
         $insights = Get-DepartmentInsights -Jobs $jobList
-        $newRoleCount7d = @($jobList | Where-Object { $_.postedAt -and (Get-DateSortValue $_.postedAt) -ge $now.AddDays(-7) }).Count
-        $staleRoleCount30d = @($jobList | Where-Object { $_.postedAt -and (Get-DateSortValue $_.postedAt) -lt $now.AddDays(-30) }).Count
+        $newRoleCount7d = @($jobList | Where-Object {
+                $postedAt = Get-ObjectValue -Object $_ -Name 'postedAt' -Default ''
+                $postedAt -and (Get-DateSortValue $postedAt) -ge $now.AddDays(-7)
+            }).Count
+        $staleRoleCount30d = @($jobList | Where-Object {
+                $postedAt = Get-ObjectValue -Object $_ -Name 'postedAt' -Default ''
+                $postedAt -and (Get-DateSortValue $postedAt) -lt $now.AddDays(-30)
+            }).Count
         $Company.jobCount = @($jobList).Count
         $Company.openRoleCount = $Company.jobCount
         $Company.newRoleCount7d = $newRoleCount7d
@@ -1395,30 +2007,61 @@ function Update-CompanyProjection {
         $Company.departmentConcentration = [double]$insights.concentration
         $Company.hiringSpikeScore = [math]::Round([math]::Min(30, ($newRoleCount7d * 4) + (($insights.topDepartmentCount -as [int]) * 1.5)))
         $latestJob = @(
-            $jobList | Sort-Object @{ Expression = { Get-DateSortValue $(if ($_.postedAt) { $_.postedAt } else { $_.importedAt }) }; Descending = $true }
+            $jobList | Sort-Object @{
+                Expression = {
+                    $postedAt = Get-ObjectValue -Object $_ -Name 'postedAt' -Default ''
+                    $importedAt = Get-ObjectValue -Object $_ -Name 'importedAt' -Default ''
+                    Get-DateSortValue $(if ($postedAt) { $postedAt } else { $importedAt })
+                }
+                Descending = $true
+            }
         ) | Select-Object -First 1
         $Company.lastJobPostedAt = if ($latestJob) {
-            if ($latestJob.postedAt) { $latestJob.postedAt } else { $latestJob.importedAt }
+            $latestPostedAt = Get-ObjectValue -Object $latestJob -Name 'postedAt' -Default ''
+            if ($latestPostedAt) { $latestPostedAt } else { Get-ObjectValue -Object $latestJob -Name 'importedAt' -Default $null }
         } else {
             $null
+        }
+        if (-not $Company.location) {
+            $locations = @(
+                $jobList |
+                    ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'location' -Default '') } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Sort-Object -Unique |
+                    Select-Object -First 3
+            )
+            if ($locations.Count -gt 0) {
+                $Company.location = [string]([string]::Join(', ', @($locations)))
+            }
         }
     } else {
         $Company.jobCount = [int](Convert-ToNumber $Company.jobCount)
         $Company.openRoleCount = [int](Convert-ToNumber $Company.openRoleCount)
+        $Company.jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast30Days' -Default 0))
+        $Company.jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobsLast90Days' -Default 0))
         $Company.newRoleCount7d = [int](Convert-ToNumber $Company.newRoleCount7d)
         $Company.staleRoleCount30d = [int](Convert-ToNumber $Company.staleRoleCount30d)
+        $Company.avgRoleSeniorityScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'avgRoleSeniorityScore' -Default 0))
+        $Company.hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringSpikeRatio' -Default 0))
+        $Company.externalRecruiterLikelihoodScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'externalRecruiterLikelihoodScore' -Default 0))
+        $Company.companyGrowthSignalScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'companyGrowthSignalScore' -Default 0))
+        $Company.companyGrowthSignalSummary = [string](Get-ObjectValue -Object $Company -Name 'companyGrowthSignalSummary' -Default '')
+        $Company.engagementScore = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore' -Default 0))
+        $Company.engagementSummary = [string](Get-ObjectValue -Object $Company -Name 'engagementSummary' -Default '')
+        $Company.hiringVelocity = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringVelocity' -Default 0))
         $Company.departmentFocus = [string]$Company.departmentFocus
         $Company.departmentFocusCount = [int](Convert-ToNumber $Company.departmentFocusCount)
         $Company.departmentConcentration = [double](Convert-ToNumber $Company.departmentConcentration)
         $Company.hiringSpikeScore = [double](Convert-ToNumber $Company.hiringSpikeScore)
+        $Company.targetScoreExplanation = if ($Company.targetScoreExplanation) { $Company.targetScoreExplanation } else { [ordered]@{} }
     }
 
     if ($PSBoundParameters.ContainsKey('Configs')) {
-        $configList = @($Configs)
-        $activeConfigs = @($configList | Where-Object { $_.active -ne $false })
-        $Company.atsTypes = @($activeConfigs | ForEach-Object { ([string]$_.atsType).ToLowerInvariant() } | Where-Object { $_ } | Sort-Object -Unique)
-        $primaryCareersUrl = @($activeConfigs | ForEach-Object { [string]$_.careersUrl } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-        $primaryDomain = @($activeConfigs | ForEach-Object { [string]$_.domain } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+        $configList = @($Configs | Where-Object { $null -ne $_ })
+        $activeConfigs = @($configList | Where-Object { (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
+        $Company.atsTypes = @($activeConfigs | ForEach-Object { ([string](Get-ObjectValue -Object $_ -Name 'atsType' -Default '')).ToLowerInvariant() } | Where-Object { $_ } | Sort-Object -Unique)
+        $primaryCareersUrl = @($activeConfigs | ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'careersUrl' -Default '') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+        $primaryDomain = @($activeConfigs | ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'domain' -Default '') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
         if ($primaryCareersUrl.Count -gt 0) {
             $Company.careersUrl = $primaryCareersUrl[0]
         } elseif (-not $Company.careersUrl) {
@@ -1432,6 +2075,27 @@ function Update-CompanyProjection {
         if (-not $Company.careersUrl) { $Company.careersUrl = '' }
     }
 
+    $activitiesList = @()
+    if ($PSBoundParameters.ContainsKey('Activities')) {
+        $activitiesList = @($Activities | Where-Object { $null -ne $_ })
+        $latestActivity = @(
+            $activitiesList |
+                Where-Object { (Get-ObjectValue -Object $_ -Name 'occurredAt' -Default '') } |
+                Sort-Object @{ Expression = { Get-DateSortValue (Get-ObjectValue -Object $_ -Name 'occurredAt' -Default '') }; Descending = $true }
+        ) | Select-Object -First 1
+        if ($latestActivity) {
+            $Company.lastContactedAt = Get-ObjectValue -Object $latestActivity -Name 'occurredAt' -Default $Company.lastContactedAt
+            $latestStage = [string](Get-ObjectValue -Object $latestActivity -Name 'pipelineStage' -Default '')
+            if ($latestStage) {
+                $Company.outreachStatus = $latestStage
+            }
+        }
+        foreach ($activity in @($activitiesList)) {
+            if ($null -eq $activity) { continue }
+            [void](Set-ObjectValue -Object $activity -Name 'accountId' -Value ([string]$Company.id))
+        }
+    }
+
     $daysSinceContact = $null
     $lastContact = [DateTime]::MinValue
     if ($Company.lastContactedAt -and [DateTime]::TryParse([string]$Company.lastContactedAt, [ref]$lastContact)) {
@@ -1439,7 +2103,25 @@ function Update-CompanyProjection {
     }
     $Company.daysSinceContact = $daysSinceContact
     $Company.staleFlag = if ($null -ne $daysSinceContact -and $daysSinceContact -ge 14) { 'STALE' } else { '' }
-    $Company.followUpScore = Get-FollowUpBonus -Status $Company.status -NextActionAt $Company.nextActionAt -LastContactedAt $Company.lastContactedAt
+    $Company.followUpScore = Get-FollowUpBonus -Status $Company.status -NextActionAt ([string](Get-ObjectValue -Object $Company -Name 'nextActionAt' -Default '')) -LastContactedAt ([string](Get-ObjectValue -Object $Company -Name 'lastContactedAt' -Default ''))
+    $targetMetrics = Get-CompanyTargetScoreMetrics -Company $Company -Jobs $(if ($PSBoundParameters.ContainsKey('Jobs')) { $jobList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now
+    $Company.targetScore = [int](Convert-ToNumber $targetMetrics.targetScore)
+    $Company.normalizedTargetScore = [int](Convert-ToNumber $targetMetrics.normalizedTargetScore)
+    $Company.jobsLast30Days = [int](Convert-ToNumber $targetMetrics.jobsLast30Days)
+    $Company.jobsLast90Days = [int](Convert-ToNumber $targetMetrics.jobsLast90Days)
+    $Company.avgRoleSeniorityScore = [double](Convert-ToNumber $targetMetrics.avgRoleSeniorityScore)
+    $Company.hiringSpikeRatio = [double](Convert-ToNumber $targetMetrics.hiringSpikeRatio)
+    $Company.externalRecruiterLikelihoodScore = [double](Convert-ToNumber $targetMetrics.externalRecruiterLikelihoodScore)
+    $Company.companyGrowthSignalScore = [double](Convert-ToNumber $targetMetrics.companyGrowthSignalScore)
+    $Company.companyGrowthSignalSummary = [string](Get-ObjectValue -Object $targetMetrics -Name 'companyGrowthSignalSummary' -Default '')
+    $Company.engagementScore = [double](Convert-ToNumber $targetMetrics.engagementScore)
+    $Company.engagementSummary = [string](Get-ObjectValue -Object $targetMetrics -Name 'engagementSummary' -Default '')
+    $Company.hiringVelocity = [double](Convert-ToNumber $targetMetrics.hiringVelocity)
+    $Company.scoreBreakdown = if ($targetMetrics.scoreBreakdown) { $targetMetrics.scoreBreakdown } else { [ordered]@{} }
+    $Company.targetScoreExplanation = if ($targetMetrics.targetScoreExplanation) { $targetMetrics.targetScoreExplanation } else { [ordered]@{} }
+    if (-not $Company.priorityTier) {
+        $Company.priorityTier = Get-PriorityTierFromScore -TargetScore $Company.targetScore
+    }
     $Company.networkStrength = Get-NetworkStrength -Connections $Company.connectionCount -SeniorContacts $Company.seniorContactCount
     $Company.hiringStatus = Get-HiringStatus -JobCount $Company.jobCount -LastJobPostedAt $Company.lastJobPostedAt
     $departmentBonus = if ($Company.departmentConcentration -ge 0.6 -and $Company.departmentFocusCount -ge 3) { 14 } elseif ($Company.departmentConcentration -ge 0.4 -and $Company.departmentFocusCount -ge 2) { 8 } else { 0 }
@@ -1458,16 +2140,6 @@ function Update-CompanyProjection {
         (Get-ManualPriorityBonus -Priority $Company.priority) -
         $stalePenalty
     )
-    $Company.scoreBreakdown = [ordered]@{
-        openRoles = $Company.openRoleCount * 3
-        newRoles = $Company.newRoleCount7d * 8
-        network = [int][math]::Round(($Company.connectionCount * 1.5) + ($Company.seniorContactCount * 6) + ($Company.talentContactCount * 5))
-        departmentFocus = $departmentBonus
-        hiringSpike = [int][math]::Round($Company.hiringSpikeScore)
-        followUp = $Company.followUpScore
-        manualPriority = Get-ManualPriorityBonus -Priority $Company.priority
-        stalePenalty = (-1 * $stalePenalty)
-    }
     $Company.recommendedAction = Get-RecommendationAction -Company $Company
     $Company.outreachDraft = Get-OutreachDraft -Company $Company
     $Company.updatedAt = $now.ToString('o')
@@ -1480,9 +2152,9 @@ function Sort-Companies {
 
     return @(
         $Companies | Sort-Object @(
-            @{ Expression = { [double]$_.dailyScore }; Descending = $true },
-            @{ Expression = { [double]$_.jobCount }; Descending = $true },
-            @{ Expression = { [double]$_.connectionCount }; Descending = $true },
+            @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true },
+            @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true },
+            @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true },
             @{ Expression = { [string]$_.displayName }; Descending = $false }
         )
     )
@@ -1519,7 +2191,7 @@ function Update-DerivedData {
     }
 
     $jobGroups = @{}
-    foreach ($job in @($State.jobs)) {
+    foreach ($job in @($State.jobs | Where-Object { $null -ne $_ })) {
         $companyKey = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
         if (-not $companyKey) { continue }
         $job.normalizedCompanyName = $companyKey
@@ -1530,7 +2202,7 @@ function Update-DerivedData {
     }
 
     $configGroups = @{}
-    foreach ($config in @($State.boardConfigs)) {
+    foreach ($config in @($State.boardConfigs | Where-Object { $null -ne $_ })) {
         $companyKey = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
         if (-not $companyKey) { continue }
         $config.normalizedCompanyName = $companyKey
@@ -1541,7 +2213,7 @@ function Update-DerivedData {
     }
 
     $activityGroups = @{}
-    foreach ($activity in @($State.activities)) {
+    foreach ($activity in @($State.activities | Where-Object { $null -ne $_ })) {
         $companyKey = Get-CanonicalCompanyKey $activity.normalizedCompanyName
         if (-not $companyKey) { continue }
         $activity.normalizedCompanyName = $companyKey
@@ -1556,6 +2228,7 @@ function Update-DerivedData {
     foreach ($key in $contactGroups.Keys) { [void]$allCompanyKeys.Add($key) }
     foreach ($key in $jobGroups.Keys) { [void]$allCompanyKeys.Add($key) }
     foreach ($key in $configGroups.Keys) { [void]$allCompanyKeys.Add($key) }
+    foreach ($key in $activityGroups.Keys) { [void]$allCompanyKeys.Add($key) }
 
     $derivedCompanies = New-Object System.Collections.ArrayList
     $now = Get-Date
@@ -1587,150 +2260,32 @@ function Update-DerivedData {
             continue
         }
 
-        $connectionCount = @($contacts).Count
-        $seniorContactCount = (@($contacts | Where-Object { Test-Truthy $_.seniorFlag })).Count
-        $talentContactCount = (@($contacts | Where-Object { Test-Truthy $_.talentFlag })).Count
-        $buyerTitleCount = (@($contacts | Where-Object { Test-Truthy $_.buyerFlag })).Count
-        $targetScore = ($connectionCount * 2) + ($seniorContactCount * 10) + ($talentContactCount * 8) + ($buyerTitleCount * 15)
-
-        foreach ($contact in $contacts) {
-            $contact.companyOverlapCount = $connectionCount
-            $contact.priorityScore = Get-ContactPriorityScore -Contact $contact -CompanyContacts $connectionCount
-            $contact.relevanceScore = $contact.priorityScore
+        $company = if ($existing) {
+            $existing
+        } else {
+            New-CompanyProjection -WorkspaceId $State.workspace.id -NormalizedName $companyKey -DisplayName $displayName
         }
+        $company.workspaceId = $State.workspace.id
+        $company.normalizedName = $companyKey
+        $company.displayName = $displayName
+        $company = Update-CompanyProjection -Company $company -Contacts $contacts -Jobs $jobs -Configs $configs -Activities $activities
 
-        $activeJobs = @($jobs | Where-Object { $_.active -ne $false })
-        $jobCount = @($activeJobs).Count
-        $newRoleCount7d = @($activeJobs | Where-Object { $_.postedAt -and (Get-DateSortValue $_.postedAt) -ge $now.AddDays(-7) }).Count
-        $staleRoleCount30d = @($activeJobs | Where-Object { $_.postedAt -and (Get-DateSortValue $_.postedAt) -lt $now.AddDays(-30) }).Count
-        $departmentInsights = Get-DepartmentInsights -Jobs $activeJobs
-        $latestJobPostedAt = $null
-        if (@($activeJobs).Count -gt 0) {
-            $latestJobPostedAt = ($activeJobs |
-                Where-Object { $_.postedAt } |
-                Sort-Object @{ Expression = { Get-DateSortValue $_.postedAt }; Descending = $true } |
-                Select-Object -First 1).postedAt
+        foreach ($contact in @($contacts)) {
+            if ($null -eq $contact) { continue }
+            [void](Set-ObjectValue -Object $contact -Name 'accountId' -Value $company.id)
         }
-
-        $latestActivity = $activities |
-            Where-Object { $_.occurredAt } |
-            Sort-Object @{ Expression = { Get-DateSortValue $_.occurredAt }; Descending = $true } |
-            Select-Object -First 1
-
-        $lastContactedAt = $null
-        $pipelineStage = ''
-        if ($latestActivity) {
-            $lastContactedAt = $latestActivity.occurredAt
-            if ($latestActivity.pipelineStage) {
-                $pipelineStage = $latestActivity.pipelineStage
-            }
+        foreach ($job in @($jobs)) {
+            if ($null -eq $job) { continue }
+            [void](Set-ObjectValue -Object $job -Name 'accountId' -Value $company.id)
         }
-
-        $daysSinceContact = $null
-        if ($lastContactedAt) {
-            $daysSinceContact = [math]::Floor(($now - (Get-DateSortValue $lastContactedAt)).TotalDays)
+        foreach ($config in @($configs)) {
+            if ($null -eq $config) { continue }
+            [void](Set-ObjectValue -Object $config -Name 'accountId' -Value $company.id)
         }
-
-        $manualPriority = if ($existing -and $existing.priority) { Normalize-AccountPriority $existing.priority } else { 'medium' }
-        $priorityTier = if ($existing -and $existing.priorityTier) { $existing.priorityTier } else { Get-PriorityTierFromScore -TargetScore $targetScore }
-        $departmentBonus = if ($departmentInsights.concentration -ge 0.6 -and $departmentInsights.topDepartmentCount -ge 3) { 14 } elseif ($departmentInsights.concentration -ge 0.4 -and $departmentInsights.topDepartmentCount -ge 2) { 8 } else { 0 }
-        $hiringSpikeScore = [math]::Round([math]::Min(30, ($newRoleCount7d * 4) + ($departmentInsights.topDepartmentCount * 1.5)))
-        $followUpScore = Get-FollowUpBonus -Status $(if ($existing) { $existing.status } else { '' }) -NextActionAt $(if ($existing) { $existing.nextActionAt } else { '' }) -LastContactedAt $lastContactedAt
-        $stalePenalty = $staleRoleCount30d * 2
-        $dailyScore = [math]::Round(
-            ($jobCount * 3) +
-            ($newRoleCount7d * 8) +
-            ($connectionCount * 1.5) +
-            ($seniorContactCount * 6) +
-            ($talentContactCount * 5) +
-            $departmentBonus +
-            $hiringSpikeScore +
-            $followUpScore +
-            (Get-RecencyBonus -LastJobPostedAt $latestJobPostedAt) +
-            (Get-PriorityTierBonus -PriorityTier $priorityTier) +
-            (Get-ManualPriorityBonus -Priority $manualPriority) -
-            $stalePenalty
-        )
-
-        $topContact = $contacts |
-            Sort-Object @{ Expression = { [double]$_.priorityScore }; Descending = $true } |
-            Select-Object -First 1
-
-        $companyId = if ($existing -and $existing.id) { $existing.id } else { New-DeterministicId -Prefix 'acct' -Seed $companyKey }
-        $careersConfig = $configs | Where-Object { (Test-ObjectHasKey -Object $_ -Name 'careersUrl') -and $_.careersUrl } | Select-Object -First 1
-        $domainConfig = $configs | Where-Object { (Test-ObjectHasKey -Object $_ -Name 'domain') -and $_.domain } | Select-Object -First 1
-        $careersUrl = if ($careersConfig) { $careersConfig.careersUrl } else { '' }
-        $atsTypes = @(
-            @($configs | ForEach-Object { if (Test-ObjectHasKey -Object $_ -Name 'atsType') { if ($_['atsType']) { $_['atsType'] } } }) +
-            @($jobs | ForEach-Object { if (Test-ObjectHasKey -Object $_ -Name 'atsType') { if ($_['atsType']) { $_['atsType'] } } })
-        ) | Where-Object { $_ } | Sort-Object -Unique
-        $locations = @($jobs | ForEach-Object { if (Test-ObjectHasKey -Object $_ -Name 'location') { if ($_['location']) { $_['location'] } } } | Sort-Object -Unique | Select-Object -First 3)
-
-        $company = [ordered]@{
-            id = $companyId
-            workspaceId = $State.workspace.id
-            normalizedName = $companyKey
-            displayName = $displayName
-            domain = if ($existing -and $existing.domain) { $existing.domain } elseif ($domainConfig) { $domainConfig.domain } else { '' }
-            owner = if ($existing -and $existing.owner) { $existing.owner } else { '' }
-            priority = $manualPriority
-            industry = if ($existing -and $existing.industry) { $existing.industry } else { '' }
-            location = if ($existing -and $existing.location) { $existing.location } elseif (@($locations).Count -gt 0) { ($locations -join ', ') } else { '' }
-            status = Normalize-AccountStatus $(if ($existing -and $existing.status) { $existing.status } else { 'new' })
-            outreachStatus = if ($existing -and $existing.outreachStatus) { $existing.outreachStatus } elseif ($pipelineStage) { $pipelineStage } else { 'not_started' }
-            priorityTier = $priorityTier
-            notes = if ($existing -and $existing.notes) { $existing.notes } else { '' }
-            tags = if ($existing -and $existing.tags) { @($existing.tags) } else { @() }
-            nextAction = if ($existing -and $existing.nextAction) { $existing.nextAction } else { '' }
-            nextActionAt = if ($existing -and $existing.nextActionAt) { $existing.nextActionAt } else { $null }
-            connectionCount = $connectionCount
-            seniorContactCount = $seniorContactCount
-            talentContactCount = $talentContactCount
-            buyerTitleCount = $buyerTitleCount
-            targetScore = $targetScore
-            dailyScore = $dailyScore
-            openRoleCount = $jobCount
-            newRoleCount7d = $newRoleCount7d
-            staleRoleCount30d = $staleRoleCount30d
-            departmentFocus = [string]$departmentInsights.topDepartment
-            departmentFocusCount = [int]$departmentInsights.topDepartmentCount
-            departmentConcentration = [double]$departmentInsights.concentration
-            hiringSpikeScore = [double]$hiringSpikeScore
-            followUpScore = [double]$followUpScore
-            scoreBreakdown = [ordered]@{
-                openRoles = ($jobCount * 3)
-                newRoles = ($newRoleCount7d * 8)
-                network = [int][math]::Round(($connectionCount * 1.5) + ($seniorContactCount * 6) + ($talentContactCount * 5))
-                departmentFocus = $departmentBonus
-                hiringSpike = $hiringSpikeScore
-                followUp = $followUpScore
-                manualPriority = Get-ManualPriorityBonus -Priority $manualPriority
-                stalePenalty = (-1 * $stalePenalty)
-            }
-            networkStrength = Get-NetworkStrength -Connections $connectionCount -SeniorContacts $seniorContactCount
-            jobCount = $jobCount
-            lastJobPostedAt = $latestJobPostedAt
-            hiringStatus = Get-HiringStatus -JobCount $jobCount -LastJobPostedAt $latestJobPostedAt
-            lastContactedAt = $lastContactedAt
-            daysSinceContact = $daysSinceContact
-            staleFlag = if ($daysSinceContact -ge 14) { 'STALE' } else { '' }
-            careersUrl = $careersUrl
-            atsTypes = $atsTypes
-            topContactName = if ($topContact) { $topContact.fullName } else { '' }
-            topContactTitle = if ($topContact) { $topContact.title } else { '' }
-            recommendedAction = ''
-            outreachDraft = ''
-            createdAt = if ($existing -and $existing.createdAt) { $existing.createdAt } else { (Get-Date).ToString('o') }
-            updatedAt = (Get-Date).ToString('o')
+        foreach ($activity in @($activities)) {
+            if ($null -eq $activity) { continue }
+            [void](Set-ObjectValue -Object $activity -Name 'accountId' -Value $company.id)
         }
-
-        $company.recommendedAction = Get-RecommendationAction -Company $company
-        $company.outreachDraft = Get-OutreachDraft -Company $company
-
-        foreach ($contact in $contacts) { $contact.accountId = $companyId }
-        foreach ($job in $jobs) { $job.accountId = $companyId }
-        foreach ($config in $configs) { $config.accountId = $companyId }
-        foreach ($activity in $activities) { $activity.accountId = $companyId }
 
         [void]$derivedCompanies.Add($company)
 
@@ -1743,6 +2298,70 @@ function Update-DerivedData {
     $State.companies = Sort-Companies -Companies @($derivedCompanies)
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Recomputing company scores' -Processed $totalCompanies -Total $totalCompanies -StartedAt $startedAt -Message 'Finished derived scoring'
     return $State
+}
+
+function Repair-AppTargetScoreRollout {
+    param(
+        [int]$Limit = 250,
+        [switch]$Persist
+    )
+
+    $accountIds = @(Get-AppTargetScoreBackfillAccountIds -Limit $Limit)
+    if ($accountIds.Count -eq 0) {
+        return [ordered]@{
+            needed = $false
+            accountCount = 0
+            deriveMs = 0
+            persistMs = 0
+        }
+    }
+
+    $scopeLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $state = Get-AppScopedStateForAccounts -AccountIds $accountIds
+    $companyKeySet = @{}
+    foreach ($company in @($state.companies)) {
+        $key = [string](Get-ObjectValue -Object $company -Name 'normalizedName' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($key)) {
+            $companyKeySet[$key] = $true
+        }
+    }
+    $activities = @(Read-AppSegment -Segment 'Activities' | Where-Object {
+            $companyKey = [string](Get-ObjectValue -Object $_ -Name 'normalizedCompanyName' -Default '')
+            $companyKey -and $companyKeySet.ContainsKey($companyKey)
+        })
+    $state.activities = $activities
+    $scopeLoadWatch.Stop()
+
+    $deriveWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $state = Update-DerivedData -State $state
+    $deriveWatch.Stop()
+
+    $persistMs = 0
+    if ($Persist) {
+        $persistWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Sync-AppStateSegmentsPartial -State $state -Segments @('Companies') | Out-Null
+        $persistWatch.Stop()
+        $persistMs = [int]$persistWatch.Elapsed.TotalMilliseconds
+    }
+
+    $maxTargetScore = 0
+    if (@($state.companies).Count -gt 0) {
+        foreach ($company in @($state.companies)) {
+            $score = [int](Convert-ToNumber (Get-ObjectValue -Object $company -Name 'targetScore' -Default 0))
+            if ($score -gt $maxTargetScore) {
+                $maxTargetScore = $score
+            }
+        }
+    }
+
+    return [ordered]@{
+        needed = $true
+        accountCount = @($state.companies).Count
+        scopeLoadMs = [int]$scopeLoadWatch.Elapsed.TotalMilliseconds
+        deriveMs = [int]$deriveWatch.Elapsed.TotalMilliseconds
+        persistMs = $persistMs
+        maxTargetScore = $maxTargetScore
+    }
 }
 
 function Get-TodayQueue {
@@ -1763,7 +2382,7 @@ function Get-TodayQueue {
                 (Convert-ToNumber $_.connectionCount) -ge $minConnections -and
                 (Convert-ToNumber $_.jobCount) -ge $minJobs
             } |
-            Sort-Object @{ Expression = { [double]$_.dailyScore }; Descending = $true } |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true } |
             Select-Object -First $maxCompanies
     )
 }
@@ -1833,7 +2452,7 @@ function Get-DashboardModel {
         $State.companies |
             Sort-Object @(
                 @{ Expression = { [double]$_.connectionCount }; Descending = $true },
-                @{ Expression = { [double]$_.dailyScore }; Descending = $true }
+                @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }
             ) |
             Select-Object -First 8 |
             ForEach-Object { Select-AccountSummary -Company $_ }
@@ -1841,14 +2460,14 @@ function Get-DashboardModel {
 
     $recommendedActions = @(
         $State.companies |
-            Sort-Object @{ Expression = { [double]$_.dailyScore }; Descending = $true } |
+            Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true } |
             Select-Object -First 8 |
             ForEach-Object {
                 [ordered]@{
                     accountId = $_.id
                     company = $_.displayName
                     text = $_.recommendedAction
-                    score = [int](Convert-ToNumber $_.dailyScore)
+                    score = [int](Convert-ToNumber $_.targetScore)
                     outreachStatus = $_.outreachStatus
                 }
             }
@@ -1883,7 +2502,7 @@ function Get-DashboardModel {
             } |
             Sort-Object @(
                 @{ Expression = { [double]$_.followUpScore }; Descending = $true },
-                @{ Expression = { [double]$_.dailyScore }; Descending = $true }
+                @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }
             ) |
             Select-Object -First 8 |
             ForEach-Object { Select-AccountSummary -Company $_ }
@@ -2066,16 +2685,16 @@ function Find-Accounts {
 
     $sorted = switch ($sortByQuery) {
         'new_roles' {
-            @($items | Sort-Object @{ Expression = { [double]$_.newRoleCount7d }; Descending = $true }, @{ Expression = { [double]$_.dailyScore }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
+            @($items | Sort-Object @{ Expression = { [double]$_.newRoleCount7d }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
         }
         'connections' {
-            @($items | Sort-Object @{ Expression = { [double]$_.connectionCount }; Descending = $true }, @{ Expression = { [double]$_.dailyScore }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
+            @($items | Sort-Object @{ Expression = { [double]$_.connectionCount }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
         }
         'follow_up' {
-            @($items | Sort-Object @{ Expression = { [double]$_.followUpScore }; Descending = $true }, @{ Expression = { [double]$_.dailyScore }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
+            @($items | Sort-Object @{ Expression = { [double]$_.followUpScore }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
         }
         'recent_jobs' {
-            @($items | Sort-Object @{ Expression = { Get-DateSortValue $_.lastJobPostedAt }; Descending = $true }, @{ Expression = { [double]$_.dailyScore }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
+            @($items | Sort-Object @{ Expression = { Get-DateSortValue $_.lastJobPostedAt }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [string]$_.displayName }; Descending = $false })
         }
         default {
             @($items)
@@ -2232,7 +2851,7 @@ function Find-SearchResults {
                     (Normalize-TextKey $_.displayName) -like "*$needle*" -or
                     (Normalize-TextKey $_.notes) -like "*$needle*"
                 } |
-                Sort-Object @{ Expression = { [double]$_.dailyScore }; Descending = $true } |
+                Sort-Object @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.hiringVelocity) }; Descending = $true }, @{ Expression = { [double](Convert-ToNumber $_.engagementScore) }; Descending = $true } |
                 Select-Object -First 5 |
                 ForEach-Object { Select-AccountSummary -Company $_ }
         )
@@ -2467,7 +3086,7 @@ function Add-Activity {
     }
 
     # Ensure optional keys exist before access (strict-mode safe)
-    foreach ($optKey in 'contactId', 'type', 'summary', 'notes', 'pipelineStage') {
+    foreach ($optKey in 'contactId', 'type', 'summary', 'notes', 'pipelineStage', 'metadata') {
         if ($Payload -is [System.Collections.IDictionary] -and -not $Payload.Contains($optKey)) {
             $Payload[$optKey] = $null
         }
@@ -2484,7 +3103,7 @@ function Add-Activity {
         notes = if ($Payload.notes) { [string]$Payload.notes } else { '' }
         pipelineStage = if ($Payload.pipelineStage) { [string]$Payload.pipelineStage } else { '' }
         occurredAt = (Get-Date).ToString('o')
-        metadata = [ordered]@{}
+        metadata = if ($Payload.metadata) { ConvertTo-PlainObject -InputObject $Payload.metadata } else { [ordered]@{} }
     }
 
     $State.activities = @(@($State.activities) + @($activity))
@@ -2507,7 +3126,11 @@ function Add-Activity {
         if ($activity.pipelineStage) {
             $relatedAccount['outreachStatus'] = $activity.pipelineStage
         }
-        $relatedAccount = Update-CompanyProjection -Company $relatedAccount
+        $relatedActivities = @($State.activities | Where-Object {
+                ([string](Get-ObjectValue -Object $_ -Name 'accountId' -Default '')) -eq [string]$relatedAccount.id -or
+                ([string](Get-ObjectValue -Object $_ -Name 'normalizedCompanyName' -Default '')) -eq [string]$normalizedCompanyName
+            })
+        $relatedAccount = Update-CompanyProjection -Company $relatedAccount -Activities $relatedActivities
         $State.companies = Sort-Companies -Companies @($State.companies)
     }
 

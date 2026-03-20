@@ -486,11 +486,24 @@ function hydrateAdminRuntimePanels(runtime) {
   }
 
   summaryTarget.innerHTML = `
-    <div class="status-matrix">
-      <div class="status-item"><span class="small muted">Server</span><strong>${summary.warmed ? 'Warm' : 'Starting'}</strong></div>
-      <div class="status-item"><span class="small muted">Worker</span><strong>${summary.workerRunning ? 'Online' : 'Idle'}</strong></div>
-      <div class="status-item"><span class="small muted">Running jobs</span><strong>${formatNumber(summary.runningJobs || 0)}</strong></div>
-      <div class="status-item"><span class="small muted">Queued jobs</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong></div>
+    <div class="runtime-status-shell">
+      <div class="runtime-status-head">
+        <div>
+          <p class="eyebrow">Live runtime</p>
+          <h4>${summary.warmed ? 'Server warm' : 'Server starting'}</h4>
+          <p class="small muted">${summary.workerRunning ? `Worker PID ${summary.workerPid || 'unknown'} is draining the queue.` : 'No worker is active right now.'}</p>
+        </div>
+        <div class="runtime-banner-flags">
+          ${renderStatusPill(summary.warmed ? 'Warm' : 'Starting', summary.warmed ? 'success' : 'warning')}
+          ${renderStatusPill(summary.workerRunning ? 'Online' : 'Idle', summary.workerRunning ? 'hot' : 'neutral')}
+        </div>
+      </div>
+      <div class="status-matrix status-matrix--premium">
+        <div class="status-item"><span class="small muted">Server</span><strong>${summary.warmed ? 'Warm' : 'Starting'}</strong><span class="small muted">${summary.serverStartedAt ? formatDate(summary.serverStartedAt) : 'Just now'}</span></div>
+        <div class="status-item"><span class="small muted">Worker</span><strong>${summary.workerRunning ? 'Online' : 'Idle'}</strong><span class="small muted">${summary.workerPid ? `PID ${summary.workerPid}` : 'No active process'}</span></div>
+        <div class="status-item"><span class="small muted">Running jobs</span><strong>${formatNumber(summary.runningJobs || 0)}</strong><span class="small muted">Currently executing</span></div>
+        <div class="status-item"><span class="small muted">Queued jobs</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong><span class="small muted">${summary.queuedJobs ? 'Waiting for worker time' : 'Queue clear'}</span></div>
+      </div>
     </div>
   `;
 
@@ -637,32 +650,63 @@ async function renderRoute() {
   await renderDashboardView();
 }
 async function renderDashboardView() {
-  renderLoadingState('Dashboard', 'Building today’s hiring radar...');
+  renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
   let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {} };
   try { extended = await api('/api/dashboard/extended'); } catch(e) { /* non-critical */ }
   const topCompany = dashboard.todayQueue[0];
   const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
+  const coverageEvents = (extended.activityFeed || []).length + (dashboard.recentlyDiscoveredBoards || []).length;
+  const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
+  const dashboardStory = [
+    {
+      label: 'Priority lane',
+      value: topCompany ? `${formatNumber(getTargetScore(topCompany))}/100` : 'No company yet',
+      description: topCompany ? (getTargetScoreExplanation(topCompany) || topCompany.displayName) : 'Relax filters or run discovery to populate the lead lane.',
+      tone: 'accent',
+    },
+    {
+      label: 'Market motion',
+      value: `${formatNumber(dashboard.summary.newJobsLast24h || 0)} fresh jobs`,
+      description: `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards and ${formatNumber(coverageEvents)} visible events keep the feed current.`,
+      tone: 'success',
+    },
+    {
+      label: 'Attention needed',
+      value: `${formatNumber(queuePressure)} accounts`,
+      description: queuePressure ? 'These accounts are overdue, stale, or ready for the next touch.' : 'No follow-up pressure is active right now.',
+      tone: 'warning',
+    },
+  ];
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--dashboard">
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Daily operating view</p>
-          <h3>${topCompany ? escapeHtml(topCompany.displayName) : 'No companies match today\'s thresholds yet'}</h3>
-          <p class="subtitle">${topCompany ? escapeHtml(topCompany.recommendedAction) : 'Run ATS discovery, import fresh jobs, or relax the filters to generate a new priority lane.'}</p>
+          <h3>${topCompany ? escapeHtml(topCompany.displayName) : 'No companies match today\'s target-score thresholds yet'}</h3>
+          <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
           <div class="button-row">
             ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">Open best account</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
             <a class="ghost-button" href="#/jobs">Review fresh jobs</a>
             <a class="ghost-button" href="#/accounts">Open accounts</a>
           </div>
+          <div class="hero-signal-strip">
+            ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
+            ${renderSignalChip('Fresh jobs', formatNumber(dashboard.summary.newJobsLast24h || 0), 'success')}
+            ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
+            ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
+          </div>
+          <div class="story-strip">
+            ${dashboardStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
+          </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Daily score', topCompany ? formatNumber(topCompany.dailyScore) : '0')}
+          ${renderMetricTile('Target score', topCompany ? formatNumber(getTargetScore(topCompany)) : '0')}
           ${renderMetricTile('Open roles', topCompany ? formatNumber(topCompany.openRoleCount || topCompany.jobCount) : '0')}
-          ${renderMetricTile('New roles 7d', topCompany ? formatNumber(topCompany.newRoleCount7d || 0) : '0')}
-          ${renderMetricTile('Network', topCompany ? renderInlineBadge(topCompany.networkStrength) : 'Cold')}
+          ${renderMetricTile('Hiring velocity', topCompany ? formatNumber(topCompany.hiringVelocity || 0) : '0')}
+          ${renderMetricTile('Engagement', topCompany ? formatNumber(topCompany.engagementScore || 0) : '0')}
         </div>
       </div>
       ${topCompany ? `
@@ -670,13 +714,28 @@ async function renderDashboardView() {
           <div class="panel-header">
             <div>
               <h3>Why this account is leading</h3>
-              <p class="muted small">Hiring heat, relationship strength, and follow-up timing all point here first.</p>
+              <p class="muted small">Target score, hiring velocity, and engagement all point here first.</p>
             </div>
             ${renderStatusPill(topCompany.hiringStatus || 'No active jobs', topCompany.jobCount > 0 ? 'success' : 'neutral')}
           </div>
-          <div class="empty-state empty-state--compact">${escapeHtml(topCompany.outreachDraft)}</div>
+          <div class="spotlight-copy">
+            <div class="spotlight-quote">${escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.outreachDraft || 'Open the account for a deeper view.')}</div>
+            <div class="spotlight-metrics">
+              ${renderSignalChip('Target score', `${formatNumber(getTargetScore(topCompany))}/100`, 'accent')}
+              ${renderSignalChip('Hiring velocity', formatNumber(topCompany.hiringVelocity || 0), 'success')}
+              ${renderSignalChip('Engagement', formatNumber(topCompany.engagementScore || 0), 'neutral')}
+              ${renderSignalChip('Next action', topCompany.nextAction || 'Review account', 'accent')}
+              ${renderSignalChip('Open roles', formatNumber(topCompany.openRoleCount || topCompany.jobCount), 'success')}
+            </div>
+          </div>
         </div>
       ` : ''}
+    </section>
+
+    <section class="trust-strip">
+      ${renderTrustCard('Launch in 3 moves', 'Import, resolve, work', 'Seed accounts, run ATS discovery, then work the ranked queue.', 'Workbook, CSV, or manual entry', 'accent')}
+      ${renderTrustCard('Coverage snapshot', `${formatNumber(dashboard.summary.accountCount || 0)} tracked accounts`, 'Contacts, configs, and imported jobs stay visible in one model.', `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards found`, 'success')}
+      ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
     </section>
 
     <section class="metrics-grid">
@@ -689,16 +748,16 @@ async function renderDashboardView() {
     ${extended.playbook.length ? `
     <section class="detail-card playbook-section">
       <div class="panel-header">
-        <div><h3>Today's playbook</h3><p class="muted small">Your top 5 accounts to work right now, ranked by daily score.</p></div>
+        <div><h3>Today's playbook</h3><p class="muted small">Your top 5 accounts to work right now, ranked by target score.</p></div>
       </div>
       <div class="playbook-grid">
         ${extended.playbook.map((item) => `
           <div class="playbook-card ${item.isOverdue ? 'playbook-card--overdue' : ''} ${item.staleFlag === 'STALE' ? 'playbook-card--stale' : ''}">
             <div class="inline-header">
               <strong>${escapeHtml(item.displayName)}</strong>
-              <span class="small muted">${formatNumber(item.dailyScore)} pts</span>
+              <span class="small muted">${formatNumber(getTargetScore(item))} / 100</span>
             </div>
-            <p class="small">${escapeHtml(item.recommendedAction || 'Review account')}</p>
+            <p class="small">${escapeHtml(getTargetScoreExplanation(item) || item.recommendedAction || 'Review account')}</p>
             <div class="small muted">${item.topContactName ? 'Contact: ' + escapeHtml(item.topContactName) : ''}${item.openRoleCount ? ' \u00b7 ' + formatNumber(item.openRoleCount) + ' roles' : ''}</div>
             ${item.isOverdue ? '<span class="status-pill danger">Overdue</span>' : ''}
             ${item.staleFlag === 'STALE' ? '<span class="status-pill warning">Stale</span>' : ''}
@@ -922,7 +981,8 @@ async function renderAccountDetail(accountId) {
   const detail = await api(`/api/accounts/${accountId}`);
   appState.accountDetail = detail;
   setViewTitle(detail.account.displayName);
-  const scoreBreakdown = detail.account.scoreBreakdown || {};
+  const targetScore = getTargetScore(detail.account);
+  const targetScoreExplanation = getTargetScoreExplanation(detail.account) || detail.account.recommendedAction || 'No target-score explanation available yet.';
 
   // Fetch hiring velocity in background (non-blocking)
   let hiringVelocity = [];
@@ -939,18 +999,18 @@ async function renderAccountDetail(accountId) {
         <div>
           <p class="eyebrow">Account detail</p>
           <h3>${escapeHtml(detail.account.displayName)}</h3>
-          <p class="subtitle">${escapeHtml(detail.account.recommendedAction)}</p>
+          <p class="subtitle">${escapeHtml(targetScoreExplanation)}</p>
           <div class="button-row">
             ${detail.account.careersUrl ? `<a class="ghost-button" href="${escapeAttr(detail.account.careersUrl)}" target="_blank" rel="noreferrer">Open careers page</a>` : ''}
             ${detail.jobs[0]?.jobUrl || detail.jobs[0]?.url ? `<a class="ghost-button" href="${escapeAttr(detail.jobs[0].jobUrl || detail.jobs[0].url)}" target="_blank" rel="noreferrer">Open newest job</a>` : ''}
           </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Daily score', formatNumber(detail.account.dailyScore))}
-          ${renderMetricTile('Open roles', formatNumber(detail.account.openRoleCount || detail.account.jobCount))}
-          ${renderMetricTile('New roles 7d', formatNumber(detail.account.newRoleCount7d || 0))}
-          ${renderMetricTile('Connections', formatNumber(detail.account.connectionCount))}
-          ${renderMetricTile('Top department', detail.account.departmentFocus ? escapeHtml(detail.account.departmentFocus) : 'Unknown')}
+          ${renderMetricTile('Target score', formatNumber(targetScore))}
+          ${renderMetricTile('Hiring velocity', formatNumber(detail.account.hiringVelocity || 0))}
+          ${renderMetricTile('Engagement', formatNumber(detail.account.engagementScore || 0))}
+          ${renderMetricTile('Jobs 30d', formatNumber(detail.account.jobsLast30Days || 0))}
+          ${renderMetricTile('Jobs 90d', formatNumber(detail.account.jobsLast90Days || 0))}
         </div>
       </div>
       <div class="kpi-ribbon">
@@ -965,10 +1025,10 @@ async function renderAccountDetail(accountId) {
     </section>
 
     <section class="metrics-grid metrics-grid--compact">
-      ${renderMetricCard('Contacts in graph', detail.stats?.contactCount || detail.account.connectionCount || 0, 'Imported LinkedIn overlap tied to this company')}
-      ${renderMetricCard('Tracked ATS configs', detail.stats?.configCount || detail.configs.length, 'Discovery results and manual board records')}
-      ${renderMetricCard('Follow-up pressure', detail.account.followUpScore || 0, 'Higher means this account needs a next move')}
-      ${renderMetricCard('Stale roles 30d+', detail.account.staleRoleCount30d || 0, 'Older roles can signal harder-to-fill demand')}
+      ${renderMetricCard('Hiring spike', detail.account.hiringSpikeRatio || 0, `${formatNumber(detail.account.jobsLast30Days || 0)} jobs in 30d`)}
+      ${renderMetricCard('External recruiter likelihood', detail.account.externalRecruiterLikelihoodScore || 0, 'Higher suggests more outsourced hiring motion')}
+      ${renderMetricCard('Company growth signal', detail.account.companyGrowthSignalScore || 0, 'Momentum feeding the target score')}
+      ${renderMetricCard('Avg role seniority', detail.account.avgRoleSeniorityScore || 0, 'Typical level of the current openings')}
     </section>
 
     <section class="action-zone">
@@ -1055,12 +1115,13 @@ async function renderAccountDetail(accountId) {
 
       <div class="panel-stack">
         <div class="detail-card">
-          <div class="panel-header"><div><h3>Hiring radar</h3><p class="muted small">Score breakdown and hiring pattern.</p></div></div>
+          <div class="panel-header"><div><h3>Target score drivers</h3><p class="muted small">Why this company is ranked where it is.</p></div></div>
+          <div class="empty-state empty-state--compact" style="margin-bottom:12px;">${escapeHtml(targetScoreExplanation)}</div>
           <div class="kpi-ribbon">
+            ${renderMetricTile('Target score', formatNumber(targetScore))}
             ${renderMetricTile('Open roles', formatNumber(detail.account.openRoleCount || detail.account.jobCount))}
-            ${renderMetricTile('Roles older than 30d', formatNumber(detail.account.staleRoleCount30d || 0))}
-            ${renderMetricTile('Dept focus', detail.account.departmentFocus ? escapeHtml(detail.account.departmentFocus) : '\u2014')}
-            ${renderMetricTile('Follow-up score', formatNumber(detail.account.followUpScore || 0))}
+            ${renderMetricTile('Hiring velocity', formatNumber(detail.account.hiringVelocity || 0))}
+            ${renderMetricTile('Engagement', formatNumber(detail.account.engagementScore || 0))}
           </div>
           ${hiringVelocity.length ? `
           <div class="velocity-chart">
@@ -1076,7 +1137,11 @@ async function renderAccountDetail(accountId) {
             </div>
           </div>` : ''}
           <div class="timeline">
-            ${Object.entries(scoreBreakdown).map(([key, value]) => '<article class="timeline-item"><div class="inline-header"><strong>' + escapeHtml(humanize(key)) + '</strong><span class="small muted">' + formatNumber(value) + '</span></div></article>').join('') || '<div class="empty-state">No score breakdown available yet.</div>'}
+            ${[
+              ['Jobs 30d', detail.account.jobsLast30Days || 0, `${formatNumber(detail.account.jobsLast90Days || 0)} jobs / 90d`],
+              ['Hiring spike', detail.account.hiringSpikeRatio || 0, `External recruiter ${formatNumber(detail.account.externalRecruiterLikelihoodScore || 0)}`],
+              ['Growth signal', detail.account.companyGrowthSignalScore || 0, `Avg role seniority ${formatNumber(detail.account.avgRoleSeniorityScore || 0)}`],
+            ].map(([label, value, meta]) => '<article class="timeline-item"><div class="inline-header"><strong>' + escapeHtml(label) + '</strong><span class="small muted">' + formatNumber(value) + '</span></div><p class="small muted">' + escapeHtml(meta) + '</p></article>').join('')}
           </div>
         </div>
 
@@ -1205,6 +1270,27 @@ async function renderAdminView() {
   const enrichmentQueue = batch.enrichmentQueue;
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
+  const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
+  const adminStory = [
+    {
+      label: 'Coverage',
+      value: `${formatNumber(summary.coveragePercent || 0)}%`,
+      description: `${formatNumber(summary.resolvedCount || 0)} resolved boards out of ${formatNumber(summary.totalCompanies || 0)} tracked companies.`,
+      tone: 'success',
+    },
+    {
+      label: 'Review queue',
+      value: `${formatNumber(reviewQueueCount)} items`,
+      description: 'Medium-confidence results and unresolved companies stay visible for operator review.',
+      tone: 'warning',
+    },
+    {
+      label: 'Runtime pulse',
+      value: `${formatNumber(runtime.runningJobs || 0)} running`,
+      description: `${formatNumber(runtime.queuedJobs || 0)} queued jobs are waiting for the worker.`,
+      tone: 'accent',
+    },
+  ];
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -1213,6 +1299,15 @@ async function renderAdminView() {
           <p class="eyebrow">Pipeline operations</p>
           <h3>Admin and automation controls</h3>
           <p class="subtitle">Run discovery, import jobs, manage ATS resolution quality, and keep the outreach engine moving without falling back to the spreadsheet.</p>
+          <div class="hero-signal-strip">
+            ${renderSignalChip('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`, 'success')}
+            ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
+            ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
+            ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
+          </div>
+          <div class="story-strip">
+            ${adminStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
+          </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`)}
@@ -1222,6 +1317,24 @@ async function renderAdminView() {
           ${renderMetricTile('Jobs running', formatNumber(runtime.runningJobs || 0))}
         </div>
       </div>
+      <div class="runtime-banner">
+        <div class="runtime-banner-copy">
+          <p class="eyebrow">Live pulse</p>
+          <h4>${runtime.workerRunning ? 'Worker online and draining the queue' : 'Worker idle and waiting for new work'}</h4>
+          <p class="small muted">${runtime.workerRunning ? `Worker PID ${runtime.workerPid || 'unknown'} is handling ${formatNumber(runtime.runningJobs || 0)} running job${(runtime.runningJobs || 0) === 1 ? '' : 's'} and ${formatNumber(runtime.queuedJobs || 0)} queued job${(runtime.queuedJobs || 0) === 1 ? '' : 's'}.` : 'No job processor is active yet. Queue a task to wake it up.'}</p>
+        </div>
+        <div class="runtime-banner-flags">
+          ${renderStatusPill(runtime.warmed ? 'Server warm' : 'Server starting', runtime.warmed ? 'success' : 'warning')}
+          ${renderStatusPill(runtime.workerRunning ? 'Queue draining' : 'Queue idle', runtime.workerRunning ? 'hot' : 'neutral')}
+          ${renderStatusPill(runtime.runningJobs > 0 ? `${formatNumber(runtime.runningJobs)} active` : 'No active jobs', runtime.runningJobs > 0 ? 'warm' : 'neutral')}
+        </div>
+      </div>
+    </section>
+
+    <section class="trust-strip trust-strip--admin">
+      ${renderTrustCard('Operator guide', 'One control surface', 'Run discovery, import, and review coverage without falling back to the spreadsheet.', `${formatNumber(runtime.queuedJobs || 0)} jobs queued`, 'accent')}
+      ${renderTrustCard('Coverage report', `${formatNumber(summary.coveragePercent || 0)}% board coverage`, 'See how much of the tracked universe is resolved and where review is still needed.', `${formatNumber(summary.resolvedCount || 0)} resolved boards`, 'success')}
+      ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
     </section>
 
     <section class="admin-grid">
@@ -1257,7 +1370,7 @@ async function renderAdminView() {
         </div>
 
         <div class="form-card" id="enrichment-queue-panel">
-          <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score → connections → open roles. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.</p></div></div>
+          <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(result.total || 0)} companies in queue.</p></div></div>
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         </div>
@@ -1306,7 +1419,7 @@ async function renderAdminView() {
         </div>
         <div class="form-card">
           <div class="panel-header"><div><h3>Background jobs</h3><p class="muted small">Long-running imports, discovery, and sheet syncs now run out of band.</p></div></div>
-          <div id="background-jobs-panel" class="timeline"></div>
+          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
         </div>
       </div>
 
@@ -1448,14 +1561,14 @@ async function renderAdminView() {
 }
 function renderTodayQueueTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>Score</th><th>Hiring</th><th>Contacts</th><th>Network</th><th>Next move</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>Target score</th><th>Hiring velocity</th><th>Engagement</th><th>Network</th><th>Next move</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div></td>
-          <td>${formatNumber(item.dailyScore)}<div class="small muted">${escapeHtml(humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.openRoleCount || item.jobCount)}<div class="small muted">${formatNumber(item.newRoleCount7d || 0)} new / 7d</div></td>
-          <td>${formatNumber(item.connectionCount)}</td>
-          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}</td>
+          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
+          <td>${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td>${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d</div></td>
+          <td>${formatNumber(item.engagementScore || 0)}<div class="small muted">${formatNumber(item.jobsLast90Days || 0)} jobs / 90d</div></td>
+          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.companyGrowthSignalScore || 0)} growth</div></td>
           <td>${escapeHtml(item.nextAction || item.recommendedAction || '')}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
@@ -1473,15 +1586,15 @@ function renderAccountsTable(items) {
       <select id="bulk-priority"><option value="">Change priority...</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
-    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Score</th><th>Hiring radar</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Target score</th><th>Signal mix</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
           <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
-          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
-          <td>${formatNumber(item.dailyScore)}<div class="small muted">${escapeHtml(humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.openRoleCount || item.jobCount)} open<div class="small muted">${formatNumber(item.newRoleCount7d || 0)} new / 7d \u00b7 ${escapeHtml(item.departmentFocus || 'No clear cluster')}</div></td>
+          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
+          <td>${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
           <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
-          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}</td>
+          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
           <td>${(item.atsTypes || []).map((type) => renderStatusPill(type, 'neutral')).join(' ') || '<span class="small muted">None</span>'}</td>
           <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Log</button></div></td>
@@ -1587,10 +1700,10 @@ function renderEnrichmentFilters() {
       <label class="checkbox-label"><input type="checkbox" id="eq-missing-careers" ${q.missingCareersUrl === 'true' ? 'checked' : ''}> Missing careers URL</label>
       <label class="checkbox-label"><input type="checkbox" id="eq-has-connections" ${q.hasConnections === 'true' ? 'checked' : ''}> Has connections</label>
       <select id="eq-min-score">
-        <option value="" ${selected(q.minTargetScore, '')}>All scores</option>
-        <option value="50" ${selected(q.minTargetScore, '50')}>Score ≥ 50</option>
-        <option value="100" ${selected(q.minTargetScore, '100')}>Score ≥ 100</option>
-        <option value="200" ${selected(q.minTargetScore, '200')}>Score ≥ 200</option>
+        <option value="" ${selected(q.minTargetScore, '')}>All target scores</option>
+        <option value="60" ${selected(q.minTargetScore, '60')}>Target score >= 60</option>
+        <option value="75" ${selected(q.minTargetScore, '75')}>Target score >= 75</option>
+        <option value="90" ${selected(q.minTargetScore, '90')}>Target score >= 90</option>
       </select>
       <button class="ghost-button" data-action="apply-enrichment-filter">Apply</button>
       <span class="small muted">Quick:</span>
@@ -1624,7 +1737,7 @@ function renderEnrichmentQueuePanel(result) {
             <td>${formatNumber(item.connectionCount || 0)}</td>
             <td>${formatNumber(item.openRoleCount || 0)}</td>
             <td>${renderStatusPill(item.enrichmentConfidence || 'unresolved', item.enrichmentConfidence === 'high' ? 'success' : (item.enrichmentConfidence === 'medium' ? 'warning' : 'neutral'))}</td>
-            <td>${escapeHtml(item.reviewReason || item.enrichmentFailureReason || '')}<div class="small muted">${safeJoin(item.aliases)}</div></td>
+            <td>${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}<div class="small muted">${safeJoin(item.aliases)}</div></td>
             <td><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></td>
           </tr>
           <tr class="enrichment-edit-row hidden" id="enrichment-edit-${item.id}">
@@ -1655,7 +1768,7 @@ async function refreshEnrichmentPanel() {
   if (!panel) return;
   const result = await api(`/api/enrichment/queue${buildQuery(appState.enrichmentQuery)}`);
   panel.innerHTML = `
-    <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score → connections → open roles. ${formatNumber(result.total || 0)} companies in queue.</p></div></div>
+    <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(result.total || 0)} companies in queue.</p></div></div>
     ${renderEnrichmentFilters()}
     ${renderEnrichmentQueuePanel(result)}
   `;
@@ -1718,7 +1831,7 @@ function renderAccountConfigsTable(items) {
 function renderFollowUpItem(item) {
   return `
     <article class="timeline-item">
-      <div class="inline-header">
+      <div class="job-card__footer">
         <strong>${escapeHtml(item.displayName)}</strong>
         ${renderStatusPill(item.status || 'new', 'neutral')}
       </div>
@@ -1766,16 +1879,19 @@ function renderBackgroundJobItem(job) {
   const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
 
   return `
-    <article class="timeline-item">
-      <div class="inline-header">
-        <strong>${escapeHtml(humanize(job.type || 'job'))}</strong>
+    <article class="timeline-item job-card job-card--${escapeAttr(job.status || 'queued')}">
+      <div class="job-card__header">
+        <div class="job-card__title">
+          <p class="eyebrow">${escapeHtml(humanize(job.type || 'job'))}</p>
+          <strong>${escapeHtml(job.summary || humanize(job.type || 'job'))}</strong>
+        </div>
         <div class="job-status-cluster">
           ${progress ? `<span class="job-pct">${progress.pct}%</span>` : ''}
           ${renderStatusPill(job.status || 'queued', tone)}
         </div>
       </div>
       ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
-      <p>${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
+      <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
         <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${job.recordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
         ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
@@ -1795,6 +1911,36 @@ function renderMetricCard(label, value, subtitle) {
 
 function renderMetricTile(label, value) {
   return `<div class="kpi-tile"><span class="small muted">${escapeHtml(label)}</span><strong>${value}</strong></div>`;
+}
+
+function renderTrustCard(label, value, description, meta, tone = 'neutral') {
+  return `
+    <article class="trust-card trust-card--${tone}">
+      <span class="trust-card__eyebrow">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value || ''))}</strong>
+      <p>${escapeHtml(description || '')}</p>
+      ${meta ? `<span class="trust-card__meta">${escapeHtml(meta)}</span>` : ''}
+    </article>
+  `;
+}
+
+function renderSignalChip(label, value, tone = 'neutral') {
+  return `
+    <div class="signal-chip signal-chip--${tone}">
+      <span class="signal-chip__label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value || ''))}</strong>
+    </div>
+  `;
+}
+
+function renderStoryCard(label, value, description, tone = 'neutral') {
+  return `
+    <article class="story-card story-card--${tone}">
+      <span class="story-card__label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value || ''))}</strong>
+      <p>${escapeHtml(description || '')}</p>
+    </article>
+  `;
 }
 
 function renderField(label, control) {
@@ -1865,7 +2011,7 @@ function renderOutreachStageOptions(currentValue, includeBlank = false) {
 function renderAccountSortSelect(currentValue) {
   return `
     <select name="sortBy">
-      <option value="" ${selected(currentValue, '')}>Daily score</option>
+      <option value="" ${selected(currentValue, '')}>Target score</option>
       <option value="new_roles" ${selected(currentValue, 'new_roles')}>New roles</option>
       <option value="connections" ${selected(currentValue, 'connections')}>Connections</option>
       <option value="follow_up" ${selected(currentValue, 'follow_up')}>Follow-up urgency</option>
@@ -1924,8 +2070,8 @@ async function runLiveImport() {
     const run = job?.result?.importRun || {};
     const stats = run?.stats || {};
     const status = run?.status === 'completed_with_errors'
-      ? `Imported ${formatNumber(stats.imported || 0)} jobs with ${formatNumber(stats.errors || 0)} errors.`
-      : `Imported ${formatNumber(stats.imported || 0)} jobs from ${formatNumber(stats.configs || 0)} ATS configs.`;
+      ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs. ${formatNumber(stats.errors || 0)} configs errored.`
+      : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.`;
     window.bdLocalApi.setAlert(status, appAlert);
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Run live import'; }
@@ -2262,7 +2408,7 @@ async function runSearch(value) {
   const results = await api(`/api/search${buildQuery({ q: value })}`);
   searchResults.classList.remove('hidden');
   searchResults.innerHTML = `
-    ${renderSearchGroup('Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(item.dailyScore)} score · ${formatNumber(item.jobCount)} jobs`)}
+    ${renderSearchGroup('Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(getTargetScore(item))} target score · ${formatNumber(item.hiringVelocity || 0)} hiring velocity · ${formatNumber(item.engagementScore || 0)} engagement`)}
     ${renderSearchGroup('Contacts', results.contacts, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.companyName || '')} · ${formatNumber(item.priorityScore)} score`)}
     ${renderSearchGroup('Jobs', results.jobs, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/jobs', (item) => escapeHtml(item.title), (item) => `${escapeHtml(item.companyName || '')} · ${formatDate(item.postedAt)}`)}
   `;
@@ -2289,6 +2435,49 @@ function asArray(value) {
 
 function safeJoin(value, sep) {
   return asArray(value).map((v) => String(v)).filter(Boolean).join(sep || ', ');
+}
+
+function getTargetScore(item) {
+  const value = item && item.targetScore !== undefined && item.targetScore !== null
+    ? item.targetScore
+    : item?.dailyScore;
+  return Number(value || 0);
+}
+
+function getTargetScoreExplanation(item) {
+  const explanation = item?.targetScoreExplanation;
+  if (typeof explanation === 'string') {
+    return explanation;
+  }
+  if (explanation && typeof explanation === 'object') {
+    if (typeof explanation.summary === 'string' && explanation.summary) {
+      return explanation.summary;
+    }
+    if (Array.isArray(explanation.topDrivers) && explanation.topDrivers.length) {
+      return explanation.topDrivers.map((driver) => driver?.summary || driver?.label || '').filter(Boolean).join('; ');
+    }
+  }
+  return item?.recommendedAction || item?.nextAction || '';
+}
+
+function renderTargetScoreSignalSummary(item) {
+  const parts = [];
+  if (item?.hiringVelocity !== undefined && item?.hiringVelocity !== null) {
+    parts.push(`${formatNumber(item.hiringVelocity)} hiring velocity`);
+  }
+  if (item?.engagementScore !== undefined && item?.engagementScore !== null) {
+    parts.push(`${formatNumber(item.engagementScore)} engagement`);
+  }
+  if (item?.jobsLast30Days !== undefined && item?.jobsLast30Days !== null) {
+    parts.push(`${formatNumber(item.jobsLast30Days)} jobs / 30d`);
+  }
+  if (item?.jobsLast90Days !== undefined && item?.jobsLast90Days !== null) {
+    parts.push(`${formatNumber(item.jobsLast90Days)} jobs / 90d`);
+  }
+  if (!parts.length) {
+    return 'No target-score signals yet';
+  }
+  return parts.join(' · ');
 }
 
 function humanize(value) {

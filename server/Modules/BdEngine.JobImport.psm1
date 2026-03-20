@@ -123,13 +123,23 @@ function Get-NestedValue {
                 break
             }
 
-            $property = @($current.PSObject.Properties.Name | Where-Object { $_ -eq $segment } | Select-Object -First 1)
-            if ($property.Count -eq 0) {
+            if ($current -is [System.Collections.IDictionary]) {
+                if (-not (Test-ObjectHasKey -Object $current -Name $segment)) {
+                    $found = $false
+                    break
+                }
+
+                $current = $current[$segment]
+                continue
+            }
+
+            $property = $current.PSObject.Properties[$segment]
+            if (-not $property) {
                 $found = $false
                 break
             }
 
-            $current = $current.$segment
+            $current = $property.Value
         }
 
         if ($found -and $null -ne $current -and [string]$current -ne '') {
@@ -138,6 +148,39 @@ function Get-NestedValue {
     }
 
     return $null
+}
+
+function Get-TopLevelCollection {
+    param(
+        $Payload,
+        [string[]]$PropertyNames = @()
+    )
+
+    foreach ($propertyName in @($PropertyNames)) {
+        if (-not $propertyName) {
+            continue
+        }
+
+        $value = Get-ObjectValue -Object $Payload -Name $propertyName -Default $null
+        if ($null -eq $value) {
+            continue
+        }
+
+        $items = @($value)
+        if ($items.Count -gt 0) {
+            return $items
+        }
+    }
+
+    if ($Payload -is [System.Collections.IEnumerable] -and $Payload -isnot [string]) {
+        return @($Payload)
+    }
+
+    if ($null -eq $Payload) {
+        return @()
+    }
+
+    return @($Payload)
 }
 
 function Get-ConfiguredApiUrl {
@@ -724,11 +767,11 @@ function Merge-BoardConfigRecord {
         $Generated
     )
 
-    $existingMethod = ([string](Get-ObjectValue -Object $Existing -Name 'discoveryMethod')).ToLowerInvariant()
-    $existingReview = ([string](Get-ObjectValue -Object $Existing -Name 'reviewStatus')).ToLowerInvariant()
-    $existingConfidence = ([string](Get-ObjectValue -Object $Existing -Name 'confidenceBand')).ToLowerInvariant()
-    $existingResolved = -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'boardId')) -or -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'resolvedBoardUrl'))
-    $isProtected = ([string](Get-ObjectValue -Object $Existing -Name 'source')).ToLowerInvariant() -eq 'manual' -or $existingMethod -in @('manual', 'known_map', 'known_override') -or $existingReview -in @('approved', 'promoted', 'rejected') -or ($existingResolved -and $existingConfidence -eq 'high')
+    $existingMethod = ([string](Get-ObjectValue -Object $Existing -Name 'discoveryMethod' -Default '')).ToLowerInvariant()
+    $existingReview = ([string](Get-ObjectValue -Object $Existing -Name 'reviewStatus' -Default '')).ToLowerInvariant()
+    $existingConfidence = ([string](Get-ObjectValue -Object $Existing -Name 'confidenceBand' -Default '')).ToLowerInvariant()
+    $existingResolved = -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'boardId' -Default '')) -or -not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $Existing -Name 'resolvedBoardUrl' -Default ''))
+    $isProtected = ([string](Get-ObjectValue -Object $Existing -Name 'source' -Default '')).ToLowerInvariant() -eq 'manual' -or $existingMethod -in @('manual', 'known_map', 'known_override') -or $existingReview -in @('approved', 'promoted', 'rejected') -or ($existingResolved -and $existingConfidence -eq 'high')
     $merged = [ordered]@{}
     foreach ($property in $Existing.Keys) {
         $merged[$property] = $Existing[$property]
@@ -1379,6 +1422,7 @@ function Invoke-CompanyEnrichment {
     return [ordered]@{
         state = $State
         stats = $stats
+        changedCompanies = @($candidates)
     }
 }
 
@@ -1392,42 +1436,181 @@ function New-ResolverAttemptRecord {
     return [ordered]@{
         stage = [string]$Stage
         url = [string]$Url
-        ok = [bool]$(if ($Response) { $Response.ok } else { $false })
-        statusCode = [int]$(if ($Response -and $Response.statusCode) { $Response.statusCode } else { 0 })
-        finalUrl = [string]$(if ($Response) { $Response.finalUrl } else { '' })
-        contentType = [string]$(if ($Response) { $Response.contentType } else { '' })
-        title = [string]$(if ($Response) { $Response.title } else { '' })
-        error = [string]$(if ($Response) { $Response.error } else { '' })
+        ok = [bool](Get-ObjectValue -Object $Response -Name 'ok' -Default $false)
+        statusCode = [int](Convert-ToNumber (Get-ObjectValue -Object $Response -Name 'statusCode' -Default 0))
+        finalUrl = [string](Get-ObjectValue -Object $Response -Name 'finalUrl')
+        contentType = [string](Get-ObjectValue -Object $Response -Name 'contentType')
+        title = [string](Get-ObjectValue -Object $Response -Name 'title')
+        error = [string](Get-ObjectValue -Object $Response -Name 'error')
+        cacheSource = [string](Get-ObjectValue -Object $Response -Name 'cacheSource')
+        elapsedMs = [int](Convert-ToNumber (Get-ObjectValue -Object $Response -Name 'elapsedMs' -Default 0))
+        cacheAgeSeconds = [int](Convert-ToNumber (Get-ObjectValue -Object $Response -Name 'cacheAgeSeconds' -Default 0))
     }
 }
 
-function Invoke-ResolverProbeRequest {
+function Initialize-ResolverProbeCaches {
+    $cache = Get-Variable -Scope Script -Name ResolverHttpProbeCache -ErrorAction SilentlyContinue
+    if (-not $cache) {
+        $script:ResolverHttpProbeCache = @{}
+    }
+}
+
+function Convert-ToResolverProbeCanonicalResponse {
+    param($Response)
+
+    if ($null -eq $Response) {
+        return $null
+    }
+
+    return [ordered]@{
+        url = [string](Get-ObjectValue -Object $Response -Name 'url')
+        ok = [bool](Get-ObjectValue -Object $Response -Name 'ok' -Default $false)
+        statusCode = [int](Convert-ToNumber (Get-ObjectValue -Object $Response -Name 'statusCode' -Default 0))
+        finalUrl = [string]$(if (Get-ObjectValue -Object $Response -Name 'finalUrl') { Get-ObjectValue -Object $Response -Name 'finalUrl' } else { Get-ObjectValue -Object $Response -Name 'url' })
+        contentType = [string](Get-ObjectValue -Object $Response -Name 'contentType')
+        content = [string](Get-ObjectValue -Object $Response -Name 'content')
+        title = [string](Get-ObjectValue -Object $Response -Name 'title')
+        error = [string](Get-ObjectValue -Object $Response -Name 'error')
+    }
+}
+
+function New-ResolverProbeResponseResult {
+    param(
+        $Response,
+        [string]$CacheSource = '',
+        [int]$ElapsedMs = 0,
+        [string]$FetchedAt = '',
+        [string]$ExpiresAt = ''
+    )
+
+    $canonical = Convert-ToResolverProbeCanonicalResponse -Response $Response
+    if (-not $canonical) {
+        return $null
+    }
+
+    $cacheAgeSeconds = 0
+    if ($FetchedAt) {
+        try {
+            $cacheAgeSeconds = [int][Math]::Max(0, [Math]::Round(((Get-Date) - ([datetime]$FetchedAt)).TotalSeconds))
+        } catch {
+            $cacheAgeSeconds = 0
+        }
+    }
+
+    return [ordered]@{
+        url = [string]$canonical.url
+        ok = [bool]$canonical.ok
+        statusCode = [int]$canonical.statusCode
+        finalUrl = [string]$canonical.finalUrl
+        contentType = [string]$canonical.contentType
+        content = [string]$canonical.content
+        title = [string]$canonical.title
+        error = [string]$canonical.error
+        cacheSource = [string]$CacheSource
+        elapsedMs = [int]$ElapsedMs
+        cacheFetchedAt = [string]$FetchedAt
+        cacheExpiresAt = [string]$ExpiresAt
+        cacheAgeSeconds = [int]$cacheAgeSeconds
+    }
+}
+
+function Get-ResolverProbeMemoryEntry {
+    param([string]$Url)
+
+    Initialize-ResolverProbeCaches
+    if (-not $script:ResolverHttpProbeCache.ContainsKey($Url)) {
+        return $null
+    }
+
+    $cached = $script:ResolverHttpProbeCache[$Url]
+    if ($null -eq $cached) {
+        return $null
+    }
+
+    if (Test-ObjectHasKey -Object $cached -Name 'response') {
+        return [ordered]@{
+            response = Convert-ToResolverProbeCanonicalResponse -Response (Get-ObjectValue -Object $cached -Name 'response')
+            fetchedAt = [string](Get-ObjectValue -Object $cached -Name 'fetchedAt')
+            expiresAt = [string](Get-ObjectValue -Object $cached -Name 'expiresAt')
+        }
+    }
+
+    return [ordered]@{
+        response = Convert-ToResolverProbeCanonicalResponse -Response $cached
+        fetchedAt = ''
+        expiresAt = ''
+    }
+}
+
+function Save-ResolverProbeMemoryEntry {
+    param(
+        [string]$Url,
+        $Response,
+        [string]$FetchedAt = '',
+        [string]$ExpiresAt = ''
+    )
+
+    Initialize-ResolverProbeCaches
+    $script:ResolverHttpProbeCache[[string]$Url] = [ordered]@{
+        response = Convert-ToResolverProbeCanonicalResponse -Response $Response
+        fetchedAt = [string]$FetchedAt
+        expiresAt = [string]$ExpiresAt
+    }
+}
+
+function Get-ResolverProbeCacheTtlSeconds {
+    param($Response)
+
+    $statusCode = [int](Convert-ToNumber (Get-ObjectValue -Object $Response -Name 'statusCode' -Default 0))
+    $ok = [bool](Get-ObjectValue -Object $Response -Name 'ok' -Default $false)
+    if ($ok) {
+        return 21600
+    }
+
+    switch ($statusCode) {
+        { $_ -in 404, 410 } { return 21600 }
+        429 { return 900 }
+        { $_ -ge 500 } { return 900 }
+        default { return 1800 }
+    }
+}
+
+function Invoke-ResolverProbeCacheMaintenance {
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return
+    }
+
+    $lastRun = Get-Variable -Scope Script -Name ResolverProbeCacheCleanupAt -ErrorAction SilentlyContinue
+    if ($lastRun) {
+        try {
+            if (((Get-Date) - ([datetime]$lastRun.Value)).TotalMinutes -lt 30) {
+                return
+            }
+        } catch {
+        }
+    }
+
+    try {
+        [void](Clear-AppResolverProbeCacheExpired)
+        [void](Clear-AppResolverSearchCacheExpired)
+        $script:ResolverProbeCacheCleanupAt = (Get-Date)
+    } catch {
+    }
+}
+
+function Invoke-ResolverProbeNetworkRequest {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Url,
         [int]$TimeoutSec = 6
     )
 
-    $normalizedUrl = ([string]$Url).Trim()
-    if (-not $normalizedUrl) {
-        return $null
-    }
-
-    $cache = Get-Variable -Scope Script -Name ResolverHttpProbeCache -ErrorAction SilentlyContinue
-    if (-not $cache) {
-        $script:ResolverHttpProbeCache = @{}
-        $cache = Get-Variable -Scope Script -Name ResolverHttpProbeCache -ErrorAction SilentlyContinue
-    }
-
-    if ($cache.Value.ContainsKey($normalizedUrl)) {
-        return $cache.Value[$normalizedUrl]
-    }
-
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $result = [ordered]@{
-        url = $normalizedUrl
+        url = [string]$Url
         ok = $false
         statusCode = 0
-        finalUrl = $normalizedUrl
+        finalUrl = [string]$Url
         contentType = ''
         content = ''
         title = ''
@@ -1435,12 +1618,11 @@ function Invoke-ResolverProbeRequest {
     }
 
     try {
-        # FIX: Set User-Agent to avoid bot-detection blocks from careers sites
         $probeHeaders = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-        $response = Invoke-WebRequest -Uri $normalizedUrl -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
         $result.ok = $true
         $result.statusCode = [int]$(if ($response.StatusCode) { $response.StatusCode } else { 200 })
-        $result.finalUrl = [string]$(if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) { $response.BaseResponse.ResponseUri.AbsoluteUri } else { $normalizedUrl })
+        $result.finalUrl = [string]$(if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) { $response.BaseResponse.ResponseUri.AbsoluteUri } else { $Url })
         $result.contentType = [string]$(if ($response.Headers['Content-Type']) { $response.Headers['Content-Type'] } elseif ($response.RawContentType) { $response.RawContentType } else { '' })
         $rawContent = [string]$(if ($response.Content) { $response.Content } else { '' })
         $looksJson = $false
@@ -1476,8 +1658,66 @@ function Invoke-ResolverProbeRequest {
         $result.title = ([string]$matches[1] -replace '\s+', ' ').Trim()
     }
 
-    $script:ResolverHttpProbeCache[$normalizedUrl] = $result
-    return $result
+    $stopwatch.Stop()
+    return [ordered]@{
+        response = (Convert-ToResolverProbeCanonicalResponse -Response $result)
+        elapsedMs = [int]$stopwatch.ElapsedMilliseconds
+    }
+}
+
+function Invoke-ResolverProbeRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+        [int]$TimeoutSec = 6
+    )
+
+    $normalizedUrl = ([string]$Url).Trim()
+    if (-not $normalizedUrl) {
+        return $null
+    }
+
+    $memoryEntry = Get-ResolverProbeMemoryEntry -Url $normalizedUrl
+    if ($memoryEntry) {
+        return (New-ResolverProbeResponseResult -Response $memoryEntry.response -CacheSource 'memory' -ElapsedMs 0 -FetchedAt ([string]$memoryEntry.fetchedAt) -ExpiresAt ([string]$memoryEntry.expiresAt))
+    }
+
+    $cacheLookupElapsed = 0
+    $cacheRecord = $null
+    if (Test-AppStoreUsesSqlite) {
+        $cacheStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $cacheRecord = @(Get-AppResolverProbeCacheRecords -Urls @($normalizedUrl) | Select-Object -First 1)
+        } finally {
+            $cacheStopwatch.Stop()
+            $cacheLookupElapsed = [int]$cacheStopwatch.ElapsedMilliseconds
+        }
+    }
+
+    if ($cacheRecord) {
+        Save-ResolverProbeMemoryEntry -Url $normalizedUrl -Response $cacheRecord.response -FetchedAt ([string]$cacheRecord.fetchedAt) -ExpiresAt ([string]$cacheRecord.expiresAt)
+        return (New-ResolverProbeResponseResult -Response $cacheRecord.response -CacheSource 'persistent' -ElapsedMs $cacheLookupElapsed -FetchedAt ([string]$cacheRecord.fetchedAt) -ExpiresAt ([string]$cacheRecord.expiresAt))
+    }
+
+    $networkResult = Invoke-ResolverProbeNetworkRequest -Url $normalizedUrl -TimeoutSec $TimeoutSec
+    $fetchedAt = (Get-Date).ToString('o')
+    $expiresAt = (Get-Date).AddSeconds((Get-ResolverProbeCacheTtlSeconds -Response $networkResult.response)).ToString('o')
+    Save-ResolverProbeMemoryEntry -Url $normalizedUrl -Response $networkResult.response -FetchedAt $fetchedAt -ExpiresAt $expiresAt
+
+    if (Test-AppStoreUsesSqlite) {
+        try {
+            [void](Save-AppResolverProbeCacheRecords -Records @([ordered]@{
+                        url = $normalizedUrl
+                        response = $networkResult.response
+                        fetchedAt = $fetchedAt
+                        expiresAt = $expiresAt
+                    }))
+            Invoke-ResolverProbeCacheMaintenance
+        } catch {
+        }
+    }
+
+    return (New-ResolverProbeResponseResult -Response $networkResult.response -CacheSource 'network' -ElapsedMs ([int]$networkResult.elapsedMs) -FetchedAt $fetchedAt -ExpiresAt $expiresAt)
 }
 
 function Invoke-ResolverProbeRequestsParallel {
@@ -1495,18 +1735,15 @@ function Invoke-ResolverProbeRequestsParallel {
         }
     }
 
-    $cache = Get-Variable -Scope Script -Name ResolverHttpProbeCache -ErrorAction SilentlyContinue
-    if (-not $cache) {
-        $script:ResolverHttpProbeCache = @{}
-        $cache = Get-Variable -Scope Script -Name ResolverHttpProbeCache -ErrorAction SilentlyContinue
-    }
+    Initialize-ResolverProbeCaches
 
     $responses = New-Object System.Collections.ArrayList
     $pendingUrls = New-Object System.Collections.ArrayList
     $firstSuccess = $null
     foreach ($url in @($normalizedUrls)) {
-        if ($cache.Value.ContainsKey($url)) {
-            $cachedResponse = $cache.Value[$url]
+        $memoryEntry = Get-ResolverProbeMemoryEntry -Url $url
+        if ($memoryEntry) {
+            $cachedResponse = New-ResolverProbeResponseResult -Response $memoryEntry.response -CacheSource 'memory' -ElapsedMs 0 -FetchedAt ([string]$memoryEntry.fetchedAt) -ExpiresAt ([string]$memoryEntry.expiresAt)
             [void]$responses.Add($cachedResponse)
             if ($StopOnFirstSuccess -and $cachedResponse.ok -and -not $firstSuccess) {
                 $firstSuccess = $cachedResponse
@@ -1525,12 +1762,58 @@ function Invoke-ResolverProbeRequestsParallel {
         }
     }
 
+    $persistentRecords = @()
+    $persistentLookupElapsed = 0
+    if (Test-AppStoreUsesSqlite) {
+        $cacheStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $persistentRecords = @(Get-AppResolverProbeCacheRecords -Urls @($pendingUrls.ToArray()))
+        } finally {
+            $cacheStopwatch.Stop()
+            $persistentLookupElapsed = [int]$cacheStopwatch.ElapsedMilliseconds
+        }
+    }
+
+    if (@($persistentRecords).Count -gt 0) {
+        $persistedMap = @{}
+        foreach ($record in @($persistentRecords)) {
+            $persistedMap[[string]$record.url] = $record
+        }
+
+        $remainingUrls = New-Object System.Collections.ArrayList
+        $perRecordElapsed = if ($persistentRecords.Count -gt 0) { [int][Math]::Max([Math]::Round($persistentLookupElapsed / $persistentRecords.Count), 1) } else { 0 }
+        foreach ($url in @($pendingUrls.ToArray())) {
+            if ($persistedMap.ContainsKey([string]$url)) {
+                $cacheRecord = $persistedMap[[string]$url]
+                Save-ResolverProbeMemoryEntry -Url ([string]$url) -Response $cacheRecord.response -FetchedAt ([string]$cacheRecord.fetchedAt) -ExpiresAt ([string]$cacheRecord.expiresAt)
+                $cachedResponse = New-ResolverProbeResponseResult -Response $cacheRecord.response -CacheSource 'persistent' -ElapsedMs $perRecordElapsed -FetchedAt ([string]$cacheRecord.fetchedAt) -ExpiresAt ([string]$cacheRecord.expiresAt)
+                [void]$responses.Add($cachedResponse)
+                if ($StopOnFirstSuccess -and $cachedResponse.ok -and -not $firstSuccess) {
+                    $firstSuccess = $cachedResponse
+                    break
+                }
+                continue
+            }
+
+            [void]$remainingUrls.Add([string]$url)
+        }
+        $pendingUrls = $remainingUrls
+    }
+
+    if ($firstSuccess -or $pendingUrls.Count -eq 0) {
+        return [ordered]@{
+            responses = @($responses.ToArray())
+            firstSuccess = $firstSuccess
+        }
+    }
+
     $probeScript = {
         param(
             [string]$Url,
             [int]$TimeoutSec
         )
 
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $result = [ordered]@{
             url = $Url
             ok = $false
@@ -1583,11 +1866,14 @@ function Invoke-ResolverProbeRequestsParallel {
             $result.title = ([string]$matches[1] -replace '\s+', ' ').Trim()
         }
 
+        $stopwatch.Stop()
+        $result.elapsedMs = [int]$stopwatch.ElapsedMilliseconds
         return [pscustomobject]$result
     }
 
     $pool = $null
     $pending = New-Object System.Collections.ArrayList
+    $recordsToPersist = New-Object System.Collections.ArrayList
     try {
         $maxThreads = [Math]::Min([Math]::Max($pendingUrls.Count, 1), 6)
         $pool = [RunspaceFactory]::CreateRunspacePool(1, $maxThreads)
@@ -1628,6 +1914,7 @@ function Invoke-ResolverProbeRequestsParallel {
                         content = ''
                         title = ''
                         error = 'Probe returned no response'
+                        elapsedMs = 0
                     }
                 }
             } catch {
@@ -1640,6 +1927,7 @@ function Invoke-ResolverProbeRequestsParallel {
                     content = ''
                     title = ''
                     error = [string]$_.Exception.Message
+                    elapsedMs = 0
                 }
             } finally {
                 try {
@@ -1652,11 +1940,24 @@ function Invoke-ResolverProbeRequestsParallel {
                 }
             }
 
-            $script:ResolverHttpProbeCache[[string]$workItem.url] = $response
-            [void]$responses.Add($response)
+            $canonicalResponse = Convert-ToResolverProbeCanonicalResponse -Response $response
+            $fetchedAt = (Get-Date).ToString('o')
+            $expiresAt = (Get-Date).AddSeconds((Get-ResolverProbeCacheTtlSeconds -Response $canonicalResponse)).ToString('o')
+            Save-ResolverProbeMemoryEntry -Url ([string]$workItem.url) -Response $canonicalResponse -FetchedAt $fetchedAt -ExpiresAt $expiresAt
+            if (Test-AppStoreUsesSqlite) {
+                [void]$recordsToPersist.Add([ordered]@{
+                        url = [string]$workItem.url
+                        response = $canonicalResponse
+                        fetchedAt = $fetchedAt
+                        expiresAt = $expiresAt
+                    })
+            }
 
-            if ($StopOnFirstSuccess -and $response.ok -and -not $firstSuccess) {
-                $firstSuccess = $response
+            $resultResponse = New-ResolverProbeResponseResult -Response $canonicalResponse -CacheSource 'network' -ElapsedMs ([int](Convert-ToNumber (Get-ObjectValue -Object $response -Name 'elapsedMs' -Default 0))) -FetchedAt $fetchedAt -ExpiresAt $expiresAt
+            [void]$responses.Add($resultResponse)
+
+            if ($StopOnFirstSuccess -and $resultResponse.ok -and -not $firstSuccess) {
+                $firstSuccess = $resultResponse
                 break
             }
         }
@@ -1679,6 +1980,14 @@ function Invoke-ResolverProbeRequestsParallel {
             }
             try { $pool.Dispose() } catch {
             }
+        }
+    }
+
+    if (Test-AppStoreUsesSqlite -and $recordsToPersist.Count -gt 0) {
+        try {
+            [void](Save-AppResolverProbeCacheRecords -Records @($recordsToPersist.ToArray()))
+            Invoke-ResolverProbeCacheMaintenance
+        } catch {
         }
     }
 
@@ -1739,7 +2048,12 @@ function Find-AtsDetectionsInContent {
     function Add-Detection {
         param($Detection)
         if (-not $Detection) { return }
-        $key = ('{0}|{1}' -f $Detection.atsType, $Detection.boardId)
+        $atsType = [string](Get-ObjectValue -Object $Detection -Name 'atsType')
+        $boardId = [string](Get-ObjectValue -Object $Detection -Name 'boardId')
+        if (-not $atsType -and -not $boardId) {
+            return
+        }
+        $key = ('{0}|{1}' -f $atsType, $boardId)
         if (-not $seen.ContainsKey($key)) {
             $seen[$key] = $true
             [void]$detections.Add($Detection)
@@ -2051,6 +2365,7 @@ function Get-ResolverSearchCandidateUrls {
         [string[]]$Aliases = @()
     )
 
+    $searchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $normalizedCompanyName = ([string]$CompanyName).Trim()
     $searchSeeds = New-Object System.Collections.ArrayList
     foreach ($seed in @($normalizedCompanyName) + @($Aliases | Where-Object { $_ })) {
@@ -2062,6 +2377,7 @@ function Get-ResolverSearchCandidateUrls {
     }
 
     if ($searchSeeds.Count -eq 0) {
+        $searchStopwatch.Stop()
         return @()
     }
 
@@ -2073,7 +2389,34 @@ function Get-ResolverSearchCandidateUrls {
 
     $cacheKey = [string]::Join('|', @($searchSeeds.ToArray()))
     if ($cache.Value.ContainsKey($cacheKey)) {
+        $searchStopwatch.Stop()
+        Write-PipelineDiag -Stage 'search_candidates' -Company $normalizedCompanyName -Message 'Loaded cached search candidate URLs' -Data @{
+            cacheSource = 'memory'
+            urlCount = @($cache.Value[$cacheKey]).Count
+            elapsedMs = [int]$searchStopwatch.ElapsedMilliseconds
+        }
         return @($cache.Value[$cacheKey])
+    }
+
+    if (Test-AppStoreUsesSqlite) {
+        $persistentRecord = $null
+        try {
+            $persistentRecord = Get-AppResolverSearchCacheRecord -CacheKey $cacheKey
+        } catch {
+            $persistentRecord = $null
+        }
+
+        if ($persistentRecord) {
+            $cache.Value[$cacheKey] = @($persistentRecord.urls)
+            $searchStopwatch.Stop()
+            Write-PipelineDiag -Stage 'search_candidates' -Company $normalizedCompanyName -Message 'Loaded cached search candidate URLs' -Data @{
+                cacheSource = 'persistent'
+                urlCount = @($persistentRecord.urls).Count
+                elapsedMs = [int]$searchStopwatch.ElapsedMilliseconds
+                cacheAgeSeconds = [int]$(if ($persistentRecord.fetchedAt) { [Math]::Max(0, [Math]::Round(((Get-Date) - ([datetime]$persistentRecord.fetchedAt)).TotalSeconds)) } else { 0 })
+            }
+            return @($persistentRecord.urls)
+        }
     }
 
     $results = New-Object System.Collections.ArrayList
@@ -2117,6 +2460,21 @@ function Get-ResolverSearchCandidateUrls {
     }
 
     $cache.Value[$cacheKey] = @($results.ToArray())
+    if (Test-AppStoreUsesSqlite) {
+        $fetchedAt = (Get-Date).ToString('o')
+        $expiresAt = (Get-Date).AddHours(6).ToString('o')
+        try {
+            [void](Save-AppResolverSearchCacheRecord -CacheKey $cacheKey -Urls @($results.ToArray()) -FetchedAt $fetchedAt -ExpiresAt $expiresAt)
+            Invoke-ResolverProbeCacheMaintenance
+        } catch {
+        }
+    }
+    $searchStopwatch.Stop()
+    Write-PipelineDiag -Stage 'search_candidates' -Company $normalizedCompanyName -Message 'Resolved search candidate URLs' -Data @{
+        cacheSource = 'network'
+        urlCount = @($results.ToArray()).Count
+        elapsedMs = [int]$searchStopwatch.ElapsedMilliseconds
+    }
     return @($results.ToArray())
 }
 
@@ -2392,7 +2750,7 @@ function Get-DiscoveryResultForConfig {
                 }
             }
 
-            if ($bestCandidate -and $bestCandidate.confidenceBand -eq 'high') {
+            if ($bestCandidate -and ([string](Get-ObjectValue -Object $bestCandidate -Name 'confidenceBand')) -eq 'high') {
                 break
             }
         }
@@ -2654,6 +3012,7 @@ function Invoke-AtsDiscovery {
     return [ordered]@{
         state = $State
         stats = $stats
+        changedConfigs = @($candidates)
     }
 }
 
@@ -2774,8 +3133,9 @@ function Get-GreenhouseJobs {
 
     $url = "https://boards-api.greenhouse.io/v1/boards/$([uri]::EscapeDataString([string]$Config.boardId))/jobs?content=true"
     $payload = Get-JsonFromUrl -Url $url
+    $jobs = @(Get-TopLevelCollection -Payload $payload -PropertyNames @('jobs'))
     return @(
-        foreach ($job in @($payload.jobs)) {
+        foreach ($job in @($jobs)) {
             [ordered]@{
                 jobId = [string]$job.id
                 title = if ($job.title) { $job.title } else { '' }
@@ -2808,7 +3168,7 @@ function Get-LeverJobs {
                 department = $department
                 employmentType = $employmentType
                 url = [string](Get-NestedValue -Object $job -Paths @('hostedUrl', 'applyUrl', 'url'))
-                postedAt = if ($job.createdAt) { Convert-ToDateString ([datetimeoffset]::FromUnixTimeMilliseconds([int64]$job.createdAt).DateTime) } else { (Get-Date).ToString('o') }
+                postedAt = if (Get-NestedValue -Object $job -Paths @('createdAt')) { Convert-ToDateString ([datetimeoffset]::FromUnixTimeMilliseconds([int64](Get-NestedValue -Object $job -Paths @('createdAt'))).DateTime) } else { (Get-Date).ToString('o') }
                 sourceUrl = $url
                 rawPayload = $job
             }
@@ -2829,8 +3189,23 @@ function Get-AshbyJobs {
 
     $url = "https://api.ashbyhq.com/posting-api/job-board/$([uri]::EscapeDataString([string]$boardId))"
     $payload = Get-JsonFromUrl -Url $url
+    $jobs = @(
+        (Get-ObjectValue -Object $payload -Name 'jobs' -Default $null),
+        $(if ($payload -is [System.Collections.IEnumerable] -and $payload -isnot [string]) { $payload } else { $null })
+    )
+    $jobItems = @()
+    foreach ($candidateJobs in $jobs) {
+        if ($null -eq $candidateJobs) {
+            continue
+        }
+
+        $jobItems = @($candidateJobs)
+        if ($jobItems.Count -gt 0) {
+            break
+        }
+    }
     return @(
-        foreach ($job in @($payload.jobs)) {
+        foreach ($job in @($jobItems)) {
             [ordered]@{
                 jobId = [string](Get-NestedValue -Object $job -Paths @('id', 'jobPostId'))
                 title = [string](Get-NestedValue -Object $job -Paths @('title'))
@@ -2855,8 +3230,24 @@ function Get-SmartRecruitersJobs {
 
     $url = "https://api.smartrecruiters.com/v1/companies/$([uri]::EscapeDataString([string]$Config.boardId))/postings?limit=100"
     $payload = Get-JsonFromUrl -Url $url
+    $jobs = @(
+        (Get-ObjectValue -Object $payload -Name 'content' -Default $null),
+        (Get-ObjectValue -Object $payload -Name 'postings' -Default $null),
+        $(if ($payload -is [System.Collections.IEnumerable] -and $payload -isnot [string]) { $payload } else { $null })
+    )
+    $jobItems = @()
+    foreach ($candidateJobs in $jobs) {
+        if ($null -eq $candidateJobs) {
+            continue
+        }
+
+        $jobItems = @($candidateJobs)
+        if ($jobItems.Count -gt 0) {
+            break
+        }
+    }
     return @(
-        foreach ($job in @($payload.content)) {
+        foreach ($job in @($jobItems)) {
             $locationParts = @(
                 [string](Get-NestedValue -Object $job -Paths @('location.city'))
                 [string](Get-NestedValue -Object $job -Paths @('location.region'))
@@ -2877,59 +3268,758 @@ function Get-SmartRecruitersJobs {
     )
 }
 
+function Convert-ToWorkdaySlug {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return (($Value.ToLowerInvariant() -replace '[^a-z0-9]+', '').Trim())
+}
+
+function Get-WorkdaySiteSegmentFromUri {
+    param([uri]$Uri)
+
+    if ($null -eq $Uri) {
+        return ''
+    }
+
+    $segments = @($Uri.AbsolutePath.Trim('/') -split '/' | Where-Object { $_ })
+    if ($segments.Count -eq 0) {
+        return ''
+    }
+
+    if ($segments.Count -ge 4 -and [string]$segments[0] -eq 'wday' -and [string]$segments[1] -eq 'cxs') {
+        return [string]$segments[3]
+    }
+
+    if ($segments.Count -ge 2 -and [string]$segments[0] -match '^[a-z]{2}(?:-[A-Z]{2})?$') {
+        return [string]$segments[1]
+    }
+
+    return [string]$segments[0]
+}
+
+function Get-WorkdayHostDescriptors {
+    param($Config)
+
+    $descriptors = New-Object System.Collections.ArrayList
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($candidateUrl in @(
+            [string](Get-ConfiguredApiUrl -Config $Config),
+            [string](Get-ObjectValue -Object $Config -Name 'resolvedBoardUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'careersUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'source' -Default '')
+        )) {
+        $normalizedCandidate = ([string]$candidateUrl).Trim()
+        if (-not $normalizedCandidate) {
+            continue
+        }
+
+        try {
+            $uri = [uri]$normalizedCandidate
+            if ($uri.Host -notmatch '^([^.]+)\.wd\d+\.myworkdayjobs\.com$') {
+                continue
+            }
+
+            $tenant = [string]$matches[1]
+            $descriptorKey = ('{0}://{1}|{2}' -f $uri.Scheme, $uri.Host, $tenant).ToLowerInvariant()
+            if (-not $seen.Add($descriptorKey)) {
+                continue
+            }
+
+            [void]$descriptors.Add([ordered]@{
+                    baseUrl = ('{0}://{1}' -f $uri.Scheme, $uri.Host)
+                    host = [string]$uri.Host
+                    scheme = [string]$uri.Scheme
+                    tenant = $tenant
+                })
+        } catch {
+        }
+    }
+
+    return @($descriptors)
+}
+
+function Get-WorkdayDirectApiCandidateUrls {
+    param($Config)
+
+    $candidates = New-Object System.Collections.ArrayList
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    function Add-WorkdayApiCandidate {
+        param([string]$Value)
+
+        $normalized = ([string]$Value).Trim()
+        if (-not $normalized) {
+            return
+        }
+
+        $candidateKey = $normalized.ToLowerInvariant()
+        if ($seen.Add($candidateKey)) {
+            [void]$candidates.Add($normalized)
+        }
+    }
+
+    foreach ($candidateUrl in @(
+            [string](Get-ConfiguredApiUrl -Config $Config),
+            [string](Get-ObjectValue -Object $Config -Name 'resolvedBoardUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'careersUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'source' -Default '')
+        )) {
+        $normalizedCandidate = ([string]$candidateUrl).Trim()
+        if (-not $normalizedCandidate) {
+            continue
+        }
+
+        if ($normalizedCandidate -match '(https?://[^/]+/wday/cxs/[^/]+/[^/?#]+)(?:/jobs)?') {
+            Add-WorkdayApiCandidate -Value "$($matches[1])/jobs"
+        }
+
+        try {
+            $uri = [uri]$normalizedCandidate
+            if ($uri.Host -notmatch '^([^.]+)\.wd\d+\.myworkdayjobs\.com$') {
+                continue
+            }
+
+            $tenant = [string]$matches[1]
+            $siteSegment = Get-WorkdaySiteSegmentFromUri -Uri $uri
+            if ($siteSegment) {
+                Add-WorkdayApiCandidate -Value ('{0}://{1}/wday/cxs/{2}/{3}/jobs' -f $uri.Scheme, $uri.Host, [uri]::EscapeDataString($tenant), [uri]::EscapeDataString($siteSegment))
+            }
+        } catch {
+        }
+    }
+
+    $slugInputs = @(
+        [string](Get-ObjectValue -Object $Config -Name 'boardId' -Default ''),
+        [string](Get-ObjectValue -Object $Config -Name 'normalizedCompanyName' -Default ''),
+        [string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')
+    )
+    foreach ($hostDescriptor in @(Get-WorkdayHostDescriptors -Config $Config)) {
+        foreach ($slugInput in $slugInputs) {
+            $slug = Convert-ToWorkdaySlug -Value $slugInput
+            if (-not $slug) {
+                continue
+            }
+
+            foreach ($siteSegment in @(
+                    $slug,
+                    ('{0}careers' -f $slug),
+                    ('{0}_careers' -f $slug),
+                    ('{0}-careers' -f $slug)
+                )) {
+                Add-WorkdayApiCandidate -Value ('{0}/wday/cxs/{1}/{2}/jobs' -f $hostDescriptor.baseUrl, [uri]::EscapeDataString([string]$hostDescriptor.tenant), [uri]::EscapeDataString([string]$siteSegment))
+            }
+        }
+    }
+
+    return @($candidates)
+}
+
+function Resolve-WorkdayApiCandidateUrlsFromPages {
+    param($Config)
+
+    $candidateUrls = New-Object System.Collections.ArrayList
+    $seenApi = New-Object 'System.Collections.Generic.HashSet[string]'
+    $pageCandidates = New-Object System.Collections.ArrayList
+    $seenPages = New-Object 'System.Collections.Generic.HashSet[string]'
+    $resolutionStart = [System.Diagnostics.Stopwatch]::StartNew()
+
+    function Add-WorkdayResolvedApiCandidate {
+        param([string]$Value)
+
+        $normalized = ([string]$Value).Trim()
+        if (-not $normalized) {
+            return
+        }
+
+        if ($seenApi.Add($normalized.ToLowerInvariant())) {
+            [void]$candidateUrls.Add($normalized)
+        }
+    }
+
+    function Add-WorkdayPageCandidate {
+        param([string]$Value)
+
+        $normalized = ([string]$Value).Trim()
+        if (-not $normalized) {
+            return
+        }
+
+        try {
+            $normalized = ([uri]$normalized).GetLeftPart([System.UriPartial]::Path)
+        } catch {
+            return
+        }
+
+        if ($seenPages.Add($normalized.ToLowerInvariant())) {
+            [void]$pageCandidates.Add($normalized)
+        }
+    }
+
+    foreach ($candidateUrl in @(
+            [string](Get-ConfiguredApiUrl -Config $Config),
+            [string](Get-ObjectValue -Object $Config -Name 'resolvedBoardUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'careersUrl' -Default ''),
+            [string](Get-ObjectValue -Object $Config -Name 'source' -Default '')
+        )) {
+        $normalizedCandidate = ([string]$candidateUrl).Trim()
+        if (-not $normalizedCandidate) {
+            continue
+        }
+
+        try {
+            $uri = [uri]$normalizedCandidate
+            if ($uri.Host -notmatch '^([^.]+)\.wd\d+\.myworkdayjobs\.com$') {
+                continue
+            }
+
+            Add-WorkdayPageCandidate -Value $normalizedCandidate
+            $siteSegment = Get-WorkdaySiteSegmentFromUri -Uri $uri
+            if ($siteSegment) {
+                Add-WorkdayPageCandidate -Value ('{0}://{1}/{2}' -f $uri.Scheme, $uri.Host, [uri]::EscapeDataString($siteSegment))
+                Add-WorkdayPageCandidate -Value ('{0}://{1}/en-US/{2}' -f $uri.Scheme, $uri.Host, [uri]::EscapeDataString($siteSegment))
+            }
+        } catch {
+        }
+    }
+
+    $slugInputs = @(
+        [string](Get-ObjectValue -Object $Config -Name 'boardId' -Default ''),
+        [string](Get-ObjectValue -Object $Config -Name 'normalizedCompanyName' -Default ''),
+        [string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')
+    )
+    foreach ($hostDescriptor in @(Get-WorkdayHostDescriptors -Config $Config)) {
+        foreach ($slugInput in $slugInputs) {
+            $slug = Convert-ToWorkdaySlug -Value $slugInput
+            if (-not $slug) {
+                continue
+            }
+
+            foreach ($siteSegment in @(
+                    $slug,
+                    ('{0}careers' -f $slug),
+                    ('{0}_careers' -f $slug),
+                    ('{0}-careers' -f $slug)
+                )) {
+                Add-WorkdayPageCandidate -Value ('{0}/{1}' -f $hostDescriptor.baseUrl, $siteSegment)
+                Add-WorkdayPageCandidate -Value ('{0}/en-US/{1}' -f $hostDescriptor.baseUrl, $siteSegment)
+            }
+        }
+    }
+
+    foreach ($pageUrl in @($pageCandidates)) {
+        $response = Invoke-ResolverProbeRequest -Url $pageUrl
+        if (-not (Get-ObjectValue -Object $response -Name 'ok' -Default $false)) {
+            continue
+        }
+
+        $content = [string](Get-ObjectValue -Object $response -Name 'content' -Default '')
+        if (-not $content) {
+            continue
+        }
+
+        try {
+            $pageUri = [uri]$pageUrl
+            if ($content -match '/wday/drs/outage\?t=([^&"''<>\s]+)&s=([^&"''<>\s]+)') {
+                $tenant = [uri]::UnescapeDataString([string]$matches[1])
+                $siteSegment = [uri]::UnescapeDataString([string]$matches[2])
+                Add-WorkdayResolvedApiCandidate -Value ('{0}://{1}/wday/cxs/{2}/{3}/jobs' -f $pageUri.Scheme, $pageUri.Host, [uri]::EscapeDataString($tenant), [uri]::EscapeDataString($siteSegment))
+                continue
+            }
+
+            if ($content -match '/wday/cxs/([^/\"''<>\s]+)/([^/\"''<>\s]+)/jobs') {
+                $tenant = [uri]::UnescapeDataString([string]$matches[1])
+                $siteSegment = [uri]::UnescapeDataString([string]$matches[2])
+                Add-WorkdayResolvedApiCandidate -Value ('{0}://{1}/wday/cxs/{2}/{3}/jobs' -f $pageUri.Scheme, $pageUri.Host, [uri]::EscapeDataString($tenant), [uri]::EscapeDataString($siteSegment))
+            }
+        } catch {
+        }
+    }
+
+    $resolutionStart.Stop()
+    Write-PipelineDiag -Stage 'workday_page_resolve' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message 'Resolved Workday API candidates from board pages' -Data @{
+        pageCandidateCount = @($pageCandidates).Count
+        apiCandidateCount = @($candidateUrls).Count
+        elapsedMs = [int]$resolutionStart.Elapsed.TotalMilliseconds
+    }
+    return @($candidateUrls)
+}
+
+function Get-WorkdayApiCandidateUrls {
+    param(
+        $Config,
+        [switch]$IncludePageResolution
+    )
+
+    $resolutionStart = [System.Diagnostics.Stopwatch]::StartNew()
+    $candidateUrls = New-Object System.Collections.ArrayList
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    foreach ($candidateUrl in @(Get-WorkdayDirectApiCandidateUrls -Config $Config)) {
+        $normalized = ([string]$candidateUrl).Trim()
+        if ($normalized -and $seen.Add($normalized.ToLowerInvariant())) {
+            [void]$candidateUrls.Add($normalized)
+        }
+    }
+
+    if ($IncludePageResolution) {
+        foreach ($candidateUrl in @(Resolve-WorkdayApiCandidateUrlsFromPages -Config $Config)) {
+            $normalized = ([string]$candidateUrl).Trim()
+            if ($normalized -and $seen.Add($normalized.ToLowerInvariant())) {
+                [void]$candidateUrls.Add($normalized)
+            }
+        }
+    }
+
+    $resolutionStart.Stop()
+    Write-PipelineDiag -Stage 'workday_candidates' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message 'Resolved Workday API candidate list' -Data @{
+        directCandidateCount = @((Get-WorkdayDirectApiCandidateUrls -Config $Config)).Count
+        includePageResolution = [bool]$IncludePageResolution
+        totalCandidateCount = @($candidateUrls).Count
+        elapsedMs = [int]$resolutionStart.Elapsed.TotalMilliseconds
+    }
+    return @($candidateUrls)
+}
+
 function Get-WorkdayApiUrl {
     param($Config)
 
-    $configured = Get-ConfiguredApiUrl -Config $Config
-    if ($configured) {
-        return $configured
-    }
-
-    $careersUrl = [string]$Config.careersUrl
-    if ($careersUrl -match '(https?://[^/]+/wday/cxs/[^/]+/[^/?#]+)') {
-        return "$($matches[1])/jobs"
+    foreach ($candidateUrl in @(Get-WorkdayApiCandidateUrls -Config $Config -IncludePageResolution)) {
+        return [string]$candidateUrl
     }
 
     return ''
 }
 
-function Get-WorkdayJobs {
-    param($Config)
+function Get-WorkdayJobCollection {
+    param($Payload)
 
-    $url = Get-WorkdayApiUrl -Config $Config
-    if (-not $url) {
-        return @()
-    }
-
-    $payload = Get-JsonFromUrl -Url $url
-    $jobCollections = @(
-        (Get-NestedValue -Object $payload -Paths @('jobPostings')),
-        (Get-NestedValue -Object $payload -Paths @('jobPostingInfo')),
-        (Get-NestedValue -Object $payload -Paths @('listItems')),
-        (Get-NestedValue -Object $payload -Paths @('jobs')),
-        $(if ($payload -is [System.Collections.IEnumerable] -and $payload -isnot [string]) { $payload } else { $null })
-    )
-    $jobs = @()
-    foreach ($candidateJobs in $jobCollections) {
+    foreach ($candidateJobs in @(
+            (Get-NestedValue -Object $Payload -Paths @('jobPostings')),
+            (Get-NestedValue -Object $Payload -Paths @('jobPostingInfo')),
+            (Get-NestedValue -Object $Payload -Paths @('listItems')),
+            (Get-NestedValue -Object $Payload -Paths @('jobs')),
+            $(if ($Payload -is [System.Collections.IEnumerable] -and $Payload -isnot [string]) { $Payload } else { $null })
+        )) {
         if ($null -eq $candidateJobs) {
             continue
         }
 
         $jobs = @($candidateJobs)
         if ($jobs.Count -gt 0) {
-            break
+            return $jobs
         }
     }
+
+    return @()
+}
+
+function Invoke-WorkdayPageRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+        [int]$Offset = 0,
+        [int]$PageLimit = 20,
+        [int]$TimeoutSec = 45
+    )
+
+    $headers = @{
+        'Content-Type' = 'application/json'
+        'Accept' = 'application/json'
+    }
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $result = [ordered]@{
+        ok = $false
+        offset = $Offset
+        jobs = @()
+        reportedTotal = 0
+        elapsedMs = 0
+        error = ''
+    }
+
+    try {
+        $body = @{
+            appliedFacets = @{}
+            limit = $PageLimit
+            offset = $Offset
+            searchText = ''
+        } | ConvertTo-Json -Depth 6 -Compress
+        $payload = Invoke-RestMethod -Uri $Url -Method Post -Headers $headers -Body $body -TimeoutSec $TimeoutSec
+        $pageJobs = @(Get-WorkdayJobCollection -Payload $payload)
+        $totalValue = Get-ObjectValue -Object $payload -Name 'total' -Default $null
+        $parsedTotal = 0
+        if ($null -ne $totalValue) {
+            [void][int]::TryParse([string]$totalValue, [ref]$parsedTotal)
+        }
+
+        $result.ok = $true
+        $result.jobs = @($pageJobs)
+        $result.reportedTotal = $parsedTotal
+    } catch {
+        $result.error = [string]$_.Exception.Message
+    } finally {
+        $stopwatch.Stop()
+        $result.elapsedMs = [int]$stopwatch.Elapsed.TotalMilliseconds
+    }
+
+    return [pscustomobject]$result
+}
+
+function Invoke-WorkdayPageRequestsParallel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+        [int[]]$Offsets,
+        [int]$PageLimit = 20,
+        [int]$TimeoutSec = 45
+    )
+
+    $normalizedOffsets = @($Offsets | Where-Object { $_ -ge 0 } | Sort-Object -Unique)
+    if ($normalizedOffsets.Count -eq 0) {
+        return @()
+    }
+
+    $pageScript = {
+        param(
+            [string]$Url,
+            [int]$Offset,
+            [int]$PageLimit,
+            [int]$TimeoutSec
+        )
+
+        $headers = @{
+            'Content-Type' = 'application/json'
+            'Accept' = 'application/json'
+        }
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $result = [ordered]@{
+            ok = $false
+            offset = $Offset
+            jobs = @()
+            reportedTotal = 0
+            elapsedMs = 0
+            error = ''
+        }
+
+        try {
+            $body = @{
+                appliedFacets = @{}
+                limit = $PageLimit
+                offset = $Offset
+                searchText = ''
+            } | ConvertTo-Json -Depth 6 -Compress
+            $payload = Invoke-RestMethod -Uri $Url -Method Post -Headers $headers -Body $body -TimeoutSec $TimeoutSec
+            $pageJobs = @()
+            foreach ($candidateJobs in @(
+                    $(if ($payload.PSObject.Properties.Name -contains 'jobPostings') { $payload.jobPostings } else { $null }),
+                    $(if ($payload.PSObject.Properties.Name -contains 'jobPostingInfo') { $payload.jobPostingInfo } else { $null }),
+                    $(if ($payload.PSObject.Properties.Name -contains 'listItems') { $payload.listItems } else { $null }),
+                    $(if ($payload.PSObject.Properties.Name -contains 'jobs') { $payload.jobs } else { $null }),
+                    $(if ($payload -is [System.Collections.IEnumerable] -and $payload -isnot [string]) { $payload } else { $null })
+                )) {
+                if ($null -eq $candidateJobs) {
+                    continue
+                }
+
+                $pageJobs = @($candidateJobs)
+                if ($pageJobs.Count -gt 0) {
+                    break
+                }
+            }
+
+            $parsedTotal = 0
+            if ($payload.PSObject.Properties.Name -contains 'total') {
+                [void][int]::TryParse([string]$payload.total, [ref]$parsedTotal)
+            }
+
+            $result.ok = $true
+            $result.jobs = @($pageJobs)
+            $result.reportedTotal = $parsedTotal
+        } catch {
+            $result.error = [string]$_.Exception.Message
+        } finally {
+            $stopwatch.Stop()
+            $result.elapsedMs = [int]$stopwatch.Elapsed.TotalMilliseconds
+        }
+
+        return [pscustomobject]$result
+    }
+
+    $results = New-Object System.Collections.ArrayList
+    $batchSize = 60
+    for ($batchStart = 0; $batchStart -lt $normalizedOffsets.Count; $batchStart += $batchSize) {
+        $offsetBatch = @($normalizedOffsets | Select-Object -Skip $batchStart -First $batchSize)
+        $pool = $null
+        $pending = New-Object System.Collections.ArrayList
+        try {
+            $maxThreads = [Math]::Min([Math]::Max($offsetBatch.Count, 1), 6)
+            $pool = [RunspaceFactory]::CreateRunspacePool(1, $maxThreads)
+            $pool.Open()
+
+            foreach ($offset in @($offsetBatch)) {
+                $powershell = [PowerShell]::Create()
+                $powershell.RunspacePool = $pool
+                [void]$powershell.AddScript($pageScript).AddParameter('Url', $Url).AddParameter('Offset', [int]$offset).AddParameter('PageLimit', $PageLimit).AddParameter('TimeoutSec', $TimeoutSec)
+                $async = $powershell.BeginInvoke()
+                [void]$pending.Add([ordered]@{
+                        offset = [int]$offset
+                        ps = $powershell
+                        async = $async
+                    })
+            }
+
+            while ($pending.Count -gt 0) {
+                $handles = @($pending | ForEach-Object { $_.async.AsyncWaitHandle })
+                $signaledIndex = [System.Threading.WaitHandle]::WaitAny($handles, [Math]::Max(($TimeoutSec + 1) * 1000, 1000))
+                if ($signaledIndex -lt 0 -or $signaledIndex -ge $pending.Count) {
+                    continue
+                }
+
+                $workItem = $pending[$signaledIndex]
+                $pending.RemoveAt($signaledIndex)
+
+                try {
+                    $output = $workItem.ps.EndInvoke($workItem.async)
+                    $pageResult = @($output | Select-Object -First 1)
+                    if (-not $pageResult) {
+                        $pageResult = [pscustomobject]@{
+                            ok = $false
+                            offset = [int]$workItem.offset
+                            jobs = @()
+                            reportedTotal = 0
+                            elapsedMs = 0
+                            error = 'Workday page fetch returned no response'
+                        }
+                    }
+
+                    [void]$results.Add($pageResult)
+                } finally {
+                    $workItem.ps.Dispose()
+                }
+            }
+        } finally {
+            foreach ($workItem in @($pending.ToArray())) {
+                try { $workItem.ps.Dispose() } catch { }
+            }
+            if ($pool) {
+                $pool.Close()
+                $pool.Dispose()
+            }
+        }
+    }
+
+    return @($results.ToArray())
+}
+
+function Invoke-WorkdayJobsRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$CandidateUrls,
+        [Parameter(Mandatory = $true)]
+        $Config
+    )
+
+    $triedCandidateKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    $lastException = $null
+
+    foreach ($candidateUrl in @($CandidateUrls)) {
+        $normalizedCandidate = ([string]$candidateUrl).Trim()
+        if (-not $normalizedCandidate) {
+            continue
+        }
+
+        if (-not $triedCandidateKeys.Add($normalizedCandidate.ToLowerInvariant())) {
+            continue
+        }
+
+        $requestStart = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $jobs = New-Object System.Collections.ArrayList
+            $seenJobKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+            $pageLimit = 20
+            $pageCount = 0
+            $reportedTotal = 0
+            $parallelPageCount = 0
+            $firstPageResult = Invoke-WorkdayPageRequest -Url $normalizedCandidate -Offset 0 -PageLimit $pageLimit -TimeoutSec 45
+            if (-not $firstPageResult.ok) {
+                throw $firstPageResult.error
+            }
+
+            foreach ($job in @($firstPageResult.jobs)) {
+                $jobKey = [string](Get-NestedValue -Object $job -Paths @('externalPath', 'id', 'jobPostingId', 'title'))
+                if (-not $jobKey) {
+                    $jobKey = ('offset:{0}|row:{1}' -f 0, $jobs.Count)
+                }
+
+                if ($seenJobKeys.Add($jobKey)) {
+                    [void]$jobs.Add($job)
+                }
+            }
+
+            $pageCount = 1
+            if ([int]$firstPageResult.reportedTotal -gt 0) {
+                $reportedTotal = [int]$firstPageResult.reportedTotal
+            }
+
+            if ($firstPageResult.jobs.Count -gt 0 -and $firstPageResult.jobs.Count -eq $pageLimit -and $reportedTotal -gt $pageLimit) {
+                $remainingOffsets = @()
+                for ($offset = $pageLimit; $offset -lt $reportedTotal; $offset += $pageLimit) {
+                    $remainingOffsets += $offset
+                }
+
+                $pageResults = @(Invoke-WorkdayPageRequestsParallel -Url $normalizedCandidate -Offsets $remainingOffsets -PageLimit $pageLimit -TimeoutSec 45)
+                $parallelPageCount = $pageResults.Count
+                $pageCount += $parallelPageCount
+                $failedPageOffsets = @($pageResults | Where-Object { -not $_.ok } | Select-Object -ExpandProperty offset)
+                if ($failedPageOffsets.Count -gt 0) {
+                    $retryResults = New-Object System.Collections.ArrayList
+                    foreach ($failedOffset in @($failedPageOffsets)) {
+                        $retryPageResult = Invoke-WorkdayPageRequest -Url $normalizedCandidate -Offset ([int]$failedOffset) -PageLimit $pageLimit -TimeoutSec 45
+                        if (-not $retryPageResult.ok) {
+                            throw $retryPageResult.error
+                        }
+
+                        [void]$retryResults.Add($retryPageResult)
+                    }
+
+                    $successfulParallelResults = @($pageResults | Where-Object { $_.ok })
+                    $pageResults = @($successfulParallelResults + @($retryResults.ToArray()))
+                }
+
+                foreach ($pageResult in @($pageResults | Sort-Object offset)) {
+                    if ([int]$pageResult.reportedTotal -gt 0) {
+                        $reportedTotal = [Math]::Max($reportedTotal, [int]$pageResult.reportedTotal)
+                    }
+
+                    foreach ($job in @($pageResult.jobs)) {
+                        $jobKey = [string](Get-NestedValue -Object $job -Paths @('externalPath', 'id', 'jobPostingId', 'title'))
+                        if (-not $jobKey) {
+                            $jobKey = ('offset:{0}|row:{1}' -f [int]$pageResult.offset, $jobs.Count)
+                        }
+
+                        if ($seenJobKeys.Add($jobKey)) {
+                            [void]$jobs.Add($job)
+                        }
+                    }
+                }
+            } elseif ($firstPageResult.jobs.Count -eq $pageLimit) {
+                $offset = $pageLimit
+                while ($pageCount -lt 250) {
+                    $pageResult = Invoke-WorkdayPageRequest -Url $normalizedCandidate -Offset $offset -PageLimit $pageLimit -TimeoutSec 45
+                    if (-not $pageResult.ok) {
+                        throw $pageResult.error
+                    }
+
+                    $pageCount += 1
+                    if ([int]$pageResult.reportedTotal -gt 0) {
+                        $reportedTotal = [Math]::Max($reportedTotal, [int]$pageResult.reportedTotal)
+                    }
+
+                    foreach ($job in @($pageResult.jobs)) {
+                        $jobKey = [string](Get-NestedValue -Object $job -Paths @('externalPath', 'id', 'jobPostingId', 'title'))
+                        if (-not $jobKey) {
+                            $jobKey = ('offset:{0}|row:{1}' -f $offset, $jobs.Count)
+                        }
+
+                        if ($seenJobKeys.Add($jobKey)) {
+                            [void]$jobs.Add($job)
+                        }
+                    }
+
+                    if ($pageResult.jobs.Count -eq 0 -or $pageResult.jobs.Count -lt $pageLimit) {
+                        break
+                    }
+
+                    if ($reportedTotal -gt 0 -and ($offset + $pageResult.jobs.Count) -ge $reportedTotal) {
+                        break
+                    }
+
+                    $offset += $pageResult.jobs.Count
+                }
+            }
+
+            $requestStart.Stop()
+            Write-PipelineDiag -Stage 'workday_fetch' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message 'Fetched Workday jobs from API candidate' -Data @{
+                apiUrl = $normalizedCandidate
+                pageCount = $pageCount
+                parallelPageCount = $parallelPageCount
+                jobCount = @($jobs).Count
+                reportedTotal = $reportedTotal
+                elapsedMs = [int]$requestStart.Elapsed.TotalMilliseconds
+            }
+            return [ordered]@{
+                apiUrl = $normalizedCandidate
+                jobs = @($jobs)
+                pageCount = $pageCount
+                reportedTotal = $reportedTotal
+                elapsedMs = [int]$requestStart.Elapsed.TotalMilliseconds
+            }
+        } catch {
+            $requestStart.Stop()
+            $lastException = $_.Exception
+            Write-PipelineDiag -Stage 'workday_fetch_candidate_error' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message ('Workday API candidate failed: ' + [string]$lastException.Message) -Data @{
+                apiUrl = $normalizedCandidate
+                elapsedMs = [int]$requestStart.Elapsed.TotalMilliseconds
+            }
+        }
+    }
+
+    if ($lastException) {
+        throw $lastException
+    }
+
+    return [ordered]@{
+        apiUrl = ''
+        jobs = @()
+        pageCount = 0
+        reportedTotal = 0
+        elapsedMs = 0
+    }
+}
+
+function Get-WorkdayJobs {
+    param($Config)
+
+    $candidateResolutionStart = [System.Diagnostics.Stopwatch]::StartNew()
+    $directCandidates = @(Get-WorkdayApiCandidateUrls -Config $Config)
+    $candidateResolutionStart.Stop()
+    if ($directCandidates.Count -eq 0) {
+        return @()
+    }
+
+    Write-PipelineDiag -Stage 'workday_resolve' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message 'Resolved direct Workday API candidates' -Data @{
+        candidateCount = $directCandidates.Count
+        elapsedMs = [int]$candidateResolutionStart.Elapsed.TotalMilliseconds
+    }
+
+    try {
+        $requestResult = Invoke-WorkdayJobsRequest -CandidateUrls $directCandidates -Config $Config
+    } catch {
+        $fallbackResolutionStart = [System.Diagnostics.Stopwatch]::StartNew()
+        $resolvedCandidates = @(Get-WorkdayApiCandidateUrls -Config $Config -IncludePageResolution)
+        $fallbackResolutionStart.Stop()
+        Write-PipelineDiag -Stage 'workday_resolve' -Company ([string](Get-ObjectValue -Object $Config -Name 'companyName' -Default '')) -Message 'Resolved fallback Workday API candidates' -Data @{
+            candidateCount = $resolvedCandidates.Count
+            elapsedMs = [int]$fallbackResolutionStart.Elapsed.TotalMilliseconds
+        }
+        $requestResult = Invoke-WorkdayJobsRequest -CandidateUrls $resolvedCandidates -Config $Config
+    }
+
+    $url = [string](Get-ObjectValue -Object $requestResult -Name 'apiUrl' -Default '')
+    $jobs = @((Get-ObjectValue -Object $requestResult -Name 'jobs' -Default @()))
 
     return @(
         foreach ($job in @($jobs)) {
             $externalPath = [string](Get-NestedValue -Object $job -Paths @('externalPath'))
             $jobUrl = if ($externalPath -and $url -match '^(https?://[^/]+)') { "$($matches[1])$externalPath" } else { $externalPath }
             [ordered]@{
-                jobId = [string](Get-NestedValue -Object $job -Paths @('bulletFields', 'externalPath', 'id', 'jobPostingId'))
+                jobId = [string](Get-NestedValue -Object $job -Paths @('externalPath', 'id', 'jobPostingId'))
                 title = [string](Get-NestedValue -Object $job -Paths @('title'))
-                location = [string](Get-NestedValue -Object $job -Paths @('locationsText', 'location'))
-                department = [string](Get-NestedValue -Object $job -Paths @('bulletFields', 'jobFamily', 'department'))
+                location = [string](Get-NestedValue -Object $job -Paths @('locationsText', 'location', 'locationText'))
+                department = [string](Get-NestedValue -Object $job -Paths @('jobFamily', 'department', 'bulletFields.jobFamily'))
                 employmentType = [string](Get-NestedValue -Object $job -Paths @('timeType', 'workerSubType', 'employmentType'))
                 url = if ($jobUrl) { $jobUrl } else { [string](Get-NestedValue -Object $job -Paths @('externalUrl', 'url')) }
                 postedAt = Convert-ToDateString (Get-NestedValue -Object $job -Paths @('postedOn', 'postedOnDate', 'startDate'))
@@ -2952,7 +4042,7 @@ function Get-JobviteJobs {
     }
 
     $payload = Get-JsonFromUrl -Url $url
-    $jobs = if ($payload.jobs) { @($payload.jobs) } elseif ($payload.requisitions) { @($payload.requisitions) } else { @($payload) }
+    $jobs = @(Get-TopLevelCollection -Payload $payload -PropertyNames @('jobs', 'requisitions'))
     return @(
         foreach ($job in $jobs) {
             [ordered]@{
@@ -2979,7 +4069,7 @@ function Get-IcimsJobs {
     }
 
     $payload = Get-JsonFromUrl -Url $url
-    $jobs = if ($payload.searchResults) { @($payload.searchResults) } elseif ($payload.jobs) { @($payload.jobs) } else { @($payload) }
+    $jobs = @(Get-TopLevelCollection -Payload $payload -PropertyNames @('searchResults', 'jobs'))
     return @(
         foreach ($job in $jobs) {
             [ordered]@{
@@ -3006,7 +4096,7 @@ function Get-TaleoJobs {
     }
 
     $payload = Get-JsonFromUrl -Url $url
-    $jobs = if ($payload.items) { @($payload.items) } elseif ($payload.requisitions) { @($payload.requisitions) } else { @($payload) }
+    $jobs = @(Get-TopLevelCollection -Payload $payload -PropertyNames @('items', 'requisitions'))
     return @(
         foreach ($job in $jobs) {
             [ordered]@{
@@ -3122,9 +4212,15 @@ function Sync-ImportedCompanyData {
         [string[]]$CompanyKeys = @()
     )
 
+    $companyDefaults = Get-CompanyRecordDefaults
+    $contactDefaults = Get-ContactRecordDefaults
+    $jobDefaults = Get-JobRecordDefaults
+    $boardConfigDefaults = Get-BoardConfigDefaults
+    $activityDefaults = Get-ActivityRecordDefaults
     $companies = New-Object System.Collections.ArrayList
     $companyMap = @{}
     foreach ($company in @($State.companies)) {
+        Ensure-RecordDefaults -Record $company -Defaults $companyDefaults | Out-Null
         [void]$companies.Add($company)
         $key = Get-CanonicalCompanyKey $(if ($company.normalizedName) { $company.normalizedName } else { $company.displayName })
         if ($key) {
@@ -3132,8 +4228,21 @@ function Sync-ImportedCompanyData {
         }
     }
 
+    $contactsByCompany = @{}
+    foreach ($contact in @($State.contacts)) {
+        Ensure-RecordDefaults -Record $contact -Defaults $contactDefaults | Out-Null
+        $key = Get-CanonicalCompanyKey $(if ($contact.normalizedCompanyName) { $contact.normalizedCompanyName } else { $contact.companyName })
+        if (-not $key) { continue }
+        [void](Set-ObjectValue -Object $contact -Name 'normalizedCompanyName' -Value $key)
+        if (-not $contactsByCompany.ContainsKey($key)) {
+            $contactsByCompany[$key] = New-Object System.Collections.ArrayList
+        }
+        [void]$contactsByCompany[$key].Add($contact)
+    }
+
     $jobsByCompany = @{}
     foreach ($job in @($State.jobs)) {
+        Ensure-RecordDefaults -Record $job -Defaults $jobDefaults | Out-Null
         $key = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $job -Name 'normalizedCompanyName' -Value $key)
@@ -3145,6 +4254,7 @@ function Sync-ImportedCompanyData {
 
     $configsByCompany = @{}
     foreach ($config in @($State.boardConfigs)) {
+        Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
         $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
@@ -3154,26 +4264,44 @@ function Sync-ImportedCompanyData {
         [void]$configsByCompany[$key].Add($config)
     }
 
+    $activitiesByCompany = @{}
+    foreach ($activity in @($State.activities)) {
+        Ensure-RecordDefaults -Record $activity -Defaults $activityDefaults | Out-Null
+        $key = Get-CanonicalCompanyKey (Get-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Default '')
+        if (-not $key) { continue }
+        [void](Set-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Value $key)
+        if (-not $activitiesByCompany.ContainsKey($key)) {
+            $activitiesByCompany[$key] = New-Object System.Collections.ArrayList
+        }
+        [void]$activitiesByCompany[$key].Add($activity)
+    }
+
     $keysToRefresh = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($key in @($CompanyKeys)) {
         $normalized = Normalize-TextKey $key
         if ($normalized) { [void]$keysToRefresh.Add($normalized) }
     }
 
-    foreach ($key in $jobsByCompany.Keys) {
-        if ($configsByCompany.ContainsKey($key)) {
-            [void]$keysToRefresh.Add($key)
+    if (@($CompanyKeys).Count -eq 0) {
+        foreach ($key in $jobsByCompany.Keys) {
+            if ($configsByCompany.ContainsKey($key)) {
+                [void]$keysToRefresh.Add($key)
+            }
         }
     }
 
     foreach ($key in ($keysToRefresh | Sort-Object)) {
         $company = $companyMap[$key]
+        $contactItems = if ($contactsByCompany.ContainsKey($key)) { @($contactsByCompany[$key].ToArray()) } else { @() }
         $configItems = if ($configsByCompany.ContainsKey($key)) { @($configsByCompany[$key].ToArray()) } else { @() }
         $jobItems = if ($jobsByCompany.ContainsKey($key)) { @($jobsByCompany[$key].ToArray()) } else { @() }
+        $activityItems = if ($activitiesByCompany.ContainsKey($key)) { @($activitiesByCompany[$key].ToArray()) } else { @() }
 
         if (-not $company) {
             $displayName = ''
-            if (@($configItems).Count -gt 0 -and $configItems[0].companyName) {
+            if (@($contactItems).Count -gt 0 -and $contactItems[0].companyName) {
+                $displayName = [string]$contactItems[0].companyName
+            } elseif (@($configItems).Count -gt 0 -and $configItems[0].companyName) {
                 $displayName = [string]$configItems[0].companyName
             } elseif (@($jobItems).Count -gt 0 -and $jobItems[0].companyName) {
                 $displayName = [string]$jobItems[0].companyName
@@ -3183,13 +4311,23 @@ function Sync-ImportedCompanyData {
             $companyMap[$key] = $company
         }
 
-        $company = Update-CompanyProjection -Company $company -Jobs $jobItems -Configs $configItems
+        $company = Update-CompanyProjection -Company $company -Contacts $contactItems -Jobs $jobItems -Configs $configItems -Activities $activityItems
+        foreach ($contact in @($contactItems)) {
+            if ($null -eq $contact) { continue }
+            [void](Set-ObjectValue -Object $contact -Name 'accountId' -Value $company.id)
+        }
         foreach ($config in @($configItems)) {
+            if ($null -eq $config) { continue }
             [void](Set-ObjectValue -Object $config -Name 'accountId' -Value $company.id)
         }
         foreach ($job in @($jobItems)) {
+            if ($null -eq $job) { continue }
             [void](Set-ObjectValue -Object $job -Name 'accountId' -Value $company.id)
             if (-not $job.companyName) { [void](Set-ObjectValue -Object $job -Name 'companyName' -Value $company.displayName) }
+        }
+        foreach ($activity in @($activityItems)) {
+            if ($null -eq $activity) { continue }
+            [void](Set-ObjectValue -Object $activity -Name 'accountId' -Value $company.id)
         }
     }
 
@@ -3221,6 +4359,10 @@ function Invoke-LiveJobImport {
 
     $jobMap = @{}
     $existingByNaturalKey = @{}
+    $changedJobs = New-Object System.Collections.ArrayList
+    $changedJobIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $changedConfigs = New-Object System.Collections.ArrayList
+    $changedConfigIds = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($job in @($State.jobs)) {
         if (-not $job.retrievedAt -and $job.importedAt) {
             [void](Set-ObjectValue -Object $job -Name 'retrievedAt' -Value $job.importedAt)
@@ -3264,6 +4406,7 @@ function Invoke-LiveJobImport {
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Importing live jobs' -Processed 0 -Total $totalConfigs -StartedAt $startedAt -Message 'Fetching active ATS job feeds'
     for ($configIndex = 0; $configIndex -lt $activeConfigs.Count; $configIndex++) {
         $config = $activeConfigs[$configIndex]
+        $configId = [string](Get-ObjectValue -Object $config -Name 'id')
         if ($ProgressCallback) {
             Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Importing live jobs' -Processed $configIndex -Total $totalConfigs -StartedAt $startedAt -Message ("Fetching {0}" -f [string]$config.companyName)
         }
@@ -3346,6 +4489,9 @@ function Invoke-LiveJobImport {
 
                 $jobMap[$jobId] = $jobRecord
                 $existingByNaturalKey[$naturalKey] = $jobRecord
+                if ($changedJobIds.Add($jobId)) {
+                    [void]$changedJobs.Add($jobRecord)
+                }
             }
 
             foreach ($existingJob in @($jobMap.Values | Where-Object {
@@ -3356,6 +4502,10 @@ function Invoke-LiveJobImport {
                     [void](Set-ObjectValue -Object $existingJob -Name 'active' -Value $false)
                     [void](Set-ObjectValue -Object $existingJob -Name 'isNew' -Value $false)
                     [void](Set-ObjectValue -Object $existingJob -Name 'retrievedAt' -Value $retrievedAt)
+                    $existingJobId = [string](Get-ObjectValue -Object $existingJob -Name 'id')
+                    if ($existingJobId -and $changedJobIds.Add($existingJobId)) {
+                        [void]$changedJobs.Add($existingJob)
+                    }
                 }
             }
 
@@ -3387,6 +4537,10 @@ function Invoke-LiveJobImport {
                 atsType = $config.atsType
                 message = $fetchErrorMsg
             })
+        }
+
+        if ($configId -and $changedConfigIds.Add($configId)) {
+            [void]$changedConfigs.Add($config)
         }
 
         $processed = $configIndex + 1
@@ -3432,6 +4586,9 @@ function Invoke-LiveJobImport {
     return [ordered]@{
         state = $State
         importRun = $run
+        changedJobs = @($changedJobs.ToArray())
+        changedConfigs = @($changedConfigs.ToArray())
+        companyKeys = @($companyKeys | Sort-Object)
     }
 }
 
