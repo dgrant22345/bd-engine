@@ -3681,6 +3681,55 @@ function Get-DashboardModel {
             ForEach-Object { Select-AccountSummary -Company $_ }
     )
 
+    $needsResolutionCandidates = New-Object System.Collections.ArrayList
+    foreach ($company in @($State.companies)) {
+        if ($company.status -in @('client', 'paused')) {
+            continue
+        }
+
+        $isOperationalCandidate = (
+            (Convert-ToNumber $company.targetScore) -ge 25 -or
+            (Convert-ToNumber $company.connectionCount) -ge 2 -or
+            (Convert-ToNumber $company.jobCount) -gt 0 -or
+            (Convert-ToNumber $company.alertPriorityScore) -ge 30
+        )
+        if (-not $isOperationalCandidate) {
+            continue
+        }
+
+        $hasStrongBoard = @(
+            $State.boardConfigs |
+                Where-Object {
+                    $_.accountId -eq $company.id -and
+                    $_.discoveryStatus -in @('mapped', 'discovered') -and
+                    (Convert-ToNumber $_.confidenceScore) -ge 80
+                }
+        ).Count -gt 0
+
+        $needsIdentityHelp = (
+            -not $company.canonicalDomain -or
+            -not $company.careersUrl -or
+            $company.enrichmentConfidence -in @('unresolved', 'low') -or
+            -not $hasStrongBoard
+        )
+
+        if ($needsIdentityHelp) {
+            [void]$needsResolutionCandidates.Add($company)
+        }
+    }
+
+    $needsResolution = @(
+        $needsResolutionCandidates |
+            Sort-Object @(
+                @{ Expression = { [double](Convert-ToNumber $_.targetScore) }; Descending = $true },
+                @{ Expression = { [double](Convert-ToNumber $_.connectionCount) }; Descending = $true },
+                @{ Expression = { [double](Convert-ToNumber $_.alertPriorityScore) }; Descending = $true },
+                @{ Expression = { [double](Convert-ToNumber $_.dailyScore) }; Descending = $true }
+            ) |
+            Select-Object -First 6 |
+            ForEach-Object { Select-AccountSummary -Company $_ }
+    )
+
     $result = [ordered]@{
         summary = [ordered]@{
             accountCount = @($State.companies).Count
@@ -3690,6 +3739,7 @@ function Get-DashboardModel {
             newJobsLast24h = $newJobsLast24h.Count
             staleAccountCount = @($State.companies | Where-Object { $_.staleFlag -eq 'STALE' }).Count
             discoveredBoardCount = @($State.boardConfigs | Where-Object { $_.discoveryStatus -in @('mapped', 'discovered') }).Count
+            needsResolutionCount = $needsResolutionCandidates.Count
         }
         todayQueue = $todayQueue
         newJobsToday = @($newJobsLast24h | Select-Object -First 12 | ForEach-Object { Select-JobSummary -Job $_ })
@@ -3697,6 +3747,7 @@ function Get-DashboardModel {
         followUpAccounts = $followUpAccounts
         networkLeaders = $networkLeaders
         recommendedActions = $recommendedActions
+        needsResolution = $needsResolution
     }
 
     $script:DashboardCache = $result

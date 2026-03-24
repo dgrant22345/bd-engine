@@ -129,17 +129,18 @@ foreach ($config in $configs) {
             $boardId = $mapping.boardId
             $supportedInt = if ($atsType -in @('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workday', 'jobvite')) { 1 } else { 0 }
             $supportedJson = if ($supportedInt -eq 1) { "true" } else { "false" }
+            $activeJson = if ($supportedInt -eq 1) { "true" } else { "false" }
             $safeEvidence = "Known enterprise mapping for $name"
             $updateCmd.CommandText = @"
 UPDATE board_configs SET
   ats_type = '$atsType', board_id = '$boardId', resolved_board_url = '$boardUrl',
-  active = 1, supported_import = $supportedInt, discovery_status = 'discovered',
+  active = $supportedInt, supported_import = $supportedInt, discovery_status = 'discovered',
   discovery_method = 'known_enterprise_map', confidence_score = 95, confidence_band = 'high',
   evidence_summary = '$safeEvidence', review_status = 'auto', failure_reason = '',
   last_checked_at = '$now', last_resolution_attempt_at = '$now', next_resolution_attempt_at = '$next',
   data_json = json_set(data_json,
     '$.atsType', '$atsType', '$.boardId', '$boardId', '$.resolvedBoardUrl', '$boardUrl',
-    '$.active', json('true'), '$.supportedImport', json('$supportedJson'),
+    '$.active', json('$activeJson'), '$.supportedImport', json('$supportedJson'),
     '$.discoveryStatus', 'discovered', '$.discoveryMethod', 'known_enterprise_map',
     '$.confidenceScore', 95, '$.confidenceBand', 'high',
     '$.evidenceSummary', '$safeEvidence', '$.reviewStatus', 'auto', '$.failureReason', '',

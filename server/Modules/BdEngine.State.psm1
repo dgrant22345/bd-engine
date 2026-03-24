@@ -839,6 +839,49 @@ function Clear-AppResolverSearchCacheExpired {
     return (Clear-BdSqliteExpiredResolverSearchCache -Before $Before)
 }
 
+function Get-AppResolverSeedCooldownRecords {
+    param(
+        [string[]]$SeedKeys,
+        [switch]$IncludeExpired
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return @()
+    }
+
+    return @(Get-BdSqliteResolverSeedCooldownRecords -SeedKeys $SeedKeys -IncludeExpired:$IncludeExpired)
+}
+
+function Save-AppResolverSeedCooldownRecords {
+    param([object[]]$Records)
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Save-BdSqliteResolverSeedCooldownRecords -Records $Records)
+}
+
+function Remove-AppResolverSeedCooldownRecords {
+    param([string[]]$SeedKeys)
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Remove-BdSqliteResolverSeedCooldownRecords -SeedKeys $SeedKeys)
+}
+
+function Clear-AppResolverSeedCooldownsExpired {
+    param([string]$Before = '')
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return 0
+    }
+
+    return (Clear-BdSqliteExpiredResolverSeedCooldowns -Before $Before)
+}
+
 function Get-JsonAppStateInternal {
     $map = Get-StorageMap
     $workspace = Read-JsonFile -Path $map.Workspace -Default (New-DefaultWorkspace)
@@ -1343,13 +1386,16 @@ function Get-AppBackgroundJobPayload {
 }
 
 function Find-AppBackgroundJobs {
-    param([hashtable]$Query)
+    param(
+        [hashtable]$Query,
+        [switch]$IncludeResult
+    )
 
     if (-not (Test-AppStoreUsesSqlite)) {
         return $null
     }
 
-    return (Find-BdSqliteBackgroundJobs -Query $Query)
+    return (Find-BdSqliteBackgroundJobs -Query $Query -IncludeResult:$IncludeResult)
 }
 
 function Update-AppBackgroundJobProgress {
@@ -1365,6 +1411,21 @@ function Update-AppBackgroundJobProgress {
     return (Update-BdSqliteBackgroundJobProgress -JobId $JobId -ProgressMessage $ProgressMessage)
 }
 
+function Update-AppBackgroundJobCheckpoint {
+    param(
+        [string]$JobId,
+        $Payload,
+        [string]$ProgressMessage = '',
+        [int]$RecordsAffected = 0
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return $null
+    }
+
+    return (Update-BdSqliteBackgroundJobCheckpoint -JobId $JobId -Payload $Payload -ProgressMessage $ProgressMessage -RecordsAffected $RecordsAffected)
+}
+
 function Start-AppBackgroundJob {
     param([string]$JobId)
 
@@ -1373,6 +1434,20 @@ function Start-AppBackgroundJob {
     }
 
     return (Start-BdSqliteBackgroundJob -JobId $JobId)
+}
+
+function Resume-AppBackgroundJob {
+    param(
+        [string]$JobId,
+        $Payload = $null,
+        [string]$ProgressMessage = 'Queued to resume'
+    )
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return $null
+    }
+
+    return (Requeue-BdSqliteBackgroundJob -JobId $JobId -Payload $Payload -ProgressMessage $ProgressMessage)
 }
 
 function Complete-AppBackgroundJob {
@@ -1547,6 +1622,16 @@ function Get-AppAccountDetailFast {
     return (Get-BdSqliteAccountDetail -AccountId $AccountId)
 }
 
+function Get-AppAccountResolutionContextFast {
+    param([string]$AccountId)
+
+    if (-not (Test-AppStoreUsesSqlite)) {
+        return $null
+    }
+
+    return (Get-BdSqliteAccountResolutionContext -AccountId $AccountId)
+}
+
 function Find-AppSearchResultsFast {
     param([string]$Query)
 
@@ -1597,13 +1682,17 @@ function New-RandomId {
 }
 
 function Invoke-AppLocalEnrichmentPassFast {
-    param([switch]$ForceRefresh)
+    param(
+        [string]$AccountId = '',
+        [switch]$ForceRefresh
+    )
 
     if (-not (Test-AppStoreUsesSqlite)) {
         return $null
     }
 
-    return (Invoke-BdSqliteLocalEnrichmentPass -Limit 5000 -ForceRefresh:$ForceRefresh)
+    $limit = if ([string]::IsNullOrWhiteSpace([string]$AccountId)) { 5000 } else { 1 }
+    return (Invoke-BdSqliteLocalEnrichmentPass -Limit $limit -AccountId $AccountId -ForceRefresh:$ForceRefresh)
 }
 
 Export-ModuleMember -Function *-*

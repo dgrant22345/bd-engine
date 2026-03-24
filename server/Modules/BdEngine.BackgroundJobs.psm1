@@ -150,14 +150,72 @@ function Get-BackgroundWorkerProcess {
     }
 }
 
+function Test-BackgroundJobSupportsResume {
+    param(
+        [string]$JobType,
+        $Payload = $null
+    )
+
+    switch ([string]$JobType) {
+        'company-enrichment' { return $true }
+        default { return $false }
+    }
+}
+
+function Get-BackgroundJobResumeAttemptCount {
+    param($Payload)
+
+    return [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'resumeCount' -Default 0))
+}
+
+function New-CompanyEnrichmentStats {
+    return [ordered]@{
+        checked = 0
+        verified = 0
+        enriched = 0
+        unresolved = 0
+        missingInputs = 0
+    }
+}
+
+function Merge-CompanyEnrichmentStats {
+    param(
+        $BaseStats,
+        $DeltaStats
+    )
+
+    $merged = New-CompanyEnrichmentStats
+    foreach ($key in @($merged.Keys)) {
+        $baseValue = [int](Convert-ToNumber (Get-ObjectValue -Object $BaseStats -Name $key -Default 0))
+        $deltaValue = [int](Convert-ToNumber (Get-ObjectValue -Object $DeltaStats -Name $key -Default 0))
+        $merged[$key] = $baseValue + $deltaValue
+    }
+
+    return $merged
+}
+
 function Fail-OrphanedBackgroundJobs {
     $worker = Get-BackgroundWorkerProcess
     if ($worker) {
         return
     }
 
-    $running = Find-AppBackgroundJobs -Query @{ status = 'running'; page = 1; pageSize = 50 }
+    $running = Find-AppBackgroundJobs -Query @{ status = 'running'; page = 1; pageSize = 50 } -IncludeResult:$false
     foreach ($job in @($running.items)) {
+        $payload = Get-AppBackgroundJobPayload -JobId $job.id
+        if (Test-BackgroundJobSupportsResume -JobType ([string]$job.type) -Payload $payload) {
+            if ($null -eq $payload) {
+                $payload = [ordered]@{}
+            }
+            $resumeCount = (Get-BackgroundJobResumeAttemptCount -Payload $payload) + 1
+            [void](Set-ObjectValue -Object $payload -Name 'resumeCount' -Value $resumeCount)
+            [void](Set-ObjectValue -Object $payload -Name 'resumeRequestedAt' -Value ((Get-Date).ToString('o')))
+            if ($resumeCount -le 5) {
+                Resume-AppBackgroundJob -JobId $job.id -Payload $payload -ProgressMessage ('Queued to resume after worker exit ({0}/5)' -f $resumeCount) | Out-Null
+                Write-BackgroundJobLog ("JOB recover-requeue id={0} type={1} resumeCount={2}" -f $job.id, $job.type, $resumeCount)
+                continue
+            }
+        }
         Fail-AppBackgroundJob -JobId $job.id -ErrorMessage 'Background worker exited before the job finished.' -Result ([ordered]@{
             recoveredAt = (Get-Date).ToString('o')
         }) | Out-Null
@@ -245,14 +303,16 @@ function Get-BackgroundJobDedupeSignature {
             $accountId = [string](Get-ObjectValue -Object $Payload -Name 'accountId' -Default '')
             $limit = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'limit' -Default 0))
             $forceRefresh = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'forceRefresh' -Default $false))
-            return ('company-enrichment|accountId={0}|limit={1}|forceRefresh={2}' -f $accountId, $limit, [int]$forceRefresh)
+            $deepVerify = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'deepVerify' -Default $false))
+            return ('company-enrichment|accountId={0}|limit={1}|forceRefresh={2}|deepVerify={3}' -f $accountId, $limit, [int]$forceRefresh, [int]$deepVerify)
         }
         'ats-discovery' {
             $configId = [string](Get-ObjectValue -Object $Payload -Name 'configId' -Default '')
             $limit = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'limit' -Default 0))
             $onlyMissing = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'onlyMissing' -Default $false))
             $forceRefresh = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'forceRefresh' -Default $false))
-            return ('ats-discovery|configId={0}|limit={1}|onlyMissing={2}|forceRefresh={3}' -f $configId, $limit, [int]$onlyMissing, [int]$forceRefresh)
+            $deepVerify = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'deepVerify' -Default $false))
+            return ('ats-discovery|configId={0}|limit={1}|onlyMissing={2}|forceRefresh={3}|deepVerify={4}' -f $configId, $limit, [int]$onlyMissing, [int]$forceRefresh, [int]$deepVerify)
         }
         default {
             return ''
@@ -339,9 +399,9 @@ function Get-BackgroundRuntimeStatus {
     )
 
     Fail-OrphanedBackgroundJobs
-    $running = Find-AppBackgroundJobs -Query @{ status = 'running'; page = 1; pageSize = 10 }
-    $queued = Find-AppBackgroundJobs -Query @{ status = 'queued'; page = 1; pageSize = 10 }
-    $recent = Find-AppBackgroundJobs -Query @{ page = 1; pageSize = 8 }
+    $running = Find-AppBackgroundJobs -Query @{ status = 'running'; page = 1; pageSize = 10 } -IncludeResult:$false
+    $queued = Find-AppBackgroundJobs -Query @{ status = 'queued'; page = 1; pageSize = 10 } -IncludeResult:$false
+    $recent = Find-AppBackgroundJobs -Query @{ page = 1; pageSize = 8 } -IncludeResult:$false
     $worker = Get-BackgroundWorkerProcess
 
     return [ordered]@{
@@ -861,7 +921,7 @@ function Invoke-BackgroundConfigSyncJob {
     }
 }
 
-function Invoke-BackgroundCompanyEnrichmentJob {
+function Invoke-BackgroundCompanyEnrichmentJobLegacy {
     param($Payload, [string]$JobId)
 
     $limit = [int]$Payload.limit
@@ -934,11 +994,272 @@ function Invoke-BackgroundCompanyEnrichmentJob {
     }
 }
 
+function Invoke-BackgroundCompanyEnrichmentJob {
+    param($Payload, [string]$JobId)
+
+    if ($null -eq $Payload) {
+        $Payload = [ordered]@{}
+    }
+
+    $limit = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'limit' -Default 0))
+    if ($limit -lt 1) { $limit = 500 }
+    [void](Set-ObjectValue -Object $Payload -Name 'limit' -Value $limit)
+
+    $forceRefresh = [bool](Get-ObjectValue -Object $Payload -Name 'forceRefresh' -Default $false)
+    [void](Set-ObjectValue -Object $Payload -Name 'forceRefresh' -Value $forceRefresh)
+    $deepVerify = [bool](Get-ObjectValue -Object $Payload -Name 'deepVerify' -Default $false)
+    [void](Set-ObjectValue -Object $Payload -Name 'deepVerify' -Value $deepVerify)
+    $targetAccountId = [string](Get-ObjectValue -Object $Payload -Name 'accountId' -Default '')
+    $isTargetedAccount = -not [string]::IsNullOrWhiteSpace($targetAccountId)
+
+    $chunkSize = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'chunkSize' -Default 0))
+    if ($chunkSize -lt 1) {
+        $chunkSize = [Math]::Min(10, [Math]::Max(1, $limit))
+    }
+    [void](Set-ObjectValue -Object $Payload -Name 'chunkSize' -Value $chunkSize)
+
+    $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
+    $timings = Get-ObjectValue -Object $Payload -Name 'timings' -Default ([ordered]@{})
+    if ($null -eq $timings) {
+        $timings = [ordered]@{}
+    }
+    foreach ($timingName in @('localMs', 'candidateMs', 'loadMs', 'enrichmentMs', 'persistMs', 'checkpointMs', 'snapshotMs')) {
+        [void](Set-ObjectValue -Object $timings -Name $timingName -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name $timingName -Default 0))))
+    }
+    [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+
+    $aggregateStats = Get-ObjectValue -Object $Payload -Name 'aggregateStats' -Default $null
+    if ($null -eq $aggregateStats) {
+        $aggregateStats = New-CompanyEnrichmentStats
+    }
+    [void](Set-ObjectValue -Object $Payload -Name 'aggregateStats' -Value $aggregateStats)
+
+    $localStats = Get-ObjectValue -Object $Payload -Name 'localStats' -Default $null
+    $currentIndex = [int](Convert-ToNumber (Get-ObjectValue -Object $Payload -Name 'currentIndex' -Default 0))
+    if ($currentIndex -lt 0) {
+        $currentIndex = 0
+    }
+    [void](Set-ObjectValue -Object $Payload -Name 'currentIndex' -Value $currentIndex)
+
+    $lastPersistence = $null
+
+    if (-not [bool](Get-ObjectValue -Object $Payload -Name 'localStageCompleted' -Default $false)) {
+        $localStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        if ($isTargetedAccount) {
+            Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Skipping global local enrichment pass for targeted account run' | Out-Null
+            if ($null -eq $localStats) {
+                $localStats = [ordered]@{
+                    contactEmailDomainApplied = 0
+                    boardConfigDomainApplied = 0
+                    boardConfigCareersApplied = 0
+                    skippedAlreadyEnriched = 0
+                    totalUpdated = 0
+                    jobDomainApplied = 0
+                }
+            }
+            Write-BackgroundJobLog ("JOB local-enrich-skip id={0} reason=targeted-account accountId={1}" -f $JobId, $targetAccountId)
+        } else {
+            Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Running local SQL enrichment pass (contact emails, board config domains)' | Out-Null
+            if (Test-AppStoreUsesSqlite) {
+                try {
+                    $localStats = Invoke-BdSqliteLocalEnrichmentPass -Limit ([Math]::Max(2000, $limit * 4)) -ForceRefresh:$forceRefresh
+                    Write-BackgroundJobLog ("JOB local-enrich id={0} contactEmail={1} boardDomain={2} boardCareers={3} total={4}" -f `
+                        $JobId,
+                        [int]$localStats.contactEmailDomainApplied,
+                        [int]$localStats.boardConfigDomainApplied,
+                        [int]$localStats.boardConfigCareersApplied,
+                        [int]$localStats.totalUpdated)
+                } catch {
+                    Write-BackgroundJobLog ("JOB local-enrich-error id={0} error={1}" -f $JobId, [string]$_)
+                }
+            }
+        }
+        $localStopwatch.Stop()
+        [void](Set-ObjectValue -Object $timings -Name 'localMs' -Value ([int]$localStopwatch.ElapsedMilliseconds))
+        [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+        [void](Set-ObjectValue -Object $Payload -Name 'localStats' -Value $localStats)
+        [void](Set-ObjectValue -Object $Payload -Name 'localStageCompleted' -Value $true)
+        [void](Set-ObjectValue -Object $Payload -Name 'localCompletedAt' -Value ((Get-Date).ToString('o')))
+        if ($JobId) {
+            $checkpointStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            Update-AppBackgroundJobCheckpoint -JobId $JobId -Payload $Payload -ProgressMessage 'Local enrichment complete - selecting candidate accounts' -RecordsAffected $currentIndex | Out-Null
+            $checkpointStopwatch.Stop()
+            [void](Set-ObjectValue -Object $timings -Name 'checkpointMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'checkpointMs' -Default 0)) + [int]$checkpointStopwatch.ElapsedMilliseconds))
+            [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+        }
+    }
+
+    $candidateIds = @(
+        @(Get-ObjectValue -Object $Payload -Name 'candidateIds' -Default @()) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            ForEach-Object { [string]$_ }
+    )
+    if ($candidateIds.Count -eq 0) {
+        Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Selecting prioritized companies for enrichment' | Out-Null
+        $candidateStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $candidateIds = @(Get-AppEnrichmentCandidateCompanyIdsFast -Limit $limit -AccountId $targetAccountId -ForceRefresh:$forceRefresh)
+        $candidateStopwatch.Stop()
+        [void](Set-ObjectValue -Object $timings -Name 'candidateMs' -Value ([int]$candidateStopwatch.ElapsedMilliseconds))
+        [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+        [void](Set-ObjectValue -Object $Payload -Name 'candidateIds' -Value @($candidateIds))
+        [void](Set-ObjectValue -Object $Payload -Name 'candidateCount' -Value @($candidateIds).Count)
+        [void](Set-ObjectValue -Object $Payload -Name 'candidateSelectedAt' -Value ((Get-Date).ToString('o')))
+        if ($isTargetedAccount) {
+            Write-BackgroundJobLog ("JOB candidate-select id={0} type=company-enrichment accountId={1} count={2} candidateMs={3}" -f `
+                $JobId,
+                $targetAccountId,
+                @($candidateIds).Count,
+                [int]$candidateStopwatch.ElapsedMilliseconds)
+        }
+        if ($JobId) {
+            $checkpointStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            Update-AppBackgroundJobCheckpoint -JobId $JobId -Payload $Payload -ProgressMessage ('Selected {0} candidate companies' -f @($candidateIds).Count) -RecordsAffected $currentIndex | Out-Null
+            $checkpointStopwatch.Stop()
+            [void](Set-ObjectValue -Object $timings -Name 'checkpointMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'checkpointMs' -Default 0)) + [int]$checkpointStopwatch.ElapsedMilliseconds))
+            [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+        }
+    }
+
+    $totalCount = @($candidateIds).Count
+    [void](Set-ObjectValue -Object $Payload -Name 'candidateCount' -Value $totalCount)
+    if ($currentIndex -gt $totalCount) {
+        $currentIndex = $totalCount
+        [void](Set-ObjectValue -Object $Payload -Name 'currentIndex' -Value $currentIndex)
+    }
+
+    if ($totalCount -eq 0) {
+        return [ordered]@{
+            localStats = $localStats
+            stats = $aggregateStats
+            companies = 0
+            chunkSize = $chunkSize
+            currentIndex = $currentIndex
+            totalCount = $totalCount
+            timings = [ordered]@{
+                localMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'localMs' -Default 0))
+                candidateMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'candidateMs' -Default 0))
+                loadMs = 0
+                enrichmentMs = 0
+                persistMs = 0
+                checkpointMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'checkpointMs' -Default 0))
+                snapshotMs = 0
+            }
+            persistence = $null
+        }
+    }
+
+    $chunkOrdinal = [int][Math]::Floor($currentIndex / [Math]::Max(1, $chunkSize))
+    while ($currentIndex -lt $totalCount) {
+        $chunkOrdinal += 1
+        $chunkIds = @($candidateIds | Select-Object -Skip $currentIndex -First $chunkSize)
+        if ($chunkIds.Count -eq 0) {
+            break
+        }
+
+        $chunkTotal = [int][Math]::Ceiling($totalCount / [double][Math]::Max(1, $chunkSize))
+        Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage ('Enriching company batch {0}/{1}' -f $chunkOrdinal, $chunkTotal) | Out-Null
+
+        $chunkLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $chunkState = Get-AppScopedStateForAccounts -AccountIds $chunkIds
+        $chunkLoadStopwatch.Stop()
+        [void](Set-ObjectValue -Object $timings -Name 'loadMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'loadMs' -Default 0)) + [int]$chunkLoadStopwatch.ElapsedMilliseconds))
+
+        $chunkEnrichmentStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $chunkResult = Invoke-CompanyEnrichment -State $chunkState -Limit 0 -AccountIds $chunkIds -ForceRefresh:$forceRefresh -DeepVerify:$deepVerify -ProgressCallback $progressCallback -ProcessedOffset $currentIndex -TotalOverride $totalCount
+        $chunkEnrichmentStopwatch.Stop()
+        [void](Set-ObjectValue -Object $timings -Name 'enrichmentMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'enrichmentMs' -Default 0)) + [int]$chunkEnrichmentStopwatch.ElapsedMilliseconds))
+
+        $aggregateStats = Merge-CompanyEnrichmentStats -BaseStats $aggregateStats -DeltaStats $chunkResult.stats
+        [void](Set-ObjectValue -Object $Payload -Name 'aggregateStats' -Value $aggregateStats)
+
+        $chunkPersistenceStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastPersistence = Save-BackgroundJobState -State ([ordered]@{
+                companies = @($chunkResult.state.companies)
+            }) -Segments @('Companies') -MergeSegments @('Companies') -JobId $JobId -OperationName ('company-enrichment-chunk-{0}' -f $chunkOrdinal) -SkipSnapshots
+        $chunkPersistenceStopwatch.Stop()
+        [void](Set-ObjectValue -Object $timings -Name 'persistMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'persistMs' -Default 0)) + [int]$chunkPersistenceStopwatch.ElapsedMilliseconds))
+
+        $currentIndex += $chunkIds.Count
+        [void](Set-ObjectValue -Object $Payload -Name 'currentIndex' -Value $currentIndex)
+        [void](Set-ObjectValue -Object $Payload -Name 'candidateCount' -Value $totalCount)
+        [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+        [void](Set-ObjectValue -Object $Payload -Name 'localStats' -Value $localStats)
+        [void](Set-ObjectValue -Object $Payload -Name 'lastChunkCompletedAt' -Value ((Get-Date).ToString('o')))
+        [void](Set-ObjectValue -Object $Payload -Name 'lastChunk' -Value ([ordered]@{
+                chunkNumber = $chunkOrdinal
+                chunkTotal = $chunkTotal
+                processed = $currentIndex
+                total = $totalCount
+                loadMs = [int]$chunkLoadStopwatch.ElapsedMilliseconds
+                enrichmentMs = [int]$chunkEnrichmentStopwatch.ElapsedMilliseconds
+                persistMs = [int]$chunkPersistenceStopwatch.ElapsedMilliseconds
+                companies = @($chunkResult.state.companies).Count
+            }))
+
+        if ($JobId) {
+            $checkpointStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            Update-AppBackgroundJobCheckpoint -JobId $JobId -Payload $Payload -ProgressMessage ('Checkpoint saved - {0}/{1} companies enriched' -f $currentIndex, $totalCount) -RecordsAffected $currentIndex | Out-Null
+            $checkpointStopwatch.Stop()
+            [void](Set-ObjectValue -Object $timings -Name 'checkpointMs' -Value ([int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'checkpointMs' -Default 0)) + [int]$checkpointStopwatch.ElapsedMilliseconds))
+            [void](Set-ObjectValue -Object $Payload -Name 'timings' -Value $timings)
+            Write-BackgroundJobLog ("JOB checkpoint id={0} type=company-enrichment chunk={1}/{2} processed={3}/{4} loadMs={5} enrichmentMs={6} persistMs={7} checkpointMs={8}" -f `
+                $JobId,
+                $chunkOrdinal,
+                $chunkTotal,
+                $currentIndex,
+                $totalCount,
+                [int]$chunkLoadStopwatch.ElapsedMilliseconds,
+                [int]$chunkEnrichmentStopwatch.ElapsedMilliseconds,
+                [int]$chunkPersistenceStopwatch.ElapsedMilliseconds,
+                [int]$checkpointStopwatch.ElapsedMilliseconds)
+        }
+    }
+
+    $deferredSnapshots = $null
+    $hasPersistenceMutations = $false
+    if ($lastPersistence) {
+        foreach ($segmentResult in @($lastPersistence.segments)) {
+            if ([int](Convert-ToNumber (Get-ObjectValue -Object $segmentResult -Name 'upserted' -Default 0)) -gt 0 -or
+                [int](Convert-ToNumber (Get-ObjectValue -Object $segmentResult -Name 'deleted' -Default 0)) -gt 0) {
+                $hasPersistenceMutations = $true
+                break
+            }
+        }
+    }
+    if ($lastPersistence -and $hasPersistenceMutations) {
+        $deferredSnapshots = Mark-AppSnapshotsDirty -Names @('filters') -Reason 'company-enrichment' -DataRevision ([string]$lastPersistence.dataRevision)
+        Write-BackgroundJobLog ("JOB snapshot-deferred id={0} operation=company-enrichment names={1} reason={2} dataRevision={3}" -f $JobId, ([string]::Join(',', @($deferredSnapshots.names))), [string]$deferredSnapshots.reason, [string]$deferredSnapshots.dataRevision)
+    } elseif ($lastPersistence) {
+        Write-BackgroundJobLog ("JOB snapshot-skip id={0} operation=company-enrichment reason=no_mutations" -f $JobId)
+    }
+
+    return [ordered]@{
+        localStats = $localStats
+        stats = $aggregateStats
+        companies = $currentIndex
+        chunkSize = $chunkSize
+        currentIndex = $currentIndex
+        totalCount = $totalCount
+        timings = [ordered]@{
+            localMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'localMs' -Default 0))
+            candidateMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'candidateMs' -Default 0))
+            loadMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'loadMs' -Default 0))
+            enrichmentMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'enrichmentMs' -Default 0))
+            persistMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'persistMs' -Default 0))
+            checkpointMs = [int](Convert-ToNumber (Get-ObjectValue -Object $timings -Name 'checkpointMs' -Default 0))
+            snapshotMs = 0
+        }
+        deferredSnapshots = $deferredSnapshots
+        persistence = $lastPersistence
+    }
+}
+
 function Invoke-BackgroundAtsDiscoveryJob {
     param($Payload, [string]$JobId)
 
     $limit = [int]$Payload.limit
     if ($limit -lt 1) { $limit = 300 }
+    $deepVerify = [bool](Get-ObjectValue -Object $Payload -Name 'deepVerify' -Default $false)
     $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
     $candidateConfigIds = @()
     if ([string]$Payload.configId) {
@@ -975,7 +1296,7 @@ function Invoke-BackgroundAtsDiscoveryJob {
     $loadStopwatch.Stop()
     Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Running ATS discovery' | Out-Null
     $discoveryStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $result = Invoke-AtsDiscovery -State $state -Limit $limit -OnlyMissing:([bool]$Payload.onlyMissing) -SkipSync -SkipDerivedData -ConfigId ([string]$Payload.configId) -ConfigIds $candidateConfigIds -ForceRefresh:([bool]$Payload.forceRefresh) -ProgressCallback $progressCallback
+    $result = Invoke-AtsDiscovery -State $state -Limit $limit -OnlyMissing:([bool]$Payload.onlyMissing) -SkipSync -SkipDerivedData -ConfigId ([string]$Payload.configId) -ConfigIds $candidateConfigIds -ForceRefresh:([bool]$Payload.forceRefresh) -DeepVerify:$deepVerify -ProgressCallback $progressCallback
     $discoveryStopwatch.Stop()
     $persistence = Save-BackgroundJobState -State $result.state -Segments @('BoardConfigs') -MergeSegments @('BoardConfigs') -JobId $JobId -OperationName 'ats-discovery'
     return [ordered]@{

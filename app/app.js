@@ -164,6 +164,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-local-enrichment') {
+      await runLocalEnrichment();
+      return;
+    }
+
     if (actionName === 'run-enrichment') {
       await runEnrichment();
       return;
@@ -237,6 +242,21 @@ function bindEvents() {
 
     if (actionName === 'rerun-enrichment-resolution') {
       await rerunEnrichmentResolution(action.dataset.id);
+      return;
+    }
+
+    if (actionName === 'account-quick-enrich') {
+      await quickEnrichAccount(action.dataset.id);
+      return;
+    }
+
+    if (actionName === 'account-resolve-now') {
+      await resolveAccountNow(action.dataset.id);
+      return;
+    }
+
+    if (actionName === 'account-deep-verify') {
+      await deepVerifyAccount(action.dataset.id);
       return;
     }
   });
@@ -695,6 +715,10 @@ async function renderDashboardView() {
   const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
   const coverageEvents = (extended.activityFeed || []).length + (dashboard.recentlyDiscoveredBoards || []).length;
   const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
+  const resolutionQueue = (dashboard.needsResolution && dashboard.needsResolution.length)
+    ? dashboard.needsResolution
+    : (extended.resolutionQueue || []);
+  const resolutionPressure = dashboard.summary.needsResolutionCount || resolutionQueue.length || 0;
   const dashboardStory = [
     {
       label: 'Priority lane',
@@ -713,6 +737,12 @@ async function renderDashboardView() {
       value: `${formatNumber(queuePressure)} accounts`,
       description: queuePressure ? 'These accounts are overdue, stale, or ready for the next touch.' : 'No follow-up pressure is active right now.',
       tone: 'warning',
+    },
+    {
+      label: 'Resolution backlog',
+      value: `${formatNumber(resolutionPressure)} accounts`,
+      description: resolutionPressure ? 'These accounts still need cleaner domain, careers, or ATS identity before they become reliable hiring signals.' : 'Resolver backlog is under control right now.',
+      tone: 'neutral',
     },
   ];
 
@@ -733,6 +763,7 @@ async function renderDashboardView() {
             ${renderSignalChip('Fresh jobs', formatNumber(dashboard.summary.newJobsLast24h || 0), 'success')}
             ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
+            ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
           </div>
           <div class="story-strip">
             ${dashboardStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
@@ -779,6 +810,7 @@ async function renderDashboardView() {
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
       ${renderMetricCard('New jobs, 24h', dashboard.summary.newJobsLast24h, 'Freshly imported postings in the last day')}
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
+      ${renderMetricCard('Needs resolution', resolutionPressure, 'Accounts still missing trusted company identity or ATS resolution')}
     </section>
 
     ${extended.playbook.length ? `
@@ -903,6 +935,16 @@ async function renderDashboardView() {
             </div>
           </div>
           ${dashboard.followUpAccounts.length ? `<div class="timeline">${dashboard.followUpAccounts.map((item) => renderFollowUpItem(item)).join('')}</div>` : '<div class="empty-state">No follow-up pressure right now.</div>'}
+        </div>
+        <div class="list-card detail-card">
+          <div class="panel-header">
+            <div>
+              <h3>Needs resolution</h3>
+              <p class="muted small">High-value accounts still missing domain, careers, or ATS identity signals.</p>
+            </div>
+            <a class="ghost-button" href="#/admin">Open review queue</a>
+          </div>
+          ${resolutionQueue.length ? `<div class="timeline">${resolutionQueue.map((item) => renderResolutionQueueItem(item)).join('')}</div>` : '<div class="empty-state">Identity resolution is in a healthy state right now.</div>'}
         </div>
         <div class="list-card detail-card">
           <div class="panel-header">
@@ -1137,6 +1179,8 @@ async function renderAccountDetail(accountId) {
         ${renderStatusPill(detail.account.priority || 'medium', 'warm')}
         ${renderStatusPill(detail.account.status || 'new', 'neutral')}
         ${renderStatusPill(detail.account.outreachStatus || 'not_started', 'neutral')}
+        ${renderStatusPill(detail.account.enrichmentStatus || 'missing_inputs', toneForEnrichmentStatus(detail.account.enrichmentStatus || 'missing_inputs'))}
+        ${renderStatusPill(detail.account.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(detail.account.enrichmentConfidence || 'unresolved'))}
         ${detail.account.staleFlag ? renderStatusPill(detail.account.staleFlag, 'danger') : ''}
         ${(detail.account.atsTypes || []).map((item) => renderStatusPill(item, 'neutral')).join('')}
       </div>
@@ -1212,6 +1256,8 @@ async function renderAccountDetail(accountId) {
 
     <section class="detail-grid detail-grid--workspace">
       <div class="panel-stack">
+        ${renderIdentityResolutionCard(detail)}
+        ${renderResolutionHistoryCard(detail)}
         <div class="detail-card">
           <div class="panel-header">
             <div><h3>Account controls</h3><p class="muted small">Manage ownership, outreach motion, and next steps.</p></div>
@@ -1616,12 +1662,13 @@ async function renderAdminView() {
             <div class="action-card">
               <p class="eyebrow">Identity enrichment</p>
               <h4>Enrich company inputs</h4>
-              <p class="small muted">Find canonical domains, careers URLs, aliases, and verified company identity evidence before ATS resolution runs.</p>
+              <p class="small muted">Use the cheap local pass first, then run the deeper web verifier only for the accounts that still need stronger evidence.</p>
               <div class="inline-field-stack">
                 <input id="enrichment-limit" type="number" min="1" value="50" placeholder="Companies to enrich">
                 <label class="field"><span class="small muted">Force refresh</span><select id="enrichment-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
-                <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="run-enrichment">Run enrichment</button>
+                <div class="button-row button-row--wrap">
+                  <button class="ghost-button" type="button" data-action="run-local-enrichment">Fast local enrich</button>
+                  <button class="secondary-button" type="button" data-action="run-enrichment">Deep verify</button>
                 </div>
               </div>
             </div>
@@ -1788,7 +1835,7 @@ function renderAccountsTable(items) {
           <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
-          <td>${(item.atsTypes || []).map((type) => renderStatusPill(type, 'neutral')).join(' ') || '<span class="small muted">None</span>'}</td>
+          <td>${renderAccountResolutionSummary(item)}</td>
           <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Log</button></div></td>
         </tr>
         <tr id="quick-log-${item.id}" class="quick-log-row hidden">
@@ -1929,8 +1976,8 @@ function renderEnrichmentQueuePanel(result) {
             <td>${formatNumber(item.connectionCount || 0)}</td>
             <td>${formatNumber(item.openRoleCount || 0)}</td>
             <td>${renderStatusPill(item.enrichmentConfidence || 'unresolved', item.enrichmentConfidence === 'high' ? 'success' : (item.enrichmentConfidence === 'medium' ? 'warning' : 'neutral'))}</td>
-            <td>${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}<div class="small muted">${safeJoin(item.aliases)}</div></td>
-            <td><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></td>
+            <td>${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}${renderEnrichmentSignalPills(item, { compact: true })}<div class="small muted">${safeJoin(item.aliases)}</div></td>
+            <td><div class="button-row button-row--wrap"><button class="ghost-button ghost-button--xs" data-action="account-quick-enrich" data-id="${item.id}">Quick</button><button class="secondary-button ghost-button--xs" data-action="account-resolve-now" data-id="${item.id}">Resolve</button><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></div></td>
           </tr>
           <tr class="enrichment-edit-row hidden" id="enrichment-edit-${item.id}">
             <td colspan="7">
@@ -2020,6 +2067,154 @@ function renderAccountConfigsTable(items) {
     </tbody></table></div>`;
 }
 
+function toneForEnrichmentStatus(status) {
+  if (status === 'verified' || status === 'manual') return 'success';
+  if (status === 'enriched') return 'accent';
+  if (status === 'unresolved' || status === 'failed') return 'warning';
+  if (status === 'missing_inputs') return 'danger';
+  return 'neutral';
+}
+
+function toneForEnrichmentConfidence(confidence) {
+  if (confidence === 'high') return 'success';
+  if (confidence === 'medium') return 'warning';
+  if (confidence === 'low') return 'accent';
+  return 'neutral';
+}
+
+function isFutureIsoDate(value) {
+  if (!value) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.getTime() > Date.now();
+}
+
+function getEnrichmentReasonSignals(item = {}) {
+  const seen = new Set();
+  const signals = [];
+  const addSignal = (label, tone) => {
+    const key = `${label}|${tone}`;
+    if (!label || seen.has(key)) return;
+    seen.add(key);
+    signals.push({ label, tone });
+  };
+
+  const canonicalDomain = (item.canonicalDomain || item.domain || '').trim();
+  const careersUrl = (item.careersUrl || '').trim();
+  const status = String(item.enrichmentStatus || '').toLowerCase();
+  const confidence = String(item.enrichmentConfidence || '').toLowerCase();
+  const failureReason = `${item.enrichmentFailureReason || ''} ${item.reviewReason || ''}`.toLowerCase();
+
+  if (!canonicalDomain) addSignal('No domain', 'warning');
+  if (!careersUrl) addSignal('No careers page', 'warning');
+  if (status === 'missing_inputs') addSignal('Missing inputs', 'danger');
+  if (status === 'unresolved' || confidence === 'unresolved') addSignal('Needs review', 'warning');
+  if (isFutureIsoDate(item.nextEnrichmentAttemptAt)) addSignal('Cooldown', 'neutral');
+  if (failureReason.includes('unsupported')) addSignal('Unsupported ATS', 'neutral');
+  if (failureReason.includes('custom careers')) addSignal('Custom careers', 'accent');
+  if (failureReason.includes('timeout') || failureReason.includes('blocked')) addSignal('Blocked / timeout', 'warning');
+  if (failureReason.includes('ambiguous')) addSignal('Ambiguous', 'warning');
+  if (failureReason.includes('unable to verify') || failureReason.includes('probe')) addSignal('Probe failed', 'warning');
+  if ((item.primaryConfigId || item.configCount || 0) === 0) addSignal('No ATS config', 'neutral');
+
+  return signals;
+}
+
+function renderEnrichmentSignalPills(item, options = {}) {
+  const signals = getEnrichmentReasonSignals(item);
+  if (!signals.length) return '';
+  const cls = options.compact ? 'inline-badge-row inline-badge-row--compact' : 'inline-badge-row';
+  return `<div class="${cls}">${signals.map((signal) => renderStatusPill(signal.label, signal.tone)).join('')}</div>`;
+}
+
+function renderIdentityResolutionCard(detail) {
+  const account = detail.account || {};
+  const primaryConfig = (detail.configs || [])[0] || null;
+  const summarySignals = [
+    renderStatusPill(account.enrichmentStatus || 'missing_inputs', toneForEnrichmentStatus(account.enrichmentStatus || 'missing_inputs')),
+    renderStatusPill(account.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(account.enrichmentConfidence || 'unresolved')),
+    primaryConfig ? renderStatusPill(primaryConfig.discoveryStatus || 'unknown', 'neutral') : '',
+  ].filter(Boolean).join('');
+
+  const evidenceText = account.enrichmentEvidence || account.enrichmentNotes || account.enrichmentFailureReason || 'No enrichment evidence stored yet.';
+  return `
+    <div class="detail-card">
+      <div class="panel-header">
+        <div><h3>Identity resolution</h3><p class="muted small">Company identity inputs feeding ATS discovery and job import.</p></div>
+      </div>
+      <div class="kpi-ribbon">${summarySignals}</div>
+      ${renderEnrichmentSignalPills({
+        ...account,
+        primaryConfigId: primaryConfig?.id || '',
+        configCount: (detail.configs || []).length,
+      })}
+      <div class="definition-grid" style="margin-top:14px;">
+        <div><span class="small muted">Canonical domain</span><strong>${escapeHtml(account.canonicalDomain || account.domain || 'Not set')}</strong></div>
+        <div><span class="small muted">Careers URL</span><strong>${account.careersUrl ? `<a class="row-link" href="${escapeAttr(account.careersUrl)}" target="_blank" rel="noreferrer">${escapeHtml(account.careersUrl)}</a>` : 'Not set'}</strong></div>
+        <div><span class="small muted">Source</span><strong>${escapeHtml(humanize(account.enrichmentSource || 'unknown'))}</strong></div>
+        <div><span class="small muted">Last enriched</span><strong>${escapeHtml(formatDate(account.lastEnrichedAt) || 'Never')}</strong></div>
+      </div>
+      <div class="empty-state empty-state--compact" style="margin-top:14px;">${escapeHtml(evidenceText)}</div>
+      <div class="button-row button-row--wrap" style="margin-top:14px;">
+        <button class="secondary-button" data-action="account-quick-enrich" data-id="${account.id}">Quick enrich</button>
+        <button class="primary-button" data-action="account-resolve-now" data-id="${account.id}">Resolve now</button>
+        <button class="ghost-button" data-action="account-deep-verify" data-id="${account.id}">Deep verify</button>
+        ${primaryConfig ? `<button class="ghost-button" data-action="rerun-enrichment-resolution" data-id="${account.id}">Rerun ATS</button>` : ''}
+      </div>
+      <p class="small muted" style="margin-top:10px;">Quick enrich only uses local signals already in the app. Resolve now uses the balanced web verifier. Deep verify spends more time probing the public web when a high-value account still looks unresolved.</p>
+    </div>
+  `;
+}
+
+function renderResolutionAttemptItem(attempt = {}, sourceLabel = '') {
+  const ok = Boolean(attempt.ok);
+  const tone = ok ? 'success' : ((attempt.statusCode || 0) >= 400 || attempt.error ? 'warning' : 'neutral');
+  const label = `${sourceLabel ? `${sourceLabel} · ` : ''}${humanize(attempt.stage || 'attempt')}`;
+  const statusText = ok
+    ? `${attempt.statusCode || 200}${attempt.elapsedMs ? ` · ${formatNumber(attempt.elapsedMs)}ms` : ''}`
+    : `${attempt.statusCode || 'No response'}${attempt.error ? ` · ${attempt.error}` : ''}`;
+  const location = attempt.finalUrl || attempt.url || '';
+  return `
+    <article class="timeline-item">
+      <div class="inline-header">
+        <strong>${escapeHtml(label)}</strong>
+        ${renderStatusPill(ok ? 'ok' : 'issue', tone)}
+      </div>
+      <p>${escapeHtml(statusText)}</p>
+      ${location ? `<div class="small muted">${escapeHtml(location)}</div>` : ''}
+    </article>
+  `;
+}
+
+function renderResolutionHistoryCard(detail) {
+  const account = detail.account || {};
+  const primaryConfig = (detail.configs || [])[0] || null;
+  const attemptedUrls = [
+    ...(Array.isArray(account.enrichmentAttemptedUrls) ? account.enrichmentAttemptedUrls : []),
+    ...(Array.isArray(primaryConfig?.attemptedUrls) ? primaryConfig.attemptedUrls : []),
+  ].filter(Boolean).filter((value, index, array) => array.indexOf(value) === index).slice(0, 8);
+  const attempts = [
+    ...(Array.isArray(account.enrichmentHttpSummary) ? account.enrichmentHttpSummary.slice(0, 4).map((item) => ({ ...item, sourceLabel: 'Identity' })) : []),
+    ...(Array.isArray(primaryConfig?.httpSummary) ? primaryConfig.httpSummary.slice(0, 4).map((item) => ({ ...item, sourceLabel: 'ATS' })) : []),
+  ].slice(0, 6);
+
+  return `
+    <div class="detail-card">
+      <div class="panel-header">
+        <div><h3>Resolution history</h3><p class="muted small">Recent resolver attempts, cooldown context, and the URLs we last tested.</p></div>
+      </div>
+      <div class="inline-badge-row inline-badge-row--compact">
+        ${isFutureIsoDate(account.nextEnrichmentAttemptAt) ? renderStatusPill('Identity cooldown', 'neutral') : ''}
+        ${primaryConfig?.nextResolutionAttemptAt && isFutureIsoDate(primaryConfig.nextResolutionAttemptAt) ? renderStatusPill('ATS cooldown', 'neutral') : ''}
+        ${attemptedUrls.length ? renderStatusPill(`${attemptedUrls.length} URLs tested`, 'accent') : renderStatusPill('No recent attempts', 'neutral')}
+      </div>
+      ${attemptedUrls.length ? `<div class="small muted" style="margin-top:12px;">${attemptedUrls.map((url) => escapeHtml(url)).join('<br>')}</div>` : '<div class="empty-state empty-state--compact" style="margin-top:12px;">No attempted URLs stored yet.</div>'}
+      <div class="timeline" style="margin-top:14px;">
+        ${attempts.length ? attempts.map((attempt) => renderResolutionAttemptItem(attempt, attempt.sourceLabel)).join('') : '<div class="empty-state empty-state--compact">No HTTP attempt history stored yet.</div>'}
+      </div>
+    </div>
+  `;
+}
+
 function renderFollowUpItem(item) {
   return `
     <article class="timeline-item">
@@ -2031,6 +2226,26 @@ function renderFollowUpItem(item) {
       <div class="inline-header">
         <span class="small muted">${item.nextActionAt ? `Due ${formatDate(item.nextActionAt)}` : (item.daysSinceContact !== null && item.daysSinceContact !== undefined ? `${formatNumber(item.daysSinceContact)} days since last touch` : 'No outreach logged')}</span>
         <button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderResolutionQueueItem(item) {
+  return `
+    <article class="timeline-item">
+      <div class="inline-header">
+        <strong>${escapeHtml(item.displayName)}</strong>
+        ${renderStatusPill(item.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(item.enrichmentConfidence || 'unresolved'))}
+      </div>
+      ${renderEnrichmentSignalPills(item, { compact: true })}
+      <p>${escapeHtml(item.reviewReason || item.recommendedAction || 'Strengthen company identity signals before deeper ATS discovery.')}</p>
+      <div class="small muted">${escapeHtml(item.canonicalDomain || item.domain || 'No canonical domain')}${item.careersUrl ? ` · ${escapeHtml(item.careersUrl)}` : ''}</div>
+      <div class="button-row button-row--wrap">
+        <button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button>
+        <button class="ghost-button" data-action="account-quick-enrich" data-id="${item.id}">Quick enrich</button>
+        <button class="secondary-button" data-action="account-resolve-now" data-id="${item.id}">Resolve now</button>
+        <button class="ghost-button" data-action="account-deep-verify" data-id="${item.id}">Deep verify</button>
       </div>
     </article>
   `;
@@ -2293,9 +2508,30 @@ async function runDiscovery() {
   }
 }
 
+async function runLocalEnrichment() {
+  const button = document.querySelector('[data-action="run-local-enrichment"]');
+  if (button) { button.disabled = true; button.textContent = 'Refreshing...'; }
+  try {
+    const forceRefresh = (document.getElementById('enrichment-force-refresh')?.value || 'false') === 'true';
+    const result = await api('/api/enrichment/run-local', {
+      method: 'POST',
+      body: JSON.stringify({ forceRefresh }),
+    });
+    invalidateAppData();
+    await renderRoute();
+    const stats = result?.stats || {};
+    window.bdLocalApi.setAlert(
+      `Fast local enrich updated ${formatNumber(stats.totalUpdated || 0)} rows in ${formatNumber(result.durationMs || 0)}ms. Domains from contacts: ${formatNumber(stats.contactEmailDomainApplied || 0)}, config domains: ${formatNumber(stats.boardConfigDomainApplied || 0)}, careers URLs: ${formatNumber(stats.boardConfigCareersApplied || 0)}.`,
+      appAlert
+    );
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Fast local enrich'; }
+  }
+}
+
 async function runEnrichment() {
   const button = document.querySelector('[data-action="run-enrichment"]');
-  if (button) { button.disabled = true; button.textContent = 'Enriching...'; }
+  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
   try {
     const limit = Number(document.getElementById('enrichment-limit')?.value || 50);
     const forceRefresh = (document.getElementById('enrichment-force-refresh')?.value || 'false') === 'true';
@@ -2303,15 +2539,16 @@ async function runEnrichment() {
       method: 'POST',
       body: JSON.stringify({ limit, forceRefresh }),
     });
-    window.bdLocalApi.setAlert('Company enrichment queued.', appAlert);
-    const job = await watchBackgroundJob(accepted.jobId, { label: 'Company enrichment' });
+    window.bdLocalApi.setAlert('Deep verification queued.', appAlert);
+    const job = await watchBackgroundJob(accepted.jobId, { label: 'Deep verification' });
     const stats = job?.result?.stats || {};
+    const timings = job?.result?.timings || {};
     window.bdLocalApi.setAlert(
-      `Enriched ${formatNumber(stats.checked || 0)} companies. Verified ${formatNumber(stats.verified || 0)}, enriched ${formatNumber(stats.enriched || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.`,
+      `Deep verification checked ${formatNumber(stats.checked || 0)} companies. Verified ${formatNumber(stats.verified || 0)}, enriched ${formatNumber(stats.enriched || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}. Probe work took ${formatNumber(timings.enrichmentMs || 0)}ms.`,
       appAlert
     );
   } finally {
-    if (button) { button.disabled = false; button.textContent = 'Run enrichment'; }
+    if (button) { button.disabled = false; button.textContent = 'Deep verify'; }
   }
 }
 
@@ -2352,14 +2589,98 @@ async function syncConfigs() {
   }
 }
 
-async function rerunEnrichmentResolution(accountId) {
+async function rerunEnrichmentResolution(accountId, options = {}) {
   const accepted = await api(`/api/enrichment/${accountId}/rerun-resolution`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify({ deepVerify: Boolean(options.deepVerify) }),
   });
-  window.bdLocalApi.setAlert('ATS resolution queued for this company.', appAlert);
+  window.bdLocalApi.setAlert(options.deepVerify ? 'Deep ATS resolution queued for this company.' : 'ATS resolution queued for this company.', appAlert);
   hydrateAdminRuntimePanels(await loadRuntimeStatus(true));
-  void watchBackgroundJob(accepted.jobId, { label: 'ATS resolution', refreshRoute: false }).catch(() => {});
+  void watchBackgroundJob(accepted.jobId, { label: options.deepVerify ? 'Deep ATS resolution' : 'ATS resolution', refreshRoute: false }).catch(() => {});
+}
+
+async function quickEnrichAccount(accountId) {
+  const button = document.querySelector(`[data-action="account-quick-enrich"][data-id="${accountId}"]`);
+  if (button) { button.disabled = true; button.textContent = 'Refreshing...'; }
+  try {
+    const result = await api(`/api/accounts/${accountId}/quick-enrich`, {
+      method: 'POST',
+      body: JSON.stringify({ forceRefresh: false }),
+    });
+    invalidateAppData();
+    await renderRoute();
+    const stats = result?.stats || {};
+    window.bdLocalApi.setAlert(
+      `Quick enrich refreshed ${formatNumber(stats.totalUpdated || 0)} local signals in ${formatNumber(result.durationMs || 0)}ms.`,
+      appAlert
+    );
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Quick enrich'; }
+  }
+}
+
+async function resolveAccountNow(accountId) {
+  const button = document.querySelector(`[data-action="account-resolve-now"][data-id="${accountId}"]`);
+  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
+  try {
+    const accepted = await api(`/api/accounts/${accountId}/resolve-now`, {
+      method: 'POST',
+      body: JSON.stringify({ forceRefresh: true }),
+    });
+    window.bdLocalApi.setAlert('Balanced verification queued for this account.', appAlert);
+    const job = await watchBackgroundJob(accepted.jobId, { label: 'Balanced verification' });
+    let resolutionQueued = false;
+    if (accepted.canRerunResolution) {
+      resolutionQueued = true;
+      const resolution = await api(`/api/enrichment/${accountId}/rerun-resolution`, {
+        method: 'POST',
+        body: JSON.stringify({ deepVerify: false }),
+      });
+      window.bdLocalApi.setAlert('Balanced verification finished. ATS resolution queued next.', appAlert);
+      await watchBackgroundJob(resolution.jobId, { label: 'ATS resolution' });
+    }
+    const timings = job?.result?.timings || {};
+    window.bdLocalApi.setAlert(
+      resolutionQueued
+        ? `Resolve now finished. Balanced verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time, then reran ATS resolution.`
+        : `Resolve now finished. Balanced verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time.`,
+      appAlert
+    );
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Resolve now'; }
+  }
+}
+
+async function deepVerifyAccount(accountId) {
+  const button = document.querySelector(`[data-action="account-deep-verify"][data-id="${accountId}"]`);
+  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
+  try {
+    const accepted = await api(`/api/accounts/${accountId}/deep-verify`, {
+      method: 'POST',
+      body: JSON.stringify({ forceRefresh: true }),
+    });
+    window.bdLocalApi.setAlert('Deep verification queued for this account.', appAlert);
+    const job = await watchBackgroundJob(accepted.jobId, { label: 'Deep verification' });
+    let resolutionQueued = false;
+    if (accepted.canRerunResolution) {
+      resolutionQueued = true;
+      const resolution = await api(`/api/enrichment/${accountId}/rerun-resolution`, {
+        method: 'POST',
+        body: JSON.stringify({ deepVerify: true }),
+      });
+      window.bdLocalApi.setAlert('Deep verification finished. ATS resolution queued next.', appAlert);
+      await watchBackgroundJob(resolution.jobId, { label: 'Deep ATS resolution' });
+    }
+    const timings = job?.result?.timings || {};
+    window.bdLocalApi.setAlert(
+      resolutionQueued
+        ? `Deep verify finished. Extended verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time, then reran ATS resolution.`
+        : `Deep verify finished. Extended verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time.`,
+      appAlert
+    );
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Deep verify'; }
+  }
 }
 
 function getSpreadsheetId() {
@@ -2588,18 +2909,30 @@ async function generateSmartOutreach(accountId, buttonEl) {
       if (subjectLine) {
         const gmailSubjectStructured = encodeURIComponent(subjectLine);
         const gmailBodyStructured = encodeURIComponent(messageBody);
+        const linkedinMsg = result.linkedin_message || result.linkedinMessage || '';
         body.innerHTML = `
-          <div class="outreach-generated__field">
-            <div class="outreach-generated__label">Subject</div>
-            <pre class="outreach-subject">${escapeHtml(subjectLine)}</pre>
-          </div>
-          <div class="outreach-generated__field">
-            <div class="outreach-generated__label">Message</div>
-            <pre class="outreach-text">${escapeHtml(messageBody)}</pre>
-          </div>
-          <div class="button-row" style="margin-top:12px;">
-            <button class="secondary-button" onclick="const subject=document.querySelector('.outreach-subject')?.textContent||'';const message=document.querySelector('.outreach-text')?.textContent||'';navigator.clipboard.writeText((subject ? 'Subject: ' + subject + '\\n\\n' : '') + message);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy to clipboard',1500)">Copy to clipboard</button>
-            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+          <div style="display: grid; gap: 16px;">
+            <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; background: var(--surface-muted);">
+              <strong>Email Message</strong>
+              <div style="margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85rem; color: var(--text-muted);">
+                Subject: ${escapeHtml(subjectLine)}<br><br>${escapeHtml(messageBody)}
+              </div>
+              <div class="button-row" style="margin-top:12px;">
+                <button class="secondary-button" onclick="const s='${escapeHtml(subjectLine).replace(/'/g,"\\'")}';const b=\`${escapeHtml(messageBody).replace(/`/g,"\\`")}\`;navigator.clipboard.writeText('Subject: '+s+'\\n\\n'+b);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy Email</button>
+                <a class="primary-button" href="mailto:?subject=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Open in Default Mail</a>
+                <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+              </div>
+            </div>
+            
+            <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; background: var(--surface-muted);">
+              <strong>LinkedIn DM</strong>
+              <div style="margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85rem; color: var(--text-muted);">
+                ${escapeHtml(linkedinMsg)}
+              </div>
+              <div class="button-row" style="margin-top:12px;">
+                <button class="primary-button" onclick="navigator.clipboard.writeText(\`${escapeHtml(linkedinMsg).replace(/`/g,"\\`")}\`); window.open('https://www.linkedin.com/messaging/compose', '_blank'); this.textContent='Copied & Opened!';setTimeout(()=>this.textContent='Copy & Open LinkedIn',2500)">Copy & Open LinkedIn</button>
+              </div>
+            </div>
           </div>
         `;
       }
@@ -2708,6 +3041,52 @@ function renderTargetScoreSignalSummary(item) {
     return 'No target-score signals yet';
   }
   return parts.join(' · ');
+}
+
+function needsDeepResolve(item = {}) {
+  const configStatus = String(item.configDiscoveryStatus || '').toLowerCase();
+  const enrichmentStatus = String(item.enrichmentStatus || '').toLowerCase();
+  const confidence = String(item.enrichmentConfidence || '').toLowerCase();
+  const hasAts = Array.isArray(item.atsTypes) && item.atsTypes.length > 0;
+  if (hasAts && confidence === 'high') return false;
+  if (configStatus === 'mapped' || configStatus === 'discovered') return false;
+  return ['missing_inputs', 'no_match_supported_ats', 'error', 'unresolved', 'needs_review'].includes(configStatus)
+    || ['missing_inputs', 'unresolved', 'failed'].includes(enrichmentStatus)
+    || confidence === 'unresolved'
+    || confidence === 'low';
+}
+
+function renderAccountResolutionSummary(item = {}) {
+  const atsTypes = Array.isArray(item.atsTypes) ? item.atsTypes : [];
+  const reviewReason = item.reviewReason || item.enrichmentFailureReason || '';
+  const discoveryStatus = item.configDiscoveryStatus || (atsTypes.length ? 'discovered' : 'missing_inputs');
+  const confidence = item.enrichmentConfidence || (atsTypes.length ? 'medium' : 'unresolved');
+  const hasPrimaryConfig = Boolean(item.primaryConfigId);
+  const signalSource = item.canonicalDomain || item.domain || item.careersUrl || 'No domain or careers URL yet';
+  const actionButtons = `
+    <div class="micro-button-row">
+      <button class="micro-button" data-action="account-quick-enrich" data-id="${item.id}">Quick enrich</button>
+      ${needsDeepResolve(item) ? `<button class="micro-button micro-button--primary" data-action="account-resolve-now" data-id="${item.id}">Resolve now</button>` : ''}
+      ${needsDeepResolve(item) ? `<button class="micro-button" data-action="account-deep-verify" data-id="${item.id}">Deep verify</button>` : ''}
+      ${hasPrimaryConfig && !needsDeepResolve(item) ? `<button class="micro-button" data-action="rerun-enrichment-resolution" data-id="${item.id}">Rerun ATS</button>` : ''}
+    </div>
+  `;
+
+  return `
+    <div class="table-cell-stack">
+      <div class="inline-badge-row inline-badge-row--compact">
+        ${atsTypes.length ? atsTypes.map((type) => renderStatusPill(type, 'neutral')).join('') : renderStatusPill('no board', 'neutral')}
+        ${renderStatusPill(humanize(discoveryStatus), discoveryStatus === 'mapped' || discoveryStatus === 'discovered' ? 'success' : 'neutral')}
+        ${renderStatusPill(confidence, toneForEnrichmentConfidence(confidence))}
+      </div>
+      ${renderEnrichmentSignalPills({
+        ...item,
+        configCount: hasPrimaryConfig ? 1 : 0,
+      }, { compact: true })}
+      <div class="small muted">${escapeHtml(reviewReason || signalSource)}</div>
+      ${actionButtons}
+    </div>
+  `;
 }
 
 function humanize(value) {

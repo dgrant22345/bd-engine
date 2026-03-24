@@ -1035,6 +1035,79 @@ a {
   gap: 10px;
 }
 
+.inline-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.inline-badge-row--compact {
+  margin-top: 8px;
+}
+
+.definition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.definition-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(247, 249, 252, 0.78);
+  border: 1px solid var(--line);
+}
+
+.definition-grid strong {
+  font-size: 0.96rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.table-cell-stack {
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.micro-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.micro-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--surface-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.micro-button:hover {
+  border-color: rgba(31, 99, 216, 0.28);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.micro-button--primary {
+  border-color: rgba(31, 99, 216, 0.18);
+  background: rgba(31, 99, 216, 0.1);
+  color: var(--accent);
+}
+
 .ghost-button,
 .primary-button,
 .secondary-button,
