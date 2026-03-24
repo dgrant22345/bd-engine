@@ -432,9 +432,15 @@ function Get-ResolverIdentityInputs {
     )
 
     $companyDomain = [string]$(if (Get-ObjectValue -Object $Company -Name 'canonicalDomain') { Get-ObjectValue -Object $Company -Name 'canonicalDomain' } elseif (Get-ObjectValue -Object $Company -Name 'domain') { Get-ObjectValue -Object $Company -Name 'domain' } else { '' })
+    if (Test-HostedAtsDomain -Domain $companyDomain) {
+        $companyDomain = ''
+    }
     $companyCareersUrl = [string](Get-ObjectValue -Object $Company -Name 'careersUrl' -Default '')
     $configTrusted = Test-ResolverConfigIdentityTrusted -Config $Config
     $configDomain = if ($configTrusted) { [string](Get-ObjectValue -Object $Config -Name 'domain' -Default '') } else { '' }
+    if (Test-HostedAtsDomain -Domain $configDomain) {
+        $configDomain = ''
+    }
     $configCareersUrl = if ($configTrusted) { [string](Get-ObjectValue -Object $Config -Name 'careersUrl' -Default '') } else { '' }
 
     return [ordered]@{
@@ -1559,6 +1565,9 @@ function New-CurrentCompanyEnrichmentResult {
     )
 
     $canonicalDomain = [string]$(if (Get-ObjectValue -Object $Company -Name 'canonicalDomain') { Get-ObjectValue -Object $Company -Name 'canonicalDomain' } elseif (Get-ObjectValue -Object $Company -Name 'domain') { Get-ObjectValue -Object $Company -Name 'domain' } else { '' })
+    if (Test-HostedAtsDomain -Domain $canonicalDomain) {
+        $canonicalDomain = ''
+    }
     $careersUrl = [string](Get-ObjectValue -Object $Company -Name 'careersUrl')
     $status = [string](Get-ObjectValue -Object $Company -Name 'enrichmentStatus')
     if (-not $status) {
@@ -1625,6 +1634,9 @@ function Get-CompanyEnrichmentResult {
     $enrichmentStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $companyName = [string]$(if (Get-ObjectValue -Object $Company -Name 'displayName') { Get-ObjectValue -Object $Company -Name 'displayName' } else { Get-ObjectValue -Object $Company -Name 'normalizedName' })
     $baseDomain = [string]$(if (Get-ObjectValue -Object $Company -Name 'canonicalDomain') { Get-ObjectValue -Object $Company -Name 'canonicalDomain' } elseif (Get-ObjectValue -Object $Company -Name 'domain') { Get-ObjectValue -Object $Company -Name 'domain' } else { '' })
+    if (Test-HostedAtsDomain -Domain $baseDomain) {
+        $baseDomain = ''
+    }
     $baseCareersUrl = [string](Get-ObjectValue -Object $Company -Name 'careersUrl')
     $aliases = @(Get-GeneratedCompanyAliases -CompanyName $companyName -Domain $baseDomain -ExistingAliases @(Get-ObjectValue -Object $Company -Name 'aliases' -Default @()))
     $existingResult = New-CurrentCompanyEnrichmentResult -Company $Company -Aliases $aliases
@@ -1724,7 +1736,7 @@ function Get-CompanyEnrichmentResult {
         $configDomain = [string](Get-ObjectValue -Object $config -Name 'domain')
         $configCareersUrl = [string](Get-ObjectValue -Object $config -Name 'careersUrl')
         $configResolvedBoardUrl = [string](Get-ObjectValue -Object $config -Name 'resolvedBoardUrl')
-        if ($configDomain) {
+        if ($configDomain -and -not (Test-HostedAtsDomain -Domain $configDomain)) {
             $domainScore = if (Test-HostedAtsDomain -Domain $configDomain) { $baseScore - 18 } else { $baseScore }
             Add-EnrichmentCandidate -Store $domainCandidates -Type 'domain' -Value $configDomain -Score $domainScore -Source 'board_config' -Evidence ("Config domain from {0}" -f [string](Get-ObjectValue -Object $config -Name 'discoveryStatus'))
         }
@@ -1998,7 +2010,7 @@ function Invoke-CompanyEnrichment {
             foreach ($field in 'canonicalDomain', 'careersUrl', 'linkedinCompanySlug', 'aliases', 'enrichmentStatus', 'enrichmentSource', 'enrichmentConfidence', 'enrichmentConfidenceScore', 'enrichmentNotes', 'enrichmentEvidence', 'enrichmentFailureReason', 'enrichmentAttemptedUrls', 'enrichmentHttpSummary', 'nextEnrichmentAttemptAt', 'lastEnrichedAt', 'lastVerifiedAt') {
                 [void](Set-ObjectValue -Object $company -Name $field -Value $result[$field])
             }
-            if ($result.canonicalDomain) {
+            if ($result.canonicalDomain -and -not (Test-HostedAtsDomain -Domain ([string]$result.canonicalDomain))) {
                 [void](Set-ObjectValue -Object $company -Name 'domain' -Value ([string]$result.canonicalDomain))
             }
             if ($result.careersUrl) {

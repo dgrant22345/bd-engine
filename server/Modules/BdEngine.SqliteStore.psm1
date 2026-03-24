@@ -3240,6 +3240,79 @@ function ConvertFrom-BdSqliteIntBool {
     return ([int](ConvertTo-BdSqliteNumber $Value) -ne 0)
 }
 
+function Get-BdSqliteHostedAtsDomains {
+    return @(
+        'greenhouse.io',
+        'lever.co',
+        'jobvite.com',
+        'myworkdayjobs.com',
+        'workday.com',
+        'icims.com',
+        'taleo.net',
+        'successfactors.com',
+        'bamboohr.com',
+        'ashbyhq.com',
+        'rippling.com',
+        'breezy.hr',
+        'smartrecruiters.com',
+        'recruiterbox.com',
+        'pinpointhq.com',
+        'teamtailor.com',
+        'applytojob.com',
+        'recruitee.com',
+        'workable.com',
+        'jazz.co',
+        'comeet.com',
+        'hirebridge.com',
+        'silkroad.com',
+        'kenexa.com',
+        'careers.linkedin.com',
+        'indeed.com',
+        'glassdoor.com',
+        'ziprecruiter.com'
+    )
+}
+
+function Get-BdSqliteDomainHost {
+    param([string]$Value)
+
+    $candidate = ([string]$Value).Trim()
+    if (-not $candidate) {
+        return ''
+    }
+
+    $uri = $null
+    if (-not ($candidate -match '^[a-z]+://')) {
+        [void][Uri]::TryCreate("https://$candidate", [UriKind]::Absolute, [ref]$uri)
+    } else {
+        [void][Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri)
+    }
+
+    $host = if ($uri) { [string]$uri.Host } else { $candidate }
+    $host = $host.ToLowerInvariant()
+    if ($host.StartsWith('www.')) {
+        $host = $host.Substring(4)
+    }
+    return $host
+}
+
+function Test-BdSqliteHostedAtsDomain {
+    param([string]$Value)
+
+    $host = Get-BdSqliteDomainHost -Value $Value
+    if (-not $host) {
+        return $false
+    }
+
+    foreach ($suffix in @(Get-BdSqliteHostedAtsDomains)) {
+        if ($host -eq $suffix -or $host.EndsWith(".$suffix")) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Convert-BdSqliteCompanyRowToSummary {
     param($Row)
 
@@ -3254,12 +3327,24 @@ function Convert-BdSqliteCompanyRowToSummary {
         $targetScoreExplanation = Get-BdSqliteFallbackTargetScoreExplanation -Row $Row
     }
 
+    $rawDomain = [string]$Row.domain
+    if (Test-BdSqliteHostedAtsDomain -Value $rawDomain) {
+        $rawDomain = ''
+    }
+    $canonicalDomain = [string]$Row.canonical_domain
+    if (Test-BdSqliteHostedAtsDomain -Value $canonicalDomain) {
+        $canonicalDomain = ''
+    }
+    if (-not $canonicalDomain) {
+        $canonicalDomain = $rawDomain
+    }
+
     return [ordered]@{
         id = [string]$Row.id
         normalizedName = [string]$Row.normalized_name
         displayName = [string]$Row.display_name
-        domain = [string]$Row.domain
-        canonicalDomain = [string]$(if ($Row.canonical_domain) { $Row.canonical_domain } else { $Row.domain })
+        domain = $rawDomain
+        canonicalDomain = $canonicalDomain
         careersUrl = [string]$Row.careers_url
         linkedinCompanySlug = [string]$Row.linkedin_company_slug
         aliases = @(ConvertFrom-BdSqliteDelimitedList $Row.aliases_text)
@@ -4018,20 +4103,72 @@ function Invoke-BdSqliteLocalEnrichmentPass {
         $freeExclusion = ($freeEmailDomains | ForEach-Object { "'$_'" }) -join ','
 
         # Hosted ATS domains to exclude from canonical domain candidates
-        $hostedAtsDomains = @('greenhouse.io','lever.co','jobvite.com','myworkdayjobs.com',
-            'workday.com','icims.com','taleo.net','successfactors.com','bamboohr.com',
-            'ashbyhq.com','rippling.com','breezy.hr','smartrecruiters.com','recruiterbox.com',
-            'pinpointhq.com','teamtailor.com','applytojob.com','recruitee.com','workable.com',
-            'jazz.co','comeet.com','hirebridge.com','silkroad.com','kenexa.com',
-            'careers.linkedin.com','indeed.com','glassdoor.com','ziprecruiter.com')
+        $hostedAtsDomains = @(Get-BdSqliteHostedAtsDomains)
         $atsExclusion = ($hostedAtsDomains | ForEach-Object { "'$_'" }) -join ','
 
         $stats = [ordered]@{
+            hostedDomainCleared      = 0
             contactEmailDomainApplied = 0
             boardConfigDomainApplied  = 0
             boardConfigCareersApplied = 0
             skippedAlreadyEnriched    = 0
             totalUpdated              = 0
+        }
+
+        # ---------------------------------------------------------------
+        # PASS 0: Clear bad canonical domains that point at hosted ATS infra
+        # This prevents board hosts like boards-api.greenhouse.io from
+        # masquerading as the company's real domain on future enrichments.
+        # ---------------------------------------------------------------
+        $hostedCanonicalRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, canonical_domain
+FROM companies
+WHERE canonical_domain IS NOT NULL
+  AND canonical_domain <> ''
+  $targetedAccountClause;
+"@)
+        $hostedCanonicalUpdates = @($hostedCanonicalRows | Where-Object { Test-BdSqliteHostedAtsDomain -Value ([string]$_.canonical_domain) })
+        if ($hostedCanonicalUpdates.Count -gt 0) {
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($row in $hostedCanonicalUpdates) {
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE companies
+SET canonical_domain = '',
+    enrichment_status = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN 'enriched'
+      ELSE 'missing_inputs'
+    END,
+    enrichment_confidence = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN enrichment_confidence
+      ELSE 'unresolved'
+    END,
+    enrichment_confidence_score = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN enrichment_confidence_score
+      ELSE 0
+    END,
+    enrichment_notes = 'Hosted ATS domain removed from canonical company identity',
+    enrichment_evidence = CASE
+      WHEN COALESCE(enrichment_evidence, '') = '' THEN 'Hosted ATS domain cleared from canonical identity'
+      ELSE enrichment_evidence || '; Hosted ATS domain cleared from canonical identity'
+    END,
+    last_enriched_at = @now,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id;
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$row.id; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.hostedDomainCleared += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
         }
 
         # ---------------------------------------------------------------
@@ -4119,7 +4256,10 @@ GROUP BY co.id
 ORDER BY conf_rank DESC
 LIMIT $Limit;
 "@
-        $pass2Rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $pass2Sql)
+        $pass2Rows = @(
+            (Invoke-BdSqliteRows -Connection $connection -Sql $pass2Sql) |
+                Where-Object { -not (Test-BdSqliteHostedAtsDomain -Value ([string]$_.domain)) }
+        )
         if ($pass2Rows.Count -gt 0) {
             $txn = $connection.BeginTransaction()
             try {
@@ -4228,7 +4368,7 @@ LIMIT $Limit;
             if ($seenPass4Ids.ContainsKey($id)) { continue }
             $rawDomain = [string]$row.raw_domain
             if ($rawDomain.StartsWith('www.')) { $rawDomain = $rawDomain.Substring(4) }
-            if (-not $rawDomain -or $atsExclusion.Contains("'$rawDomain'") -or $freeExclusion.Contains("'$rawDomain'")) { continue }
+            if (-not $rawDomain -or (Test-BdSqliteHostedAtsDomain -Value $rawDomain) -or $freeExclusion.Contains("'$rawDomain'")) { continue }
             $seenPass4Ids[$id] = $true
             [void]$jobDomainUpdates.Add([ordered]@{ id = $id; domain = $rawDomain })
         }
@@ -4266,7 +4406,7 @@ WHERE id = @id
             } finally { $txn.Dispose() }
         }
 
-        $stats.totalUpdated = $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied
+        $stats.totalUpdated = $stats.hostedDomainCleared + $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied
         return $stats
     } finally {
         $connection.Dispose()
