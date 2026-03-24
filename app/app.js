@@ -9,6 +9,7 @@ const appState = {
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
+  generatedOutreach: null,
   searchTimer: null,
   configEditingId: '',
   runtimeStatus: null,
@@ -217,6 +218,21 @@ function bindEvents() {
 
     if (actionName === 'generate-outreach') {
       await generateSmartOutreach(action.dataset.id, action);
+      return;
+    }
+
+    if (actionName === 'copy-generated-outreach') {
+      await copyGeneratedOutreach(action.dataset.kind || 'email', action);
+      return;
+    }
+
+    if (actionName === 'copy-outreach-subject') {
+      await copyGeneratedSubject(action.dataset.index, action);
+      return;
+    }
+
+    if (actionName === 'open-generated-linkedin') {
+      await openGeneratedLinkedIn(action);
       return;
     }
 
@@ -1135,6 +1151,7 @@ async function renderAccountDetail(accountId) {
   renderLoadingState('Account detail', 'Loading account context...');
   const detail = await api(`/api/accounts/${accountId}`);
   appState.accountDetail = detail;
+  appState.generatedOutreach = null;
   setViewTitle(detail.account.displayName);
   const targetScore = getTargetScore(detail.account);
   const targetScoreExplanation = getTargetScoreExplanation(detail.account) || detail.account.recommendedAction || 'No target-score explanation available yet.';
@@ -1200,18 +1217,21 @@ async function renderAccountDetail(accountId) {
           <div class="outreach-controls outreach-controls--stacked">
             <select id="outreach-contact-select" class="inline-select">
               ${detail.contacts.length
-                ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
+                ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
                 : '<option value="">No contacts</option>'}
             </select>
             <select id="outreach-template-select" class="inline-select">
-              <option value="cold" selected>Cold outreach</option>
-              <option value="follow_up">Follow-up</option>
-              <option value="re_engage">Re-engage</option>
+              <option value="cold" selected>Balanced hiring note</option>
+              <option value="talent_partner">Talent / recruiter note</option>
+              <option value="hiring_manager">Hiring manager note</option>
+              <option value="executive">Executive note</option>
               <option value="warm_intro">Warm intro</option>
+              <option value="follow_up">Follow-up</option>
+              <option value="re_engage">Re-open thread</option>
             </select>
-            <button class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate outreach</button>
+            <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
           </div>
-          <div id="outreach-prompt-body" class="empty-state empty-state--compact">${escapeHtml(detail.account.outreachDraft)}</div>
+          <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
           <div class="next-action-bar">
             <div class="next-action-display">
               <strong>Next:</strong> <span>${escapeHtml(detail.account.nextAction || 'No next action set')}</span>
@@ -1366,6 +1386,7 @@ async function renderAccountDetail(accountId) {
       </div>
     </section>
   `;
+  syncOutreachComposerState();
 }
 async function renderContactsView() {
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
@@ -2822,6 +2843,10 @@ document.addEventListener('change', (event) => {
     updateBulkBar();
     return;
   }
+  if (event.target.id === 'outreach-template-select' || event.target.id === 'outreach-contact-select') {
+    syncOutreachComposerState();
+    return;
+  }
   if (event.target.classList.contains('bulk-checkbox')) {
     updateBulkBar();
     return;
@@ -2840,6 +2865,7 @@ document.addEventListener('click', (event) => {
       sel.value = name;
       document.querySelectorAll('.contact-row-selectable').forEach(r => r.classList.remove('selected'));
       contactRow.classList.add('selected');
+      syncOutreachComposerState();
     }
   }
 });
@@ -2946,6 +2972,196 @@ async function generateSmartOutreach(accountId, buttonEl) {
     window.bdLocalApi.setAlert('Failed to generate outreach: ' + (err.message || err), appAlert);
   } finally {
     buttonEl.textContent = origText;
+    buttonEl.disabled = false;
+  }
+}
+
+function getOutreachTemplateMeta(template) {
+  switch ((template || 'cold').toLowerCase()) {
+    case 'talent_partner':
+      return { label: 'Talent / recruiter note', buttonLabel: 'Generate recruiter note' };
+    case 'hiring_manager':
+      return { label: 'Hiring manager note', buttonLabel: 'Generate hiring-manager note' };
+    case 'executive':
+      return { label: 'Executive note', buttonLabel: 'Generate executive note' };
+    case 'warm_intro':
+      return { label: 'Warm intro note', buttonLabel: 'Generate warm intro' };
+    case 'follow_up':
+      return { label: 'Follow-up note', buttonLabel: 'Generate follow-up' };
+    case 're_engage':
+      return { label: 'Re-engagement note', buttonLabel: 'Generate re-engagement note' };
+    default:
+      return { label: 'Hiring signal note', buttonLabel: 'Generate tailored note' };
+  }
+}
+
+function syncOutreachComposerState() {
+  const templateSelect = document.getElementById('outreach-template-select');
+  const contactSelect = document.getElementById('outreach-contact-select');
+  const button = document.getElementById('generate-outreach-button');
+  if (!button || !templateSelect) return;
+  const meta = getOutreachTemplateMeta(templateSelect.value || 'cold');
+  const selectedContact = contactSelect?.selectedOptions?.[0]?.value || '';
+  button.textContent = selectedContact ? `${meta.buttonLabel} for ${selectedContact}` : meta.buttonLabel;
+}
+
+function normalizeGeneratedOutreach(result) {
+  const subjectOptionsRaw = result.subject_options || result.subjectOptions || [];
+  const subjectOptions = Array.isArray(subjectOptionsRaw) ? subjectOptionsRaw.filter(Boolean) : [];
+  const subjectLine = result.subject_line || result.subjectLine || subjectOptions[0] || `Hiring signal at ${appState.accountDetail?.account?.displayName || 'this company'}`;
+  return {
+    subjectLine,
+    subjectOptions,
+    messageBody: result.message_body || result.messageBody || result.outreach || '',
+    linkedinMessage: result.linkedin_message || result.linkedinMessage || '',
+    followUpMessage: result.follow_up_message || result.followUpMessage || '',
+    callOpener: result.call_opener || result.callOpener || '',
+    whyNow: result.why_now || result.whyNow || '',
+    contactHook: result.contact_hook || result.contactHook || '',
+    angleSummary: result.angle_summary || result.angleSummary || '',
+    templateLabel: result.template_label || result.templateLabel || getOutreachTemplateMeta(document.getElementById('outreach-template-select')?.value || 'cold').label,
+    personaLabel: result.persona_label || result.personaLabel || '',
+    contactName: result.contact_name || result.contactName || '',
+    contactTitle: result.contact_title || result.contactTitle || '',
+    signalFocus: result.signal_focus || result.signalFocus || '',
+    suggestedNextStep: result.suggested_next_step || result.suggestedNextStep || '',
+    companySnippet: result.companySnippet || result.company_snippet || '',
+    timings: result.timings || {},
+  };
+}
+
+function renderOutreachPiece(title, body, actionsHtml, className = '') {
+  if (!body) return '';
+  return `
+    <article class="outreach-piece ${className}">
+      <div class="outreach-piece-header"><strong>${escapeHtml(title)}</strong></div>
+      <div class="outreach-piece-body">${escapeHtml(body)}</div>
+      ${actionsHtml ? `<div class="button-row outreach-piece-actions">${actionsHtml}</div>` : ''}
+    </article>
+  `;
+}
+
+function renderGeneratedOutreach(outreach) {
+  const gmailSubject = encodeURIComponent(outreach.subjectLine || '');
+  const gmailBody = encodeURIComponent(outreach.messageBody || '');
+  const pills = [
+    outreach.templateLabel ? renderStatusPill(outreach.templateLabel, 'neutral') : '',
+    outreach.personaLabel ? renderStatusPill(outreach.personaLabel, 'warm') : '',
+    outreach.contactName ? renderStatusPill(outreach.contactName, 'success') : '',
+  ].filter(Boolean).join('');
+
+  return `
+    <div class="outreach-composer">
+      <div class="outreach-brief">
+        <div class="kpi-ribbon">${pills}</div>
+        ${outreach.whyNow ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Why now</span><p>${escapeHtml(outreach.whyNow)}</p></div>` : ''}
+        ${outreach.contactHook ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Best angle</span><p>${escapeHtml(outreach.contactHook)}</p></div>` : ''}
+        ${outreach.angleSummary ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Approach</span><p>${escapeHtml(outreach.angleSummary)}</p></div>` : ''}
+        ${outreach.companySnippet ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Company context</span><p>${escapeHtml(outreach.companySnippet)}</p></div>` : ''}
+      </div>
+      <div class="outreach-piece-grid">
+        <article class="outreach-piece outreach-piece--primary">
+          <div class="outreach-piece-header">
+            <strong>Primary email</strong>
+            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="ghost-button micro-button" data-action="copy-outreach-subject" data-index="${index}" type="button">${escapeHtml(option)}</button>`).join('')}</div>` : ''}
+          </div>
+          <div class="outreach-piece-subject">Subject: ${escapeHtml(outreach.subjectLine)}</div>
+          <div class="outreach-piece-body">${escapeHtml(outreach.messageBody)}</div>
+          <div class="button-row outreach-piece-actions">
+            <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy email</button>
+            <a class="primary-button" href="mailto:?subject=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Open in mail</a>
+            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+          </div>
+        </article>
+        ${renderOutreachPiece('LinkedIn DM', outreach.linkedinMessage, '<button class="primary-button" data-action="open-generated-linkedin" type="button">Copy & open LinkedIn</button><button class="secondary-button" data-action="copy-generated-outreach" data-kind="linkedin" type="button">Copy DM</button>')}
+        ${renderOutreachPiece('Follow-up note', outreach.followUpMessage, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="followup" type="button">Copy follow-up</button>')}
+        ${renderOutreachPiece('Call opener', outreach.callOpener, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="call" type="button">Copy opener</button>')}
+      </div>
+    </div>
+  `;
+}
+
+function getGeneratedOutreachText(kind) {
+  const outreach = appState.generatedOutreach;
+  if (!outreach) return '';
+  switch ((kind || '').toLowerCase()) {
+    case 'linkedin':
+      return outreach.linkedinMessage || '';
+    case 'followup':
+      return outreach.followUpMessage || '';
+    case 'call':
+      return outreach.callOpener || '';
+    case 'subject':
+      return outreach.subjectLine || '';
+    case 'email':
+    default:
+      return `Subject: ${outreach.subjectLine || ''}\n\n${outreach.messageBody || ''}`.trim();
+  }
+}
+
+async function copyGeneratedOutreach(kind, buttonEl) {
+  const text = getGeneratedOutreachText(kind);
+  if (!text) return;
+  const originalText = buttonEl.textContent;
+  await navigator.clipboard.writeText(text);
+  buttonEl.textContent = 'Copied!';
+  setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
+}
+
+async function copyGeneratedSubject(index, buttonEl) {
+  const outreach = appState.generatedOutreach;
+  if (!outreach?.subjectOptions?.length) return;
+  const text = outreach.subjectOptions[Number(index)] || '';
+  if (!text) return;
+  const originalText = buttonEl.textContent;
+  await navigator.clipboard.writeText(text);
+  buttonEl.textContent = 'Copied!';
+  setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
+}
+
+async function openGeneratedLinkedIn(buttonEl) {
+  const outreach = appState.generatedOutreach;
+  if (!outreach?.linkedinMessage) return;
+  const originalText = buttonEl.textContent;
+  await navigator.clipboard.writeText(outreach.linkedinMessage);
+  window.open('https://www.linkedin.com/messaging/compose', '_blank', 'noopener');
+  buttonEl.textContent = 'Copied & opened';
+  setTimeout(() => { buttonEl.textContent = originalText; }, 1800);
+}
+
+async function generateSmartOutreach(accountId, buttonEl) {
+  if (!accountId) return;
+  const origText = buttonEl.textContent;
+  buttonEl.textContent = 'Generating...';
+  buttonEl.disabled = true;
+
+  try {
+    const contactSelect = document.getElementById('outreach-contact-select');
+    const selectedOption = contactSelect?.selectedOptions?.[0];
+    const contactName = selectedOption?.value || '';
+    const contactTitle = selectedOption?.dataset?.title || '';
+
+    const result = await api(`/api/accounts/${accountId}/generate-outreach`, {
+      method: 'POST',
+      body: JSON.stringify({ bookingLink: 'https://tinyurl.com/ysdep7cn', contactName, contactTitle, template: document.getElementById('outreach-template-select')?.value || 'cold' }),
+    });
+
+    const outreach = normalizeGeneratedOutreach(result);
+    appState.generatedOutreach = outreach;
+
+    const body = document.getElementById('outreach-prompt-body');
+    if (body && outreach.messageBody) {
+      body.className = 'outreach-generated';
+      body.innerHTML = renderGeneratedOutreach(outreach);
+      const card = document.getElementById('outreach-prompt-card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    window.bdLocalApi.setAlert(`${outreach.templateLabel} generated. Review the email, LinkedIn note, follow-up, and call opener in the outreach card.`, appAlert);
+  } catch (err) {
+    window.bdLocalApi.setAlert('Failed to generate outreach: ' + (err.message || err), appAlert);
+  } finally {
+    buttonEl.textContent = origText;
+    syncOutreachComposerState();
     buttonEl.disabled = false;
   }
 }

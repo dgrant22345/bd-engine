@@ -875,6 +875,181 @@ function Get-OutreachTechStackInsights {
     return (Get-OutreachPatternInsights -Jobs $Jobs -PatternMap $patternMap -JobSignalTextCache $JobSignalTextCache -Limit $Limit)
 }
 
+function Get-OutreachRoleFamilyInsights {
+    param(
+        $Jobs,
+        [hashtable]$JobSignalTextCache = $null,
+        [int]$Limit = 3
+    )
+
+    $patternMap = [ordered]@{
+        'machine learning' = '\b(machine learning|ml|ai|artificial intelligence|llm|research scientist|applied scientist|model)\b'
+        'data' = '\b(data engineer|analytics engineering|data platform|etl|warehouse|bi|databricks|snowflake|spark)\b'
+        'platform / infrastructure' = '\b(platform|infrastructure|devops|sre|site reliability|cloud|distributed systems?|backend|api)\b'
+        'security' = '\b(security|iam|identity|compliance|risk|privacy)\b'
+        'product and design' = '\b(product manager|product management|ux|ui|design|research)\b'
+        'go-to-market' = '\b(account executive|sales|marketing|customer success|growth|revops|revenue operations)\b'
+        'finance / operations' = '\b(finance|accounting|controller|fp&a|operations|manufacturing|supply chain|quality|logistics|bring-up)\b'
+        'talent' = '\b(recruiter|talent acquisition|sourcer|people operations|hris|people systems)\b'
+    }
+
+    return (Get-OutreachPatternInsights -Jobs $Jobs -PatternMap $patternMap -JobSignalTextCache $JobSignalTextCache -Limit $Limit)
+}
+
+function Get-OutreachPossessiveLabel {
+    param([string]$Value)
+
+    $label = ([string]$Value).Trim()
+    if (-not $label) { return '' }
+    if ($label -match '[sS]$') {
+        return ('{0}''' -f $label)
+    }
+    return ('{0}''s' -f $label)
+}
+
+function Get-OutreachContactContext {
+    param(
+        $Contacts,
+        [string]$OverrideContactName = '',
+        [string]$OverrideContactTitle = ''
+    )
+
+    $selected = $null
+    $overrideName = ([string]$OverrideContactName).Trim()
+    $overrideTitle = ([string]$OverrideContactTitle).Trim()
+
+    if ($overrideName) {
+        $selected = @(
+            $Contacts |
+                Where-Object {
+                    [string](Get-ObjectValue -Object $_ -Name 'fullName' -Default '') -eq $overrideName -and
+                    [string](Get-ObjectValue -Object $_ -Name 'title' -Default '') -eq $overrideTitle
+                } |
+                Select-Object -First 1
+        )
+        if (-not $selected) {
+            $selected = @(
+                $Contacts |
+                    Where-Object { [string](Get-ObjectValue -Object $_ -Name 'fullName' -Default '') -eq $overrideName } |
+                    Select-Object -First 1
+            )
+        }
+    }
+
+    if (-not $selected) {
+        $selected = @($Contacts | Select-Object -First 1)
+    }
+
+    $resolved = if ($selected) { $selected[0] } else { $null }
+    $name = if ($overrideName) { $overrideName } elseif ($resolved) { [string](Get-ObjectValue -Object $resolved -Name 'fullName' -Default '') } else { '' }
+    $title = if ($overrideTitle) { $overrideTitle } elseif ($resolved) { [string](Get-ObjectValue -Object $resolved -Name 'title' -Default '') } else { '' }
+    $talentFlag = if ($resolved) { [bool](Test-Truthy (Get-ObjectValue -Object $resolved -Name 'talentFlag' -Default $false)) } else { $false }
+    $seniorFlag = if ($resolved) { [bool](Test-Truthy (Get-ObjectValue -Object $resolved -Name 'seniorFlag' -Default $false)) } else { $false }
+    $buyerFlag = if ($resolved) { [bool](Test-Truthy (Get-ObjectValue -Object $resolved -Name 'buyerFlag' -Default $false)) } else { $false }
+    $techFlag = if ($resolved) { [bool](Test-Truthy (Get-ObjectValue -Object $resolved -Name 'techFlag' -Default $false)) } else { $false }
+    $financeFlag = if ($resolved) { [bool](Test-Truthy (Get-ObjectValue -Object $resolved -Name 'financeFlag' -Default $false)) } else { $false }
+    $linkedinUrl = if ($resolved) { [string](Get-ObjectValue -Object $resolved -Name 'linkedinUrl' -Default '') } else { '' }
+
+    return [ordered]@{
+        name = $name
+        title = $title
+        known = [bool]$resolved
+        talentFlag = $talentFlag
+        seniorFlag = $seniorFlag
+        buyerFlag = $buyerFlag
+        techFlag = $techFlag
+        financeFlag = $financeFlag
+        linkedinUrl = $linkedinUrl
+    }
+}
+
+function Get-OutreachTemplateProfile {
+    param([string]$Template = 'cold')
+
+    $templateKey = if ([string]::IsNullOrWhiteSpace([string]$Template)) { 'cold' } else { ([string]$Template).Trim().ToLowerInvariant() }
+    switch ($templateKey) {
+        'talent_partner' { return [ordered]@{ key = 'talent_partner'; label = 'Talent / recruiter note'; personaHint = 'talent'; buttonLabel = 'Generate recruiter note' } }
+        'hiring_manager' { return [ordered]@{ key = 'hiring_manager'; label = 'Hiring manager note'; personaHint = 'leader'; buttonLabel = 'Generate hiring-manager note' } }
+        'executive' { return [ordered]@{ key = 'executive'; label = 'Executive note'; personaHint = 'executive'; buttonLabel = 'Generate executive note' } }
+        'follow_up' { return [ordered]@{ key = 'follow_up'; label = 'Follow-up note'; personaHint = ''; buttonLabel = 'Generate follow-up' } }
+        're_engage' { return [ordered]@{ key = 're_engage'; label = 'Re-engagement note'; personaHint = ''; buttonLabel = 'Generate re-engagement note' } }
+        'warm_intro' { return [ordered]@{ key = 'warm_intro'; label = 'Warm intro note'; personaHint = ''; buttonLabel = 'Generate warm intro' } }
+        default { return [ordered]@{ key = 'cold'; label = 'Hiring signal note'; personaHint = ''; buttonLabel = 'Generate tailored note' } }
+    }
+}
+
+function Get-OutreachPersonaProfile {
+    param(
+        $Account,
+        $ContactContext,
+        $TemplateProfile
+    )
+
+    $title = ([string](Get-ObjectValue -Object $ContactContext -Name 'title' -Default '')).Trim()
+    $titleKey = Normalize-TextKey $title
+    $personaKey = [string](Get-ObjectValue -Object $TemplateProfile -Name 'personaHint' -Default '')
+    $talentContactCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'talentContactCount' -Default 0))
+
+    if (-not $personaKey) {
+        if ((Get-ObjectValue -Object $ContactContext -Name 'talentFlag' -Default $false) -or $titleKey -match 'recruit|talent|people|staffing|sourc|human resources|hrbp|people ops') {
+            $personaKey = 'talent'
+        } elseif ($titleKey -match 'founder|chief|ceo|coo|cto|cfo|cio|president|svp|evp|vp|general manager|gm') {
+            $personaKey = 'executive'
+        } elseif ((Get-ObjectValue -Object $ContactContext -Name 'techFlag' -Default $false) -or $titleKey -match 'engineer|product|data|security|platform|infrastructure|head|director|manager|lead|principal|architect') {
+            $personaKey = 'leader'
+        } elseif ((Get-ObjectValue -Object $ContactContext -Name 'seniorFlag' -Default $false)) {
+            $personaKey = 'leader'
+        } elseif ($talentContactCount -gt 0) {
+            $personaKey = 'talent'
+        } else {
+            $personaKey = 'general'
+        }
+    }
+
+    switch ($personaKey) {
+        'talent' {
+            return [ordered]@{
+                key = 'talent'
+                label = 'Talent / recruiting angle'
+                pressureLine = 'When that mix ramps, recruiting teams usually feel it first in search prioritization, niche pipeline coverage, and hiring-manager bandwidth.'
+                capabilityLine = 'Talencity helps internal TA teams close hard-to-fill searches without adding more coordination load.'
+                contactLead = 'Lead with recruiter bandwidth and the specialist searches most likely to drag.'
+                callPrompt = 'Where is the recruiting load or specialist search coverage starting to pinch most right now?'
+            }
+        }
+        'leader' {
+            return [ordered]@{
+                key = 'leader'
+                label = 'Hiring leader angle'
+                pressureLine = 'When that hiring mix ramps, the pain usually shows up in specialist coverage, interview drag, and team bandwidth.'
+                capabilityLine = 'Talencity helps leaders land hard-to-find builders without pulling core interviewers deeper into the search.'
+                contactLead = 'Lead with delivery risk, interview load, and the hardest roles to close.'
+                callPrompt = 'Which roles in the current mix are pulling the most time from the team?'
+            }
+        }
+        'executive' {
+            return [ordered]@{
+                key = 'executive'
+                label = 'Executive angle'
+                pressureLine = 'That kind of hiring burst usually shows up as execution pressure before it shows up cleanly in the headcount plan.'
+                capabilityLine = 'Talencity helps teams add critical talent quickly without building permanent recruiting overhead.'
+                contactLead = 'Lead with headcount pace, delivery risk, and where external support speeds hiring.'
+                callPrompt = 'Which part of the hiring plan feels most exposed if the team has to keep this pace for another quarter?'
+            }
+        }
+        default {
+            return [ordered]@{
+                key = 'general'
+                label = 'Hiring signal angle'
+                pressureLine = 'That usually signals real capacity pressure, not just a routine backfill cycle.'
+                capabilityLine = 'Talencity helps teams close hard-to-fill searches when internal hiring bandwidth gets thin.'
+                contactLead = 'Lead with the current hiring pressure while the signal is still fresh.'
+                callPrompt = 'Where is the current hiring mix starting to bottleneck?'
+            }
+        }
+    }
+}
+
 function Build-SmartOutreachDraft {
     param(
         [Parameter(Mandatory = $true)]$Account,
@@ -888,81 +1063,240 @@ function Build-SmartOutreachDraft {
     )
 
     $companyName = [string]$Account.displayName
+    $possessiveCompanyName = Get-OutreachPossessiveLabel -Value $companyName
     $industry = [string](Get-ObjectValue -Object $Account -Name 'industry' -Default '')
+    $departmentFocus = [string](Get-ObjectValue -Object $Account -Name 'departmentFocus' -Default '')
+    $networkStrength = [string](Get-ObjectValue -Object $Account -Name 'networkStrength' -Default '')
+    $recommendedAction = [string](Get-ObjectValue -Object $Account -Name 'recommendedAction' -Default '')
     $jobSignalTextCache = @{}
     $activeJobs = @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
     $openRoles = if ($activeJobs.Count -gt 0) { $activeJobs.Count } else { [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'openRoleCount' -Default 0)) }
     $jobsLast30Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'jobsLast30Days' -Default 0))
     $jobsLast90Days = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'jobsLast90Days' -Default 0))
+    $newRoleCount7d = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'newRoleCount7d' -Default 0))
+    $staleRoleCount30d = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'staleRoleCount30d' -Default 0))
     $hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'hiringSpikeRatio' -Default 0))
+    $sequenceStatus = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $Account -Name 'sequenceState' -Default $null) -Name 'status' -Default '')
+    $contactContext = Get-OutreachContactContext -Contacts $Contacts -OverrideContactName $OverrideContactName -OverrideContactTitle $OverrideContactTitle
+    $templateProfile = Get-OutreachTemplateProfile -Template $Template
+    $personaProfile = Get-OutreachPersonaProfile -Account $Account -ContactContext $contactContext -TemplateProfile $templateProfile
     $roleTitleInsights = Get-OutreachRoleTitleInsights -Jobs $activeJobs
+    $roleFamilyInsights = Get-OutreachRoleFamilyInsights -Jobs $activeJobs -JobSignalTextCache $jobSignalTextCache
     $roleKeywordInsights = Get-OutreachKeywordInsights -Jobs $activeJobs -JobSignalTextCache $jobSignalTextCache
     $techStackInsights = Get-OutreachTechStackInsights -Jobs $activeJobs -JobSignalTextCache $jobSignalTextCache
 
-    $subjectFocus = if ($roleTitleInsights.items.Count -gt 0) {
-        [string]$roleTitleInsights.items[0]
+    $focusItems = @()
+    if ($roleFamilyInsights.items.Count -gt 0) {
+        $focusItems = @($roleFamilyInsights.items | Select-Object -First 2)
     } elseif ($roleKeywordInsights.items.Count -gt 0) {
-        [string]$roleKeywordInsights.items[0]
+        $focusItems = @($roleKeywordInsights.items | Select-Object -First 2)
     } elseif ($techStackInsights.items.Count -gt 0) {
-        [string]$techStackInsights.items[0]
+        $focusItems = @($techStackInsights.items | Select-Object -First 2)
+    } elseif ($departmentFocus) {
+        $focusItems = @([string]$departmentFocus)
+    } elseif ($roleTitleInsights.items.Count -gt 0) {
+        $focusItems = @($roleTitleInsights.items | Select-Object -First 1)
+    }
+
+    $focusSummary = if ($focusItems.Count -gt 0) {
+        Join-NaturalLanguageList -Values @($focusItems)
+    } elseif ($departmentFocus) {
+        [string]$departmentFocus
+    } else {
+        ''
+    }
+    $focusLabel = if ($focusItems.Count -gt 0) {
+        [string]::Join(' + ', @($focusItems))
     } elseif ($openRoles -gt 0) {
         ('{0} open role{1}' -f $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }))
     } else {
-        'hiring signal'
-    }
-    $subjectLine = if ($subjectFocus -match 'open role') {
-        '{0}: {1}' -f $companyName, $subjectFocus
-    } else {
-        '{0}: {1} hiring' -f $companyName, $subjectFocus
+        'current hiring pressure'
     }
 
-    if ($jobsLast30Days -gt 0 -and $roleTitleInsights.summary -and $techStackInsights.summary -and $hiringSpikeRatio -ge 1.4) {
-        $firstSentence = 'Noticed {0} opened {1} roles in the last 30 days, with a clear spike across {2} and repeated mentions of {3}.' -f $companyName, $jobsLast30Days, $roleTitleInsights.summary, $techStackInsights.summary
-    } elseif ($jobsLast30Days -gt 0 -and $roleTitleInsights.summary) {
-        $firstSentence = 'Noticed {0} opened {1} roles in the last 30 days, concentrated across {2}.' -f $companyName, $jobsLast30Days, $roleTitleInsights.summary
-    } elseif ($openRoles -gt 0 -and $roleTitleInsights.summary -and $techStackInsights.summary) {
-        $firstSentence = 'Noticed {0} has {1} open role{2} across {3}, with repeated mentions of {4}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleTitleInsights.summary, $techStackInsights.summary
-    } elseif ($openRoles -gt 0 -and $roleTitleInsights.summary) {
-        $firstSentence = 'Noticed {0} has {1} open role{2} across {3}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleTitleInsights.summary
-    } elseif ($openRoles -gt 0 -and $roleKeywordInsights.summary) {
-        $firstSentence = 'Noticed {0} has {1} open role{2} clustered around {3}.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' }), $roleKeywordInsights.summary
-    } elseif ($jobsLast90Days -gt 0) {
-        $firstSentence = 'Noticed {0} has kept hiring active with {1} roles over the last 90 days.' -f $companyName, $jobsLast90Days
+    $whyNow = if ($jobsLast30Days -gt 0 -and $focusSummary -and $hiringSpikeRatio -ge 1.3) {
+        '{0} roles opened in the last 30 days, a {1}x spike versus baseline, concentrated around {2}.' -f $jobsLast30Days, ([Math]::Round($hiringSpikeRatio, 2)), $focusSummary
+    } elseif ($jobsLast30Days -gt 0 -and $focusSummary) {
+        '{0} roles opened in the last 30 days, with hiring concentrated around {1}.' -f $jobsLast30Days, $focusSummary
+    } elseif ($openRoles -gt 0 -and $focusSummary) {
+        '{0} open roles live now across {1}.' -f $openRoles, $focusSummary
+    } elseif ($jobsLast90Days -gt 0 -and $focusSummary) {
+        '{0} roles over the last 90 days, with the current mix centered on {1}.' -f $jobsLast90Days, $focusSummary
+    } elseif ($CompanySnippet) {
+        [string]$CompanySnippet
     } elseif ($openRoles -gt 0) {
-        $firstSentence = 'Noticed {0} is carrying {1} open role{2} right now.' -f $companyName, $openRoles, $(if ($openRoles -eq 1) { '' } else { 's' })
-    } elseif ($roleKeywordInsights.summary) {
-        $firstSentence = 'Noticed {0}''s hiring pattern is concentrated around {1}.' -f $companyName, $roleKeywordInsights.summary
+        '{0} open roles live right now.' -f $openRoles
     } else {
-        $firstSentence = 'Noticed live hiring activity at {0}.' -f $companyName
+        'Live hiring motion is still visible.'
     }
 
-    if ($industry -and $roleKeywordInsights.summary -and $techStackInsights.summary) {
-        $contextSentence = 'In {0}, that mix usually means the team is scaling real capability on {1}, not just backfilling.' -f $industry, $techStackInsights.summary
+    $leadSentence = switch ($templateProfile.key) {
+        'warm_intro' { 'Since we are already connected, I will keep this direct.'; break }
+        'follow_up' { 'Circling back because the hiring signal still looks active.'; break }
+        're_engage' { 'Reaching back out because the hiring picture looks materially more active now.'; break }
+        default { '' }
+    }
+
+    if ($jobsLast30Days -gt 0 -and $focusSummary -and $hiringSpikeRatio -ge 1.3) {
+        $firstSentence = 'Saw {0} has opened {1} roles in the last 30 days, with hiring spiking across {2}.' -f $companyName, $jobsLast30Days, $focusSummary
+    } elseif ($jobsLast30Days -gt 0 -and $focusSummary) {
+        $firstSentence = 'Saw {0} has opened {1} roles in the last 30 days, especially across {2}.' -f $companyName, $jobsLast30Days, $focusSummary
+    } elseif ($openRoles -gt 0 -and $focusSummary) {
+        $firstSentence = 'Saw {0} is carrying {1} open roles across {2}.' -f $companyName, $openRoles, $focusSummary
+    } elseif ($jobsLast90Days -gt 0 -and $focusSummary) {
+        $firstSentence = 'Saw {0} has kept hiring active across {1}, with {2} roles in the last 90 days.' -f $companyName, $focusSummary, $jobsLast90Days
+    } elseif ($openRoles -gt 0) {
+        $firstSentence = 'Saw {0} is carrying {1} open roles right now.' -f $companyName, $openRoles
+    } elseif ($CompanySnippet) {
+        $firstSentence = '{0} looks to be in an active build phase: {1}' -f $companyName, $CompanySnippet
+    } else {
+        $firstSentence = 'Saw live hiring motion at {0}.' -f $companyName
+    }
+
+    $contextSentence = if ($industry -and $techStackInsights.summary -and $personaProfile.key -eq 'executive') {
+        'In {0}, that usually means the operating plan is moving faster than the internal team can comfortably absorb.' -f $industry
+    } elseif ($industry -and $techStackInsights.summary) {
+        'In {0}, that usually means the team is adding capability around {1}, not just backfilling.' -f $industry, $techStackInsights.summary
     } elseif ($techStackInsights.summary -and $roleKeywordInsights.summary) {
-        $contextSentence = 'The mix of {0} hiring around {1} usually means the team is tightening a core build, not just filling seats.' -f $roleKeywordInsights.summary, $techStackInsights.summary
-    } elseif ($industry -and $roleKeywordInsights.summary) {
-        $contextSentence = 'In {0}, that mix usually means the team is adding capability quickly, not just backfilling.' -f $industry
-    } elseif ($techStackInsights.summary) {
-        $contextSentence = 'That usually signals a team standardizing the stack while delivery pressure is rising.'
-    } elseif ($roleTitleInsights.summary) {
-        $contextSentence = 'That usually points to a team building real capability, not just adding headcount.'
+        'The mix of {0} work and repeated mentions of {1} usually signals a real build push, not routine backfill.' -f $roleKeywordInsights.summary, $techStackInsights.summary
     } else {
-        $contextSentence = 'That usually points to real execution pressure, not a routine hiring cycle.'
+        [string]$personaProfile.pressureLine
     }
 
-    $closeSentence = switch (([string]$Template).ToLowerInvariant()) {
-        'follow_up' { 'Happy to compare notes on which search in that mix tends to bottleneck first.'; break }
-        're_engage' { 'Happy to compare notes on which seat in that cluster tends to bottleneck first.'; break }
-        'warm_intro' { 'Happy to compare notes if that pattern is a priority this quarter.'; break }
-        default { 'Happy to compare notes on where that hiring mix usually gets hardest.' }
+    $capabilityFocus = if ($focusSummary) { $focusSummary } elseif ($departmentFocus) { $departmentFocus } else { 'specialist' }
+    $capabilitySentence = switch ($personaProfile.key) {
+        'talent' { 'Talencity helps internal TA teams close hard-to-fill {0} searches without adding more coordination load.' -f $capabilityFocus; break }
+        'leader' { 'Talencity helps teams land hard-to-find {0} talent without pulling hiring leaders deeper into the search.' -f $capabilityFocus; break }
+        'executive' { 'Talencity helps companies add critical {0} talent quickly without building permanent recruiting overhead.' -f $capabilityFocus; break }
+        default { 'Talencity helps teams close hard-to-fill {0} searches when internal bandwidth gets thin.' -f $capabilityFocus }
     }
 
-    $messageBody = Limit-TextWords -Text ([string]::Join(' ', @($firstSentence, $contextSentence, $closeSentence))) -MaxWords 75
+    $closeSentence = switch ($templateProfile.key) {
+        'follow_up' { 'If this is still live, I can send a sharper take on which searches in that cluster are most likely to bottleneck first.'; break }
+        're_engage' { 'If the plan is active again, I can send a fresh point of view on which searches are most likely to stall.'; break }
+        'warm_intro' { 'If helpful, I can send a concise take on which searches in the cluster look hardest to close.'; break }
+        'talent_partner' { 'If useful, I can send a quick prioritization view on where outside support would help fastest.'; break }
+        'hiring_manager' { 'If helpful, I can share where I would expect interview drag or specialist coverage risk to show up first.'; break }
+        'executive' { 'If useful, I can send a short view on where I would focus first to keep the hiring plan moving.'; break }
+        default { 'If helpful, I can send a quick read on which searches in this cluster are most likely to bottleneck first.' }
+    }
+
+    $messageParts = @($leadSentence, $firstSentence, $contextSentence, $capabilitySentence, $closeSentence) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $messageBody = Limit-TextWords -Text ([string]::Join(' ', $messageParts)) -MaxWords 90
+
+    $subjectOptions = @()
+    switch ($templateProfile.key) {
+        'follow_up' {
+            $subjectOptions += ('Following up on {0} current hiring mix' -f $possessiveCompanyName)
+            $subjectOptions += ('Still relevant for {0} hiring plan?' -f $possessiveCompanyName)
+        }
+        're_engage' {
+            $subjectOptions += ('Worth revisiting {0} hiring plan?' -f $possessiveCompanyName)
+            $subjectOptions += ('{0}: fresh hiring signal' -f $companyName)
+        }
+        'warm_intro' {
+            $subjectOptions += ('Quick thought on {0} hiring' -f $companyName)
+            $subjectOptions += ('A hiring angle for {0}' -f $companyName)
+        }
+        'talent_partner' {
+            $subjectOptions += ('{0}: support for the current hiring load' -f $companyName)
+            $subjectOptions += ('Where {0} search load may tighten' -f $possessiveCompanyName)
+        }
+        'hiring_manager' {
+            $subjectOptions += ('{0}: scaling {1}' -f $companyName, $focusLabel)
+            $subjectOptions += ('Where {0} hiring mix may bottleneck' -f $possessiveCompanyName)
+        }
+        'executive' {
+            $subjectOptions += ('{0}: current headcount pressure' -f $companyName)
+            $subjectOptions += ('Keeping {0} hiring plan moving' -f $possessiveCompanyName)
+        }
+        default {
+            $subjectOptions += ('{0}: {1}' -f $companyName, $focusLabel)
+            $subjectOptions += ('Where {0} current hiring mix may bottleneck' -f $possessiveCompanyName)
+        }
+    }
+    $subjectOptions += ('Quick POV on {0} hiring pressure' -f $possessiveCompanyName)
+    $subjectOptions = @($subjectOptions | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    $subjectLine = if ($subjectOptions.Count -gt 0) { [string]$subjectOptions[0] } else { '{0}: hiring signal' -f $companyName }
+
+    $contactName = [string](Get-ObjectValue -Object $contactContext -Name 'name' -Default '')
+    $contactTitle = [string](Get-ObjectValue -Object $contactContext -Name 'title' -Default '')
+    $greetingName = if ($contactName) { $contactName } else { 'there' }
+    $linkedinOpen = if ($contactName) { 'Hi {0} -' -f $contactName } else { 'Hi -' }
+    $linkedinParts = @(
+        $linkedinOpen,
+        ('saw {0} has {1} active around {2}.' -f $companyName, $(if ($jobsLast30Days -gt 0) { "$jobsLast30Days new roles in the last 30 days" } elseif ($openRoles -gt 0) { "$openRoles open roles right now" } else { 'live hiring motion' }), $(if ($focusSummary) { $focusSummary } else { 'core hiring' })),
+        $(if ($personaProfile.key -eq 'talent') { 'That usually gets painful around prioritization and specialist pipeline coverage.' } elseif ($personaProfile.key -eq 'executive') { 'That kind of pace usually shows up as delivery pressure pretty quickly.' } else { 'That usually gets painful around specialist coverage and interview bandwidth.' }),
+        'If useful, happy to send a quick take on which searches look hardest to close first.'
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $linkedinMessage = Limit-TextWords -Text ([string]::Join(' ', $linkedinParts)) -MaxWords 65
+
+    $followUpParts = @(
+        $(if ($contactName) { 'Hi {0},' -f $contactName } else { 'Hi,' }),
+        ('circling back because {0} hiring signal still looks active, especially around {1}.' -f $possessiveCompanyName, $(if ($focusSummary) { $focusSummary } else { 'the current search mix' })),
+        'If it would help, I can send a concise read on the roles I would expect to drag first and where external help is most useful.'
+    )
+    $followUpMessage = Limit-TextWords -Text ([string]::Join(' ', $followUpParts)) -MaxWords 65
+
+    $callOpener = Limit-TextWords -Text ([string]::Join(' ', @(
+                ('Saw {0} has {1} active around {2}.' -f $companyName, $(if ($jobsLast30Days -gt 0) { "$jobsLast30Days recent roles" } elseif ($openRoles -gt 0) { "$openRoles open roles" } else { 'live hiring motion' }), $(if ($focusSummary) { $focusSummary } else { 'the current search mix' })),
+                [string]$personaProfile.capabilityLine,
+                [string]$personaProfile.callPrompt
+            ))) -MaxWords 55
+
+    $contactRoute = if ($contactName -and $contactTitle) {
+        '{0} ({1})' -f $contactName, $contactTitle
+    } elseif ($contactName) {
+        $contactName
+    } else {
+        ''
+    }
+    $contactHook = if ($contactRoute) {
+        'Best route: {0}. {1}' -f $contactRoute, ([string]$personaProfile.contactLead)
+    } elseif ($recommendedAction) {
+        $recommendedAction
+    } elseif ($networkStrength -eq 'Hot' -or $networkStrength -eq 'Warm') {
+        'Lead with the live hiring signal and keep the ask tight while the network path is still warm.'
+    } else {
+        'Lead with the current hiring pressure and a concrete point of view on which searches will be hardest to close.'
+    }
+
+    $angleSummary = switch ($templateProfile.key) {
+        'follow_up' { 'Follow-up on a still-active hiring signal'; break }
+        're_engage' { 'Re-open the thread with fresher hiring evidence'; break }
+        'warm_intro' { 'Use the warm path and keep the message concise'; break }
+        default { '{0} with live hiring evidence' -f [string]$personaProfile.label }
+    }
 
     return [ordered]@{
         subject_line = $subjectLine.Trim()
+        subject_options = @($subjectOptions)
         message_body = $messageBody.Trim()
         outreach = $messageBody.Trim()
+        linkedin_message = $linkedinMessage.Trim()
+        follow_up_message = $followUpMessage.Trim()
+        call_opener = $callOpener.Trim()
+        why_now = [string]$whyNow
+        contact_hook = [string]$contactHook
+        angle_summary = [string]$angleSummary
+        template_label = [string](Get-ObjectValue -Object $templateProfile -Name 'label' -Default 'Hiring signal note')
+        template_button_label = [string](Get-ObjectValue -Object $templateProfile -Name 'buttonLabel' -Default 'Generate tailored note')
+        persona = [string](Get-ObjectValue -Object $personaProfile -Name 'key' -Default 'general')
+        persona_label = [string](Get-ObjectValue -Object $personaProfile -Name 'label' -Default 'Hiring signal angle')
+        contact_name = $contactName
+        contact_title = $contactTitle
+        company_snippet = [string]$CompanySnippet
+        booking_link = [string]$BookingLink
+        sequence_status = [string]$sequenceStatus
+        signal_focus = [string]$focusSummary
+        suggested_next_step = [string]$recommendedAction
+        signal_metrics = [ordered]@{
+            open_roles = [int]$openRoles
+            jobs_last_30_days = [int]$jobsLast30Days
+            jobs_last_90_days = [int]$jobsLast90Days
+            new_roles_7d = [int]$newRoleCount7d
+            stale_roles_30d = [int]$staleRoleCount30d
+            hiring_spike_ratio = [double]$hiringSpikeRatio
+        }
     }
 }
 

@@ -79,6 +79,7 @@ $defaultConnectionsCsvPath = Get-DefaultConnectionsCsvPath
 $defaultSpreadsheetId = [string]$env:GOOGLE_SHEETS_SPREADSHEET_ID
 $script:ApiGetCache = @{}
 $script:ApiGetCacheSignature = ''
+$script:CompanySnippetCache = @{}
 $script:ServerStartedAt = (Get-Date).ToString('o')
 $script:ServerWarmedAt = ''
 
@@ -107,6 +108,74 @@ function Write-SnapshotLog {
     $sourceRevision = if ($SnapshotResult.sourceRevision) { [string]$SnapshotResult.sourceRevision } else { '' }
     $currentRevision = if ($SnapshotResult.currentRevision) { [string]$SnapshotResult.currentRevision } else { '' }
     Write-ServerLog ("SNAPSHOT {0} source={1} hit={2} ageSeconds={3} rebuildMs={4} dirty={5} dirtyReason={6} sourceRevision={7} currentRevision={8}" -f $Name, $source, $hit, $age, $rebuildMs, $dirty, $dirtyReason, $sourceRevision, $currentRevision)
+}
+
+function Get-CompanySnippetForOutreach {
+    param(
+        [string]$CacheKey,
+        [string]$CompanyName,
+        [switch]$SkipSearch
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $key = if ([string]::IsNullOrWhiteSpace([string]$CacheKey)) { ([string]$CompanyName).Trim().ToLowerInvariant() } else { ([string]$CacheKey).Trim().ToLowerInvariant() }
+    $ttlHours = 18
+
+    if ($script:CompanySnippetCache.ContainsKey($key)) {
+        $cached = $script:CompanySnippetCache[$key]
+        if ($cached -and $cached.fetchedAt) {
+            $ageHours = ((Get-Date) - [datetime]$cached.fetchedAt).TotalHours
+            if ($ageHours -lt $ttlHours) {
+                $stopwatch.Stop()
+                return [ordered]@{
+                    snippet = [string](Get-ObjectValue -Object $cached -Name 'snippet' -Default '')
+                    source = 'cache_hit'
+                    durationMs = [int]$stopwatch.ElapsedMilliseconds
+                }
+            }
+        }
+    }
+
+    if ($SkipSearch) {
+        $stopwatch.Stop()
+        return [ordered]@{
+            snippet = ''
+            source = 'skipped_internal_signal'
+            durationMs = [int]$stopwatch.ElapsedMilliseconds
+        }
+    }
+
+    $snippet = ''
+    $source = 'search_miss'
+    try {
+        $searchQuery = "$CompanyName company about"
+        $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
+        $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 3 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
+        $snippets = @(
+            [regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') |
+                ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } |
+                Where-Object { $_.Length -gt 40 } |
+                Select-Object -First 1
+        )
+        if ($snippets.Count -gt 0) {
+            $snippet = [string]$snippets[0]
+            if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 197) + '...' }
+            $source = 'search_hit'
+        }
+    } catch {
+        $source = 'search_error'
+    }
+
+    $script:CompanySnippetCache[$key] = [ordered]@{
+        snippet = $snippet
+        fetchedAt = (Get-Date).ToString('o')
+    }
+    $stopwatch.Stop()
+    return [ordered]@{
+        snippet = $snippet
+        source = $source
+        durationMs = [int]$stopwatch.ElapsedMilliseconds
+    }
 }
 
 function Get-ContentType {
@@ -933,30 +1002,27 @@ function Handle-ApiRequest {
         $accountId = $matches[1]
         $payload = Read-JsonBody -Request $Request
         $bookingLink = if ($payload.bookingLink) { [string]$payload.bookingLink } else { 'https://tinyurl.com/ysdep7cn' }
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
         # Fetch account detail
+        $detailWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $detail = if (Test-AppStoreUsesSqlite) {
             Get-AppAccountDetailFast -AccountId $accountId
         } else {
             $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
             Get-AccountDetail -State $state -AccountId $accountId
         }
+        $detailWatch.Stop()
         if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
 
-        # Quick web search for company context
-        $companySnippet = ''
-        try {
-            $searchQuery = "$($detail.account.displayName) company about"
-            $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
-            $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 5 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
-            $snippets = @([regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } | Where-Object { $_.Length -gt 40 } | Select-Object -First 1)
-            if ($snippets.Count -gt 0) {
-                $companySnippet = [string]$snippets[0]
-                if ($companySnippet.Length -gt 200) { $companySnippet = $companySnippet.Substring(0, 197) + '...' }
-            }
-        } catch {
-            # Non-critical, proceed without snippet
-        }
+        $hasInternalSignal = (@($detail.jobs).Count -gt 0) -or
+            ([int](Get-ObjectValue -Object $detail.account -Name 'openRoleCount' -Default 0) -gt 0) -or
+            ([int](Get-ObjectValue -Object $detail.account -Name 'jobsLast30Days' -Default 0) -gt 0) -or
+            (-not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $detail.account -Name 'companyGrowthSignalSummary' -Default ''))) -or
+            (-not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $detail.account -Name 'recommendedAction' -Default '')))
+
+        $snippetResult = Get-CompanySnippetForOutreach -CacheKey ([string](Get-ObjectValue -Object $detail.account -Name 'normalizedName' -Default $accountId)) -CompanyName ([string]$detail.account.displayName) -SkipSearch:$hasInternalSignal
+        $companySnippet = [string](Get-ObjectValue -Object $snippetResult -Name 'snippet' -Default '')
 
         $outreachParams = @{
             Account = $detail.account
@@ -968,16 +1034,51 @@ function Handle-ApiRequest {
         if ($payload.contactName) { $outreachParams.OverrideContactName = [string]$payload.contactName }
         if ($payload.contactTitle) { $outreachParams.OverrideContactTitle = [string]$payload.contactTitle }
         if ($payload.template) { $outreachParams.Template = [string]$payload.template }
+        $buildWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $outreach = Build-SmartOutreachDraft @outreachParams
-
-        $linkedinMsg = "Hi $(if ($payload.contactName){$payload.contactName}else{'there'}), impressive traction with the open roles at $($detail.account.displayName)! I specialize in scaling engineering teams and would love to connect to see if we can support your growth priorities."
+        $buildWatch.Stop()
+        $linkedinMsg = [string](Get-ObjectValue -Object $outreach -Name 'linkedin_message' -Default '')
+        $followUpMsg = [string](Get-ObjectValue -Object $outreach -Name 'follow_up_message' -Default '')
+        $callOpener = [string](Get-ObjectValue -Object $outreach -Name 'call_opener' -Default '')
+        $subjectOptions = @($(Get-ObjectValue -Object $outreach -Name 'subject_options' -Default @()) | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $stopwatch.Stop()
+        Write-ServerLog ("OUTREACH accountId={0} detailMs={1} snippetMs={2} snippetSource={3} buildMs={4} durationMs={5} template={6}" -f `
+                $accountId,
+                [int]$detailWatch.ElapsedMilliseconds,
+                [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0),
+                [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default ''),
+                [int]$buildWatch.ElapsedMilliseconds,
+                [int]$stopwatch.ElapsedMilliseconds,
+                [string](Get-ObjectValue -Object $outreach -Name 'template_label' -Default ([string]$payload.template)))
 
         return (New-JsonResult ([ordered]@{
             outreach = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
             subject_line = [string](Get-ObjectValue -Object $outreach -Name 'subject_line' -Default '')
+            subject_options = @($subjectOptions)
             message_body = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
             linkedin_message = $linkedinMsg
+            follow_up_message = $followUpMsg
+            call_opener = $callOpener
+            why_now = [string](Get-ObjectValue -Object $outreach -Name 'why_now' -Default '')
+            contact_hook = [string](Get-ObjectValue -Object $outreach -Name 'contact_hook' -Default '')
+            angle_summary = [string](Get-ObjectValue -Object $outreach -Name 'angle_summary' -Default '')
+            template_label = [string](Get-ObjectValue -Object $outreach -Name 'template_label' -Default '')
+            template_button_label = [string](Get-ObjectValue -Object $outreach -Name 'template_button_label' -Default '')
+            persona = [string](Get-ObjectValue -Object $outreach -Name 'persona' -Default '')
+            persona_label = [string](Get-ObjectValue -Object $outreach -Name 'persona_label' -Default '')
+            contact_name = [string](Get-ObjectValue -Object $outreach -Name 'contact_name' -Default '')
+            contact_title = [string](Get-ObjectValue -Object $outreach -Name 'contact_title' -Default '')
             companySnippet = $companySnippet
+            signal_focus = [string](Get-ObjectValue -Object $outreach -Name 'signal_focus' -Default '')
+            suggested_next_step = [string](Get-ObjectValue -Object $outreach -Name 'suggested_next_step' -Default '')
+            signal_metrics = Get-ObjectValue -Object $outreach -Name 'signal_metrics' -Default ([ordered]@{})
+            timings = [ordered]@{
+                detailMs = [int]$detailWatch.ElapsedMilliseconds
+                snippetMs = [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0)
+                buildMs = [int]$buildWatch.ElapsedMilliseconds
+                durationMs = [int]$stopwatch.ElapsedMilliseconds
+                snippetSource = [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default '')
+            }
         }))
     }
 
