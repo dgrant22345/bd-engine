@@ -6981,6 +6981,12 @@ function Sync-ImportedCompanyData {
         growthMs = 0
         explanationMs = 0
     }
+    $cacheTotals = [ordered]@{
+        graphCacheHits = 0
+        recommendationCacheHits = 0
+        outreachDraftCacheHits = 0
+        explanationCacheHits = 0
+    }
     $slowCompanies = New-Object System.Collections.ArrayList
     foreach ($key in ($keysToRefresh | Sort-Object)) {
         $companyProjectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -7014,6 +7020,18 @@ function Sync-ImportedCompanyData {
             foreach ($phaseKey in @($scoringPhaseTotals.Keys)) {
                 $scoringPhaseTotals[$phaseKey] = [int]$scoringPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name $phaseKey -Default 0))
             }
+            if (Test-Truthy (Get-ObjectValue -Object $companyScoringDetails -Name 'explanationCacheHit' -Default $false)) {
+                $cacheTotals['explanationCacheHits'] = [int]$cacheTotals['explanationCacheHits'] + 1
+            }
+        }
+        if (Test-Truthy (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'graphCacheHit' -Default $false)) {
+            $cacheTotals['graphCacheHits'] = [int]$cacheTotals['graphCacheHits'] + 1
+        }
+        if (Test-Truthy (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'recommendationCacheHit' -Default $false)) {
+            $cacheTotals['recommendationCacheHits'] = [int]$cacheTotals['recommendationCacheHits'] + 1
+        }
+        if (Test-Truthy (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'outreachDraftCacheHit' -Default $false)) {
+            $cacheTotals['outreachDraftCacheHits'] = [int]$cacheTotals['outreachDraftCacheHits'] + 1
         }
         foreach ($contact in @($contactItems)) {
             if ($null -eq $contact) { continue }
@@ -7086,6 +7104,7 @@ function Sync-ImportedCompanyData {
         $TimingBag['jobSignalTimestampCacheCount'] = [int]$sharedJobSignalTimestampCache.Count
         $TimingBag['phaseTotals'] = $projectionPhaseTotals
         $TimingBag['scoringPhaseTotals'] = $scoringPhaseTotals
+        $TimingBag['cacheTotals'] = $cacheTotals
         $TimingBag['slowCompanies'] = @(
             @($slowCompanies.ToArray()) |
                 Sort-Object @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'durationMs' -Default 0)) }; Descending = $true } |

@@ -1751,7 +1751,8 @@ function Invoke-BackgroundLiveJobImportJob {
     $companySyncDiagnostics = Get-ObjectValue -Object $applyResult.diagnostics -Name 'companySync' -Default $null
     if ($companySyncDiagnostics) {
         $scoringPhaseTotals = Get-ObjectValue -Object $companySyncDiagnostics -Name 'scoringPhaseTotals' -Default $null
-        Write-BackgroundJobLog ("JOB live-import-company-sync id={0} touched={1} companyIndexMs={2} contactIndexMs={3} jobIndexMs={4} configIndexMs={5} activityIndexMs={6} keySelectMs={7} projectionMs={8} sortMs={9} totalMs={10} jobSignalTextCacheCount={11} jobSignalTimestampCacheCount={12} scoringActiveJobsMs={13} scoringHiringMs={14} scoringEngagementMs={15} scoringGrowthMs={16} scoringExplanationMs={17}" -f `
+        $cacheTotals = Get-ObjectValue -Object $companySyncDiagnostics -Name 'cacheTotals' -Default $null
+        Write-BackgroundJobLog ("JOB live-import-company-sync id={0} touched={1} companyIndexMs={2} contactIndexMs={3} jobIndexMs={4} configIndexMs={5} activityIndexMs={6} keySelectMs={7} projectionMs={8} sortMs={9} totalMs={10} jobSignalTextCacheCount={11} jobSignalTimestampCacheCount={12} scoringActiveJobsMs={13} scoringHiringMs={14} scoringEngagementMs={15} scoringGrowthMs={16} scoringExplanationMs={17} graphCacheHits={18} recommendationCacheHits={19} outreachDraftCacheHits={20} explanationCacheHits={21}" -f `
                 $JobId,
                 [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'touchedCompanyCount' -Default 0)),
                 [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'companyIndexMs' -Default 0)),
@@ -1769,7 +1770,11 @@ function Invoke-BackgroundLiveJobImportJob {
                 [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'hiringMs' -Default 0)),
                 [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'engagementMs' -Default 0)),
                 [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'growthMs' -Default 0)),
-                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'explanationMs' -Default 0)))
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'explanationMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $cacheTotals -Name 'graphCacheHits' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $cacheTotals -Name 'recommendationCacheHits' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $cacheTotals -Name 'outreachDraftCacheHits' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $cacheTotals -Name 'explanationCacheHits' -Default 0)))
 
         $slowCompanies = @(Get-ObjectValue -Object $companySyncDiagnostics -Name 'slowCompanies' -Default @())
         if ($slowCompanies.Count -gt 0) {

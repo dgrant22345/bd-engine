@@ -812,6 +812,45 @@ function Get-CompanyOutreachDraftSignature {
         ))
 }
 
+function Get-ConnectionGraphSignatureData {
+    param(
+        $Company,
+        $Contacts = $null,
+        $Activities = $null
+    )
+
+    $pastPlacementCount = Get-CompanyPastPlacementCount -Company $Company -Activities $Activities
+    $parts = New-Object System.Collections.ArrayList
+    [void]$parts.Add([string](Get-ObjectValue -Object $Company -Name 'displayName' -Default ''))
+    [void]$parts.Add([string]$pastPlacementCount)
+    [void]$parts.Add([string]@($Contacts).Count)
+
+    foreach ($contact in @($Contacts)) {
+        if ($null -eq $contact) {
+            continue
+        }
+        [void]$parts.Add(([string]::Join('|', @(
+                        [string](Get-ObjectValue -Object $contact -Name 'id' -Default ''),
+                        [string](Get-ObjectValue -Object $contact -Name 'fullName' -Default ''),
+                        [string](Get-ObjectValue -Object $contact -Name 'title' -Default ''),
+                        [string](Convert-ToNumber (Get-ObjectValue -Object $contact -Name 'yearsConnected' -Default 0)),
+                        [string](Convert-ToNumber (Get-ObjectValue -Object $contact -Name 'priorityScore' -Default 0)),
+                        [string](Convert-ToNumber (Get-ObjectValue -Object $contact -Name 'companyOverlapCount' -Default 0)),
+                        [string](Test-Truthy (Get-ObjectValue -Object $contact -Name 'seniorFlag' -Default $false)),
+                        [string](Test-Truthy (Get-ObjectValue -Object $contact -Name 'buyerFlag' -Default $false)),
+                        [string](Test-Truthy (Get-ObjectValue -Object $contact -Name 'talentFlag' -Default $false)),
+                        [string](Get-ObjectValue -Object $contact -Name 'connectedOn' -Default ''),
+                        [string](Get-ObjectValue -Object $contact -Name 'linkedinUrl' -Default ''),
+                        [string](Get-ObjectValue -Object $contact -Name 'email' -Default '')
+                    ))))
+    }
+
+    return [ordered]@{
+        signature = [string]::Join('||', @($parts.ToArray()))
+        pastPlacementCount = [int]$pastPlacementCount
+    }
+}
+
 function Join-NaturalLanguageList {
     param([string[]]$Values)
 
@@ -2205,6 +2244,9 @@ function Get-CompanyTargetScoreMetrics {
     param(
         $Company,
         $Jobs = $null,
+        $ActiveJobs = $null,
+        $JobsForTextAnalysis = $null,
+        $JobsForGrowthSignals = $null,
         $Activities = $null,
         [datetime]$ReferenceNow = (Get-Date),
         [hashtable]$JobSignalTextCache = $null,
@@ -2219,16 +2261,32 @@ function Get-CompanyTargetScoreMetrics {
         $JobSignalTimestampCache = @{}
     }
     $activeJobsStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $activeJobs = $null
-    $jobsForTextAnalysis = $null
-    $jobsForGrowthSignals = $null
-    if ($null -ne $Jobs) {
+    $activeJobs = if ($PSBoundParameters.ContainsKey('ActiveJobs') -and $null -ne $ActiveJobs) {
+        @($ActiveJobs)
+    } else {
+        $null
+    }
+    $jobsForTextAnalysis = if ($PSBoundParameters.ContainsKey('JobsForTextAnalysis') -and $null -ne $JobsForTextAnalysis) {
+        @($JobsForTextAnalysis)
+    } else {
+        $null
+    }
+    $jobsForGrowthSignals = if ($PSBoundParameters.ContainsKey('JobsForGrowthSignals') -and $null -ne $JobsForGrowthSignals) {
+        @($JobsForGrowthSignals)
+    } else {
+        $null
+    }
+    if ($null -ne $Jobs -and $null -eq $activeJobs) {
         $activeJobs = @(Get-ActiveJobsForSignalAnalysis -Jobs $Jobs)
+    }
+    if ($null -ne $activeJobs -and $null -eq $jobsForTextAnalysis) {
         if (@($activeJobs).Count -gt 12) {
             $jobsForTextAnalysis = @(Select-MostRecentJobsForSignalAnalysis -Jobs $activeJobs -Limit 12 -JobSignalTimestampCache $JobSignalTimestampCache)
         } else {
             $jobsForTextAnalysis = @($activeJobs)
         }
+    }
+    if ($null -ne $jobsForTextAnalysis -and $null -eq $jobsForGrowthSignals) {
         if (@($jobsForTextAnalysis).Count -gt 6) {
             $jobsForGrowthSignals = @($jobsForTextAnalysis | Select-Object -First 6)
         } else {
@@ -2313,8 +2371,25 @@ function Get-CompanyTargetScoreMetrics {
     }
 
     $normalizedTargetScore = [Math]::Min(100, [Math]::Round($weightedTotal, 0))
+    $explanationSignature = [string]::Join('||', @(
+            @($components) |
+                ForEach-Object {
+                    [string]::Join('|', @(
+                            [string](Get-ObjectValue -Object $_ -Name 'key' -Default ''),
+                            [string](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)),
+                            [string](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'contribution' -Default 0)),
+                            [string](Get-ObjectValue -Object $_ -Name 'value' -Default '')
+                        ))
+                }
+        ))
+    $existingExplanationSignature = [string](Get-ObjectValue -Object $Company -Name 'targetScoreExplanationSignature' -Default '')
+    $existingExplanation = Get-ObjectValue -Object $Company -Name 'targetScoreExplanation' -Default $null
     $explanationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $explanation = Get-TargetScoreExplanation -Components $components
+    if ($existingExplanationSignature -eq $explanationSignature -and $existingExplanation) {
+        $explanation = $existingExplanation
+    } else {
+        $explanation = Get-TargetScoreExplanation -Components $components
+    }
     $explanationStopwatch.Stop()
 
     if ($TimingBag) {
@@ -2323,6 +2398,7 @@ function Get-CompanyTargetScoreMetrics {
         $TimingBag['engagementMs'] = [int]$engagementStopwatch.ElapsedMilliseconds
         $TimingBag['growthMs'] = [int]$growthStopwatch.ElapsedMilliseconds
         $TimingBag['explanationMs'] = [int]$explanationStopwatch.ElapsedMilliseconds
+        $TimingBag['explanationCacheHit'] = [bool]($existingExplanationSignature -eq $explanationSignature -and $existingExplanation)
         $TimingBag['activeJobsCount'] = @($activeJobs).Count
         $TimingBag['jobsForTextAnalysisCount'] = @($jobsForTextAnalysis).Count
         $TimingBag['jobsForGrowthSignalsCount'] = @($jobsForGrowthSignals).Count
@@ -2343,6 +2419,7 @@ function Get-CompanyTargetScoreMetrics {
         hiringVelocity = [double](Convert-ToNumber $hiringMetrics.hiringVelocity)
         scoreBreakdown = $scoreBreakdown
         targetScoreExplanation = $explanation
+        targetScoreExplanationSignature = $explanationSignature
     }
 }
 
@@ -2550,7 +2627,8 @@ function Get-ConnectionGraphInsights {
     param(
         $Company,
         $Contacts = $null,
-        $Activities = $null
+        $Activities = $null,
+        [int]$PastPlacementCount = -1
     )
 
     if ($null -eq $Contacts) {
@@ -2561,7 +2639,7 @@ function Get-ConnectionGraphInsights {
         return (Get-EmptyConnectionGraph)
     }
 
-    $pastPlacementCount = Get-CompanyPastPlacementCount -Company $Company -Activities $Activities
+    $pastPlacementCount = if ($PastPlacementCount -ge 0) { $PastPlacementCount } else { Get-CompanyPastPlacementCount -Company $Company -Activities $Activities }
     $rankedCandidates = New-Object System.Collections.ArrayList
     $decisionMakerCount = 0
     foreach ($contact in @($Contacts)) {
@@ -3503,9 +3581,13 @@ function New-CompanyProjection {
         topContactName = ''
         topContactTitle = ''
         recommendedAction = ''
+        recommendationSignature = ''
         outreachDraft = ''
+        outreachDraftSignature = ''
+        targetScoreExplanationSignature = ''
         pipelineState = [ordered]@{}
         connectionGraph = [ordered]@{}
+        connectionGraphSignature = ''
         triggerAlerts = @()
         sequenceState = [ordered]@{}
         relationshipStrengthScore = 0
@@ -3668,6 +3750,8 @@ function Update-CompanyProjection {
 
     $jobsStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $jobList = @()
+    $jobsForTextAnalysis = $null
+    $jobsForGrowthSignals = $null
     if ($PSBoundParameters.ContainsKey('Jobs')) {
         $jobList = @($Jobs | Where-Object { $null -ne $_ -and (Get-ObjectValue -Object $_ -Name 'active' -Default $true) -ne $false })
         $insights = Get-DepartmentInsights -Jobs $jobList
@@ -3712,6 +3796,16 @@ function Update-CompanyProjection {
             if ($locations.Count -gt 0) {
                 $Company.location = [string]([string]::Join(', ', @($locations)))
             }
+        }
+        if (@($jobList).Count -gt 12) {
+            $jobsForTextAnalysis = @(Select-MostRecentJobsForSignalAnalysis -Jobs $jobList -Limit 12 -JobSignalTimestampCache $JobSignalTimestampCache)
+        } else {
+            $jobsForTextAnalysis = @($jobList)
+        }
+        if (@($jobsForTextAnalysis).Count -gt 6) {
+            $jobsForGrowthSignals = @($jobsForTextAnalysis | Select-Object -First 6)
+        } else {
+            $jobsForGrowthSignals = @($jobsForTextAnalysis)
         }
     } else {
         $Company.jobCount = [int](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'jobCount' -Default 0))
@@ -3872,7 +3966,7 @@ function Update-CompanyProjection {
 
     $scoringStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $scoringTimingBag = [ordered]@{}
-    $targetMetrics = Get-CompanyTargetScoreMetrics -Company $Company -Jobs $(if ($PSBoundParameters.ContainsKey('Jobs')) { $jobList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now -JobSignalTextCache $JobSignalTextCache -JobSignalTimestampCache $JobSignalTimestampCache -TimingBag $scoringTimingBag
+    $targetMetrics = Get-CompanyTargetScoreMetrics -Company $Company -Jobs $(if ($PSBoundParameters.ContainsKey('Jobs')) { $jobList } else { $null }) -ActiveJobs $(if ($PSBoundParameters.ContainsKey('Jobs')) { $jobList } else { $null }) -JobsForTextAnalysis $jobsForTextAnalysis -JobsForGrowthSignals $jobsForGrowthSignals -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -ReferenceNow $now -JobSignalTextCache $JobSignalTextCache -JobSignalTimestampCache $JobSignalTimestampCache -TimingBag $scoringTimingBag
     $Company.targetScore = [int](Convert-ToNumber $targetMetrics.targetScore)
     $Company.normalizedTargetScore = [int](Convert-ToNumber $targetMetrics.normalizedTargetScore)
     $Company.jobsLast30Days = [int](Convert-ToNumber $targetMetrics.jobsLast30Days)
@@ -3887,6 +3981,7 @@ function Update-CompanyProjection {
     $Company.hiringVelocity = [double](Convert-ToNumber $targetMetrics.hiringVelocity)
     $Company.scoreBreakdown = if ($targetMetrics.scoreBreakdown) { $targetMetrics.scoreBreakdown } else { [ordered]@{} }
     $Company.targetScoreExplanation = if ($targetMetrics.targetScoreExplanation) { $targetMetrics.targetScoreExplanation } else { [ordered]@{} }
+    [void](Set-ObjectValue -Object $Company -Name 'targetScoreExplanationSignature' -Value ([string](Get-ObjectValue -Object $targetMetrics -Name 'targetScoreExplanationSignature' -Default '')))
     $scoringStopwatch.Stop()
 
     $pipelineStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -3896,8 +3991,25 @@ function Update-CompanyProjection {
     $pipelineStopwatch.Stop()
 
     $graphStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $Company.connectionGraph = Get-ConnectionGraphInsights -Company $Company -Contacts $(if ($PSBoundParameters.ContainsKey('Contacts')) { $contactList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null })
-    $Company.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company.connectionGraph -Name 'relationshipStrengthScore' -Default 0))
+    $graphCacheHit = $false
+    if ($PSBoundParameters.ContainsKey('Contacts')) {
+        $graphSignatureData = Get-ConnectionGraphSignatureData -Company $Company -Contacts $contactList -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null })
+        $graphSignature = [string](Get-ObjectValue -Object $graphSignatureData -Name 'signature' -Default '')
+        $existingGraphSignature = [string](Get-ObjectValue -Object $Company -Name 'connectionGraphSignature' -Default '')
+        $existingGraph = Get-ObjectValue -Object $Company -Name 'connectionGraph' -Default $null
+        if ($existingGraphSignature -eq $graphSignature -and $existingGraph) {
+            $Company.connectionGraph = $existingGraph
+            $Company.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $existingGraph -Name 'relationshipStrengthScore' -Default 0))
+            $graphCacheHit = $true
+        } else {
+            $Company.connectionGraph = Get-ConnectionGraphInsights -Company $Company -Contacts $contactList -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null }) -PastPlacementCount ([int](Convert-ToNumber (Get-ObjectValue -Object $graphSignatureData -Name 'pastPlacementCount' -Default 0)))
+            $Company.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company.connectionGraph -Name 'relationshipStrengthScore' -Default 0))
+            [void](Set-ObjectValue -Object $Company -Name 'connectionGraphSignature' -Value $graphSignature)
+        }
+    } else {
+        $Company.connectionGraph = Get-ConnectionGraphInsights -Company $Company -Contacts $(if ($PSBoundParameters.ContainsKey('Contacts')) { $contactList } else { $null }) -Activities $(if ($PSBoundParameters.ContainsKey('Activities')) { $activitiesList } else { $null })
+        $Company.relationshipStrengthScore = [int](Convert-ToNumber (Get-ObjectValue -Object $Company.connectionGraph -Name 'relationshipStrengthScore' -Default 0))
+    }
     $graphStopwatch.Stop()
 
     $sequenceStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -3963,9 +4075,12 @@ function Update-CompanyProjection {
         $TimingBag['scoringDetails'] = $scoringTimingBag
         $TimingBag['pipelineMs'] = [int]$pipelineStopwatch.ElapsedMilliseconds
         $TimingBag['graphMs'] = [int]$graphStopwatch.ElapsedMilliseconds
+        $TimingBag['graphCacheHit'] = [bool]$graphCacheHit
         $TimingBag['sequenceMs'] = [int]$sequenceStopwatch.ElapsedMilliseconds
         $TimingBag['alertsMs'] = [int]$alertsStopwatch.ElapsedMilliseconds
         $TimingBag['actionDraftMs'] = [int]$actionDraftStopwatch.ElapsedMilliseconds
+        $TimingBag['recommendationCacheHit'] = [bool]($existingRecommendationSignature -eq $recommendationSignature -and -not [string]::IsNullOrWhiteSpace($existingRecommendedAction))
+        $TimingBag['outreachDraftCacheHit'] = [bool]($existingOutreachDraftSignature -eq $outreachDraftSignature -and -not [string]::IsNullOrWhiteSpace($existingOutreachDraft))
     }
 
     return $Company

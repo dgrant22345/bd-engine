@@ -290,9 +290,13 @@ function Get-CompanyRecordDefaults {
         topContactName = ''
         topContactTitle = ''
         recommendedAction = ''
+        recommendationSignature = ''
         outreachDraft = ''
+        outreachDraftSignature = ''
+        targetScoreExplanationSignature = ''
         pipelineState = @{}
         connectionGraph = @{}
+        connectionGraphSignature = ''
         triggerAlerts = @()
         sequenceState = @{}
         relationshipStrengthScore = 0
