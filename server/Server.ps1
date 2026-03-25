@@ -178,6 +178,54 @@ function Get-CompanySnippetForOutreach {
     }
 }
 
+function Convert-ToOutreachApiModel {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Outreach,
+        [string]$CompanySnippet = '',
+        $Timings = $null
+    )
+
+    $subjectOptions = @($(Get-ObjectValue -Object $Outreach -Name 'subject_options' -Default @()) | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    return [ordered]@{
+        outreach = [string](Get-ObjectValue -Object $Outreach -Name 'message_body' -Default '')
+        subject_line = [string](Get-ObjectValue -Object $Outreach -Name 'subject_line' -Default '')
+        subject_options = @($subjectOptions)
+        message_body = [string](Get-ObjectValue -Object $Outreach -Name 'message_body' -Default '')
+        linkedin_message = [string](Get-ObjectValue -Object $Outreach -Name 'linkedin_message' -Default '')
+        follow_up_message = [string](Get-ObjectValue -Object $Outreach -Name 'follow_up_message' -Default '')
+        call_opener = [string](Get-ObjectValue -Object $Outreach -Name 'call_opener' -Default '')
+        why_now = [string](Get-ObjectValue -Object $Outreach -Name 'why_now' -Default '')
+        contact_hook = [string](Get-ObjectValue -Object $Outreach -Name 'contact_hook' -Default '')
+        angle_summary = [string](Get-ObjectValue -Object $Outreach -Name 'angle_summary' -Default '')
+        template_key = [string](Get-ObjectValue -Object $Outreach -Name 'template_key' -Default 'cold')
+        template_label = [string](Get-ObjectValue -Object $Outreach -Name 'template_label' -Default '')
+        template_button_label = [string](Get-ObjectValue -Object $Outreach -Name 'template_button_label' -Default '')
+        persona = [string](Get-ObjectValue -Object $Outreach -Name 'persona' -Default '')
+        persona_label = [string](Get-ObjectValue -Object $Outreach -Name 'persona_label' -Default '')
+        contact_name = [string](Get-ObjectValue -Object $Outreach -Name 'contact_name' -Default '')
+        contact_title = [string](Get-ObjectValue -Object $Outreach -Name 'contact_title' -Default '')
+        companySnippet = $CompanySnippet
+        signal_focus = [string](Get-ObjectValue -Object $Outreach -Name 'signal_focus' -Default '')
+        suggested_next_step = [string](Get-ObjectValue -Object $Outreach -Name 'suggested_next_step' -Default '')
+        signal_metrics = Get-ObjectValue -Object $Outreach -Name 'signal_metrics' -Default ([ordered]@{})
+        outreach_status = [string](Get-ObjectValue -Object $Outreach -Name 'outreach_status' -Default '')
+        sequence_status = [string](Get-ObjectValue -Object $Outreach -Name 'sequence_status' -Default '')
+        sequence_guidance = [string](Get-ObjectValue -Object $Outreach -Name 'sequence_guidance' -Default '')
+        timings = if ($Timings) { $Timings } else { [ordered]@{} }
+    }
+}
+
+function Get-OutreachVariantTemplates {
+    param(
+        [string]$PrimaryTemplate = 'cold'
+    )
+
+    $preferred = @('talent_partner', 'hiring_manager', 'executive')
+    $primaryKey = if ([string]::IsNullOrWhiteSpace([string]$PrimaryTemplate)) { 'cold' } else { ([string]$PrimaryTemplate).Trim().ToLowerInvariant() }
+    return @($preferred | Where-Object { $_ -ne $primaryKey } | Select-Object -Unique)
+}
+
 function Get-ContentType {
     param([string]$Path)
     switch ([System.IO.Path]::GetExtension($Path).ToLowerInvariant()) {
@@ -1002,6 +1050,7 @@ function Handle-ApiRequest {
         $accountId = $matches[1]
         $payload = Read-JsonBody -Request $Request
         $bookingLink = if ($payload.bookingLink) { [string]$payload.bookingLink } else { 'https://tinyurl.com/ysdep7cn' }
+        $includeVariants = [bool](Test-Truthy (Get-PayloadValue -Record $payload -Names @('includeVariants')))
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
         # Fetch account detail
@@ -1037,49 +1086,53 @@ function Handle-ApiRequest {
         $buildWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $outreach = Build-SmartOutreachDraft @outreachParams
         $buildWatch.Stop()
-        $linkedinMsg = [string](Get-ObjectValue -Object $outreach -Name 'linkedin_message' -Default '')
-        $followUpMsg = [string](Get-ObjectValue -Object $outreach -Name 'follow_up_message' -Default '')
-        $callOpener = [string](Get-ObjectValue -Object $outreach -Name 'call_opener' -Default '')
-        $subjectOptions = @($(Get-ObjectValue -Object $outreach -Name 'subject_options' -Default @()) | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $variantBuildWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $variantResults = @()
+        if ($includeVariants) {
+            $primaryTemplateKey = [string](Get-ObjectValue -Object $outreach -Name 'template_key' -Default (Get-PayloadValue -Record $payload -Names @('template')))
+            foreach ($variantTemplate in @(Get-OutreachVariantTemplates -PrimaryTemplate $primaryTemplateKey)) {
+                $variantOutreachParams = @{
+                    Account = $detail.account
+                    Jobs = $detail.jobs
+                    Contacts = $detail.contacts
+                    BookingLink = $bookingLink
+                    CompanySnippet = $companySnippet
+                    Template = [string]$variantTemplate
+                }
+                if ($payload.contactName) { $variantOutreachParams.OverrideContactName = [string]$payload.contactName }
+                if ($payload.contactTitle) { $variantOutreachParams.OverrideContactTitle = [string]$payload.contactTitle }
+                $variantResults += @(Build-SmartOutreachDraft @variantOutreachParams)
+            }
+        }
+        $variantBuildWatch.Stop()
         $stopwatch.Stop()
-        Write-ServerLog ("OUTREACH accountId={0} detailMs={1} snippetMs={2} snippetSource={3} buildMs={4} durationMs={5} template={6}" -f `
+        Write-ServerLog ("OUTREACH accountId={0} detailMs={1} snippetMs={2} snippetSource={3} buildMs={4} variantBuildMs={5} variantCount={6} durationMs={7} template={8}" -f `
                 $accountId,
                 [int]$detailWatch.ElapsedMilliseconds,
                 [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0),
                 [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default ''),
                 [int]$buildWatch.ElapsedMilliseconds,
+                [int]$variantBuildWatch.ElapsedMilliseconds,
+                [int](@($variantResults).Count),
                 [int]$stopwatch.ElapsedMilliseconds,
                 [string](Get-ObjectValue -Object $outreach -Name 'template_label' -Default ([string]$payload.template)))
 
-        return (New-JsonResult ([ordered]@{
-            outreach = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
-            subject_line = [string](Get-ObjectValue -Object $outreach -Name 'subject_line' -Default '')
-            subject_options = @($subjectOptions)
-            message_body = [string](Get-ObjectValue -Object $outreach -Name 'message_body' -Default '')
-            linkedin_message = $linkedinMsg
-            follow_up_message = $followUpMsg
-            call_opener = $callOpener
-            why_now = [string](Get-ObjectValue -Object $outreach -Name 'why_now' -Default '')
-            contact_hook = [string](Get-ObjectValue -Object $outreach -Name 'contact_hook' -Default '')
-            angle_summary = [string](Get-ObjectValue -Object $outreach -Name 'angle_summary' -Default '')
-            template_label = [string](Get-ObjectValue -Object $outreach -Name 'template_label' -Default '')
-            template_button_label = [string](Get-ObjectValue -Object $outreach -Name 'template_button_label' -Default '')
-            persona = [string](Get-ObjectValue -Object $outreach -Name 'persona' -Default '')
-            persona_label = [string](Get-ObjectValue -Object $outreach -Name 'persona_label' -Default '')
-            contact_name = [string](Get-ObjectValue -Object $outreach -Name 'contact_name' -Default '')
-            contact_title = [string](Get-ObjectValue -Object $outreach -Name 'contact_title' -Default '')
-            companySnippet = $companySnippet
-            signal_focus = [string](Get-ObjectValue -Object $outreach -Name 'signal_focus' -Default '')
-            suggested_next_step = [string](Get-ObjectValue -Object $outreach -Name 'suggested_next_step' -Default '')
-            signal_metrics = Get-ObjectValue -Object $outreach -Name 'signal_metrics' -Default ([ordered]@{})
-            timings = [ordered]@{
+        $response = Convert-ToOutreachApiModel -Outreach $outreach -CompanySnippet $companySnippet -Timings ([ordered]@{
                 detailMs = [int]$detailWatch.ElapsedMilliseconds
                 snippetMs = [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0)
                 buildMs = [int]$buildWatch.ElapsedMilliseconds
+                variantBuildMs = [int]$variantBuildWatch.ElapsedMilliseconds
+                variantCount = [int](@($variantResults).Count)
                 durationMs = [int]$stopwatch.ElapsedMilliseconds
                 snippetSource = [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default '')
-            }
-        }))
+            })
+        if ($includeVariants -and @($variantResults).Count -gt 0) {
+            $response.variants = @($variantResults | ForEach-Object {
+                    Convert-ToOutreachApiModel -Outreach $_ -CompanySnippet $companySnippet
+                })
+        }
+
+        return (New-JsonResult $response)
     }
 
     # Quick update endpoint - lightweight account patch with auto activity log

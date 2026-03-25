@@ -1076,7 +1076,12 @@ function Build-SmartOutreachDraft {
     $newRoleCount7d = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'newRoleCount7d' -Default 0))
     $staleRoleCount30d = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'staleRoleCount30d' -Default 0))
     $hiringSpikeRatio = [double](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'hiringSpikeRatio' -Default 0))
+    $outreachStatus = [string](Get-ObjectValue -Object $Account -Name 'outreachStatus' -Default 'not_started')
+    $daysSinceContact = [int](Convert-ToNumber (Get-ObjectValue -Object $Account -Name 'daysSinceContact' -Default 0))
+    $lastContactedAt = Get-ObjectValue -Object $Account -Name 'lastContactedAt' -Default $null
     $sequenceStatus = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $Account -Name 'sequenceState' -Default $null) -Name 'status' -Default '')
+    $sequenceNextStep = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $Account -Name 'sequenceState' -Default $null) -Name 'nextStepLabel' -Default '')
+    $sequenceNextStepAt = Get-ObjectValue -Object (Get-ObjectValue -Object $Account -Name 'sequenceState' -Default $null) -Name 'nextStepAt' -Default $null
     $contactContext = Get-OutreachContactContext -Contacts $Contacts -OverrideContactName $OverrideContactName -OverrideContactTitle $OverrideContactTitle
     $templateProfile = Get-OutreachTemplateProfile -Template $Template
     $personaProfile = Get-OutreachPersonaProfile -Account $Account -ContactContext $contactContext -TemplateProfile $templateProfile
@@ -1131,8 +1136,22 @@ function Build-SmartOutreachDraft {
 
     $leadSentence = switch ($templateProfile.key) {
         'warm_intro' { 'Since we are already connected, I will keep this direct.'; break }
-        'follow_up' { 'Circling back because the hiring signal still looks active.'; break }
-        're_engage' { 'Reaching back out because the hiring picture looks materially more active now.'; break }
+        'follow_up' {
+            if ($daysSinceContact -gt 0) {
+                'Circling back because the hiring signal still looks active, and it has been {0} day{1} since the last touch.' -f $daysSinceContact, $(if ($daysSinceContact -eq 1) { '' } else { 's' })
+            } else {
+                'Circling back because the hiring signal still looks active.'
+            }
+            break
+        }
+        're_engage' {
+            if ($daysSinceContact -gt 0) {
+                'Reaching back out because the hiring picture looks materially more active now than it did {0} day{1} ago.' -f $daysSinceContact, $(if ($daysSinceContact -eq 1) { '' } else { 's' })
+            } else {
+                'Reaching back out because the hiring picture looks materially more active now.'
+            }
+            break
+        }
         default { '' }
     }
 
@@ -1178,6 +1197,9 @@ function Build-SmartOutreachDraft {
         'hiring_manager' { 'If helpful, I can share where I would expect interview drag or specialist coverage risk to show up first.'; break }
         'executive' { 'If useful, I can send a short view on where I would focus first to keep the hiring plan moving.'; break }
         default { 'If helpful, I can send a quick read on which searches in this cluster are most likely to bottleneck first.' }
+    }
+    if (($templateProfile.key -eq 'cold' -or $templateProfile.key -eq 'talent_partner' -or $templateProfile.key -eq 'hiring_manager') -and ($outreachStatus -eq 'contacted' -or $outreachStatus -eq 'researching') -and $daysSinceContact -ge 10) {
+        $closeSentence = 'Since there was already a touch on this account, I can keep the follow-up tight and focused on the searches most likely to drag.'
     }
 
     $messageParts = @($leadSentence, $firstSentence, $contextSentence, $capabilitySentence, $closeSentence) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
@@ -1259,6 +1281,9 @@ function Build-SmartOutreachDraft {
     } else {
         'Lead with the current hiring pressure and a concrete point of view on which searches will be hardest to close.'
     }
+    if (($outreachStatus -eq 'contacted' -or $outreachStatus -eq 'researching') -and $daysSinceContact -gt 0) {
+        $contactHook = '{0} Last touch was {1} day{2} ago, so the angle should sound like a focused continuation rather than a fresh cold note.' -f $contactHook, $daysSinceContact, $(if ($daysSinceContact -eq 1) { '' } else { 's' })
+    }
 
     $angleSummary = switch ($templateProfile.key) {
         'follow_up' { 'Follow-up on a still-active hiring signal'; break }
@@ -1266,8 +1291,16 @@ function Build-SmartOutreachDraft {
         'warm_intro' { 'Use the warm path and keep the message concise'; break }
         default { '{0} with live hiring evidence' -f [string]$personaProfile.label }
     }
+    $sequenceGuidance = if ($sequenceStatus -eq 'active' -and $sequenceNextStep) {
+        '{0}{1}' -f $sequenceNextStep, $(if ($sequenceNextStepAt) { ' due ' + ([string]$sequenceNextStepAt) } else { '' })
+    } elseif ($daysSinceContact -gt 0) {
+        'Last contact was {0} day{1} ago.' -f $daysSinceContact, $(if ($daysSinceContact -eq 1) { '' } else { 's' })
+    } else {
+        ''
+    }
 
     return [ordered]@{
+        template_key = [string](Get-ObjectValue -Object $templateProfile -Name 'key' -Default 'cold')
         subject_line = $subjectLine.Trim()
         subject_options = @($subjectOptions)
         message_body = $messageBody.Trim()
@@ -1286,7 +1319,9 @@ function Build-SmartOutreachDraft {
         contact_title = $contactTitle
         company_snippet = [string]$CompanySnippet
         booking_link = [string]$BookingLink
+        outreach_status = [string]$outreachStatus
         sequence_status = [string]$sequenceStatus
+        sequence_guidance = [string]$sequenceGuidance
         signal_focus = [string]$focusSummary
         suggested_next_step = [string]$recommendedAction
         signal_metrics = [ordered]@{

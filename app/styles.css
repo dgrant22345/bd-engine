@@ -2025,6 +2025,10 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+.outreach-piece-grid--variants {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .outreach-piece {
   display: grid;
   gap: 12px;
@@ -2037,6 +2041,10 @@ a {
 
 .outreach-piece--primary {
   grid-column: span 2;
+}
+
+.outreach-piece--variant {
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .outreach-piece-header {
@@ -2062,6 +2070,15 @@ a {
 
 .outreach-piece-actions {
   margin-top: auto;
+}
+
+.outreach-variant-section {
+  display: grid;
+  gap: 12px;
+}
+
+.panel-header--compact {
+  margin-bottom: 0;
 }
 
 .outreach-subject-options {
