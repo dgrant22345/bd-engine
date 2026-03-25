@@ -5,6 +5,10 @@ $script:JsonSerializer = $null
 $script:SqliteSchemaInitialized = $false
 $script:StoreSignatureCache = ''
 $script:StoreSignatureFileStamp = ''
+$script:SiblingCompanySourceIndexCache = $null
+$script:SiblingCompanySourceIndexStamp = ''
+$script:SiblingConfigSourceIndexCache = $null
+$script:SiblingConfigSourceIndexStamp = ''
 $script:CompanySummaryColumns = 'id, sort_order, normalized_name, display_name, display_name_normalized, industry, location, domain, careers_url, owner, owner_normalized, priority, priority_tier, status, outreach_status, connection_count, senior_contact_count, talent_contact_count, buyer_title_count, target_score, target_score_explanation_json, daily_score, follow_up_score, job_count, open_role_count, jobs_last_30_days, jobs_last_90_days, new_role_count_7d, stale_role_count_30d, avg_role_seniority_score, hiring_spike_ratio, external_recruiter_likelihood_score, company_growth_signal_score, company_growth_signal_summary, engagement_score, engagement_summary, hiring_velocity, department_focus, department_focus_count, department_concentration, hiring_spike_score, network_strength, hiring_status, last_job_posted_at, last_contacted_at, days_since_contact, stale_flag, next_action, next_action_at, alert_priority_score, relationship_strength_score, sequence_status, sequence_next_step, sequence_next_step_at, recommended_action, outreach_draft, top_contact_name, top_contact_title, ats_types_text, tags_text, notes, search_text, canonical_domain, linkedin_company_slug, aliases_text, enrichment_status, enrichment_source, enrichment_confidence, enrichment_confidence_score, enrichment_notes, enrichment_evidence, enrichment_failure_reason, enrichment_attempted_urls_text, last_enriched_at, last_verified_at, next_enrichment_attempt_at'
 $script:CanadaLocationHints = @(
     'canada', 'toronto', 'ontario', 'vancouver', 'british columbia', 'montreal', 'quebec', 'quebec city',
@@ -665,6 +669,61 @@ function Find-BdSqliteSiblingPropagationSource {
     }
 
     return $best
+}
+
+function Get-BdSqliteSiblingCompanySourceCacheStamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    $rows = @(Invoke-BdSqliteRows -Connection $Connection -Sql @"
+SELECT
+  COUNT(*) AS source_count,
+  COALESCE(MAX(NULLIF(last_enriched_at, '')), '') AS max_enriched_at,
+  COALESCE(MAX(NULLIF(last_verified_at, '')), '') AS max_verified_at,
+  COALESCE(SUM(LENGTH(COALESCE(canonical_domain, '')) + LENGTH(COALESCE(careers_url, '')) + LENGTH(COALESCE(aliases_text, ''))), 0) AS source_weight
+FROM companies
+WHERE (COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '')
+  AND COALESCE(NULLIF(enrichment_status, ''), '') IN ('manual', 'verified', 'enriched')
+  AND COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('high', 'medium');
+"@)
+    $row = if (@($rows).Count -gt 0) { $rows[0] } else { $null }
+    return ('companies|count={0}|enriched={1}|verified={2}|weight={3}' -f
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_count' -Default 0)),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_enriched_at' -Default ''),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_verified_at' -Default ''),
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_weight' -Default 0)))
+}
+
+function Get-BdSqliteSiblingConfigSourceCacheStamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    $rows = @(Invoke-BdSqliteRows -Connection $Connection -Sql @"
+SELECT
+  COUNT(*) AS source_count,
+  COALESCE(MAX(NULLIF(last_checked_at, '')), '') AS max_checked_at,
+  COALESCE(MAX(NULLIF(last_resolution_attempt_at, '')), '') AS max_resolution_attempt_at,
+  COALESCE(SUM(
+      LENGTH(COALESCE(domain, '')) +
+      LENGTH(COALESCE(careers_url, '')) +
+      LENGTH(COALESCE(resolved_board_url, '')) +
+      LENGTH(COALESCE(board_id, '')) +
+      LENGTH(COALESCE(normalized_company_name, ''))
+  ), 0) AS source_weight
+FROM board_configs
+WHERE COALESCE(NULLIF(discovery_status, ''), '') IN ('mapped', 'discovered', 'verified')
+  AND COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('high', 'medium');
+"@)
+    $row = if (@($rows).Count -gt 0) { $rows[0] } else { $null }
+    return ('configs|count={0}|checked={1}|attempted={2}|weight={3}' -f
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_count' -Default 0)),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_checked_at' -Default ''),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_resolution_attempt_at' -Default ''),
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_weight' -Default 0)))
 }
 
 function Get-BdSqliteSearchText {
@@ -4397,7 +4456,9 @@ function Invoke-BdSqliteLocalEnrichmentPass {
             boardConfigDomainApplied  = 0
             boardConfigCareersApplied = 0
             siblingPropagationApplied = 0
+            siblingPropagationCooldownApplied = 0
             boardConfigSiblingApplied = 0
+            boardConfigSiblingCooldownApplied = 0
             jobDomainApplied          = 0
             skippedAlreadyEnriched    = 0
             totalUpdated              = 0
@@ -4716,8 +4777,21 @@ WHERE id = @id
         # (e.g. "Modis" -> "Modis Canada"), without broad web probing.
         # ---------------------------------------------------------------
         $pass5Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $pass5SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $sourceRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+        $pass5SourceStamp = Get-BdSqliteSiblingCompanySourceCacheStamp -Connection $connection
+        $sourceRows = @()
+        $sourceIndex = @{}
+        $sourceLeadingKeys = @()
+        $pass5SourceCount = 0
+        if ($script:SiblingCompanySourceIndexCache -and $script:SiblingCompanySourceIndexStamp -eq $pass5SourceStamp) {
+            $sourceIndex = $script:SiblingCompanySourceIndexCache.sourceIndex
+            $sourceLeadingKeys = $script:SiblingCompanySourceIndexCache.sourceLeadingKeys
+            $pass5SourceCount = [int](ConvertTo-BdSqliteNumber $script:SiblingCompanySourceIndexCache.sourceCount)
+            $stats.timings.pass5SourceIndexCacheHit = $true
+            $stats.timings.pass5SourceLoadMs = 0
+            $stats.timings.pass5SourceIndexBuildMs = 0
+        } else {
+            $pass5SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, enrichment_confidence, enrichment_confidence_score, aliases_text
 FROM companies
 WHERE (COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '')
@@ -4733,9 +4807,10 @@ ORDER BY
   COALESCE(enrichment_confidence_score, 0) DESC,
   display_name ASC;
 "@)
-        $pass5SourceLoadStopwatch.Stop()
-        $sourceIndex = @{}
-        foreach ($row in @($sourceRows)) {
+            $pass5SourceLoadStopwatch.Stop()
+            $pass5SourceBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceIndex = @{}
+            foreach ($row in @($sourceRows)) {
             $canonicalDomain = [string]$row.canonical_domain
             $careersUrl = [string]$row.careers_url
             if (-not $canonicalDomain -and -not $careersUrl) {
@@ -4782,8 +4857,19 @@ ORDER BY
                 [void]$sourceIndex[$leadingKey].Add($descriptor)
             }
         }
-
-        $sourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $sourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $pass5SourceBuildStopwatch.Stop()
+            $pass5SourceCount = @($sourceRows).Count
+            $script:SiblingCompanySourceIndexCache = [ordered]@{
+                sourceIndex = $sourceIndex
+                sourceLeadingKeys = $sourceLeadingKeys
+                sourceCount = $pass5SourceCount
+            }
+            $script:SiblingCompanySourceIndexStamp = $pass5SourceStamp
+            $stats.timings.pass5SourceIndexCacheHit = $false
+            $stats.timings.pass5SourceLoadMs = [int]$pass5SourceLoadStopwatch.ElapsedMilliseconds
+            $stats.timings.pass5SourceIndexBuildMs = [int]$pass5SourceBuildStopwatch.ElapsedMilliseconds
+        }
         $sourceLeadingKeysSql = if ($sourceLeadingKeys.Count -gt 0) {
             [string]::Join(',', @($sourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
         } else {
@@ -4822,6 +4908,7 @@ LIMIT $Limit;
 
         if ($candidateRows.Count -gt 0 -and $sourceIndex.Count -gt 0) {
             $pass5MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $pass5UnmatchedCandidateIds = New-Object System.Collections.ArrayList
             $txn = $connection.BeginTransaction()
             try {
                 foreach ($candidateRow in @($candidateRows)) {
@@ -4833,6 +4920,7 @@ LIMIT $Limit;
 
                     $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateRow -SourceIndex $sourceIndex
                     if ($null -eq $match) {
+                        [void]$pass5UnmatchedCandidateIds.Add([string]$candidateRow.id)
                         continue
                     }
 
@@ -4912,13 +5000,50 @@ WHERE id = @id
             } finally { $txn.Dispose() }
             $pass5MatchStopwatch.Stop()
             $stats.timings.pass5MatchUpdateMs = [int]$pass5MatchStopwatch.ElapsedMilliseconds
+            $stats.timings.pass5UnmatchedCandidateCount = @($pass5UnmatchedCandidateIds).Count
+
+            if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId) -and @($pass5UnmatchedCandidateIds).Count -gt 0) {
+                $pass5CooldownStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $pass5CooldownTxn = $connection.BeginTransaction()
+                try {
+                    foreach ($candidateCompanyId in @($pass5UnmatchedCandidateIds | Select-Object -Unique)) {
+                        if ([string]::IsNullOrWhiteSpace([string]$candidateCompanyId)) {
+                            continue
+                        }
+                        $cmd = $connection.CreateCommand()
+                        $cmd.Transaction = $pass5CooldownTxn
+                        $cmd.CommandText = @"
+UPDATE companies
+SET last_enriched_at = CASE WHEN COALESCE(NULLIF(last_enriched_at, ''), '') = '' THEN @now ELSE last_enriched_at END,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id
+  AND COALESCE(NULLIF(enrichment_source, ''), '') <> 'sibling_propagation'
+  AND (next_enrichment_attempt_at IS NULL OR next_enrichment_attempt_at = '' OR next_enrichment_attempt_at <= @now);
+"@
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateCompanyId; [void]$cmd.Parameters.Add($p)
+                        $affected = $cmd.ExecuteNonQuery()
+                        $stats.siblingPropagationCooldownApplied += $affected
+                    }
+                    $pass5CooldownTxn.Commit()
+                } catch {
+                    try { $pass5CooldownTxn.Rollback() } catch {}
+                    throw
+                } finally { $pass5CooldownTxn.Dispose() }
+                $pass5CooldownStopwatch.Stop()
+                $stats.timings.pass5CooldownMs = [int]$pass5CooldownStopwatch.ElapsedMilliseconds
+            } else {
+                $stats.timings.pass5CooldownMs = 0
+            }
         } else {
             $stats.timings.pass5MatchUpdateMs = 0
+            $stats.timings.pass5UnmatchedCandidateCount = 0
+            $stats.timings.pass5CooldownMs = 0
         }
         $pass5Stopwatch.Stop()
-        $stats.timings.pass5SourceLoadMs = [int]$pass5SourceLoadStopwatch.ElapsedMilliseconds
         $stats.timings.pass5CandidateLoadMs = [int]$pass5CandidateLoadStopwatch.ElapsedMilliseconds
-        $stats.timings.pass5SourceCount = @($sourceRows).Count
+        $stats.timings.pass5SourceCount = $pass5SourceCount
         $stats.timings.pass5CandidateCount = @($candidateRows).Count
         $stats.timings.pass5SourceLeadingKeyCount = @($sourceLeadingKeys).Count
         $stats.timings.pass5SiblingPropagationMs = [int]$pass5Stopwatch.ElapsedMilliseconds
@@ -4929,9 +5054,23 @@ WHERE id = @id
         # board candidate so coverage improves even before deep web discovery.
         # ---------------------------------------------------------------
         $pass6Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $pass6SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $sourceConfigMap = @{}
-        $sourceConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+        $sourceIndex = @{}
+        $sourceConfigRows = @()
+        $pass6SourceLeadingKeys = @()
+        $pass6SourceCount = 0
+        $pass6SourceStamp = Get-BdSqliteSiblingConfigSourceCacheStamp -Connection $connection
+        if ($script:SiblingConfigSourceIndexCache -and $script:SiblingConfigSourceIndexStamp -eq $pass6SourceStamp) {
+            $sourceConfigMap = $script:SiblingConfigSourceIndexCache.sourceConfigMap
+            $sourceIndex = $script:SiblingConfigSourceIndexCache.sourceIndex
+            $pass6SourceLeadingKeys = $script:SiblingConfigSourceIndexCache.sourceLeadingKeys
+            $pass6SourceCount = [int](ConvertTo-BdSqliteNumber $script:SiblingConfigSourceIndexCache.sourceCount)
+            $stats.timings.pass6SourceIndexCacheHit = $true
+            $stats.timings.pass6SourceLoadMs = 0
+            $stats.timings.pass6SourceIndexBuildMs = 0
+        } else {
+            $pass6SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT bc.id, bc.normalized_company_name, bc.ats_type, bc.board_id, bc.domain, bc.careers_url, bc.resolved_board_url,
        bc.discovery_status, bc.confidence_band, bc.discovery_method, bc.supported_import, bc.active
 FROM board_configs bc
@@ -4945,15 +5084,16 @@ ORDER BY
   END DESC,
   bc.company_name ASC;
 "@)
-        $pass6SourceLoadStopwatch.Stop()
-        foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            $pass6SourceLoadStopwatch.Stop()
+            $pass6SourceBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            foreach ($sourceConfigRow in @($sourceConfigRows)) {
             $normalizedCompanyName = [string]$sourceConfigRow.normalized_company_name
             if (-not $normalizedCompanyName -or $sourceConfigMap.ContainsKey($normalizedCompanyName)) {
                 continue
             }
             $sourceConfigMap[$normalizedCompanyName] = $sourceConfigRow
         }
-        foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            foreach ($sourceConfigRow in @($sourceConfigRows)) {
             $sourceNormalizedName = [string]$sourceConfigRow.normalized_company_name
             if (-not $sourceNormalizedName) {
                 continue
@@ -5003,8 +5143,20 @@ ORDER BY
                 [void]$sourceIndex[$leadingKey].Add($descriptor)
             }
         }
-
-        $pass6SourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $pass6SourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $pass6SourceBuildStopwatch.Stop()
+            $pass6SourceCount = @($sourceConfigRows).Count
+            $script:SiblingConfigSourceIndexCache = [ordered]@{
+                sourceConfigMap = $sourceConfigMap
+                sourceIndex = $sourceIndex
+                sourceLeadingKeys = $pass6SourceLeadingKeys
+                sourceCount = $pass6SourceCount
+            }
+            $script:SiblingConfigSourceIndexStamp = $pass6SourceStamp
+            $stats.timings.pass6SourceIndexCacheHit = $false
+            $stats.timings.pass6SourceLoadMs = [int]$pass6SourceLoadStopwatch.ElapsedMilliseconds
+            $stats.timings.pass6SourceIndexBuildMs = [int]$pass6SourceBuildStopwatch.ElapsedMilliseconds
+        }
         $pass6SourceLeadingKeysSql = if ($pass6SourceLeadingKeys.Count -gt 0) {
             [string]::Join(',', @($pass6SourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
         } else {
@@ -5026,11 +5178,14 @@ ORDER BY
         $pass6CandidateLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $candidateConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT bc.id, bc.company_name, bc.normalized_company_name, bc.domain, bc.careers_url, bc.discovery_status, bc.confidence_band,
+       bc.discovery_method, bc.next_resolution_attempt_at,
        co.id AS account_id, co.display_name, co.normalized_name, co.aliases_text
 FROM board_configs bc
 LEFT JOIN companies co ON co.normalized_name = bc.normalized_company_name
 WHERE (COALESCE(NULLIF(bc.discovery_status, ''), 'missing_inputs') NOT IN ('mapped', 'discovered', 'verified')
        OR COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))
+  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (bc.next_resolution_attempt_at IS NULL OR bc.next_resolution_attempt_at = '' OR bc.next_resolution_attempt_at <= '$now')" } else { '' })
+  $(if (-not $ForceRefresh) { "AND COALESCE(NULLIF(bc.discovery_method, ''), '') <> 'sibling_propagation'" } else { '' })
   $(
     if (-not [string]::IsNullOrWhiteSpace([string]$AccountId)) {
         "AND co.id = '$escapedAccountId'"
@@ -5045,9 +5200,12 @@ LIMIT $Limit;
         $pass6CandidateLoadStopwatch.Stop()
         if ($candidateConfigRows.Count -gt 0 -and $sourceConfigMap.Count -gt 0 -and $sourceIndex.Count -gt 0) {
             $pass6MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $pass6UnmatchedCandidateIds = New-Object System.Collections.ArrayList
+            $pass6CooldownCandidateIds = New-Object System.Collections.ArrayList
             $txn = $connection.BeginTransaction()
             try {
                 foreach ($candidateConfigRow in @($candidateConfigRows)) {
+                    $candidateConfigId = [string]$candidateConfigRow.id
                     $candidateCompany = [ordered]@{
                         id = [string]$candidateConfigRow.account_id
                         display_name = [string]$(if ($candidateConfigRow.display_name) { $candidateConfigRow.display_name } else { $candidateConfigRow.company_name })
@@ -5057,16 +5215,20 @@ LIMIT $Limit;
 
                     $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateCompany -SourceIndex $sourceIndex
                     if ($null -eq $match) {
+                        [void]$pass6UnmatchedCandidateIds.Add($candidateConfigId)
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
                         continue
                     }
 
                     $source = Get-BdSqliteRecordValue -Record $match -Name 'source' -Default $null
                     if ($null -eq $source) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
                         continue
                     }
 
                     $sourceNormalizedName = [string](Get-BdSqliteRecordValue -Record $source -Name 'normalizedName' -Default '')
                     if (-not $sourceNormalizedName -or -not $sourceConfigMap.ContainsKey($sourceNormalizedName)) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
                         continue
                     }
 
@@ -5075,6 +5237,7 @@ LIMIT $Limit;
                     $sourceCareersUrl = [string]$(if ($sourceConfig.careers_url) { $sourceConfig.careers_url } else { Get-BdSqliteRecordValue -Record $source -Name 'careersUrl' -Default '' })
                     $sourceResolvedBoardUrl = [string]$(if ($sourceConfig.resolved_board_url) { $sourceConfig.resolved_board_url } else { $sourceCareersUrl })
                     if (-not $sourceDomain -and -not $sourceCareersUrl -and -not $sourceResolvedBoardUrl) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
                         continue
                     }
 
@@ -5114,9 +5277,12 @@ WHERE id = @id
                     $p = $cmd.CreateParameter(); $p.ParameterName = '@evidence'; $p.Value = ("Sibling board config propagated from {0} via brand phrase '{1}'" -f [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default 'related company'), [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default '')); [void]$cmd.Parameters.Add($p)
                     $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
                     $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
-                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateConfigRow.id; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = $candidateConfigId; [void]$cmd.Parameters.Add($p)
                     $affected = $cmd.ExecuteNonQuery()
                     $stats.boardConfigSiblingApplied += $affected
+                    if ($affected -le 0) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                    }
                 }
                 $txn.Commit()
             } catch {
@@ -5125,13 +5291,52 @@ WHERE id = @id
             } finally { $txn.Dispose() }
             $pass6MatchStopwatch.Stop()
             $stats.timings.pass6MatchUpdateMs = [int]$pass6MatchStopwatch.ElapsedMilliseconds
+            $stats.timings.pass6UnmatchedCandidateCount = @($pass6UnmatchedCandidateIds).Count
+            $stats.timings.pass6CooldownCandidateCount = @($pass6CooldownCandidateIds | Select-Object -Unique).Count
+
+            if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId) -and @($pass6CooldownCandidateIds).Count -gt 0) {
+                $pass6CooldownStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $pass6CooldownTxn = $connection.BeginTransaction()
+                try {
+                    foreach ($candidateConfigId in @($pass6CooldownCandidateIds | Select-Object -Unique)) {
+                        if ([string]::IsNullOrWhiteSpace([string]$candidateConfigId)) {
+                            continue
+                        }
+                        $cmd = $connection.CreateCommand()
+                        $cmd.Transaction = $pass6CooldownTxn
+                        $cmd.CommandText = @"
+UPDATE board_configs
+SET last_resolution_attempt_at = @now,
+    next_resolution_attempt_at = @cooldown
+WHERE id = @id
+  AND COALESCE(NULLIF(discovery_method, ''), '') <> 'sibling_propagation'
+  AND (next_resolution_attempt_at IS NULL OR next_resolution_attempt_at = '' OR next_resolution_attempt_at <= @now);
+"@
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateConfigId; [void]$cmd.Parameters.Add($p)
+                        $affected = $cmd.ExecuteNonQuery()
+                        $stats.boardConfigSiblingCooldownApplied += $affected
+                    }
+                    $pass6CooldownTxn.Commit()
+                } catch {
+                    try { $pass6CooldownTxn.Rollback() } catch {}
+                    throw
+                } finally { $pass6CooldownTxn.Dispose() }
+                $pass6CooldownStopwatch.Stop()
+                $stats.timings.pass6CooldownMs = [int]$pass6CooldownStopwatch.ElapsedMilliseconds
+            } else {
+                $stats.timings.pass6CooldownMs = 0
+            }
         } else {
             $stats.timings.pass6MatchUpdateMs = 0
+            $stats.timings.pass6UnmatchedCandidateCount = 0
+            $stats.timings.pass6CooldownCandidateCount = 0
+            $stats.timings.pass6CooldownMs = 0
         }
         $pass6Stopwatch.Stop()
-        $stats.timings.pass6SourceLoadMs = [int]$pass6SourceLoadStopwatch.ElapsedMilliseconds
         $stats.timings.pass6CandidateLoadMs = [int]$pass6CandidateLoadStopwatch.ElapsedMilliseconds
-        $stats.timings.pass6SourceCount = @($sourceConfigRows).Count
+        $stats.timings.pass6SourceCount = $pass6SourceCount
         $stats.timings.pass6CandidateCount = @($candidateConfigRows).Count
         $stats.timings.pass6SourceLeadingKeyCount = @($pass6SourceLeadingKeys).Count
         $stats.timings.pass6SiblingConfigMs = [int]$pass6Stopwatch.ElapsedMilliseconds
