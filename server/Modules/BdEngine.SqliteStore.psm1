@@ -527,6 +527,7 @@ function Get-BdSqliteCandidateLeadingKeys {
 
     $keys = New-Object System.Collections.ArrayList
     $seen = @{}
+    $stopwords = @(Get-BdSqliteCompanyIdentityStopwords)
 
     function Add-LeadingKey {
         param(
@@ -546,7 +547,11 @@ function Get-BdSqliteCandidateLeadingKeys {
         }
 
         $leading = [string]$tokens[0]
-        if ($leading.Length -lt 2) {
+        if ($leading.Length -lt 4) {
+            return
+        }
+
+        if ($stopwords -contains $leading) {
             return
         }
 
@@ -582,12 +587,20 @@ function Find-BdSqliteSiblingPropagationSource {
     $candidateLeadingKeys = @(Get-BdSqliteCandidateLeadingKeys -DisplayName ([string](Get-BdSqliteRecordValue -Record $Candidate -Name 'display_name' -Default '')) -NormalizedName $candidateNormalizedName -AliasesText $candidateAliasesText)
 
     $candidateSets = New-Object System.Collections.ArrayList
+    $seenDescriptorIds = @{}
     foreach ($leadingKey in @($candidateLeadingKeys)) {
         if (-not $leadingKey -or -not $SourceIndex.ContainsKey($leadingKey)) {
             continue
         }
 
         foreach ($descriptor in @($SourceIndex[$leadingKey])) {
+            $descriptorId = [string](Get-BdSqliteRecordValue -Record $descriptor -Name 'id' -Default '')
+            if ($descriptorId -and $seenDescriptorIds.ContainsKey($descriptorId)) {
+                continue
+            }
+            if ($descriptorId) {
+                $seenDescriptorIds[$descriptorId] = $true
+            }
             [void]$candidateSets.Add($descriptor)
         }
     }
@@ -4703,6 +4716,7 @@ WHERE id = @id
         # (e.g. "Modis" -> "Modis Canada"), without broad web probing.
         # ---------------------------------------------------------------
         $pass5Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $pass5SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $sourceRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, enrichment_confidence, enrichment_confidence_score, aliases_text
 FROM companies
@@ -4719,20 +4733,7 @@ ORDER BY
   COALESCE(enrichment_confidence_score, 0) DESC,
   display_name ASC;
 "@)
-        $candidateRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
-SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, aliases_text
-FROM companies co
-WHERE (COALESCE(NULLIF(co.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(co.careers_url, ''), '') = '')
-  AND COALESCE(NULLIF(co.enrichment_status, ''), '') NOT IN ('manual', 'verified')
-  $targetedCompanyAliasClause
-  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
-ORDER BY
-  CASE WHEN COALESCE(NULLIF(co.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(co.careers_url, ''), '') = '' THEN 1 ELSE 2 END,
-  COALESCE(co.target_score, 0) DESC,
-  COALESCE(co.connection_count, 0) DESC,
-  co.display_name ASC
-LIMIT $Limit;
-"@)
+        $pass5SourceLoadStopwatch.Stop()
         $sourceIndex = @{}
         foreach ($row in @($sourceRows)) {
             $canonicalDomain = [string]$row.canonical_domain
@@ -4782,7 +4783,45 @@ LIMIT $Limit;
             }
         }
 
+        $sourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+        $sourceLeadingKeysSql = if ($sourceLeadingKeys.Count -gt 0) {
+            [string]::Join(',', @($sourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
+        } else {
+            ''
+        }
+        $pass5CandidateLeadingKeyClause = if ($sourceLeadingKeysSql) {
+@"
+  AND LOWER(
+        CASE
+          WHEN INSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), ' ') > 0
+            THEN SUBSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), 1, INSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), ' ') - 1)
+          ELSE COALESCE(NULLIF(co.normalized_name, ''), co.display_name)
+        END
+      ) IN ($sourceLeadingKeysSql)
+"@
+        } else {
+            ''
+        }
+        $pass5CandidateLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $candidateRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, aliases_text
+FROM companies co
+WHERE (COALESCE(NULLIF(co.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(co.careers_url, ''), '') = '')
+  AND COALESCE(NULLIF(co.enrichment_status, ''), '') NOT IN ('manual', 'verified')
+  $targetedCompanyAliasClause
+  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
+  $pass5CandidateLeadingKeyClause
+ORDER BY
+  CASE WHEN COALESCE(NULLIF(co.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(co.careers_url, ''), '') = '' THEN 1 ELSE 2 END,
+  COALESCE(co.target_score, 0) DESC,
+  COALESCE(co.connection_count, 0) DESC,
+  co.display_name ASC
+LIMIT $Limit;
+"@)
+        $pass5CandidateLoadStopwatch.Stop()
+
         if ($candidateRows.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $pass5MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $txn = $connection.BeginTransaction()
             try {
                 foreach ($candidateRow in @($candidateRows)) {
@@ -4871,8 +4910,17 @@ WHERE id = @id
                 try { $txn.Rollback() } catch {}
                 throw
             } finally { $txn.Dispose() }
+            $pass5MatchStopwatch.Stop()
+            $stats.timings.pass5MatchUpdateMs = [int]$pass5MatchStopwatch.ElapsedMilliseconds
+        } else {
+            $stats.timings.pass5MatchUpdateMs = 0
         }
         $pass5Stopwatch.Stop()
+        $stats.timings.pass5SourceLoadMs = [int]$pass5SourceLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass5CandidateLoadMs = [int]$pass5CandidateLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass5SourceCount = @($sourceRows).Count
+        $stats.timings.pass5CandidateCount = @($candidateRows).Count
+        $stats.timings.pass5SourceLeadingKeyCount = @($sourceLeadingKeys).Count
         $stats.timings.pass5SiblingPropagationMs = [int]$pass5Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
@@ -4881,6 +4929,7 @@ WHERE id = @id
         # board candidate so coverage improves even before deep web discovery.
         # ---------------------------------------------------------------
         $pass6Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $pass6SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $sourceConfigMap = @{}
         $sourceConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT bc.id, bc.normalized_company_name, bc.ats_type, bc.board_id, bc.domain, bc.careers_url, bc.resolved_board_url,
@@ -4896,6 +4945,7 @@ ORDER BY
   END DESC,
   bc.company_name ASC;
 "@)
+        $pass6SourceLoadStopwatch.Stop()
         foreach ($sourceConfigRow in @($sourceConfigRows)) {
             $normalizedCompanyName = [string]$sourceConfigRow.normalized_company_name
             if (-not $normalizedCompanyName -or $sourceConfigMap.ContainsKey($normalizedCompanyName)) {
@@ -4954,6 +5004,26 @@ ORDER BY
             }
         }
 
+        $pass6SourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+        $pass6SourceLeadingKeysSql = if ($pass6SourceLeadingKeys.Count -gt 0) {
+            [string]::Join(',', @($pass6SourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
+        } else {
+            ''
+        }
+        $pass6CandidateLeadingKeyClause = if ($pass6SourceLeadingKeysSql) {
+@"
+  AND LOWER(
+        CASE
+          WHEN INSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), ' ') > 0
+            THEN SUBSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), 1, INSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), ' ') - 1)
+          ELSE COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name)
+        END
+      ) IN ($pass6SourceLeadingKeysSql)
+"@
+        } else {
+            ''
+        }
+        $pass6CandidateLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $candidateConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT bc.id, bc.company_name, bc.normalized_company_name, bc.domain, bc.careers_url, bc.discovery_status, bc.confidence_band,
        co.id AS account_id, co.display_name, co.normalized_name, co.aliases_text
@@ -4968,10 +5038,13 @@ WHERE (COALESCE(NULLIF(bc.discovery_status, ''), 'missing_inputs') NOT IN ('mapp
         ''
     }
   )
+  $pass6CandidateLeadingKeyClause
 ORDER BY COALESCE(co.target_score, 0) DESC, COALESCE(co.connection_count, 0) DESC, bc.company_name ASC
 LIMIT $Limit;
 "@)
+        $pass6CandidateLoadStopwatch.Stop()
         if ($candidateConfigRows.Count -gt 0 -and $sourceConfigMap.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $pass6MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $txn = $connection.BeginTransaction()
             try {
                 foreach ($candidateConfigRow in @($candidateConfigRows)) {
@@ -5050,8 +5123,17 @@ WHERE id = @id
                 try { $txn.Rollback() } catch {}
                 throw
             } finally { $txn.Dispose() }
+            $pass6MatchStopwatch.Stop()
+            $stats.timings.pass6MatchUpdateMs = [int]$pass6MatchStopwatch.ElapsedMilliseconds
+        } else {
+            $stats.timings.pass6MatchUpdateMs = 0
         }
         $pass6Stopwatch.Stop()
+        $stats.timings.pass6SourceLoadMs = [int]$pass6SourceLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass6CandidateLoadMs = [int]$pass6CandidateLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass6SourceCount = @($sourceConfigRows).Count
+        $stats.timings.pass6CandidateCount = @($candidateConfigRows).Count
+        $stats.timings.pass6SourceLeadingKeyCount = @($pass6SourceLeadingKeys).Count
         $stats.timings.pass6SiblingConfigMs = [int]$pass6Stopwatch.ElapsedMilliseconds
 
         $stats.totalUpdated = $stats.hostedDomainCleared + $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied + $stats.siblingPropagationApplied + $stats.boardConfigSiblingApplied
