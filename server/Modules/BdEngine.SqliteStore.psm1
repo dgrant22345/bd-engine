@@ -138,7 +138,7 @@ function ConvertFrom-BdSqliteJsonText {
     }
 
     $serializer = Get-BdSqliteJsonSerializer
-    return (ConvertTo-BdSqlitePlainObject -InputObject ($serializer.DeserializeObject($JsonText)))
+    return ($serializer.DeserializeObject($JsonText))
 }
 
 function ConvertTo-BdSqliteJsonText {

@@ -1278,20 +1278,28 @@ function Resolve-CompanyReachableCareersEndpoint {
         [int]$TimeoutSec = 6
     )
 
+    $endpointStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $attemptedUrls = New-Object System.Collections.ArrayList
     $httpSummary = New-Object System.Collections.ArrayList
     $bestUrl = ''
     $bestDomain = ''
     $bestEvidence = ''
     $verified = $false
-    $candidateUrls = @((Get-CareersPageCandidateUrls -Domain $Domain -CareersUrl $CareersUrl) | Select-Object -First $CandidateLimit)
+    $fixedProbeMs = 0
+    $homepageLinkScanMs = 0
+    $homepageFollowUpMs = 0
+    $homepageCandidateCount = 0
+    $candidateUrls = @(Get-ResolverCareersProbeUrls -Domain $Domain -CareersUrl $CareersUrl -CandidateLimit $CandidateLimit)
     foreach ($candidateUrl in @($candidateUrls)) {
         [void]$attemptedUrls.Add([string]$candidateUrl)
     }
 
-    # FIX: Do NOT use StopOnFirstSuccess — the bare domain often returns 200 first but
+    # FIX: Do NOT use StopOnFirstSuccess - the bare domain often returns 200 first but
     # is not the careers page. Probe all candidates and pick the best careers-specific URL.
+    $fixedProbeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $probeBatch = Invoke-ResolverProbeRequestsParallel -Urls $candidateUrls -TimeoutSec $TimeoutSec
+    $fixedProbeStopwatch.Stop()
+    $fixedProbeMs = [int]$fixedProbeStopwatch.ElapsedMilliseconds
     foreach ($response in @($probeBatch.responses)) {
         $responseUrl = [string]$(if ($response.url) { $response.url } else { '' })
         [void]$httpSummary.Add((New-ResolverAttemptRecord -Stage 'enrichment_careers' -Url $responseUrl -Response $response))
@@ -1327,6 +1335,86 @@ function Resolve-CompanyReachableCareersEndpoint {
         if ($finalUrl -match '/careers|/jobs|join-us|careers\.') {
             $bestEvidence = if ($successResponse.title) { "Verified careers endpoint: $($successResponse.title)" } else { 'Verified careers endpoint' }
         }
+    }
+
+    $shouldScanHomepageLinks = [bool](
+        @($probeBatch.responses | Where-Object { $_.ok }).Count -gt 0 -and
+        (
+            -not $verified -or
+            $bestScore -lt 10 -or
+            $bestUrl -notmatch '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers'
+        )
+    )
+    if ($shouldScanHomepageLinks) {
+        $homepageLinkScanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $homepageCandidates = @(
+            Get-ResolverDiscoveredCareersLinkCandidates -Responses @($probeBatch.responses) -KnownDomain $Domain -Limit ([Math]::Min([Math]::Max($CandidateLimit, 3), 5))
+        )
+        $homepageLinkScanStopwatch.Stop()
+        $homepageLinkScanMs = [int]$homepageLinkScanStopwatch.ElapsedMilliseconds
+        $homepageCandidateCount = @($homepageCandidates).Count
+
+        if ($homepageCandidates.Count -gt 0) {
+            foreach ($followUpCandidate in @($homepageCandidates)) {
+                [void]$attemptedUrls.Add([string](Get-ObjectValue -Object $followUpCandidate -Name 'url' -Default ''))
+            }
+
+            $homepageFollowUpStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $followUpUrls = @($homepageCandidates | Select-Object -First 3 | ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'url' -Default '') })
+            $followUpBatch = Invoke-ResolverProbeRequestsParallel -Urls $followUpUrls -TimeoutSec ([Math]::Max(3, [Math]::Min($TimeoutSec, 5)))
+            $homepageFollowUpStopwatch.Stop()
+            $homepageFollowUpMs = [int]$homepageFollowUpStopwatch.ElapsedMilliseconds
+
+            foreach ($response in @($followUpBatch.responses)) {
+                $responseUrl = [string]$(if ($response.url) { $response.url } else { '' })
+                [void]$httpSummary.Add((New-ResolverAttemptRecord -Stage 'enrichment_careers_homepage' -Url $responseUrl -Response $response))
+                if (-not $response.ok) {
+                    continue
+                }
+
+                $finalUrl = [string]$(if ($response.finalUrl) { $response.finalUrl } else { $responseUrl })
+                $finalDomain = Get-DomainFromUrl -Url $finalUrl
+                $responseTitle = [string](Get-ObjectValue -Object $response -Name 'title' -Default '')
+                $responseContent = [string](Get-ObjectValue -Object $response -Name 'content' -Default '')
+                $detections = @(Find-AtsDetectionsInContent -Content $responseContent -FinalUrl $finalUrl -Method 'homepage_link')
+                $score = 0
+                if ($responseUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $score += 12 }
+                if ($finalUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $score += 18 }
+                if ($responseUrl -match 'careers\.') { $score += 8 }
+                if ($finalUrl -match 'careers\.') { $score += 10 }
+                if ($responseTitle -match 'career|job|join us|opportunit') { $score += 8 }
+                if (@($detections).Count -gt 0) { $score += 12 }
+                if ($finalUrl -match '^https?://[^/]+/?$') { $score -= 8 }
+
+                if ($score -le $bestScore) {
+                    continue
+                }
+
+                $bestScore = $score
+                $bestUrl = $finalUrl
+                $bestDomain = if ($Domain) { $Domain } elseif (-not (Test-HostedAtsDomain -Domain $finalDomain)) { $finalDomain } else { '' }
+                $bestEvidence = if (@($detections).Count -gt 0) {
+                    [string](Get-ObjectValue -Object $detections[0] -Name 'evidenceSummary' -Default 'Discovered careers link from homepage content')
+                } elseif ($responseTitle) {
+                    "Discovered careers link from homepage: $responseTitle"
+                } else {
+                    'Discovered careers link from homepage content'
+                }
+                $verified = $true
+            }
+        }
+    }
+
+    $endpointStopwatch.Stop()
+    Write-PipelineDiag -Stage 'careers_endpoint' -Company $Domain -Message 'Resolved reachable careers endpoint' -Data @{
+        fixedCandidateCount = [int](@($candidateUrls).Count)
+        fixedProbeMs = [int]$fixedProbeMs
+        homepageCandidateCount = [int]$homepageCandidateCount
+        homepageLinkScanMs = [int]$homepageLinkScanMs
+        homepageFollowUpMs = [int]$homepageFollowUpMs
+        verified = [bool]$verified
+        bestUrl = [string]$bestUrl
+        elapsedMs = [int]$endpointStopwatch.ElapsedMilliseconds
     }
 
     return [ordered]@{
@@ -1970,13 +2058,13 @@ function Test-ResolverRedirectLandingUntrusted {
         $contentKey = $contentKey.Substring(0, 2000)
     }
 
-    foreach ($blockedDomain in @('sedo.com', 'rebrandly.com', 'godaddy.com', 'hugedomains.com', 'dan.com', 'afternic.com')) {
+    foreach ($blockedDomain in @('sedo.com', 'rebrandly.com', 'godaddy.com', 'hugedomains.com', 'dan.com', 'afternic.com', 'spaceship.com', 'spaceship-cdn.com')) {
         if ($finalDomain -eq $blockedDomain -or $finalDomain.EndsWith(".$blockedDomain")) {
             return $true
         }
     }
 
-    foreach ($pattern in @('domain for sale', 'this domain is for sale', 'buy this domain', 'coming soon', 'under construction', 'rebrandly', 'sedo', 'godaddy', 'hugedomains')) {
+    foreach ($pattern in @('domain for sale', 'this domain is for sale', 'buy this domain', 'for sale', 'buy [a-z0-9\.-]+', 'secure checkout', 'guided transfer', 'coming soon', 'under construction', 'rebrandly', 'sedo', 'godaddy', 'hugedomains', 'spaceship')) {
         if ($titleKey -match $pattern -or $contentKey -match $pattern) {
             return $true
         }
@@ -2021,6 +2109,7 @@ function Resolve-CompanyOfficialDomainGuess {
     $rankedCandidates = New-Object System.Collections.ArrayList
     $blockedCandidateCount = 0
     $successCandidateCount = 0
+    $untrustedCandidateCount = 0
     foreach ($response in @($probeBatch.responses)) {
         $responseUrl = [string](Get-ObjectValue -Object $response -Name 'url' -Default '')
         [void]$httpSummary.Add((New-ResolverAttemptRecord -Stage 'domain_guess' -Url $responseUrl -Response $response))
@@ -2033,14 +2122,22 @@ function Resolve-CompanyOfficialDomainGuess {
             continue
         }
 
-        $match = Get-CompanyDomainIdentityMatch -CompanyName $CompanyName -Aliases $Aliases -Domain $resolvedDomain -Title ([string](Get-ObjectValue -Object $response -Name 'title' -Default '')) -Content ([string](Get-ObjectValue -Object $response -Name 'content' -Default ''))
+        $responseTitle = [string](Get-ObjectValue -Object $response -Name 'title' -Default '')
+        $responseContent = [string](Get-ObjectValue -Object $response -Name 'content' -Default '')
+        $landingUntrusted = [bool](Test-ResolverRedirectLandingUntrusted -FinalUrl $finalUrl -Title $responseTitle -Content $responseContent)
+        if ($landingUntrusted) {
+            $untrustedCandidateCount += 1
+            continue
+        }
+
+        $match = Get-CompanyDomainIdentityMatch -CompanyName $CompanyName -Aliases $Aliases -Domain $resolvedDomain -Title $responseTitle -Content $responseContent
         $score = [double](Convert-ToNumber (Get-ObjectValue -Object $match -Name 'score' -Default 0))
         $redirectEvidence = ''
         $redirectUntrusted = $false
         $sourceDomain = Get-DomainFromUrl -Url $responseUrl
         if ($sourceDomain -and $resolvedDomain -and $resolvedDomain -ne $sourceDomain) {
             $sourceMatch = Get-CompanyDomainIdentityMatch -CompanyName $CompanyName -Aliases $Aliases -Domain $sourceDomain
-            $redirectUntrusted = Test-ResolverRedirectLandingUntrusted -FinalUrl $finalUrl -Title ([string](Get-ObjectValue -Object $response -Name 'title' -Default '')) -Content ([string](Get-ObjectValue -Object $response -Name 'content' -Default ''))
+            $redirectUntrusted = $landingUntrusted
             if (([int](Convert-ToNumber (Get-ObjectValue -Object $sourceMatch -Name 'score' -Default 0)) -ge 28) -and -not $redirectUntrusted) {
                 $score = [double][Math]::Max($score, 46)
                 $redirectEvidence = ("Exact brand domain {0} redirects to canonical site {1}" -f $sourceDomain, $resolvedDomain)
@@ -2058,7 +2155,7 @@ function Resolve-CompanyOfficialDomainGuess {
 
         if ($blockedButReachable) {
             $blockedCandidateCount += 1
-            $score = [double][Math]::Max($score, 42)
+            $score = [double][Math]::Max($score, $(if ($redirectEvidence) { 52 } else { 42 }))
         } elseif ($responseOk) {
             $successCandidateCount += 1
         }
@@ -2069,7 +2166,6 @@ function Resolve-CompanyOfficialDomainGuess {
         }
 
         $detections = @()
-        $responseContent = [string](Get-ObjectValue -Object $response -Name 'content' -Default '')
         if ($responseContent) {
             $detections = @(Find-AtsDetectionsInContent -Content $responseContent -FinalUrl $finalUrl -Method 'homepage_guess')
         }
@@ -2101,6 +2197,9 @@ function Resolve-CompanyOfficialDomainGuess {
                 'Direct domain guess matched company identity'
             }
             matchedTokens = @(Get-ObjectValue -Object $match -Name 'matchedTokens' -Default @())
+            matchedInDomain = [int](Convert-ToNumber (Get-ObjectValue -Object $match -Name 'matchedInDomain' -Default 0))
+            matchedInTitle = [int](Convert-ToNumber (Get-ObjectValue -Object $match -Name 'matchedInTitle' -Default 0))
+            matchedInContent = [int](Convert-ToNumber (Get-ObjectValue -Object $match -Name 'matchedInContent' -Default 0))
             responseOk = $responseOk
             statusCode = $responseStatusCode
         }
@@ -2116,6 +2215,8 @@ function Resolve-CompanyOfficialDomainGuess {
         $rankedCandidates.ToArray() |
             Sort-Object @(
                 @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)) }; Descending = $true },
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'matchedInTitle' -Default 0)) }; Descending = $true },
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'matchedInContent' -Default 0)) }; Descending = $true },
                 @{ Expression = { [bool](Get-ObjectValue -Object $_ -Name 'responseOk' -Default $false) }; Descending = $true },
                 @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'domain' -Default '') }; Descending = $false }
             )
@@ -2127,6 +2228,7 @@ function Resolve-CompanyOfficialDomainGuess {
             usableCandidateCount = @($sortedCandidates).Count
             blockedCandidateCount = [int]$blockedCandidateCount
             successCandidateCount = [int]$successCandidateCount
+            untrustedCandidateCount = [int]$untrustedCandidateCount
             probeMs = [int]$probeStopwatch.ElapsedMilliseconds
         }
         return [ordered]@{
@@ -2149,6 +2251,7 @@ function Resolve-CompanyOfficialDomainGuess {
         usableCandidateCount = @($sortedCandidates).Count
         blockedCandidateCount = [int]$blockedCandidateCount
         successCandidateCount = [int]$successCandidateCount
+        untrustedCandidateCount = [int]$untrustedCandidateCount
         bestDomain = [string](Get-ObjectValue -Object $best -Name 'domain' -Default '')
         bestScore = [int](Convert-ToNumber (Get-ObjectValue -Object $best -Name 'score' -Default 0))
         probeMs = [int]$probeStopwatch.ElapsedMilliseconds
@@ -2242,6 +2345,44 @@ function Get-CompanyEnrichmentResult {
     $trustAliases = @(Get-GeneratedCompanyAliases -CompanyName $companyName -Domain '' -ExistingAliases $storedAliasSeeds)
     $existingResult = New-CurrentCompanyEnrichmentResult -Company $Company -Aliases $aliases
     $existingStatus = [string](Get-ObjectValue -Object $existingResult -Name 'enrichmentStatus' -Default '')
+    $storedHttpSummary = @((Get-ObjectValue -Object $existingResult -Name 'enrichmentHttpSummary' -Default @()))
+
+    function Test-StoredIdentityUrlUntrusted {
+        param(
+            [object[]]$HttpSummary = @(),
+            [string]$Domain = '',
+            [string]$CareersUrl = ''
+        )
+
+        $targetDomain = ([string]$Domain).Trim().ToLowerInvariant()
+        $targetCareersUrl = ([string]$CareersUrl).Trim()
+        foreach ($attempt in @($HttpSummary)) {
+            $attemptFinalUrl = [string](Get-ObjectValue -Object $attempt -Name 'finalUrl' -Default '')
+            $attemptUrl = [string](Get-ObjectValue -Object $attempt -Name 'url' -Default '')
+            $attemptMatchUrl = if ($attemptFinalUrl) { $attemptFinalUrl } else { $attemptUrl }
+            if (-not $attemptMatchUrl) {
+                continue
+            }
+
+            $attemptDomain = Get-DomainFromUrl -Url $attemptMatchUrl
+            $matchesTarget = $false
+            if ($targetCareersUrl -and $attemptMatchUrl -eq $targetCareersUrl) {
+                $matchesTarget = $true
+            } elseif ($targetDomain -and $attemptDomain -and $attemptDomain -eq $targetDomain) {
+                $matchesTarget = $true
+            }
+            if (-not $matchesTarget) {
+                continue
+            }
+
+            if (Test-ResolverRedirectLandingUntrusted -FinalUrl $attemptMatchUrl -Title ([string](Get-ObjectValue -Object $attempt -Name 'title' -Default '')) -Content '') {
+                return $true
+            }
+        }
+
+        return $false
+    }
+
     $baseDomainIdentity = if ($baseDomain) {
         Get-CompanyDomainIdentityMatch -CompanyName $companyName -Aliases $trustAliases -Domain $baseDomain
     } else {
@@ -2253,12 +2394,14 @@ function Get-CompanyEnrichmentResult {
     } else {
         $null
     }
+    $baseDomainUntrusted = [bool](Test-StoredIdentityUrlUntrusted -HttpSummary $storedHttpSummary -Domain $baseDomain)
+    $baseCareersUntrusted = [bool](Test-StoredIdentityUrlUntrusted -HttpSummary $storedHttpSummary -Domain $baseCareersDomain -CareersUrl $baseCareersUrl)
     $storedIdentityTrusted = [bool](
         $existingStatus -in @('manual', 'verified') -or
-        ([int](Convert-ToNumber (Get-ObjectValue -Object $baseDomainIdentity -Name 'score' -Default 0)) -ge 18) -or
-        ([int](Convert-ToNumber (Get-ObjectValue -Object $baseCareersIdentity -Name 'score' -Default 0)) -ge 18)
+        (([int](Convert-ToNumber (Get-ObjectValue -Object $baseDomainIdentity -Name 'score' -Default 0)) -ge 18) -and -not $baseDomainUntrusted) -or
+        (([int](Convert-ToNumber (Get-ObjectValue -Object $baseCareersIdentity -Name 'score' -Default 0)) -ge 18) -and -not $baseCareersUntrusted)
     )
-    if (-not $storedIdentityTrusted -and $baseDomain) {
+    if (($baseDomainUntrusted -or -not $storedIdentityTrusted) -and $baseDomain) {
         $baseDomain = ''
         $aliases = @(Get-GeneratedCompanyAliases -CompanyName $companyName -Domain $baseDomain -ExistingAliases $storedAliasSeeds)
         if ($existingStatus -notin @('manual', 'verified')) {
@@ -2269,6 +2412,10 @@ function Get-CompanyEnrichmentResult {
                 [void](Set-ObjectValue -Object $existingResult -Name 'enrichmentConfidenceScore' -Value 0)
             }
         }
+    }
+    if (($baseCareersUntrusted -or -not $storedIdentityTrusted) -and $baseCareersUrl -and $existingStatus -notin @('manual', 'verified')) {
+        $baseCareersUrl = ''
+        [void](Set-ObjectValue -Object $existingResult -Name 'careersUrl' -Value '')
     }
     $hasStoredResult = [bool]($existingResult.enrichmentStatus -or $existingResult.canonicalDomain -or $existingResult.careersUrl)
     $attemptDue = Test-EnrichmentAttemptDue -NextAttemptAt ([string](Get-ObjectValue -Object $existingResult -Name 'nextEnrichmentAttemptAt'))
@@ -2559,11 +2706,15 @@ function Get-CompanyEnrichmentResult {
         foreach ($attempt in @((Get-ObjectValue -Object $searchFallback -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
         foreach ($attemptedUrl in @((Get-ObjectValue -Object $searchFallback -Name 'attemptedUrls'))) { [void]$attemptedUrls.Add([string]$attemptedUrl) }
 
+        $searchDomainScore = [double](Convert-ToNumber (Get-ObjectValue -Object $searchFallback -Name 'domainScore' -Default 76))
+        $searchCareersScore = [double](Convert-ToNumber (Get-ObjectValue -Object $searchFallback -Name 'careersScore' -Default 78))
+        $searchDomainEvidence = [string](Get-ObjectValue -Object $searchFallback -Name 'domainEvidence' -Default 'Official domain candidate from web search')
+        $searchCareersEvidence = [string](Get-ObjectValue -Object $searchFallback -Name 'careersEvidence' -Default 'Careers URL candidate from web search')
         if (Get-ObjectValue -Object $searchFallback -Name 'domain') {
-            Add-EnrichmentCandidate -Store $domainCandidates -Type 'domain' -Value ([string](Get-ObjectValue -Object $searchFallback -Name 'domain')) -Score 76 -Source 'web_search' -Evidence 'Official domain candidate from web search'
+            Add-EnrichmentCandidate -Store $domainCandidates -Type 'domain' -Value ([string](Get-ObjectValue -Object $searchFallback -Name 'domain')) -Score ([Math]::Max(68, $searchDomainScore)) -Source 'web_search' -Evidence $searchDomainEvidence
         }
         if (Get-ObjectValue -Object $searchFallback -Name 'careersUrl') {
-            Add-EnrichmentCandidate -Store $careersCandidates -Type 'careers' -Value ([string](Get-ObjectValue -Object $searchFallback -Name 'careersUrl')) -Score 78 -Source 'web_search' -Evidence 'Careers URL candidate from web search'
+            Add-EnrichmentCandidate -Store $careersCandidates -Type 'careers' -Value ([string](Get-ObjectValue -Object $searchFallback -Name 'careersUrl')) -Score ([Math]::Max(72, $searchCareersScore)) -Source 'web_search' -Evidence $searchCareersEvidence
         }
 
         $bestDomainCandidate = $domainCandidates.Values | Sort-Object @{ Expression = { [double]$_.score }; Descending = $true } | Select-Object -First 1
@@ -3049,8 +3200,16 @@ function Invoke-ResolverProbeNetworkRequest {
     }
 
     try {
+        $isSearchProviderRequest = [bool](
+            $Url -match '^https?://(www\.)?bing\.com/search\?' -or
+            $Url -match '^https?://(html\.)?duckduckgo\.com/html/\?'
+        )
         $probeHeaders = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
+        if ($isSearchProviderRequest) {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -ErrorAction Stop
+        } else {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
+        }
         $result.ok = $true
         $result.statusCode = [int]$(if ($response.StatusCode) { $response.StatusCode } else { 200 })
         $result.finalUrl = [string]$(if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) { $response.BaseResponse.ResponseUri.AbsoluteUri } else { $Url })
@@ -3264,8 +3423,16 @@ function Invoke-ResolverProbeRequestsParallel {
         }
 
         try {
+            $isSearchProviderRequest = [bool](
+                $Url -match '^https?://(www\.)?bing\.com/search\?' -or
+                $Url -match '^https?://(html\.)?duckduckgo\.com/html/\?'
+            )
             $probeHeaders = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
+            if ($isSearchProviderRequest) {
+                $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -ErrorAction Stop
+            } else {
+                $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5 -TimeoutSec $TimeoutSec -Headers $probeHeaders -ErrorAction Stop
+            }
             $result.ok = $true
             $result.statusCode = [int]$(if ($response.StatusCode) { $response.StatusCode } else { 200 })
             $result.finalUrl = [string]$(if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) { $response.BaseResponse.ResponseUri.AbsoluteUri } else { $Url })
@@ -3473,6 +3640,216 @@ function Get-CareersPageCandidateUrls {
     }
 
     return @($urls.ToArray())
+}
+
+function Get-ResolverCareersProbeUrls {
+    param(
+        [string]$Domain,
+        [string]$CareersUrl,
+        [int]$CandidateLimit = 5
+    )
+
+    $allCandidates = @(
+        Get-CareersPageCandidateUrls -Domain $Domain -CareersUrl $CareersUrl
+    )
+    if ($allCandidates.Count -le $CandidateLimit) {
+        return @($allCandidates)
+    }
+
+    $homepageUrl = ''
+    if ($Domain) {
+        $homepageUrl = ([string]$Domain).Trim()
+        if ($homepageUrl -and $homepageUrl -notmatch '^https?://') {
+            $homepageUrl = "https://$homepageUrl"
+        }
+    }
+
+    $selected = New-Object System.Collections.ArrayList
+    $seen = @{}
+
+    function Add-SelectedProbeUrl {
+        param([string]$Value)
+
+        $candidate = ([string]$Value).Trim()
+        if (-not $candidate) {
+            return
+        }
+        if ($seen.ContainsKey($candidate)) {
+            return
+        }
+        $seen[$candidate] = $true
+        [void]$selected.Add($candidate)
+    }
+
+    $reserveHomepageSlot = [bool]($homepageUrl -and $CandidateLimit -ge 2 -and ($allCandidates -contains $homepageUrl))
+    $mainTakeCount = if ($reserveHomepageSlot) { [Math]::Max(1, $CandidateLimit - 1) } else { $CandidateLimit }
+
+    foreach ($candidateUrl in @($allCandidates | Where-Object { $_ -and $_ -ne $homepageUrl } | Select-Object -First $mainTakeCount)) {
+        Add-SelectedProbeUrl -Value ([string]$candidateUrl)
+    }
+
+    if ($reserveHomepageSlot) {
+        Add-SelectedProbeUrl -Value $homepageUrl
+    }
+
+    foreach ($candidateUrl in @($allCandidates)) {
+        if ($selected.Count -ge $CandidateLimit) {
+            break
+        }
+        Add-SelectedProbeUrl -Value ([string]$candidateUrl)
+    }
+
+    return @($selected.ToArray() | Select-Object -First $CandidateLimit)
+}
+
+function Get-ResolverDiscoveredCareersLinkCandidates {
+    param(
+        [object[]]$Responses,
+        [string]$KnownDomain = '',
+        [int]$Limit = 4
+    )
+
+    $candidateMap = @{}
+
+    function Test-ResolverCareersHint {
+        param([string]$Value)
+
+        return [bool](([string]$Value) -match 'careers|jobs|join-us|join us|openings|open positions|open roles|opportunit|work with us|we''re hiring|we are hiring')
+    }
+
+    function Add-ResolverDiscoveredCandidate {
+        param(
+            [string]$Url,
+            [string]$AnchorText,
+            [string]$SourceUrl,
+            [string]$SourceDomain,
+            [int]$BaseScore = 0
+        )
+
+        $candidateUrl = ([string]$Url).Trim()
+        if (-not $candidateUrl -or $candidateUrl -notmatch '^https?://') {
+            return
+        }
+
+        $targetDomain = Get-DomainFromUrl -Url $candidateUrl
+        if (-not $targetDomain) {
+            return
+        }
+
+        $trustedTarget = $false
+        if (Test-HostedAtsDomain -Domain $targetDomain) {
+            $trustedTarget = $true
+        } elseif ($KnownDomain) {
+            if ($targetDomain -eq $KnownDomain -or $targetDomain.EndsWith(".$KnownDomain") -or $KnownDomain.EndsWith(".$targetDomain")) {
+                $trustedTarget = $true
+            }
+        } elseif ($SourceDomain) {
+            if ($targetDomain -eq $SourceDomain -or $targetDomain.EndsWith(".$SourceDomain") -or $SourceDomain.EndsWith(".$targetDomain")) {
+                $trustedTarget = $true
+            }
+        }
+
+        if (-not $trustedTarget) {
+            return
+        }
+
+        $score = [int]$BaseScore
+        $anchorValue = ([string]$AnchorText).Trim()
+        $atsDetection = Resolve-AtsFromUrlValue -Url $candidateUrl -Method 'homepage_link'
+        $atsType = [string]$(if ($atsDetection) { Get-ObjectValue -Object $atsDetection -Name 'atsType' -Default '' } else { '' })
+
+        if (Test-ResolverCareersHint -Value $candidateUrl) { $score += 22 }
+        if (Test-ResolverCareersHint -Value $anchorValue) { $score += 18 }
+        if ($candidateUrl -match '^https?://careers\.') { $score += 10 }
+        if ($candidateUrl -match '^https?://[^/]+/?$') { $score -= 8 }
+        if ($candidateUrl -match '/blog|/news|/press|/support|/docs|/help|/investor') { $score -= 10 }
+        if ($KnownDomain -and ($targetDomain -eq $KnownDomain -or $targetDomain.EndsWith(".$KnownDomain"))) { $score += 8 }
+        if ($SourceDomain -and ($targetDomain -eq $SourceDomain -or $targetDomain.EndsWith(".$SourceDomain"))) { $score += 4 }
+        if ($atsType) {
+            $score += 20
+            if (Test-ImportCapableAtsType -AtsType $atsType) {
+                $score += 4
+            }
+        }
+
+        if ($score -lt 10) {
+            return
+        }
+
+        $key = $candidateUrl.ToLowerInvariant()
+        if ($candidateMap.ContainsKey($key)) {
+            $existingScore = [int](Convert-ToNumber (Get-ObjectValue -Object $candidateMap[$key] -Name 'score' -Default 0))
+            if ($existingScore -ge $score) {
+                return
+            }
+        }
+
+        $candidateMap[$key] = [ordered]@{
+            url = $candidateUrl
+            domain = $targetDomain
+            score = [int]$score
+            sourceUrl = [string]$SourceUrl
+            sourceDomain = [string]$SourceDomain
+            anchorText = $anchorValue
+            atsType = $atsType
+        }
+    }
+
+    foreach ($response in @($Responses | Where-Object { $_ -and $_.ok })) {
+        $baseUrl = [string]$(if (Get-ObjectValue -Object $response -Name 'finalUrl' -Default '') { Get-ObjectValue -Object $response -Name 'finalUrl' -Default '' } else { Get-ObjectValue -Object $response -Name 'url' -Default '' })
+        if (-not $baseUrl) {
+            continue
+        }
+
+        $sourceDomain = Get-DomainFromUrl -Url $baseUrl
+        $content = [string](Get-ObjectValue -Object $response -Name 'content' -Default '')
+        if (-not $content) {
+            continue
+        }
+
+        $baseUri = $null
+        try {
+            $baseUri = [uri]$baseUrl
+        } catch {
+            $baseUri = $null
+        }
+        if (-not $baseUri) {
+            continue
+        }
+
+        foreach ($match in [regex]::Matches($content, '<a\b[^>]*href\s*=\s*["''](?<href>[^"'']+)["''][^>]*>(?<text>.*?)</a>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline)) {
+            $hrefValue = [System.Net.WebUtility]::HtmlDecode(([string]$match.Groups['href'].Value).Trim())
+            if (-not $hrefValue -or $hrefValue -match '^(mailto:|tel:|javascript:|#|data:)') {
+                continue
+            }
+
+            $absoluteUrl = ''
+            try {
+                if ($hrefValue -match '^https?://') {
+                    $absoluteUrl = $hrefValue
+                } else {
+                    $absoluteUrl = ([uri]::new($baseUri, $hrefValue)).AbsoluteUri
+                }
+            } catch {
+                $absoluteUrl = ''
+            }
+            if (-not $absoluteUrl) {
+                continue
+            }
+
+            $anchorText = [System.Net.WebUtility]::HtmlDecode(([string]$match.Groups['text'].Value -replace '<[^>]+>', ' ' -replace '\s+', ' ').Trim())
+            Add-ResolverDiscoveredCandidate -Url $absoluteUrl -AnchorText $anchorText -SourceUrl $baseUrl -SourceDomain $sourceDomain -BaseScore 0
+        }
+    }
+
+    return @(
+        $candidateMap.Values |
+            Sort-Object @(
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)) }; Descending = $true },
+                @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'url' -Default '') }; Descending = $false }
+            ) |
+            Select-Object -First $Limit
+    )
 }
 
 function Find-AtsDetectionsInContent {
@@ -3716,16 +4093,29 @@ function Resolve-CareersPageCandidate {
         [int]$TimeoutSec = 6
     )
 
+    $resolveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $attemptedUrls = New-Object System.Collections.ArrayList
     $httpSummary = New-Object System.Collections.ArrayList
     $best = $null
+    $bestVerifiedCareersUrl = ''
+    $bestVerifiedDomain = ''
+    $bestVerifiedEvidence = ''
+    $bestVerifiedScore = -1
+    $fixedProbeMs = 0
+    $homepageLinkScanMs = 0
+    $homepageFollowUpMs = 0
+    $homepageCandidateCount = 0
+    $homepageUntrusted = $false
 
-    $candidateUrls = @((Get-CareersPageCandidateUrls -Domain $Domain -CareersUrl $CareersUrl) | Select-Object -First $CandidateLimit)
+    $candidateUrls = @(Get-ResolverCareersProbeUrls -Domain $Domain -CareersUrl $CareersUrl -CandidateLimit $CandidateLimit)
     foreach ($candidateUrl in @($candidateUrls)) {
         [void]$attemptedUrls.Add([string]$candidateUrl)
     }
 
+    $fixedProbeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $probeBatch = Invoke-ResolverProbeRequestsParallel -Urls $candidateUrls -TimeoutSec $TimeoutSec
+    $fixedProbeStopwatch.Stop()
+    $fixedProbeMs = [int]$fixedProbeStopwatch.ElapsedMilliseconds
     foreach ($response in @($probeBatch.responses)) {
         $candidateUrl = [string]$(if ($response.url) { $response.url } else { '' })
         [void]$httpSummary.Add((New-ResolverAttemptRecord -Stage 'careers_page' -Url $candidateUrl -Response $response))
@@ -3733,6 +4123,14 @@ function Resolve-CareersPageCandidate {
             continue
         }
 
+        $responseFinalUrl = [string]$(if ($response.finalUrl) { $response.finalUrl } else { $candidateUrl })
+        $responseDomain = if ($Domain) { $Domain } else { Get-DomainFromUrl -Url $responseFinalUrl }
+        $responseTitle = [string](Get-ObjectValue -Object $response -Name 'title' -Default '')
+        $responseIsUntrusted = [bool](Test-ResolverRedirectLandingUntrusted -FinalUrl $responseFinalUrl -Title $responseTitle -Content ([string](Get-ObjectValue -Object $response -Name 'content' -Default '')))
+        if ($responseIsUntrusted -and ($candidateUrl -match '^https?://[^/]+/?$' -or $responseFinalUrl -match '^https?://[^/]+/?$')) {
+            $homepageUntrusted = $true
+            continue
+        }
         $detections = @(Find-AtsDetectionsInContent -Content ([string]$response.content) -FinalUrl ([string]$response.finalUrl) -Method 'careers_page')
         foreach ($detection in @($detections)) {
             $score = [double]$detection.confidenceScore + 6
@@ -3745,8 +4143,8 @@ function Resolve-CareersPageCandidate {
                 atsType = [string]$detection.atsType
                 boardId = [string]$detection.boardId
                 source = [string]$(if ($detection.source) { $detection.source } else { $detection.resolvedBoardUrl })
-                domain = if ($Domain) { $Domain } else { Get-DomainFromUrl -Url $response.finalUrl }
-                careersUrl = [string]$(if ($CareersUrl) { $CareersUrl } else { $candidateUrl })
+                domain = $responseDomain
+                careersUrl = [string]$(if ($responseFinalUrl) { $responseFinalUrl } else { $candidateUrl })
                 resolvedBoardUrl = [string]$(if ($detection.resolvedBoardUrl) { $detection.resolvedBoardUrl } else { $response.finalUrl })
                 supportedImport = [bool]$detection.supportedImport
                 discoveryMethod = 'careers_page'
@@ -3764,16 +4162,175 @@ function Resolve-CareersPageCandidate {
             }
         }
 
+        $verifiedScore = 0
+        if ($candidateUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $verifiedScore += 10 }
+        if ($responseFinalUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $verifiedScore += 14 }
+        if ($candidateUrl -match 'careers\.') { $verifiedScore += 6 }
+        if ($responseFinalUrl -match 'careers\.') { $verifiedScore += 8 }
+        if ($responseTitle -match 'career|job|join us|opportunit') { $verifiedScore += 8 }
+        if (@($detections).Count -gt 0) { $verifiedScore += 8 }
+        if ($responseFinalUrl -match '^https?://[^/]+/?$') { $verifiedScore -= 6 }
+        if ($verifiedScore -gt $bestVerifiedScore) {
+            $bestVerifiedScore = $verifiedScore
+            $bestVerifiedCareersUrl = $responseFinalUrl
+            $bestVerifiedDomain = $responseDomain
+            $bestVerifiedEvidence = if (@($detections).Count -gt 0) {
+                [string](Get-ObjectValue -Object $detections[0] -Name 'evidenceSummary' -Default 'Reachable careers page discovered')
+            } elseif ($responseTitle) {
+                "Reachable careers page: $responseTitle"
+            } else {
+                'Reachable careers page discovered'
+            }
+        }
+
         if ($best -and $best.confidenceBand -eq 'high') {
             break
         }
     }
 
+    $shouldScanHomepageLinks = [bool](
+        @($probeBatch.responses | Where-Object { $_.ok }).Count -gt 0 -and
+        (
+            -not $best -or
+            [double](Convert-ToNumber (Get-ObjectValue -Object $best -Name 'confidenceScore' -Default 0)) -lt 90
+        )
+    )
+    if ($shouldScanHomepageLinks) {
+        $homepageLinkScanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $homepageCandidates = @(
+            Get-ResolverDiscoveredCareersLinkCandidates -Responses @($probeBatch.responses) -KnownDomain $Domain -Limit ([Math]::Min([Math]::Max($CandidateLimit, 3), 5))
+        )
+        $homepageLinkScanStopwatch.Stop()
+        $homepageLinkScanMs = [int]$homepageLinkScanStopwatch.ElapsedMilliseconds
+        $homepageCandidateCount = @($homepageCandidates).Count
+
+        if ($homepageCandidates.Count -gt 0) {
+            foreach ($followUpCandidate in @($homepageCandidates)) {
+                [void]$attemptedUrls.Add([string](Get-ObjectValue -Object $followUpCandidate -Name 'url' -Default ''))
+            }
+
+            $homepageFollowUpStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $followUpUrls = @($homepageCandidates | Select-Object -First 3 | ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'url' -Default '') })
+            $followUpBatch = Invoke-ResolverProbeRequestsParallel -Urls $followUpUrls -TimeoutSec ([Math]::Max(3, [Math]::Min($TimeoutSec, 5)))
+            $homepageFollowUpStopwatch.Stop()
+            $homepageFollowUpMs = [int]$homepageFollowUpStopwatch.ElapsedMilliseconds
+
+            foreach ($response in @($followUpBatch.responses)) {
+                $candidateUrl = [string]$(if ($response.url) { $response.url } else { '' })
+                [void]$httpSummary.Add((New-ResolverAttemptRecord -Stage 'careers_page_homepage' -Url $candidateUrl -Response $response))
+                if (-not $response.ok) {
+                    continue
+                }
+
+                $responseFinalUrl = [string]$(if ($response.finalUrl) { $response.finalUrl } else { $candidateUrl })
+                $responseDomain = if ($Domain) { $Domain } else { Get-DomainFromUrl -Url $responseFinalUrl }
+                $responseTitle = [string](Get-ObjectValue -Object $response -Name 'title' -Default '')
+                $responseIsUntrusted = [bool](Test-ResolverRedirectLandingUntrusted -FinalUrl $responseFinalUrl -Title $responseTitle -Content ([string](Get-ObjectValue -Object $response -Name 'content' -Default '')))
+                if ($responseIsUntrusted -and ($candidateUrl -match '^https?://[^/]+/?$' -or $responseFinalUrl -match '^https?://[^/]+/?$')) {
+                    $homepageUntrusted = $true
+                    continue
+                }
+                $detections = @(Find-AtsDetectionsInContent -Content ([string]$response.content) -FinalUrl $responseFinalUrl -Method 'homepage_link')
+                foreach ($detection in @($detections)) {
+                    $score = [double]$detection.confidenceScore + 8
+                    if ($response.finalUrl -and $response.finalUrl -ne $candidateUrl) {
+                        $score += 4
+                        $detection.redirectTarget = [string]$response.finalUrl
+                    }
+
+                    $candidate = [ordered]@{
+                        atsType = [string]$detection.atsType
+                        boardId = [string]$detection.boardId
+                        source = [string]$(if ($detection.source) { $detection.source } else { $detection.resolvedBoardUrl })
+                        domain = $responseDomain
+                        careersUrl = $responseFinalUrl
+                        resolvedBoardUrl = [string]$(if ($detection.resolvedBoardUrl) { $detection.resolvedBoardUrl } else { $responseFinalUrl })
+                        supportedImport = [bool]$detection.supportedImport
+                        discoveryMethod = 'homepage_link'
+                        confidenceScore = [int][Math]::Min(100, $score)
+                        confidenceBand = Get-ResolverConfidenceBand -Score ([double][Math]::Min(100, $score))
+                        evidenceSummary = ("ATS link discovered from homepage follow-up{0}" -f $(if ($responseTitle) { ": $responseTitle" } else { '' }))
+                        matchedSignatures = @($detection.matchedSignatures + @('homepage_link'))
+                        attemptedUrls = @($attemptedUrls.ToArray())
+                        httpSummary = @($httpSummary.ToArray())
+                        redirectTarget = [string]$response.finalUrl
+                    }
+
+                    if (-not $best -or [double]$candidate.confidenceScore -gt [double]$best.confidenceScore) {
+                        $best = $candidate
+                    }
+                }
+
+                $verifiedScore = 0
+                if ($candidateUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $verifiedScore += 12 }
+                if ($responseFinalUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $verifiedScore += 16 }
+                if ($candidateUrl -match 'careers\.') { $verifiedScore += 8 }
+                if ($responseFinalUrl -match 'careers\.') { $verifiedScore += 10 }
+                if ($responseTitle -match 'career|job|join us|opportunit') { $verifiedScore += 8 }
+                if (@($detections).Count -gt 0) { $verifiedScore += 10 }
+                if ($responseFinalUrl -match '^https?://[^/]+/?$') { $verifiedScore -= 6 }
+                if ($verifiedScore -gt $bestVerifiedScore) {
+                    $bestVerifiedScore = $verifiedScore
+                    $bestVerifiedCareersUrl = $responseFinalUrl
+                    $bestVerifiedDomain = $responseDomain
+                    $bestVerifiedEvidence = if (@($detections).Count -gt 0) {
+                        [string](Get-ObjectValue -Object $detections[0] -Name 'evidenceSummary' -Default 'Reachable careers link discovered from homepage content')
+                    } elseif ($responseTitle) {
+                        "Reachable careers link discovered from homepage: $responseTitle"
+                    } else {
+                        'Reachable careers link discovered from homepage content'
+                    }
+                }
+
+                if ($best -and $best.confidenceBand -eq 'high') {
+                    break
+                }
+            }
+        }
+    }
+
     if ($best) {
+        if (-not (Get-ObjectValue -Object $best -Name 'domain' -Default '')) {
+            $best.domain = $bestVerifiedDomain
+        }
+        if (-not (Get-ObjectValue -Object $best -Name 'careersUrl' -Default '')) {
+            $best.careersUrl = $bestVerifiedCareersUrl
+        }
+        $resolveStopwatch.Stop()
+        Write-PipelineDiag -Stage 'careers_page_candidate' -Company $Domain -Message 'Resolved careers page candidate' -Data @{
+            fixedCandidateCount = [int](@($candidateUrls).Count)
+            fixedProbeMs = [int]$fixedProbeMs
+            homepageCandidateCount = [int]$homepageCandidateCount
+            homepageLinkScanMs = [int]$homepageLinkScanMs
+            homepageFollowUpMs = [int]$homepageFollowUpMs
+            verifiedCareers = [bool]([string]$bestVerifiedCareersUrl)
+            homepageUntrusted = [bool]$homepageUntrusted
+            atsType = [string](Get-ObjectValue -Object $best -Name 'atsType' -Default '')
+            confidence = [string](Get-ObjectValue -Object $best -Name 'confidenceBand' -Default '')
+            elapsedMs = [int]$resolveStopwatch.ElapsedMilliseconds
+        }
         return $best
     }
 
+    $resolveStopwatch.Stop()
+    Write-PipelineDiag -Stage 'careers_page_candidate' -Company $Domain -Message 'Completed careers page candidate probe without ATS match' -Data @{
+        fixedCandidateCount = [int](@($candidateUrls).Count)
+        fixedProbeMs = [int]$fixedProbeMs
+        homepageCandidateCount = [int]$homepageCandidateCount
+        homepageLinkScanMs = [int]$homepageLinkScanMs
+        homepageFollowUpMs = [int]$homepageFollowUpMs
+        verifiedCareers = [bool]([string]$bestVerifiedCareersUrl)
+        homepageUntrusted = [bool]$homepageUntrusted
+        bestVerifiedCareersUrl = [string]$bestVerifiedCareersUrl
+        elapsedMs = [int]$resolveStopwatch.ElapsedMilliseconds
+    }
+
     return [ordered]@{
+        domain = $bestVerifiedDomain
+        careersUrl = $bestVerifiedCareersUrl
+        verifiedCareers = [bool]([string]$bestVerifiedCareersUrl)
+        homepageUntrusted = [bool]$homepageUntrusted
+        evidenceSummary = [string]$bestVerifiedEvidence
         attemptedUrls = @($attemptedUrls.ToArray())
         httpSummary = @($httpSummary.ToArray())
     }
@@ -3815,6 +4372,102 @@ function Get-ResolverSearchSeedCooldownKey {
     return ('company={0}|seed={1}' -f $companyKey, $seedKey)
 }
 
+function Get-ResolverSearchCandidateUrlScore {
+    param(
+        [string]$CompanyName,
+        [string[]]$Aliases = @(),
+        [string]$Url,
+        [string]$Source = '',
+        [bool]$PreferOfficialSite = $false
+    )
+
+    $candidateUrl = ([string]$Url).Trim()
+    if (-not $candidateUrl) {
+        return [ordered]@{
+            url = ''
+            domain = ''
+            score = 0
+            identityScore = 0
+            pathScore = 0
+            sourceBonus = 0
+            atsScore = 0
+            atsType = ''
+        }
+    }
+
+    $domain = Get-DomainFromUrl -Url $candidateUrl
+    $path = ''
+    try {
+        $candidateUri = [uri]$candidateUrl
+        $path = [string]$candidateUri.AbsolutePath
+    } catch {
+        $path = ''
+    }
+    $normalizedPath = ([string]$path).ToLowerInvariant()
+
+    $identityScore = 0
+    if ($domain -and -not (Test-HostedAtsDomain -Domain $domain)) {
+        $identityMatch = Get-CompanyDomainIdentityMatch -CompanyName $CompanyName -Aliases $Aliases -Domain $domain
+        $identityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $identityMatch -Name 'score' -Default 0))
+    }
+
+    $pathScore = 0
+    if ($candidateUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') {
+        $pathScore += 18
+    } elseif ($candidateUrl -match 'careers\.') {
+        $pathScore += 10
+    } elseif ($candidateUrl -match '^https?://[^/]+/?$') {
+        $pathScore += if ($PreferOfficialSite) { 10 } else { 4 }
+    }
+    if ($normalizedPath -match '/blog|/news|/press|/investor|/support|/docs|/help|/about') {
+        $pathScore -= 8
+    }
+    $pathSegments = @($normalizedPath -split '/' | Where-Object { $_ })
+    if ($pathSegments.Count -gt 3) {
+        $pathScore -= [Math]::Min(8, ($pathSegments.Count - 3) * 2)
+    }
+
+    $atsType = ''
+    $atsScore = 0
+    $atsDetection = Resolve-AtsFromUrlValue -Url $candidateUrl -Method 'search_candidate'
+    if ($atsDetection) {
+        $atsType = [string](Get-ObjectValue -Object $atsDetection -Name 'atsType' -Default '')
+        if ($atsType) {
+            $atsConfidenceScore = [double](Convert-ToNumber (Get-ObjectValue -Object $atsDetection -Name 'confidenceScore' -Default 0))
+            $atsScore = [int][Math]::Max(20, [Math]::Round($atsConfidenceScore * 0.35))
+            if ($PreferOfficialSite -and $candidateUrl -notmatch '/careers|/jobs|/join-us|/openings') {
+                $atsScore -= 4
+            }
+        }
+    }
+
+    $sourceBonus = switch ([string]$Source) {
+        'official_site' { 14 }
+        'careers' { 8 }
+        'jobs' { 6 }
+        default { 0 }
+    }
+
+    $tldBonus = 0
+    if ($domain -match '\.com$') {
+        $tldBonus = 3
+    } elseif ($domain -match '\.ca$') {
+        $tldBonus = 2
+    }
+
+    $score = $identityScore + $pathScore + $atsScore + $sourceBonus + $tldBonus
+    return [ordered]@{
+        url = $candidateUrl
+        domain = $domain
+        score = [int][Math]::Round($score)
+        identityScore = [int]$identityScore
+        pathScore = [int]$pathScore
+        sourceBonus = [int]$sourceBonus
+        atsScore = [int]$atsScore
+        atsType = [string]$atsType
+    }
+}
+
 function Get-ResolverSearchCandidateUrls {
     param(
         [string]$CompanyName,
@@ -3822,7 +4475,8 @@ function Get-ResolverSearchCandidateUrls {
         [int]$MaxResults = 6,
         [int]$MaxSeeds = 4,
         [int]$QueryTimeoutSec = 4,
-        [bool]$AllowOfficialSiteFallback = $true
+        [bool]$AllowOfficialSiteFallback = $true,
+        [bool]$PreferOfficialSite = $false
     )
 
     $searchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -3847,8 +4501,8 @@ function Get-ResolverSearchCandidateUrls {
         $cache = Get-Variable -Scope Script -Name ResolverSearchCandidateCache -ErrorAction SilentlyContinue
     }
 
-    $searchStrategyVersion = 'v2_parallel_batches'
-    $cacheKey = ('strategy={0}|fallback={1}|{2}|results={3}|seeds={4}|timeout={5}' -f $searchStrategyVersion, [int][bool]$AllowOfficialSiteFallback, [string]::Join('|', @($searchSeeds.ToArray())), $MaxResults, $MaxSeeds, $QueryTimeoutSec)
+    $searchStrategyVersion = 'v6_static_search_profile'
+    $cacheKey = ('strategy={0}|fallback={1}|preferOfficial={2}|{3}|results={4}|seeds={5}|timeout={6}' -f $searchStrategyVersion, [int][bool]$AllowOfficialSiteFallback, [int][bool]$PreferOfficialSite, [string]::Join('|', @($searchSeeds.ToArray())), $MaxResults, $MaxSeeds, $QueryTimeoutSec)
     if ($cache.Value.ContainsKey($cacheKey)) {
         $searchStopwatch.Stop()
         Write-PipelineDiag -Stage 'search_candidates' -Company $normalizedCompanyName -Message 'Loaded cached search candidate URLs' -Data @{
@@ -3880,8 +4534,7 @@ function Get-ResolverSearchCandidateUrls {
         }
     }
 
-    $results = New-Object System.Collections.ArrayList
-    $seen = @{}
+    $candidateRecords = @{}
     $selectedSeeds = @($searchSeeds.ToArray() | Select-Object -First $MaxSeeds)
     $seedCooldownKeys = @()
     $seedCooldownCount = 0
@@ -3921,14 +4574,54 @@ function Get-ResolverSearchCandidateUrls {
         [void]$primaryQueries.Add("$seed careers")
         [void]$primaryQueries.Add("$seed jobs")
         [void]$fallbackQueries.Add("$seed official site")
+        [void]$fallbackQueries.Add("$seed company website")
+        [void]$fallbackQueries.Add(('"{0}" official site' -f $seed))
+    }
+
+    function Convert-ResolverSearchProviderUrl {
+        param([string]$Url)
+
+        $candidateUrl = [System.Net.WebUtility]::HtmlDecode(([string]$Url).Trim())
+        if (-not $candidateUrl) {
+            return ''
+        }
+
+        if ($candidateUrl -match '^https?://www\.bing\.com/ck/a' -and $candidateUrl -match '(^|[?&])u=([^&]+)') {
+            $encodedTarget = ''
+            try {
+                $encodedTarget = [uri]::UnescapeDataString([string]$matches[2])
+            } catch {
+                $encodedTarget = [string]$matches[2]
+            }
+
+            if ($encodedTarget -match '^a1(?<payload>.+)$') {
+                $payload = [string]$Matches['payload']
+                $paddingLength = (4 - ($payload.Length % 4)) % 4
+                if ($paddingLength -gt 0) {
+                    $payload += ('=' * $paddingLength)
+                }
+                try {
+                    $decodedTarget = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
+                    if ($decodedTarget) {
+                        return ([string]$decodedTarget).Trim()
+                    }
+                } catch {
+                }
+            }
+
+            if ($encodedTarget) {
+                return ([string]$encodedTarget).Trim()
+            }
+        }
+
+        return $candidateUrl
     }
 
     function Add-SearchResultsFromBatch {
         param(
             [object[]]$Responses,
-            [System.Collections.ArrayList]$ResultStore,
-            [hashtable]$SeenMap,
-            [int]$ResultLimit
+            [hashtable]$CandidateStore,
+            [string]$SourceLabel
         )
 
         foreach ($response in @($Responses)) {
@@ -3936,6 +4629,7 @@ function Get-ResolverSearchCandidateUrls {
                 continue
             }
 
+            $candidateUrls = New-Object System.Collections.ArrayList
             foreach ($match in [regex]::Matches([string]$response.content, 'uddg=([^&"]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
                 $candidateUrl = ''
                 try {
@@ -3943,50 +4637,128 @@ function Get-ResolverSearchCandidateUrls {
                 } catch {
                     $candidateUrl = [string]$match.Groups[1].Value
                 }
+                if ($candidateUrl) {
+                    [void]$candidateUrls.Add([string]$candidateUrl)
+                }
+            }
 
-                if (-not $candidateUrl -or $SeenMap.ContainsKey($candidateUrl)) {
+            if ($candidateUrls.Count -eq 0) {
+                foreach ($match in [regex]::Matches([string]$response.content, '<li[^>]+class="[^"]*b_algo[^"]*"[\s\S]{0,4000}?<h2[^>]*>\s*<a[^>]+href="(?<url>[^"]+)"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+                    $candidateUrl = Convert-ResolverSearchProviderUrl -Url ([string]$match.Groups['url'].Value)
+                    if ($candidateUrl) {
+                        [void]$candidateUrls.Add($candidateUrl)
+                    }
+                }
+            }
+
+            if ($candidateUrls.Count -eq 0) {
+                foreach ($match in [regex]::Matches([string]$response.content, '<h2[^>]*>\s*<a[^>]+href="(?<url>[^"]+)"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+                    $candidateUrl = Convert-ResolverSearchProviderUrl -Url ([string]$match.Groups['url'].Value)
+                    if ($candidateUrl) {
+                        [void]$candidateUrls.Add($candidateUrl)
+                    }
+                }
+            }
+
+            foreach ($candidateUrl in @($candidateUrls.ToArray())) {
+
+                if (-not $candidateUrl) {
                     continue
                 }
                 if (-not (Test-ResolverSearchCandidateUrlAllowed -Url $candidateUrl)) {
                     continue
                 }
-
-                $SeenMap[$candidateUrl] = $true
-                [void]$ResultStore.Add($candidateUrl)
-                if ($ResultStore.Count -ge $ResultLimit) {
-                    return
+                $scoreRecord = Get-ResolverSearchCandidateUrlScore -CompanyName $normalizedCompanyName -Aliases @($selectedSeeds) -Url $candidateUrl -Source $SourceLabel -PreferOfficialSite:$PreferOfficialSite
+                $candidateKey = ([string]$candidateUrl).Trim().ToLowerInvariant()
+                if (-not $candidateKey) {
+                    continue
                 }
+                if ($CandidateStore.ContainsKey($candidateKey)) {
+                    $existing = $CandidateStore[$candidateKey]
+                    $existingScore = [int](Convert-ToNumber (Get-ObjectValue -Object $existing -Name 'score' -Default 0))
+                    $incomingScore = [int](Convert-ToNumber (Get-ObjectValue -Object $scoreRecord -Name 'score' -Default 0))
+                    if ($existingScore -gt $incomingScore) {
+                        continue
+                    }
+                    if ($existingScore -eq $incomingScore) {
+                        $existingIdentity = [int](Convert-ToNumber (Get-ObjectValue -Object $existing -Name 'identityScore' -Default 0))
+                        $incomingIdentity = [int](Convert-ToNumber (Get-ObjectValue -Object $scoreRecord -Name 'identityScore' -Default 0))
+                        if ($existingIdentity -ge $incomingIdentity) {
+                            continue
+                        }
+                    }
+                }
+                $CandidateStore[$candidateKey] = $scoreRecord
             }
         }
     }
 
     $primaryBatchMs = 0
     $fallbackBatchMs = 0
+    $bingPrimaryBatchMs = 0
+    $bingFallbackBatchMs = 0
     if ($primaryQueries.Count -gt 0) {
         $primaryBatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $primarySearchUrls = @($primaryQueries.ToArray() | ForEach-Object { 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString([string]$_) })
         $primaryBatch = Invoke-ResolverProbeRequestsParallel -Urls $primarySearchUrls -TimeoutSec $QueryTimeoutSec -DisableCache
         $primaryBatchStopwatch.Stop()
         $primaryBatchMs = [int]$primaryBatchStopwatch.ElapsedMilliseconds
-        Add-SearchResultsFromBatch -Responses @($primaryBatch.responses) -ResultStore $results -SeenMap $seen -ResultLimit $MaxResults
+        Add-SearchResultsFromBatch -Responses @($primaryBatch.responses) -CandidateStore $candidateRecords -SourceLabel 'careers'
     }
 
-    if ($AllowOfficialSiteFallback -and $results.Count -lt [Math]::Min($MaxResults, 2) -and $fallbackQueries.Count -gt 0) {
+    $shouldRunOfficialSiteFallback = [bool](
+        $AllowOfficialSiteFallback -and
+        $fallbackQueries.Count -gt 0 -and
+        (
+            $PreferOfficialSite -or
+            $candidateRecords.Count -lt [Math]::Min($MaxResults, 2)
+        )
+    )
+    if ($shouldRunOfficialSiteFallback) {
         $fallbackBatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $fallbackSearchUrls = @($fallbackQueries.ToArray() | ForEach-Object { 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString([string]$_) })
         $fallbackBatch = Invoke-ResolverProbeRequestsParallel -Urls $fallbackSearchUrls -TimeoutSec $QueryTimeoutSec -DisableCache
         $fallbackBatchStopwatch.Stop()
         $fallbackBatchMs = [int]$fallbackBatchStopwatch.ElapsedMilliseconds
-        Add-SearchResultsFromBatch -Responses @($fallbackBatch.responses) -ResultStore $results -SeenMap $seen -ResultLimit $MaxResults
+        Add-SearchResultsFromBatch -Responses @($fallbackBatch.responses) -CandidateStore $candidateRecords -SourceLabel 'official_site'
     }
 
-    $cache.Value[$cacheKey] = @($results.ToArray())
+    if ($candidateRecords.Count -lt [Math]::Min($MaxResults, 2) -and $primaryQueries.Count -gt 0) {
+        $bingPrimaryBatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $bingPrimarySearchUrls = @($primaryQueries.ToArray() | ForEach-Object { 'https://www.bing.com/search?q=' + [uri]::EscapeDataString([string]$_) })
+        $bingPrimaryBatch = Invoke-ResolverProbeRequestsParallel -Urls $bingPrimarySearchUrls -TimeoutSec ([Math]::Max(3, $QueryTimeoutSec)) -DisableCache
+        $bingPrimaryBatchStopwatch.Stop()
+        $bingPrimaryBatchMs = [int]$bingPrimaryBatchStopwatch.ElapsedMilliseconds
+        Add-SearchResultsFromBatch -Responses @($bingPrimaryBatch.responses) -CandidateStore $candidateRecords -SourceLabel 'careers'
+    }
+    if ($candidateRecords.Count -lt [Math]::Min($MaxResults, 2) -and $shouldRunOfficialSiteFallback) {
+        $bingFallbackBatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $bingFallbackSearchUrls = @($fallbackQueries.ToArray() | ForEach-Object { 'https://www.bing.com/search?q=' + [uri]::EscapeDataString([string]$_) })
+        $bingFallbackBatch = Invoke-ResolverProbeRequestsParallel -Urls $bingFallbackSearchUrls -TimeoutSec ([Math]::Max(3, $QueryTimeoutSec)) -DisableCache
+        $bingFallbackBatchStopwatch.Stop()
+        $bingFallbackBatchMs = [int]$bingFallbackBatchStopwatch.ElapsedMilliseconds
+        Add-SearchResultsFromBatch -Responses @($bingFallbackBatch.responses) -CandidateStore $candidateRecords -SourceLabel 'official_site'
+    }
+
+    $rankedUrls = @(
+        $candidateRecords.Values |
+            Sort-Object @(
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)) }; Descending = $true },
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'identityScore' -Default 0)) }; Descending = $true },
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'sourceBonus' -Default 0)) }; Descending = $true },
+                @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'pathScore' -Default 0)) }; Descending = $true },
+                @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'url' -Default '') }; Descending = $false }
+            ) |
+            Select-Object -First $MaxResults |
+            ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'url' -Default '') }
+    )
+    $cache.Value[$cacheKey] = @($rankedUrls)
     if (Test-AppStoreUsesSqlite) {
         $fetchedAt = (Get-Date).ToString('o')
-        $expiresAt = (Get-Date).AddHours($(if ($results.Count -gt 0) { 6 } else { 3 })).ToString('o')
+        $expiresAt = (Get-Date).AddHours($(if ($rankedUrls.Count -gt 0) { 6 } else { 3 })).ToString('o')
         try {
-            [void](Save-AppResolverSearchCacheRecord -CacheKey $cacheKey -Urls @($results.ToArray()) -FetchedAt $fetchedAt -ExpiresAt $expiresAt)
-            if ($results.Count -eq 0 -and -not $AllowOfficialSiteFallback -and $selectedSeeds.Count -gt 0) {
+            [void](Save-AppResolverSearchCacheRecord -CacheKey $cacheKey -Urls @($rankedUrls) -FetchedAt $fetchedAt -ExpiresAt $expiresAt)
+            if ($rankedUrls.Count -eq 0 -and -not $AllowOfficialSiteFallback -and $selectedSeeds.Count -gt 0) {
                 $cooldownHours = if ($MaxSeeds -le 1 -and $MaxResults -le 2 -and $QueryTimeoutSec -le 2) { 24 } else { 12 }
                 [void](Save-AppResolverSeedCooldownRecords -Records @($selectedSeeds | ForEach-Object {
                             [ordered]@{
@@ -3996,7 +4768,7 @@ function Get-ResolverSearchCandidateUrls {
                                 expiresAt = (Get-Date).AddHours($cooldownHours).ToString('o')
                             }
                         }))
-            } elseif ($results.Count -gt 0 -and $selectedSeeds.Count -gt 0) {
+            } elseif ($rankedUrls.Count -gt 0 -and $selectedSeeds.Count -gt 0) {
                 [void](Remove-AppResolverSeedCooldownRecords -SeedKeys @($selectedSeeds | ForEach-Object { Get-ResolverSearchSeedCooldownKey -CompanyName $normalizedCompanyName -Seed ([string]$_) }))
             }
             Invoke-ResolverProbeCacheMaintenance
@@ -4006,16 +4778,20 @@ function Get-ResolverSearchCandidateUrls {
     $searchStopwatch.Stop()
     Write-PipelineDiag -Stage 'search_candidates' -Company $normalizedCompanyName -Message 'Resolved search candidate URLs' -Data @{
         cacheSource = 'network'
-        urlCount = @($results.ToArray()).Count
+        urlCount = @($rankedUrls).Count
+        rawUrlCount = [int]$candidateRecords.Count
         strategy = $searchStrategyVersion
         cooldownCount = [int]$seedCooldownCount
-        queryCount = [int]($primaryQueries.Count + $(if ($fallbackBatchMs -gt 0) { $fallbackQueries.Count } else { 0 }))
+        queryCount = [int]($primaryQueries.Count + $(if ($fallbackBatchMs -gt 0) { $fallbackQueries.Count } else { 0 }) + $(if ($bingPrimaryBatchMs -gt 0) { $primaryQueries.Count } else { 0 }) + $(if ($bingFallbackBatchMs -gt 0) { $fallbackQueries.Count } else { 0 }))
         officialSiteFallback = [bool]$AllowOfficialSiteFallback
+        preferOfficialSite = [bool]$PreferOfficialSite
         primaryBatchMs = [int]$primaryBatchMs
         fallbackBatchMs = [int]$fallbackBatchMs
+        bingPrimaryBatchMs = [int]$bingPrimaryBatchMs
+        bingFallbackBatchMs = [int]$bingFallbackBatchMs
         elapsedMs = [int]$searchStopwatch.ElapsedMilliseconds
     }
-    return @($results.ToArray())
+    return @($rankedUrls)
 }
 
 function Resolve-SearchResultCandidate {
@@ -4062,19 +4838,80 @@ function Resolve-SearchResultCandidate {
         return $score
     }
 
+    function Get-ResolverSearchIdentitySignal {
+        param(
+            [object]$Response,
+            [string]$CandidateUrl,
+            [string]$KnownDomain,
+            [string]$KnownCareersUrl
+        )
+
+        $resolvedUrl = [string]$(if (Get-ObjectValue -Object $Response -Name 'finalUrl' -Default '') { Get-ObjectValue -Object $Response -Name 'finalUrl' -Default '' } else { $CandidateUrl })
+        $resolvedDomain = Get-DomainFromUrl -Url $resolvedUrl
+        if (-not $resolvedDomain -or (Test-HostedAtsDomain -Domain $resolvedDomain)) {
+            return [ordered]@{
+                domain = ''
+                careersUrl = ''
+                score = 0
+                identityScore = 0
+                evidence = ''
+            }
+        }
+
+        $pageTitle = [string](Get-ObjectValue -Object $Response -Name 'title' -Default '')
+        $pageContent = [string](Get-ObjectValue -Object $Response -Name 'content' -Default '')
+        $identityMatch = Get-CompanyDomainIdentityMatch -CompanyName $CompanyName -Aliases $Aliases -Domain $resolvedDomain -Title $pageTitle -Content $pageContent
+        $identityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $identityMatch -Name 'score' -Default 0))
+        $score = $identityScore
+        if ($CandidateUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $score += 10 }
+        if ($resolvedUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') { $score += 12 }
+        if ($CandidateUrl -match 'careers\.' -or $resolvedUrl -match 'careers\.') { $score += 8 }
+        if ($pageTitle -match 'career|job|join us|opportunit') { $score += 8 }
+        if ($KnownDomain -and $resolvedDomain -eq $KnownDomain) { $score += 4 }
+        if ($KnownCareersUrl -and $resolvedUrl -eq $KnownCareersUrl) { $score += 6 }
+
+        $careersValue = ''
+        if ($resolvedUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') {
+            $careersValue = $resolvedUrl
+        } elseif ($CandidateUrl -match '/careers|/jobs|/join-us|/openings|/company/careers|/about/careers') {
+            $careersValue = $CandidateUrl
+        }
+
+        $matchedTokens = @((Get-ObjectValue -Object $identityMatch -Name 'matchedTokens' -Default @()) | Where-Object { $_ } | Select-Object -Unique)
+        $evidence = if ($matchedTokens.Count -gt 0) {
+            "Search result domain matched company identity via $([string]::Join(', ', $matchedTokens))"
+        } else {
+            'Search result domain matched company identity'
+        }
+
+        return [ordered]@{
+            domain = $resolvedDomain
+            careersUrl = [string]$careersValue
+            score = [int][Math]::Round($score)
+            identityScore = [int]$identityScore
+            evidence = [string]$evidence
+        }
+    }
+
     $resolveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $attemptedUrls = New-Object System.Collections.ArrayList
     $httpSummary = New-Object System.Collections.ArrayList
     $best = $null
     $bestDomain = [string]$Domain
     $bestCareersUrl = [string]$CareersUrl
+    $bestDomainScore = 0
+    $bestCareersScore = 0
+    $bestDomainEvidence = ''
+    $bestCareersEvidence = ''
     $directPhaseMs = 0
     $contentProbeMs = 0
     $careersFollowUpMs = 0
     $careersFollowUpCount = 0
     $contentProbeCount = 0
+    $preferOfficialSiteSearch = [bool](-not $Domain -and -not $CareersUrl)
+    $followUpTargets = @{}
 
-    $candidateUrls = @((Get-ResolverSearchCandidateUrls -CompanyName $CompanyName -Aliases $Aliases -MaxResults $MaxResults -MaxSeeds $MaxSeeds -QueryTimeoutSec $QueryTimeoutSec -AllowOfficialSiteFallback:$AllowOfficialSiteFallback) | Select-Object -First $MaxResults)
+    $candidateUrls = @((Get-ResolverSearchCandidateUrls -CompanyName $CompanyName -Aliases $Aliases -MaxResults $MaxResults -MaxSeeds $MaxSeeds -QueryTimeoutSec $QueryTimeoutSec -AllowOfficialSiteFallback:$AllowOfficialSiteFallback -PreferOfficialSite:$preferOfficialSiteSearch) | Select-Object -First $MaxResults)
     if ($candidateUrls.Count -eq 0) {
         $resolveStopwatch.Stop()
         Write-PipelineDiag -Stage 'search_result_resolve' -Company $CompanyName -Message 'No search-result candidates available' -Data @{
@@ -4148,7 +4985,7 @@ function Resolve-SearchResultCandidate {
         $probeBatch = Invoke-ResolverProbeRequestsParallel -Urls $candidateUrls -TimeoutSec 4
         $contentProbeStopwatch.Stop()
         $contentProbeMs = [int]$contentProbeStopwatch.ElapsedMilliseconds
-        $contentProbeCount = [int]@($candidateUrls).Count
+        $contentProbeCount = [int](@($candidateUrls).Count)
         $bestFollowUpTarget = $null
         $bestFollowUpScore = [int]::MinValue
 
@@ -4161,11 +4998,23 @@ function Resolve-SearchResultCandidate {
 
             $finalUrl = [string]$(if ($response.finalUrl) { $response.finalUrl } else { $candidateUrl })
             $finalDomain = Get-DomainFromUrl -Url $finalUrl
-            if (-not $bestDomain -and $finalDomain) {
-                $bestDomain = $finalDomain
-            }
-            if (-not $bestCareersUrl -and (($finalUrl -match '/careers|/jobs|join-us') -or ($candidateUrl -match '/careers|/jobs|join-us'))) {
-                $bestCareersUrl = if ($finalUrl) { $finalUrl } else { [string]$candidateUrl }
+            $identitySignal = Get-ResolverSearchIdentitySignal -Response $response -CandidateUrl $candidateUrl -KnownDomain $bestDomain -KnownCareersUrl $bestCareersUrl
+            $identitySignalScore = [int](Convert-ToNumber (Get-ObjectValue -Object $identitySignal -Name 'score' -Default 0))
+            $identitySignalIdentityScore = [int](Convert-ToNumber (Get-ObjectValue -Object $identitySignal -Name 'identityScore' -Default 0))
+            if ($identitySignalIdentityScore -ge 18 -or $identitySignalScore -ge 30) {
+                $identityDomain = [string](Get-ObjectValue -Object $identitySignal -Name 'domain' -Default '')
+                $identityCareersUrl = [string](Get-ObjectValue -Object $identitySignal -Name 'careersUrl' -Default '')
+                $identityEvidence = [string](Get-ObjectValue -Object $identitySignal -Name 'evidence' -Default 'Search result domain matched company identity')
+                if ($identityDomain -and $identitySignalScore -gt $bestDomainScore) {
+                    $bestDomain = $identityDomain
+                    $bestDomainScore = $identitySignalScore
+                    $bestDomainEvidence = $identityEvidence
+                }
+                if ($identityCareersUrl -and ($identitySignalScore + 4) -gt $bestCareersScore) {
+                    $bestCareersUrl = $identityCareersUrl
+                    $bestCareersScore = $identitySignalScore + 4
+                    $bestCareersEvidence = $identityEvidence
+                }
             }
 
             $detections = @(Find-AtsDetectionsInContent -Content ([string]$response.content) -FinalUrl $finalUrl -Method 'search_result')
@@ -4197,11 +5046,26 @@ function Resolve-SearchResultCandidate {
 
             if (-not $best -or ([string](Get-ObjectValue -Object $best -Name 'confidenceBand')) -ne 'high') {
                 $followUpScore = Get-ResolverFollowUpCandidateScore -CandidateUrl $candidateUrl -FinalUrl $finalUrl -FinalDomain $finalDomain -KnownDomain $bestDomain -PageTitle ([string](Get-ObjectValue -Object $response -Name 'title' -Default ''))
-                if ($followUpScore -gt $bestFollowUpScore) {
-                    $bestFollowUpScore = $followUpScore
+                $combinedFollowUpScore = [int]$followUpScore + [int]$identitySignalScore
+                $followUpDomain = [string]$(if ($bestDomain) { $bestDomain } elseif (Get-ObjectValue -Object $identitySignal -Name 'domain' -Default '') { Get-ObjectValue -Object $identitySignal -Name 'domain' -Default '' } else { $finalDomain })
+                $followUpCareersUrl = [string]$(if ($bestCareersUrl) { $bestCareersUrl } elseif (Get-ObjectValue -Object $identitySignal -Name 'careersUrl' -Default '') { Get-ObjectValue -Object $identitySignal -Name 'careersUrl' -Default '' } elseif ($finalUrl) { $finalUrl } else { $candidateUrl })
+                if ($followUpDomain -or $followUpCareersUrl) {
+                    $followUpKey = ('{0}|{1}' -f [string]$followUpDomain, [string]$followUpCareersUrl)
+                    if (-not $followUpTargets.ContainsKey($followUpKey) -or [int](Convert-ToNumber (Get-ObjectValue -Object $followUpTargets[$followUpKey] -Name 'score' -Default 0)) -lt $combinedFollowUpScore) {
+                        $followUpTargets[$followUpKey] = [ordered]@{
+                            domain = [string]$followUpDomain
+                            careersUrl = [string]$followUpCareersUrl
+                            score = [int]$combinedFollowUpScore
+                            evidence = [string]$(if ($bestDomainEvidence) { $bestDomainEvidence } else { Get-ObjectValue -Object $identitySignal -Name 'evidence' -Default 'Search result follow-up candidate' })
+                        }
+                    }
+                }
+                if ($combinedFollowUpScore -gt $bestFollowUpScore) {
+                    $bestFollowUpScore = $combinedFollowUpScore
                     $bestFollowUpTarget = [ordered]@{
-                        domain = [string]$(if ($bestDomain) { $bestDomain } else { $finalDomain })
-                        careersUrl = [string]$(if ($bestCareersUrl) { $bestCareersUrl } elseif ($finalUrl) { $finalUrl } else { $candidateUrl })
+                        domain = [string]$followUpDomain
+                        careersUrl = [string]$followUpCareersUrl
+                        evidence = [string]$(if ($bestDomainEvidence) { $bestDomainEvidence } else { Get-ObjectValue -Object $identitySignal -Name 'evidence' -Default 'Search result follow-up candidate' })
                     }
                 }
             }
@@ -4211,12 +5075,26 @@ function Resolve-SearchResultCandidate {
             }
         }
 
-        if ($bestFollowUpTarget -and (-not $best -or ([string](Get-ObjectValue -Object $best -Name 'confidenceBand')) -ne 'high')) {
+        $selectedFollowUpTargets = @()
+        if ($followUpTargets.Count -gt 0) {
+            $selectedFollowUpTargets = @(
+                $followUpTargets.Values |
+                    Sort-Object @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'score' -Default 0)) }; Descending = $true } |
+                    Select-Object -First $(if ($preferOfficialSiteSearch) { 2 } else { 1 })
+            )
+        } elseif ($bestFollowUpTarget) {
+            $selectedFollowUpTargets = @($bestFollowUpTarget)
+        }
+
+        foreach ($followUpTarget in @($selectedFollowUpTargets)) {
+            if (-not $followUpTarget -or ($best -and ([string](Get-ObjectValue -Object $best -Name 'confidenceBand')) -eq 'high')) {
+                break
+            }
             $careersFollowUpStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $careersCandidate = Resolve-CareersPageCandidate -Domain ([string](Get-ObjectValue -Object $bestFollowUpTarget -Name 'domain' -Default $bestDomain)) -CareersUrl ([string](Get-ObjectValue -Object $bestFollowUpTarget -Name 'careersUrl' -Default $bestCareersUrl)) -CandidateLimit 4 -TimeoutSec 4
+            $careersCandidate = Resolve-CareersPageCandidate -Domain ([string](Get-ObjectValue -Object $followUpTarget -Name 'domain' -Default $bestDomain)) -CareersUrl ([string](Get-ObjectValue -Object $followUpTarget -Name 'careersUrl' -Default $bestCareersUrl)) -CandidateLimit 4 -TimeoutSec 4
             $careersFollowUpStopwatch.Stop()
-            $careersFollowUpMs = [int]$careersFollowUpStopwatch.ElapsedMilliseconds
-            $careersFollowUpCount = 1
+            $careersFollowUpMs += [int]$careersFollowUpStopwatch.ElapsedMilliseconds
+            $careersFollowUpCount += 1
             foreach ($attempt in @((Get-ObjectValue -Object $careersCandidate -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
             foreach ($attemptedUrl in @((Get-ObjectValue -Object $careersCandidate -Name 'attemptedUrls'))) { [void]$attemptedUrls.Add([string]$attemptedUrl) }
             if ([string](Get-ObjectValue -Object $careersCandidate -Name 'atsType')) {
@@ -4240,6 +5118,11 @@ function Resolve-SearchResultCandidate {
         contentProbeMs = [int]$contentProbeMs
         careersFollowUpMs = [int]$careersFollowUpMs
         elapsedMs = [int]$resolveStopwatch.ElapsedMilliseconds
+        preferOfficialSite = [bool]$preferOfficialSiteSearch
+        bestDomain = [string]$bestDomain
+        bestCareersUrl = [string]$bestCareersUrl
+        bestDomainScore = [int]$bestDomainScore
+        bestCareersScore = [int]$bestCareersScore
         confidence = [string]$(if ($best) { Get-ObjectValue -Object $best -Name 'confidenceBand' -Default '' } else { '' })
         atsType = [string]$(if ($best) { Get-ObjectValue -Object $best -Name 'atsType' -Default '' } else { '' })
     }
@@ -4248,6 +5131,10 @@ function Resolve-SearchResultCandidate {
         candidate = $best
         domain = $bestDomain
         careersUrl = $bestCareersUrl
+        domainScore = [int]$bestDomainScore
+        careersScore = [int]$bestCareersScore
+        domainEvidence = [string]$bestDomainEvidence
+        careersEvidence = [string]$bestCareersEvidence
         attemptedUrls = @($attemptedUrls.ToArray() | Where-Object { $_ } | Select-Object -Unique)
         httpSummary = @($httpSummary.ToArray())
     }
@@ -4282,6 +5169,7 @@ function Get-DiscoveryResultForConfig {
     $candidateCount = 0
     $careersPageProbeRan = $false
     $skipSlugProbes = $false
+    $forceOfficialSiteFallback = $false
 
     Write-PipelineDiag -Stage 'discovery_start' -Company $companyName -Message 'Beginning ATS discovery' -Data @{
         domain = $domain
@@ -4390,15 +5278,28 @@ function Get-DiscoveryResultForConfig {
             $careersPageProbeRan = $true
             foreach ($attempt in @((Get-ObjectValue -Object $careersPageCandidate -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
             foreach ($attemptedUrl in @((Get-ObjectValue -Object $careersPageCandidate -Name 'attemptedUrls'))) { [void]$attemptedUrls.Add([string]$attemptedUrl) }
+            if (Get-ObjectValue -Object $careersPageCandidate -Name 'domain') {
+                $resolvedDomain = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'domain')
+            }
+            if (Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl') {
+                $resolvedCareersUrl = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl')
+            }
             $careersPageAtsType = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'atsType')
+            $careersPageHomepageUntrusted = [bool](Get-ObjectValue -Object $careersPageCandidate -Name 'homepageUntrusted' -Default $false)
+            $careersPageVerifiedCareers = [bool](Get-ObjectValue -Object $careersPageCandidate -Name 'verifiedCareers' -Default $false)
+            if ($careersPageHomepageUntrusted -and -not $careersPageAtsType -and -not $careersPageVerifiedCareers) {
+                Write-PipelineDiag -Stage 'discovery_domain_reset' -Company $companyName -Message 'Resetting untrusted homepage domain before ATS slug/search fallback' -Data @{
+                    priorDomain = $resolvedDomain
+                    priorCareersUrl = $resolvedCareersUrl
+                    identitySource = $identitySource
+                }
+                $resolvedDomain = ''
+                $resolvedCareersUrl = ''
+                $identitySource = 'untrusted_domain'
+                $forceOfficialSiteFallback = $true
+            }
             if ($careersPageAtsType -and (-not $bestCandidate -or [double](Convert-ToNumber (Get-ObjectValue -Object $careersPageCandidate -Name 'confidenceScore')) -gt [double](Convert-ToNumber (Get-ObjectValue -Object $bestCandidate -Name 'confidenceScore')))) {
                 $bestCandidate = $careersPageCandidate
-                if (Get-ObjectValue -Object $careersPageCandidate -Name 'domain') {
-                    $resolvedDomain = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'domain')
-                }
-                if (Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl') {
-                    $resolvedCareersUrl = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl')
-                }
             }
             if ($careersPageAtsType -and [double](Convert-ToNumber (Get-ObjectValue -Object $careersPageCandidate -Name 'confidenceScore' -Default 0)) -ge 66) {
                 $skipSlugProbes = $true
@@ -4406,7 +5307,7 @@ function Get-DiscoveryResultForConfig {
         }
 
         if (-not $skipSlugProbes) {
-            $slugCandidates = @((Get-DiscoveryCandidateSlugs -CompanyName $companyName -Domain $domain -CareersUrl $careersUrl -Aliases $aliases -LinkedinCompanySlug $linkedinCompanySlug) | Select-Object -First ([int]$discoveryPlan.slugCandidateLimit))
+            $slugCandidates = @((Get-DiscoveryCandidateSlugs -CompanyName $companyName -Domain $resolvedDomain -CareersUrl $resolvedCareersUrl -Aliases $aliases -LinkedinCompanySlug $linkedinCompanySlug) | Select-Object -First ([int]$discoveryPlan.slugCandidateLimit))
             $candidateCount = $slugCandidates.Count
             foreach ($candidate in @($slugCandidates)) {
                 foreach ($atsType in @($discoveryPlan.atsProbeTypes)) {
@@ -4452,7 +5353,10 @@ function Get-DiscoveryResultForConfig {
 
         if (-not ($bestCandidate -and ([string](Get-ObjectValue -Object $bestCandidate -Name 'confidenceBand')) -eq 'high')) {
             $searchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $searchFallback = Resolve-SearchResultCandidate -CompanyName $companyName -Domain $resolvedDomain -CareersUrl $resolvedCareersUrl -Aliases $aliases -MaxResults ([int]$discoveryPlan.maxResults) -MaxSeeds ([int]$discoveryPlan.maxSeeds) -QueryTimeoutSec ([int]$discoveryPlan.queryTimeoutSec) -AllowOfficialSiteFallback ([bool]$discoveryPlan.allowOfficialSiteFallback)
+            $searchFallbackMaxResults = if ($forceOfficialSiteFallback) { [Math]::Max(3, [int]$discoveryPlan.maxResults) } else { [int]$discoveryPlan.maxResults }
+            $searchFallbackMaxSeeds = if ($forceOfficialSiteFallback) { [Math]::Max(2, [int]$discoveryPlan.maxSeeds) } else { [int]$discoveryPlan.maxSeeds }
+            $searchFallbackTimeoutSec = if ($forceOfficialSiteFallback) { [Math]::Max(3, [int]$discoveryPlan.queryTimeoutSec) } else { [int]$discoveryPlan.queryTimeoutSec }
+            $searchFallback = Resolve-SearchResultCandidate -CompanyName $companyName -Domain $resolvedDomain -CareersUrl $resolvedCareersUrl -Aliases $aliases -MaxResults $searchFallbackMaxResults -MaxSeeds $searchFallbackMaxSeeds -QueryTimeoutSec $searchFallbackTimeoutSec -AllowOfficialSiteFallback ([bool]($forceOfficialSiteFallback -or $discoveryPlan.allowOfficialSiteFallback))
             $searchStopwatch.Stop()
             $searchMs = [int]$searchStopwatch.ElapsedMilliseconds
             foreach ($attempt in @((Get-ObjectValue -Object $searchFallback -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
@@ -4478,7 +5382,26 @@ function Get-DiscoveryResultForConfig {
             $careersPageProbeRan = $true
             foreach ($attempt in @((Get-ObjectValue -Object $careersPageCandidate -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
             foreach ($attemptedUrl in @((Get-ObjectValue -Object $careersPageCandidate -Name 'attemptedUrls'))) { [void]$attemptedUrls.Add([string]$attemptedUrl) }
+            if (Get-ObjectValue -Object $careersPageCandidate -Name 'domain') {
+                $resolvedDomain = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'domain')
+            }
+            if (Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl') {
+                $resolvedCareersUrl = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'careersUrl')
+            }
             $careersPageAtsType = [string](Get-ObjectValue -Object $careersPageCandidate -Name 'atsType')
+            $careersPageHomepageUntrusted = [bool](Get-ObjectValue -Object $careersPageCandidate -Name 'homepageUntrusted' -Default $false)
+            $careersPageVerifiedCareers = [bool](Get-ObjectValue -Object $careersPageCandidate -Name 'verifiedCareers' -Default $false)
+            if ($careersPageHomepageUntrusted -and -not $careersPageAtsType -and -not $careersPageVerifiedCareers) {
+                Write-PipelineDiag -Stage 'discovery_domain_reset' -Company $companyName -Message 'Resetting untrusted homepage domain before ATS search fallback' -Data @{
+                    priorDomain = $resolvedDomain
+                    priorCareersUrl = $resolvedCareersUrl
+                    identitySource = $identitySource
+                }
+                $resolvedDomain = ''
+                $resolvedCareersUrl = ''
+                $identitySource = 'untrusted_domain'
+                $forceOfficialSiteFallback = $true
+            }
             if ($careersPageAtsType -and (-not $bestCandidate -or [double](Convert-ToNumber (Get-ObjectValue -Object $careersPageCandidate -Name 'confidenceScore')) -gt [double](Convert-ToNumber (Get-ObjectValue -Object $bestCandidate -Name 'confidenceScore')))) {
                 $bestCandidate = $careersPageCandidate
             }
@@ -4499,6 +5422,7 @@ function Get-DiscoveryResultForConfig {
                 candidateCount = [int]$candidateCount
                 slugProbeCount = [int]$slugProbeCount
                 skippedSlugProbes = [bool]$skipSlugProbes
+                forceOfficialSiteFallback = [bool]$forceOfficialSiteFallback
                 searchMs = [int]$searchMs
                 careersPageMs = [int]$careersPageMs
                 deepVerify = [bool]$DeepVerify
@@ -4536,6 +5460,7 @@ function Get-DiscoveryResultForConfig {
             elapsedMs = [int]$discoveryElapsed
             candidateCount = [int]$candidateCount
             slugProbeCount = [int]$slugProbeCount
+            forceOfficialSiteFallback = [bool]$forceOfficialSiteFallback
             searchMs = [int]$searchMs
             careersPageMs = [int]$careersPageMs
             deepVerify = [bool]$DeepVerify
@@ -4725,16 +5650,22 @@ function Invoke-AtsDiscovery {
         }
     }
 
+    $deriveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     if (-not $SkipDerivedData) {
         Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Finalizing ATS discovery' -Processed $stats.checked -Total $totalCandidates -StartedAt $startedAt -Message 'Refreshing derived account scores'
         $State = Update-DerivedData -State $State -ProgressCallback $ProgressCallback
     } elseif ($ProgressCallback) {
         Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Finalizing ATS discovery' -Processed $stats.checked -Total $totalCandidates -StartedAt $startedAt -Message 'Persisting ATS discovery results'
     }
+    $deriveStopwatch.Stop()
     return [ordered]@{
         state = $State
         stats = $stats
         changedConfigs = @($candidates)
+        timings = [ordered]@{
+            deriveMs = [int]$deriveStopwatch.ElapsedMilliseconds
+            skippedDerivedData = [bool]$SkipDerivedData
+        }
     }
 }
 
@@ -5931,9 +6862,11 @@ function Sync-ImportedCompanyData {
     param(
         [Parameter(Mandatory = $true)]
         $State,
-        [string[]]$CompanyKeys = @()
+        [string[]]$CompanyKeys = @(),
+        [System.Collections.IDictionary]$TimingBag
     )
 
+    $overallStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $companyDefaults = Get-CompanyRecordDefaults
     $contactDefaults = Get-ContactRecordDefaults
     $jobDefaults = Get-JobRecordDefaults
@@ -5941,6 +6874,7 @@ function Sync-ImportedCompanyData {
     $activityDefaults = Get-ActivityRecordDefaults
     $companies = New-Object System.Collections.ArrayList
     $companyMap = @{}
+    $companyIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($company in @($State.companies)) {
         Ensure-RecordDefaults -Record $company -Defaults $companyDefaults | Out-Null
         [void]$companies.Add($company)
@@ -5949,8 +6883,10 @@ function Sync-ImportedCompanyData {
             $companyMap[$key] = $company
         }
     }
+    $companyIndexStopwatch.Stop()
 
     $contactsByCompany = @{}
+    $contactIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($contact in @($State.contacts)) {
         Ensure-RecordDefaults -Record $contact -Defaults $contactDefaults | Out-Null
         $key = Get-CanonicalCompanyKey $(if ($contact.normalizedCompanyName) { $contact.normalizedCompanyName } else { $contact.companyName })
@@ -5961,8 +6897,10 @@ function Sync-ImportedCompanyData {
         }
         [void]$contactsByCompany[$key].Add($contact)
     }
+    $contactIndexStopwatch.Stop()
 
     $jobsByCompany = @{}
+    $jobIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($job in @($State.jobs)) {
         Ensure-RecordDefaults -Record $job -Defaults $jobDefaults | Out-Null
         $key = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
@@ -5973,8 +6911,10 @@ function Sync-ImportedCompanyData {
         }
         [void]$jobsByCompany[$key].Add($job)
     }
+    $jobIndexStopwatch.Stop()
 
     $configsByCompany = @{}
+    $configIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($config in @($State.boardConfigs)) {
         Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
         $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
@@ -5985,8 +6925,10 @@ function Sync-ImportedCompanyData {
         }
         [void]$configsByCompany[$key].Add($config)
     }
+    $configIndexStopwatch.Stop()
 
     $activitiesByCompany = @{}
+    $activityIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($activity in @($State.activities)) {
         Ensure-RecordDefaults -Record $activity -Defaults $activityDefaults | Out-Null
         $key = Get-CanonicalCompanyKey (Get-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Default '')
@@ -5997,8 +6939,10 @@ function Sync-ImportedCompanyData {
         }
         [void]$activitiesByCompany[$key].Add($activity)
     }
+    $activityIndexStopwatch.Stop()
 
     $keysToRefresh = New-Object 'System.Collections.Generic.HashSet[string]'
+    $keySelectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($key in @($CompanyKeys)) {
         $normalized = Normalize-TextKey $key
         if ($normalized) { [void]$keysToRefresh.Add($normalized) }
@@ -6011,8 +6955,36 @@ function Sync-ImportedCompanyData {
             }
         }
     }
+    $keySelectStopwatch.Stop()
 
+    $projectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $projectionReferenceNow = Get-Date
+    $sharedJobSignalTextCache = @{}
+    $sharedJobSignalTimestampCache = @{}
+    $projectionPhaseTotals = [ordered]@{
+        contactsMs = 0
+        jobsMs = 0
+        configsMs = 0
+        identityMs = 0
+        activitiesMs = 0
+        scoringMs = 0
+        pipelineMs = 0
+        graphMs = 0
+        sequenceMs = 0
+        alertsMs = 0
+        actionDraftMs = 0
+    }
+    $scoringPhaseTotals = [ordered]@{
+        activeJobsMs = 0
+        hiringMs = 0
+        engagementMs = 0
+        growthMs = 0
+        explanationMs = 0
+    }
+    $slowCompanies = New-Object System.Collections.ArrayList
     foreach ($key in ($keysToRefresh | Sort-Object)) {
+        $companyProjectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $companyPhaseTimingBag = [ordered]@{}
         $company = $companyMap[$key]
         $contactItems = if ($contactsByCompany.ContainsKey($key)) { @($contactsByCompany[$key].ToArray()) } else { @() }
         $configItems = if ($configsByCompany.ContainsKey($key)) { @($configsByCompany[$key].ToArray()) } else { @() }
@@ -6033,7 +7005,16 @@ function Sync-ImportedCompanyData {
             $companyMap[$key] = $company
         }
 
-        $company = Update-CompanyProjection -Company $company -Contacts $contactItems -Jobs $jobItems -Configs $configItems -Activities $activityItems
+        $company = Update-CompanyProjection -Company $company -Contacts $contactItems -Jobs $jobItems -Configs $configItems -Activities $activityItems -JobSignalTextCache $sharedJobSignalTextCache -JobSignalTimestampCache $sharedJobSignalTimestampCache -ReferenceNow $projectionReferenceNow -TimingBag $companyPhaseTimingBag
+        foreach ($phaseKey in @($projectionPhaseTotals.Keys)) {
+            $projectionPhaseTotals[$phaseKey] = [int]$projectionPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name $phaseKey -Default 0))
+        }
+        $companyScoringDetails = Get-ObjectValue -Object $companyPhaseTimingBag -Name 'scoringDetails' -Default $null
+        if ($companyScoringDetails) {
+            foreach ($phaseKey in @($scoringPhaseTotals.Keys)) {
+                $scoringPhaseTotals[$phaseKey] = [int]$scoringPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name $phaseKey -Default 0))
+            }
+        }
         foreach ($contact in @($contactItems)) {
             if ($null -eq $contact) { continue }
             [void](Set-ObjectValue -Object $contact -Name 'accountId' -Value $company.id)
@@ -6051,9 +7032,67 @@ function Sync-ImportedCompanyData {
             if ($null -eq $activity) { continue }
             [void](Set-ObjectValue -Object $activity -Name 'accountId' -Value $company.id)
         }
+
+        $companyProjectionStopwatch.Stop()
+        if ($companyProjectionStopwatch.ElapsedMilliseconds -ge 250) {
+            $topPhaseEntry = @(
+                @($companyPhaseTimingBag.GetEnumerator()) |
+                    Sort-Object @{ Expression = { [int](Convert-ToNumber $_.Value) }; Descending = $true } |
+                    Select-Object -First 1
+            )
+            $topPhaseName = if ($topPhaseEntry.Count -gt 0) { [string]$topPhaseEntry[0].Key } else { '' }
+            $topPhaseMs = if ($topPhaseEntry.Count -gt 0) { [int](Convert-ToNumber $topPhaseEntry[0].Value) } else { 0 }
+            [void]$slowCompanies.Add([ordered]@{
+                    key = [string]$key
+                    displayName = [string](Get-ObjectValue -Object $company -Name 'displayName' -Default '')
+                    durationMs = [int]$companyProjectionStopwatch.ElapsedMilliseconds
+                    contactCount = @($contactItems).Count
+                    jobCount = @($jobItems).Count
+                    configCount = @($configItems).Count
+                    activityCount = @($activityItems).Count
+                    topPhase = $topPhaseName
+                    topPhaseMs = $topPhaseMs
+                    graphMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'graphMs' -Default 0))
+                    scoringMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'scoringMs' -Default 0))
+                    scoringHiringMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name 'hiringMs' -Default 0))
+                    scoringGrowthMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name 'growthMs' -Default 0))
+                    scoringEngagementMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name 'engagementMs' -Default 0))
+                    alertsMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'alertsMs' -Default 0))
+                    jobsMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'jobsMs' -Default 0))
+                    contactsMs = [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'contactsMs' -Default 0))
+                })
+        }
+    }
+    $projectionStopwatch.Stop()
+
+    $sortStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $State.companies = Sort-Companies -Companies @($companies.ToArray())
+    $sortStopwatch.Stop()
+    $overallStopwatch.Stop()
+
+    if ($TimingBag) {
+        $TimingBag['companyIndexMs'] = [int]$companyIndexStopwatch.ElapsedMilliseconds
+        $TimingBag['contactIndexMs'] = [int]$contactIndexStopwatch.ElapsedMilliseconds
+        $TimingBag['jobIndexMs'] = [int]$jobIndexStopwatch.ElapsedMilliseconds
+        $TimingBag['configIndexMs'] = [int]$configIndexStopwatch.ElapsedMilliseconds
+        $TimingBag['activityIndexMs'] = [int]$activityIndexStopwatch.ElapsedMilliseconds
+        $TimingBag['keySelectMs'] = [int]$keySelectStopwatch.ElapsedMilliseconds
+        $TimingBag['projectionMs'] = [int]$projectionStopwatch.ElapsedMilliseconds
+        $TimingBag['sortMs'] = [int]$sortStopwatch.ElapsedMilliseconds
+        $TimingBag['totalMs'] = [int]$overallStopwatch.ElapsedMilliseconds
+        $TimingBag['companyCount'] = @($State.companies).Count
+        $TimingBag['touchedCompanyCount'] = $keysToRefresh.Count
+        $TimingBag['jobSignalTextCacheCount'] = [int]$sharedJobSignalTextCache.Count
+        $TimingBag['jobSignalTimestampCacheCount'] = [int]$sharedJobSignalTimestampCache.Count
+        $TimingBag['phaseTotals'] = $projectionPhaseTotals
+        $TimingBag['scoringPhaseTotals'] = $scoringPhaseTotals
+        $TimingBag['slowCompanies'] = @(
+            @($slowCompanies.ToArray()) |
+                Sort-Object @{ Expression = { [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'durationMs' -Default 0)) }; Descending = $true } |
+                Select-Object -First 12
+        )
     }
 
-    $State.companies = Sort-Companies -Companies @($companies.ToArray())
     return $State
 }
 

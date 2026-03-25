@@ -498,6 +498,50 @@ function Get-BackgroundStateCompaniesByScope {
     )
 }
 
+function Get-BackgroundStateItemsByCompanyKeys {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Items,
+        [string[]]$CompanyKeys = @(),
+        [string]$NormalizedProperty = 'normalizedCompanyName',
+        [string]$FallbackProperty = 'companyName'
+    )
+
+    $companyKeySet = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($companyKey in @($CompanyKeys)) {
+        $normalized = Get-CanonicalCompanyKey $companyKey
+        if ($normalized) {
+            [void]$companyKeySet.Add($normalized)
+        }
+    }
+
+    if ($companyKeySet.Count -eq 0) {
+        return @()
+    }
+
+    $matches = New-Object System.Collections.ArrayList
+    foreach ($item in @($Items)) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        $value = ''
+        if ($NormalizedProperty) {
+            $value = [string](Get-ObjectValue -Object $item -Name $NormalizedProperty -Default '')
+        }
+        if (-not $value -and $FallbackProperty) {
+            $value = [string](Get-ObjectValue -Object $item -Name $FallbackProperty -Default '')
+        }
+
+        $companyKey = Get-CanonicalCompanyKey $value
+        if ($companyKey -and $companyKeySet.Contains($companyKey)) {
+            [void]$matches.Add($item)
+        }
+    }
+
+    return @($matches.ToArray())
+}
+
 function Apply-LiveJobImportDelta {
     param(
         [Parameter(Mandatory = $true)]
@@ -525,6 +569,8 @@ function Apply-LiveJobImportDelta {
         }
     }
 
+    $companyKeysSorted = @($companyKeysToRefresh | Sort-Object)
+
     $mergeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $State.jobs = Merge-BackgroundStateSegmentData -Segment 'Jobs' -ExistingData $State.jobs -IncomingData @($JobRunResult.changedJobs)
     $State.boardConfigs = Merge-BackgroundStateSegmentData -Segment 'BoardConfigs' -ExistingData $State.boardConfigs -IncomingData @($incomingConfigs)
@@ -535,11 +581,71 @@ function Apply-LiveJobImportDelta {
         Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Refreshing touched company projections' | Out-Null
     }
 
+    $contactHydrationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $hydratedContactCount = 0
+    if (@($State.contacts).Count -eq 0 -and $companyKeysSorted.Count -gt 0) {
+        $contactScope = Get-AppScopedStateForCompanyKeys -CompanyKeys $companyKeysSorted
+        $State.contacts = @($contactScope.contacts)
+        $hydratedContactCount = @($State.contacts).Count
+        if ($JobId) {
+            Write-BackgroundJobLog ("JOB live-import-contact-hydrate id={0} companyKeys={1} contactCount={2}" -f `
+                    $JobId,
+                    $companyKeysSorted.Count,
+                    $hydratedContactCount)
+        }
+    }
+    $contactHydrationStopwatch.Stop()
+
+    $companyScopeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $scopedCompanies = Get-BackgroundStateCompaniesByScope -State $State -CompanyKeys $companyKeysSorted
+    $companyScopeStopwatch.Stop()
+
+    $segmentScopeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $scopedContacts = if (@($State.contacts).Count -gt 0) {
+        Get-BackgroundStateItemsByCompanyKeys -Items $State.contacts -CompanyKeys $companyKeysSorted -NormalizedProperty 'normalizedCompanyName' -FallbackProperty 'companyName'
+    } else {
+        @()
+    }
+    $scopedJobs = if (@($State.jobs).Count -gt 0) {
+        Get-BackgroundStateItemsByCompanyKeys -Items $State.jobs -CompanyKeys $companyKeysSorted -NormalizedProperty 'normalizedCompanyName' -FallbackProperty 'companyName'
+    } else {
+        @()
+    }
+    $scopedBoardConfigs = if (@($State.boardConfigs).Count -gt 0) {
+        Get-BackgroundStateItemsByCompanyKeys -Items $State.boardConfigs -CompanyKeys $companyKeysSorted -NormalizedProperty 'normalizedCompanyName' -FallbackProperty 'companyName'
+    } else {
+        @()
+    }
+    $scopedActivities = if (@($State.activities).Count -gt 0) {
+        Get-BackgroundStateItemsByCompanyKeys -Items $State.activities -CompanyKeys $companyKeysSorted -NormalizedProperty 'normalizedCompanyName' -FallbackProperty ''
+    } else {
+        @()
+    }
+    $segmentScopeStopwatch.Stop()
+
+    $companySyncState = [ordered]@{
+        workspace = $State.workspace
+        settings = $(if ($State.settings) { $State.settings } else { New-DefaultSettings })
+        companies = @($scopedCompanies)
+        contacts = @($scopedContacts)
+        jobs = @($scopedJobs)
+        boardConfigs = @($scopedBoardConfigs)
+        activities = @($scopedActivities)
+        importRuns = @()
+    }
+
+    $companySyncTimingBag = [ordered]@{}
     $companySyncStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $State = Sync-ImportedCompanyData -State $State -CompanyKeys @($companyKeysToRefresh | Sort-Object)
+    $companySyncState = Sync-ImportedCompanyData -State $companySyncState -CompanyKeys $companyKeysSorted -TimingBag $companySyncTimingBag
     $companySyncStopwatch.Stop()
 
-    $affectedCompanies = Get-BackgroundStateCompaniesByScope -State $State -CompanyKeys @($companyKeysToRefresh | Sort-Object) -AccountIds $AdditionalCompanyIds
+    $companyMergeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    if (@($companySyncState.companies).Count -gt 0) {
+        $State.companies = Merge-BackgroundStateSegmentData -Segment 'Companies' -ExistingData $State.companies -IncomingData @($companySyncState.companies)
+    }
+    $companyMergeStopwatch.Stop()
+
+    $affectedCompanies = Get-BackgroundStateCompaniesByScope -State $State -CompanyKeys $companyKeysSorted -AccountIds $AdditionalCompanyIds
     $deltaState = [ordered]@{
         jobs = @($JobRunResult.changedJobs)
         boardConfigs = @($incomingConfigs)
@@ -554,12 +660,25 @@ function Apply-LiveJobImportDelta {
         persistence = $persistence
         timings = [ordered]@{
             mergeMs = [int]$mergeStopwatch.ElapsedMilliseconds
+            contactHydrationMs = [int]$contactHydrationStopwatch.ElapsedMilliseconds
+            companyScopeMs = [int]$companyScopeStopwatch.ElapsedMilliseconds
+            segmentScopeMs = [int]$segmentScopeStopwatch.ElapsedMilliseconds
             companySyncMs = [int]$companySyncStopwatch.ElapsedMilliseconds
+            companyMergeMs = [int]$companyMergeStopwatch.ElapsedMilliseconds
         }
         counts = [ordered]@{
             changedJobs = @($JobRunResult.changedJobs).Count
             changedConfigs = @($incomingConfigs).Count
             affectedCompanies = @($affectedCompanies).Count
+            hydratedContacts = $hydratedContactCount
+            scopedCompanies = @($scopedCompanies).Count
+            scopedContacts = @($scopedContacts).Count
+            scopedJobs = @($scopedJobs).Count
+            scopedBoardConfigs = @($scopedBoardConfigs).Count
+            scopedActivities = @($scopedActivities).Count
+        }
+        diagnostics = [ordered]@{
+            companySync = $companySyncTimingBag
         }
     }
 }
@@ -1554,21 +1673,28 @@ function Invoke-BackgroundLiveJobImportJob {
 
     $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
     $loadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $loadSegments = if ($Payload.discoverFirst) {
-        @('Workspace', 'Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'ImportRuns')
-    } else {
-        @('Workspace', 'Companies', 'Jobs', 'BoardConfigs', 'ImportRuns')
-    }
+    $loadSegments = @('Workspace', 'Companies', 'Jobs', 'BoardConfigs', 'ImportRuns')
     $state = Get-AppStateView -Segments $loadSegments
     $loadStopwatch.Stop()
     $enrichmentCompanyIds = @()
     $discoveryChangedConfigs = @()
+    $enrichmentScopeLoadMs = 0
     if ($Payload.discoverFirst) {
         Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Refreshing company enrichment before ATS discovery' | Out-Null
         $enrichmentIds = @(Get-AppEnrichmentCandidateCompanyIdsFast -Limit 40)
         if ($enrichmentIds.Count -gt 0) {
-            $enrichmentResult = Invoke-CompanyEnrichment -State $state -Limit 0 -AccountIds $enrichmentIds -ProgressCallback $progressCallback
-            $state = $enrichmentResult.state
+            $enrichmentScopeLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $enrichmentState = Get-AppScopedStateForAccounts -AccountIds $enrichmentIds
+            $enrichmentScopeLoadStopwatch.Stop()
+            $enrichmentScopeLoadMs = [int]$enrichmentScopeLoadStopwatch.ElapsedMilliseconds
+            Write-BackgroundJobLog ("JOB live-import-enrichment-scope id={0} accountCount={1} scopeLoadMs={2}" -f `
+                    $JobId,
+                    @($enrichmentIds).Count,
+                    $enrichmentScopeLoadMs)
+            $enrichmentResult = Invoke-CompanyEnrichment -State $enrichmentState -Limit 0 -AccountIds $enrichmentIds -ProgressCallback $progressCallback
+            if (@($enrichmentResult.changedCompanies).Count -gt 0) {
+                $state.companies = Merge-BackgroundStateSegmentData -Segment 'Companies' -ExistingData $state.companies -IncomingData @($enrichmentResult.changedCompanies)
+            }
             $enrichmentCompanyIds = @(
                 @($enrichmentResult.changedCompanies) |
                     ForEach-Object { [string](Get-ObjectValue -Object $_ -Name 'id' -Default '') } |
@@ -1582,12 +1708,21 @@ function Invoke-BackgroundLiveJobImportJob {
     if ($Payload.discoverFirst) {
         Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Discovering ATS configs before job import' | Out-Null
         $discoveryStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $discovery = Invoke-AtsDiscovery -State $state -Limit 50 -OnlyMissing -SkipSync -ProgressCallback $progressCallback
+        $discovery = Invoke-AtsDiscovery -State $state -Limit 50 -OnlyMissing -SkipSync -SkipDerivedData -ProgressCallback $progressCallback
         $discoveryStopwatch.Stop()
         $discoveryMs = [int]$discoveryStopwatch.ElapsedMilliseconds
         $state = $discovery.state
         $discoveryStats = $discovery.stats
         $discoveryChangedConfigs = @($discovery.changedConfigs)
+        Write-BackgroundJobLog ("JOB live-import-discovery id={0} checked={1} discovered={2} mapped={3} unresolved={4} discoveryMs={5} deriveFinalizeMs={6} skipDerived={7}" -f `
+                $JobId,
+                [int](Convert-ToNumber (Get-ObjectValue -Object $discoveryStats -Name 'checked' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $discoveryStats -Name 'discovered' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $discoveryStats -Name 'mapped' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $discoveryStats -Name 'unresolved' -Default 0)),
+                $discoveryMs,
+                [int](Convert-ToNumber (Get-ObjectValue -Object $discovery.timings -Name 'deriveMs' -Default 0)),
+                [bool](Get-ObjectValue -Object $discovery.timings -Name 'skippedDerivedData' -Default $false))
     }
 
     Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage 'Fetching active ATS job feeds' | Out-Null
@@ -1603,26 +1738,72 @@ function Invoke-BackgroundLiveJobImportJob {
     $applyResult = Apply-LiveJobImportDelta -State $state -JobRunResult $jobRunResult -AdditionalBoardConfigs $discoveryChangedConfigs -AdditionalCompanyIds $enrichmentCompanyIds -JobId $JobId -OperationName 'live-job-import'
     $state = $applyResult.state
     $persistence = $applyResult.persistence
-    Write-BackgroundJobLog ("JOB live-import-refresh id={0} changedJobs={1} changedConfigs={2} affectedCompanies={3} mergeMs={4} companySyncMs={5}" -f `
+    Write-BackgroundJobLog ("JOB live-import-refresh id={0} changedJobs={1} changedConfigs={2} affectedCompanies={3} mergeMs={4} companyScopeMs={5} segmentScopeMs={6} companySyncMs={7} companyMergeMs={8}" -f `
             $JobId,
             [int]$applyResult.counts.changedJobs,
             [int]$applyResult.counts.changedConfigs,
             [int]$applyResult.counts.affectedCompanies,
             [int]$applyResult.timings.mergeMs,
-            [int]$applyResult.timings.companySyncMs)
+            [int]$applyResult.timings.companyScopeMs,
+            [int]$applyResult.timings.segmentScopeMs,
+            [int]$applyResult.timings.companySyncMs,
+            [int]$applyResult.timings.companyMergeMs)
+    $companySyncDiagnostics = Get-ObjectValue -Object $applyResult.diagnostics -Name 'companySync' -Default $null
+    if ($companySyncDiagnostics) {
+        $scoringPhaseTotals = Get-ObjectValue -Object $companySyncDiagnostics -Name 'scoringPhaseTotals' -Default $null
+        Write-BackgroundJobLog ("JOB live-import-company-sync id={0} touched={1} companyIndexMs={2} contactIndexMs={3} jobIndexMs={4} configIndexMs={5} activityIndexMs={6} keySelectMs={7} projectionMs={8} sortMs={9} totalMs={10} jobSignalTextCacheCount={11} jobSignalTimestampCacheCount={12} scoringActiveJobsMs={13} scoringHiringMs={14} scoringEngagementMs={15} scoringGrowthMs={16} scoringExplanationMs={17}" -f `
+                $JobId,
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'touchedCompanyCount' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'companyIndexMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'contactIndexMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'jobIndexMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'configIndexMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'activityIndexMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'keySelectMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'projectionMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'sortMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'totalMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'jobSignalTextCacheCount' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $companySyncDiagnostics -Name 'jobSignalTimestampCacheCount' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'activeJobsMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'hiringMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'engagementMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'growthMs' -Default 0)),
+                [int](Convert-ToNumber (Get-ObjectValue -Object $scoringPhaseTotals -Name 'explanationMs' -Default 0)))
+
+        $slowCompanies = @(Get-ObjectValue -Object $companySyncDiagnostics -Name 'slowCompanies' -Default @())
+        if ($slowCompanies.Count -gt 0) {
+            $slowSummary = [string]::Join('; ', @(
+                    $slowCompanies |
+                        ForEach-Object {
+                            '{0}:{1}ms jobs={2} contacts={3} configs={4} activities={5}' -f `
+                                [string](Get-ObjectValue -Object $_ -Name 'displayName' -Default (Get-ObjectValue -Object $_ -Name 'key' -Default '')),
+                                [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'durationMs' -Default 0)),
+                                [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'jobCount' -Default 0)),
+                                [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'contactCount' -Default 0)),
+                                [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'configCount' -Default 0)),
+                                [int](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'activityCount' -Default 0))
+                        }
+                ))
+            Write-BackgroundJobLog ("JOB live-import-company-sync-slow id={0} companies={1}" -f $JobId, $slowSummary)
+        }
+    }
 
     return [ordered]@{
         importRun = $jobRunResult.importRun
         discoveryStats = $discoveryStats
         timings = [ordered]@{
             loadMs = [int]$loadStopwatch.ElapsedMilliseconds
+            enrichmentScopeLoadMs = $enrichmentScopeLoadMs
             discoveryMs = $discoveryMs
             importMs = [int]$jobImportStopwatch.ElapsedMilliseconds
             mergeMs = [int]$applyResult.timings.mergeMs
+            contactHydrationMs = [int]$applyResult.timings.contactHydrationMs
             deriveMs = [int]$applyResult.timings.companySyncMs
             snapshotMs = [int]$(if ($persistence.snapshot -and $persistence.snapshot.durationMs) { $persistence.snapshot.durationMs } else { 0 })
         }
         counts = $applyResult.counts
+        diagnostics = $applyResult.diagnostics
         persistence = $persistence
     }
 }
