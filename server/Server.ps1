@@ -1171,16 +1171,17 @@ function Handle-ApiRequest {
     if ($path -match '^/api/accounts/([^/]+)$') {
         $accountId = $matches[1]
         if ($method -eq 'GET') {
-            return (Get-CachedApiResult -Path $path -Query $query -Factory {
-                $detail = if (Test-AppStoreUsesSqlite) {
-                    Get-AppAccountDetailFast -AccountId $accountId
-                } else {
-                    $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
-                    Get-AccountDetail -State $state -AccountId $accountId
-                }
-                if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
-                New-JsonResult $detail
-            })
+            $detailStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $detail = if (Test-AppStoreUsesSqlite) {
+                Get-AppAccountDetailFast -AccountId $accountId
+            } else {
+                $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
+                Get-AccountDetail -State $state -AccountId $accountId
+            }
+            $detailStopwatch.Stop()
+            Write-ServerLog ("ACCOUNT-DETAIL accountId={0} cache=disabled detailMs={1}" -f $accountId, [int]$detailStopwatch.ElapsedMilliseconds)
+            if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+            return (New-JsonResult $detail)
         }
         if ($method -eq 'PATCH') {
             $state = Get-AppState
@@ -1529,18 +1530,32 @@ function Handle-ApiRequest {
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
     if ($path -eq '/api/enrichment/run-local' -and $method -eq 'POST') {
-        # Direct fast-path: run local SQL enrichment pass synchronously and return stats.
+        # Queue the fast local SQL enrichment pass so larger sibling/domain sweeps do not block the UI.
         # No HTTP probing — just derives domain/careers from contact emails and board configs.
         $payload = Read-JsonBody -Request $Request
+        $limit = [int](Convert-ToNumber $payload.limit)
+        if ($limit -lt 1) { $limit = 5000 }
         $forceRefresh = [bool]$(if (@($payload.Keys) -contains 'forceRefresh') { Test-Truthy $payload.forceRefresh } else { $false })
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $localStats = Invoke-AppLocalEnrichmentPassFast -ForceRefresh:$forceRefresh
+        $enqueueWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Enqueue-BackgroundJob -Type 'local-enrichment' -Payload ([ordered]@{
+            limit = $limit
+            forceRefresh = $forceRefresh
+        }) -Summary 'Run fast local company identity enrichment' -ProgressMessage 'Queued fast local enrichment'
+        $enqueueWatch.Stop()
+        $enqueueMs = [int]$enqueueWatch.ElapsedMilliseconds
+        $accepted = Get-BackgroundJobAcceptedResult -Job $job
+        [void](Set-ObjectValue -Object $accepted -Name 'limit' -Value $limit)
+        [void](Set-ObjectValue -Object $accepted -Name 'forceRefresh' -Value $forceRefresh)
+        [void](Set-ObjectValue -Object $accepted -Name 'mode' -Value 'background')
         $stopwatch.Stop()
-        Write-ServerLog ("LOCAL-ENRICH contactEmail={0} boardDomain={1} boardCareers={2} jobDomain={3} total={4} durationMs={5}" -f `
-            [int]$localStats.contactEmailDomainApplied, [int]$localStats.boardConfigDomainApplied,
-            [int]$localStats.boardConfigCareersApplied, [int]$(if ($localStats.jobDomainApplied) { $localStats.jobDomainApplied } else { 0 }),
-            [int]$localStats.totalUpdated, [int]$stopwatch.ElapsedMilliseconds)
-        return (New-JsonResult ([ordered]@{ success = $true; stats = $localStats; durationMs = [int]$stopwatch.ElapsedMilliseconds }) 200)
+        Write-ServerLog ("LOCAL-ENRICH queue id={0} limit={1} forceRefresh={2} enqueueMs={3} durationMs={4}" -f `
+            [string]$job.id,
+            $limit,
+            [int]$forceRefresh,
+            $enqueueMs,
+            [int]$stopwatch.ElapsedMilliseconds)
+        return (New-JsonResult $accepted 202)
     }
 
     if ($path -match '^/api/enrichment/([^/]+)/rerun-resolution$' -and $method -eq 'POST') {

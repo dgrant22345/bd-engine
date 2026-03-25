@@ -41,8 +41,18 @@ function Get-BdSqliteDatabaseFileStamp {
         return "$dbPath:missing"
     }
 
-    $item = Get-Item -LiteralPath $dbPath
-    return ('{0}:{1}' -f $item.LastWriteTimeUtc.Ticks, $item.Length)
+    $stampParts = New-Object System.Collections.ArrayList
+    foreach ($path in @($dbPath, "$dbPath-wal", "$dbPath-shm")) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            [void]$stampParts.Add("$path:missing")
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $path
+        [void]$stampParts.Add(('{0}:{1}:{2}' -f $path, $item.LastWriteTimeUtc.Ticks, $item.Length))
+    }
+
+    return [string]::Join('|', @($stampParts))
 }
 
 function Test-BdSqliteStoreEnabled {
@@ -411,6 +421,237 @@ function ConvertFrom-BdSqliteDelimitedList {
     }
 
     return @($Value.Trim('|').Split('|') | Where-Object { $_ })
+}
+
+function Get-BdSqliteCompanyIdentityStopwords {
+    return @(
+        'and', 'the', 'of', 'for', 'to', 'in',
+        'inc', 'incorporated', 'corp', 'corporation', 'co', 'company',
+        'llc', 'ltd', 'limited', 'plc', 'lp', 'group', 'holdings', 'holding',
+        'services', 'service', 'solutions', 'solution', 'professional', 'professionals',
+        'global', 'international', 'systems', 'system', 'technologies', 'technology',
+        'consulting', 'consultants', 'partners', 'partner', 'staffing', 'recruiting',
+        'employment', 'canada', 'usa', 'us', 'north', 'america', 'formerly', 'former'
+    )
+}
+
+function Get-BdSqliteCompanyIdentityPhraseCandidates {
+    param(
+        [string]$DisplayName,
+        [string]$AliasesText = '',
+        [string]$CanonicalDomain = ''
+    )
+
+    $results = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $stopwords = @(Get-BdSqliteCompanyIdentityStopwords)
+
+    function Add-PhraseCandidate {
+        param(
+            [System.Collections.ArrayList]$List,
+            [hashtable]$Seen,
+            [string]$Value,
+            [string[]]$Stopwords
+        )
+
+        $normalized = Normalize-BdSqliteText ([string]$Value)
+        if (-not $normalized) {
+            return
+        }
+
+        if ($normalized.Length -lt 4 -or $normalized -match '^\d+$') {
+            return
+        }
+
+        $tokens = @($normalized -split ' ' | Where-Object { $_ })
+        if ($tokens.Count -eq 0) {
+            return
+        }
+
+        $firstToken = [string]$tokens[0]
+        if ($firstToken.Length -lt 4) {
+            return
+        }
+
+        if ($Stopwords -contains $normalized) {
+            return
+        }
+
+        $key = $normalized.ToLowerInvariant()
+        if ($Seen.ContainsKey($key)) {
+            return
+        }
+
+        $Seen[$key] = $true
+        [void]$List.Add($normalized)
+    }
+
+    Add-PhraseCandidate -List $results -Seen $seen -Value $DisplayName -Stopwords $stopwords
+
+    foreach ($alias in @(ConvertFrom-BdSqliteDelimitedList $AliasesText)) {
+        Add-PhraseCandidate -List $results -Seen $seen -Value ([string]$alias) -Stopwords $stopwords
+    }
+
+    $normalizedDisplayName = Normalize-BdSqliteText $DisplayName
+    if ($normalizedDisplayName) {
+        $trimmedDisplay = ($normalizedDisplayName -replace '\b(inc|incorporated|corp|corporation|co|company|llc|ltd|limited|group|holdings|holding|services|service|solutions|solution|professional|professionals|canada|formerly|former)\b', ' ')
+        $trimmedDisplay = ($trimmedDisplay -replace '\s+', ' ').Trim()
+        Add-PhraseCandidate -List $results -Seen $seen -Value $trimmedDisplay -Stopwords $stopwords
+    }
+
+    $domainName = Get-BdSqliteDomainHost -Value $CanonicalDomain
+    if ($domainName -and -not (Test-BdSqliteHostedAtsDomain -Value $domainName)) {
+        $hostParts = @($domainName.Split('.') | Where-Object { $_ })
+        if ($hostParts.Count -gt 0) {
+            $root = [string]$hostParts[0]
+            if ($root -in @('www', 'jobs', 'careers', 'boards', 'apply') -and $hostParts.Count -gt 1) {
+                $root = [string]$hostParts[1]
+            }
+            Add-PhraseCandidate -List $results -Seen $seen -Value $root -Stopwords $stopwords
+            Add-PhraseCandidate -List $results -Seen $seen -Value ($root -replace '-', ' ') -Stopwords $stopwords
+        }
+    }
+
+    return @(
+        $results.ToArray() |
+            Sort-Object @{ Expression = { ([string]$_).Length }; Descending = $true }, @{ Expression = { [string]$_ }; Descending = $false }
+    )
+}
+
+function Get-BdSqliteCandidateLeadingKeys {
+    param(
+        [string]$DisplayName,
+        [string]$NormalizedName,
+        [string]$AliasesText = ''
+    )
+
+    $keys = New-Object System.Collections.ArrayList
+    $seen = @{}
+
+    function Add-LeadingKey {
+        param(
+            [System.Collections.ArrayList]$List,
+            [hashtable]$Seen,
+            [string]$Value
+        )
+
+        $normalized = Normalize-BdSqliteText ([string]$Value)
+        if (-not $normalized) {
+            return
+        }
+
+        $tokens = @($normalized -split ' ' | Where-Object { $_ })
+        if ($tokens.Count -eq 0) {
+            return
+        }
+
+        $leading = [string]$tokens[0]
+        if ($leading.Length -lt 2) {
+            return
+        }
+
+        if ($Seen.ContainsKey($leading)) {
+            return
+        }
+
+        $Seen[$leading] = $true
+        [void]$List.Add($leading)
+    }
+
+    Add-LeadingKey -List $keys -Seen $seen -Value $NormalizedName
+    Add-LeadingKey -List $keys -Seen $seen -Value $DisplayName
+    foreach ($alias in @(ConvertFrom-BdSqliteDelimitedList $AliasesText)) {
+        Add-LeadingKey -List $keys -Seen $seen -Value ([string]$alias)
+    }
+
+    return @($keys.ToArray())
+}
+
+function Find-BdSqliteSiblingPropagationSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Candidate,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$SourceIndex
+    )
+
+    $candidateId = [string](Get-BdSqliteRecordValue -Record $Candidate -Name 'id' -Default '')
+    $candidateNormalizedName = Normalize-BdSqliteText ([string](Get-BdSqliteRecordValue -Record $Candidate -Name 'normalized_name' -Default (Get-BdSqliteRecordValue -Record $Candidate -Name 'display_name' -Default '')))
+    $candidateAliasesText = [string](Get-BdSqliteRecordValue -Record $Candidate -Name 'aliases_text' -Default '')
+    $candidateAliasValues = @(ConvertFrom-BdSqliteDelimitedList $candidateAliasesText | ForEach-Object { Normalize-BdSqliteText ([string]$_) } | Where-Object { $_ })
+    $candidateLeadingKeys = @(Get-BdSqliteCandidateLeadingKeys -DisplayName ([string](Get-BdSqliteRecordValue -Record $Candidate -Name 'display_name' -Default '')) -NormalizedName $candidateNormalizedName -AliasesText $candidateAliasesText)
+
+    $candidateSets = New-Object System.Collections.ArrayList
+    foreach ($leadingKey in @($candidateLeadingKeys)) {
+        if (-not $leadingKey -or -not $SourceIndex.ContainsKey($leadingKey)) {
+            continue
+        }
+
+        foreach ($descriptor in @($SourceIndex[$leadingKey])) {
+            [void]$candidateSets.Add($descriptor)
+        }
+    }
+
+    if ($candidateSets.Count -eq 0) {
+        return $null
+    }
+
+    $best = $null
+    $bestScore = -1
+    foreach ($descriptor in @($candidateSets.ToArray())) {
+        if ($null -eq $descriptor) {
+            continue
+        }
+
+        if ([string]$descriptor.id -eq $candidateId) {
+            continue
+        }
+
+        $matchedPhrase = ''
+        foreach ($phrase in @($descriptor.matchPhrases)) {
+            if (-not $phrase) {
+                continue
+            }
+
+            if ($candidateNormalizedName -eq $phrase -or $candidateNormalizedName.StartsWith("$phrase ")) {
+                $matchedPhrase = $phrase
+                break
+            }
+
+            $aliasMatched = $false
+            foreach ($candidateAlias in @($candidateAliasValues)) {
+                if (-not $candidateAlias) {
+                    continue
+                }
+                if ($candidateAlias -eq $phrase -or $candidateAlias.StartsWith("$phrase ")) {
+                    $aliasMatched = $true
+                    break
+                }
+            }
+            if ($aliasMatched) {
+                $matchedPhrase = $phrase
+                break
+            }
+        }
+
+        if (-not $matchedPhrase) {
+            continue
+        }
+
+        $score = [int](ConvertTo-BdSqliteNumber $descriptor.trustScore) + ([string]$matchedPhrase).Length
+        if ($score -le $bestScore) {
+            continue
+        }
+
+        $bestScore = $score
+        $best = [ordered]@{
+            source = $descriptor
+            matchedPhrase = $matchedPhrase
+            score = $score
+        }
+    }
+
+    return $best
 }
 
 function Get-BdSqliteSearchText {
@@ -3973,14 +4214,40 @@ SELECT
     SUM(CASE WHEN COALESCE(NULLIF(review_status, ''), CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 'auto' ELSE 'pending' END) <> 'rejected' AND (CASE WHEN COALESCE(NULLIF(confidence_band, ''), '') <> '' THEN confidence_band WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 'high' ELSE 'unresolved' END) = 'unresolved' THEN 1 ELSE 0 END) AS unresolved_review_queue_count
 FROM board_configs;
 '@ | Select-Object -First 1)
+        $operationalSummary = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
+SELECT
+    COUNT(*) AS total_operational_companies,
+    SUM(CASE WHEN COALESCE(bc.has_resolved, 0) = 1 THEN 1 ELSE 0 END) AS resolved_operational_companies
+FROM companies c
+LEFT JOIN (
+    SELECT normalized_company_name, MAX(CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 1 ELSE 0 END) AS has_resolved
+    FROM board_configs
+    GROUP BY normalized_company_name
+) bc ON bc.normalized_company_name = c.normalized_name
+WHERE COALESCE(c.status, '') NOT IN ('client', 'paused')
+  AND (
+      COALESCE(c.target_score, 0) >= 25
+      OR COALESCE(c.connection_count, 0) >= 2
+      OR COALESCE(c.open_role_count, 0) > 0
+      OR COALESCE(c.hiring_velocity, 0) > 0
+      OR COALESCE(c.engagement_score, 0) > 0
+      OR COALESCE(c.alert_priority_score, 0) >= 20
+  );
+'@ | Select-Object -First 1)
         if (-not $summary) {
             $summary = [ordered]@{}
+        }
+        if (-not $operationalSummary) {
+            $operationalSummary = [ordered]@{}
         }
 
         $totalConfigs = [int](ConvertTo-BdSqliteNumber $summary.total_configs)
         $resolvedCount = [int](ConvertTo-BdSqliteNumber $summary.resolved_count)
         $unresolvedCount = [int][Math]::Max(0, $totalConfigs - $resolvedCount)
         $coveragePct = if ($totalConfigs -gt 0) { [double][Math]::Round(($resolvedCount / $totalConfigs) * 100, 1) } else { 0 }
+        $operationalTotal = [int](ConvertTo-BdSqliteNumber $operationalSummary.total_operational_companies)
+        $operationalResolved = [int](ConvertTo-BdSqliteNumber $operationalSummary.resolved_operational_companies)
+        $operationalCoveragePct = if ($operationalTotal -gt 0) { [double][Math]::Round(($operationalResolved / $operationalTotal) * 100, 1) } else { 0 }
 
         return [ordered]@{
             summary = [ordered]@{
@@ -3989,6 +4256,9 @@ FROM board_configs;
                 unresolvedCount = $unresolvedCount
                 activeCount = [int](ConvertTo-BdSqliteNumber $summary.active_count)
                 coveragePercent = $coveragePct
+                operationalTotalCompanies = $operationalTotal
+                operationalResolvedCount = $operationalResolved
+                operationalCoveragePercent = $operationalCoveragePct
                 mediumReviewQueueCount = [int](ConvertTo-BdSqliteNumber $summary.medium_review_queue_count)
                 unresolvedReviewQueueCount = [int](ConvertTo-BdSqliteNumber $summary.unresolved_review_queue_count)
             }
@@ -4086,10 +4356,12 @@ function Invoke-BdSqliteLocalEnrichmentPass {
         $now = (Get-Date).ToString('o')
         $highCooldown = (Get-Date).AddDays(30).ToString('o')
         $medCooldown  = (Get-Date).AddDays(3).ToString('o')
-        $targetedAccountClause = ''
+        $targetedCompanyClause = ''
+        $targetedCompanyAliasClause = ''
         if (-not [string]::IsNullOrWhiteSpace([string]$AccountId)) {
             $escapedAccountId = [string]$AccountId.Replace("'", "''")
-            $targetedAccountClause = "AND co.id = '$escapedAccountId'"
+            $targetedCompanyClause = "AND id = '$escapedAccountId'"
+            $targetedCompanyAliasClause = "AND co.id = '$escapedAccountId'"
         }
 
         # ---------------------------------------------------------------
@@ -4111,8 +4383,12 @@ function Invoke-BdSqliteLocalEnrichmentPass {
             contactEmailDomainApplied = 0
             boardConfigDomainApplied  = 0
             boardConfigCareersApplied = 0
+            siblingPropagationApplied = 0
+            boardConfigSiblingApplied = 0
+            jobDomainApplied          = 0
             skippedAlreadyEnriched    = 0
             totalUpdated              = 0
+            timings                   = [ordered]@{}
         }
 
         # ---------------------------------------------------------------
@@ -4120,12 +4396,13 @@ function Invoke-BdSqliteLocalEnrichmentPass {
         # This prevents board hosts like boards-api.greenhouse.io from
         # masquerading as the company's real domain on future enrichments.
         # ---------------------------------------------------------------
+        $pass0Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $hostedCanonicalRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
 SELECT id, canonical_domain
 FROM companies
 WHERE canonical_domain IS NOT NULL
   AND canonical_domain <> ''
-  $targetedAccountClause;
+  $targetedCompanyClause;
 "@)
         $hostedCanonicalUpdates = @($hostedCanonicalRows | Where-Object { Test-BdSqliteHostedAtsDomain -Value ([string]$_.canonical_domain) })
         if ($hostedCanonicalUpdates.Count -gt 0) {
@@ -4170,12 +4447,15 @@ WHERE id = @id;
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass0Stopwatch.Stop()
+        $stats.timings.pass0HostedDomainMs = [int]$pass0Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 1: Derive canonical_domain from corporate contact emails
         # Finds the most common non-free, non-ATS email domain per company
         # and sets it as canonical_domain for any company with no domain yet.
         # ---------------------------------------------------------------
+        $pass1Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass1Sql = @"
 SELECT co.id, co.display_name,
        LOWER(SUBSTR(ct.email, INSTR(ct.email,'@')+1)) AS email_domain,
@@ -4187,7 +4467,7 @@ WHERE ct.email LIKE '%@%.%'
   AND LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1)) NOT IN ($atsExclusion)
   AND LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1)) NOT LIKE '%.edu'
   AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
-  $targetedAccountClause
+  $targetedCompanyAliasClause
   $(if (-not $ForceRefresh) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
 GROUP BY co.id, LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1))
 ORDER BY co.id, domain_count DESC
@@ -4236,12 +4516,15 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass1Stopwatch.Stop()
+        $stats.timings.pass1ContactDomainMs = [int]$pass1Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 2: Derive canonical_domain from board_configs.domain
         # Uses the company's best-confidence config domain where it's not
         # a hosted ATS and no canonical_domain is set yet.
         # ---------------------------------------------------------------
+        $pass2Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass2Sql = @"
 SELECT co.id, co.display_name, bc.domain,
        MAX(CASE bc.confidence_band WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) AS conf_rank
@@ -4250,7 +4533,7 @@ JOIN board_configs bc ON bc.normalized_company_name = co.normalized_name
 WHERE bc.domain IS NOT NULL AND bc.domain != ''
   AND LOWER(bc.domain) NOT IN ($atsExclusion)
   AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
-  $targetedAccountClause
+  $targetedCompanyAliasClause
   $(if (-not $ForceRefresh) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
 GROUP BY co.id
 ORDER BY conf_rank DESC
@@ -4292,11 +4575,14 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass2Stopwatch.Stop()
+        $stats.timings.pass2BoardDomainMs = [int]$pass2Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 3: Derive careers_url from board_configs.careers_url or
         # resolved_board_url where the company has no careers_url yet.
         # ---------------------------------------------------------------
+        $pass3Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass3Sql = @"
 SELECT co.id, co.display_name,
        COALESCE(NULLIF(bc.careers_url,''), bc.resolved_board_url) AS best_careers_url,
@@ -4305,7 +4591,7 @@ FROM companies co
 JOIN board_configs bc ON bc.normalized_company_name = co.normalized_name
 WHERE (bc.careers_url IS NOT NULL AND bc.careers_url != '' OR bc.resolved_board_url IS NOT NULL AND bc.resolved_board_url != '')
   AND (co.careers_url IS NULL OR co.careers_url = '')
-  $targetedAccountClause
+  $targetedCompanyAliasClause
 GROUP BY co.id
 ORDER BY conf_rank DESC
 LIMIT $Limit;
@@ -4343,10 +4629,13 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass3Stopwatch.Stop()
+        $stats.timings.pass3BoardCareersMs = [int]$pass3Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 4: Derive canonical_domain from job URLs (internal source mining)
         # ---------------------------------------------------------------
+        $pass4Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass4Sql = @"
 SELECT co.id, co.display_name,
        LOWER(SUBSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), 1, CASE WHEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') > 0 THEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') - 1 ELSE LENGTH(SUBSTR(j.url, INSTR(j.url, '//') + 2)) END)) AS raw_domain,
@@ -4355,7 +4644,7 @@ FROM companies co
 JOIN jobs j ON j.account_id = co.id
 WHERE (j.url LIKE 'http://%' OR j.url LIKE 'https://%')
   AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
-  $targetedAccountClause
+  $targetedCompanyAliasClause
 GROUP BY co.id, LOWER(SUBSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), 1, CASE WHEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') > 0 THEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') - 1 ELSE LENGTH(SUBSTR(j.url, INSTR(j.url, '//') + 2)) END))
 ORDER BY co.id, job_count DESC
 LIMIT $Limit;
@@ -4373,7 +4662,6 @@ LIMIT $Limit;
             [void]$jobDomainUpdates.Add([ordered]@{ id = $id; domain = $rawDomain })
         }
 
-        $stats.jobDomainApplied = 0
         if ($jobDomainUpdates.Count -gt 0) {
             $txn = $connection.BeginTransaction()
             try {
@@ -4405,8 +4693,368 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass4Stopwatch.Stop()
+        $stats.timings.pass4JobDomainMs = [int]$pass4Stopwatch.ElapsedMilliseconds
 
-        $stats.totalUpdated = $stats.hostedDomainCleared + $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied
+        # ---------------------------------------------------------------
+        # PASS 5: Propagate trusted company identity to safe sibling variants.
+        # Reuses verified/high-confidence canonical domains and careers URLs
+        # when another company record starts with the same trusted brand phrase
+        # (e.g. "Modis" -> "Modis Canada"), without broad web probing.
+        # ---------------------------------------------------------------
+        $pass5Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $sourceRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, enrichment_confidence, enrichment_confidence_score, aliases_text
+FROM companies
+WHERE (COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '')
+  AND COALESCE(NULLIF(enrichment_status, ''), '') IN ('manual', 'verified', 'enriched')
+  AND COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('high', 'medium')
+ORDER BY
+  CASE COALESCE(NULLIF(enrichment_status, ''), '')
+    WHEN 'manual' THEN 4
+    WHEN 'verified' THEN 3
+    WHEN 'enriched' THEN 2
+    ELSE 1
+  END DESC,
+  COALESCE(enrichment_confidence_score, 0) DESC,
+  display_name ASC;
+"@)
+        $candidateRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, aliases_text
+FROM companies co
+WHERE (COALESCE(NULLIF(co.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(co.careers_url, ''), '') = '')
+  AND COALESCE(NULLIF(co.enrichment_status, ''), '') NOT IN ('manual', 'verified')
+  $targetedCompanyAliasClause
+  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
+ORDER BY
+  CASE WHEN COALESCE(NULLIF(co.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(co.careers_url, ''), '') = '' THEN 1 ELSE 2 END,
+  COALESCE(co.target_score, 0) DESC,
+  COALESCE(co.connection_count, 0) DESC,
+  co.display_name ASC
+LIMIT $Limit;
+"@)
+        $sourceIndex = @{}
+        foreach ($row in @($sourceRows)) {
+            $canonicalDomain = [string]$row.canonical_domain
+            $careersUrl = [string]$row.careers_url
+            if (-not $canonicalDomain -and -not $careersUrl) {
+                continue
+            }
+
+            $matchPhrases = @(Get-BdSqliteCompanyIdentityPhraseCandidates -DisplayName ([string]$row.display_name) -AliasesText ([string]$row.aliases_text) -CanonicalDomain $canonicalDomain)
+            if ($matchPhrases.Count -eq 0) {
+                continue
+            }
+
+            $trustScore = switch ([string]$row.enrichment_status) {
+                'manual' { 96 }
+                'verified' { 92 }
+                default { 82 }
+            }
+            $trustScore += [int](ConvertTo-BdSqliteNumber $row.enrichment_confidence_score)
+            if ($trustScore -gt 100) {
+                $trustScore = 100
+            }
+
+            $descriptor = [ordered]@{
+                id = [string]$row.id
+                displayName = [string]$row.display_name
+                normalizedName = [string]$row.normalized_name
+                canonicalDomain = $canonicalDomain
+                careersUrl = $careersUrl
+                matchPhrases = $matchPhrases
+                trustScore = $trustScore
+            }
+
+            foreach ($phrase in @($matchPhrases)) {
+                $phraseTokens = @(([string]$phrase) -split ' ' | Where-Object { $_ })
+                if ($phraseTokens.Count -eq 0) {
+                    continue
+                }
+                $leadingKey = [string]$phraseTokens[0]
+                if ($leadingKey.Length -lt 4) {
+                    continue
+                }
+                if (-not $sourceIndex.ContainsKey($leadingKey)) {
+                    $sourceIndex[$leadingKey] = New-Object System.Collections.ArrayList
+                }
+                [void]$sourceIndex[$leadingKey].Add($descriptor)
+            }
+        }
+
+        if ($candidateRows.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($candidateRow in @($candidateRows)) {
+                    $candidateDomain = [string]$candidateRow.canonical_domain
+                    $candidateCareersUrl = [string]$candidateRow.careers_url
+                    if ($candidateDomain -and $candidateCareersUrl) {
+                        continue
+                    }
+
+                    $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateRow -SourceIndex $sourceIndex
+                    if ($null -eq $match) {
+                        continue
+                    }
+
+                    $source = Get-BdSqliteRecordValue -Record $match -Name 'source' -Default $null
+                    if ($null -eq $source) {
+                        continue
+                    }
+
+                    $newDomain = if ($candidateDomain) { $candidateDomain } else { [string](Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '') }
+                    $newCareersUrl = if ($candidateCareersUrl) { $candidateCareersUrl } else { [string](Get-BdSqliteRecordValue -Record $source -Name 'careersUrl' -Default '') }
+                    if (-not $newDomain -and -not $newCareersUrl) {
+                        continue
+                    }
+
+                    $existingAliases = @(ConvertFrom-BdSqliteDelimitedList ([string](Get-BdSqliteRecordValue -Record $candidateRow -Name 'aliases_text' -Default '')))
+                    $mergedAliases = @($existingAliases + @(
+                            [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default ''),
+                            [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default ''),
+                            [string](Get-BdSqliteDomainHost -Value ([string](Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '')))
+                        ) | Where-Object { $_ })
+                    $aliasesText = ConvertTo-BdSqliteDelimitedList $mergedAliases
+
+                    $evidence = ("Sibling identity propagated from {0} via brand phrase '{1}'" -f [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default 'related company'), [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default ''))
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE companies
+SET canonical_domain = CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' THEN @domain ELSE canonical_domain END,
+    careers_url = CASE WHEN COALESCE(NULLIF(careers_url, ''), '') = '' THEN @careersUrl ELSE careers_url END,
+    aliases_text = CASE WHEN @aliasesText <> '' THEN @aliasesText ELSE aliases_text END,
+    enrichment_status = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '' AND COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '' THEN 'enriched'
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '' THEN 'enriched'
+      WHEN COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '' THEN 'enriched'
+      ELSE enrichment_status
+    END,
+    enrichment_source = CASE
+      WHEN (COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '') OR (COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '')
+        THEN 'sibling_propagation'
+      ELSE enrichment_source
+    END,
+    enrichment_confidence = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 'medium'
+      ELSE enrichment_confidence
+    END,
+    enrichment_confidence_score = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 74
+      ELSE enrichment_confidence_score
+    END,
+    enrichment_notes = CASE
+      WHEN COALESCE(NULLIF(enrichment_notes, ''), '') = '' THEN 'Identity propagated from verified sibling company variant'
+      ELSE enrichment_notes
+    END,
+    enrichment_evidence = CASE
+      WHEN COALESCE(NULLIF(enrichment_evidence, ''), '') = '' THEN @evidence
+      ELSE enrichment_evidence || '; ' || @evidence
+    END,
+    last_enriched_at = @now,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id
+  AND ((COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '') OR (COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> ''));
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@domain'; $p.Value = [string]$newDomain; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@careersUrl'; $p.Value = [string]$newCareersUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@aliasesText'; $p.Value = [string]$aliasesText; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@evidence'; $p.Value = [string]$evidence; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateRow.id; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.siblingPropagationApplied += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+        }
+        $pass5Stopwatch.Stop()
+        $stats.timings.pass5SiblingPropagationMs = [int]$pass5Stopwatch.ElapsedMilliseconds
+
+        # ---------------------------------------------------------------
+        # PASS 6: Propagate resolved board config identity to sibling variants.
+        # This converts a trusted sibling company match into a config-level
+        # board candidate so coverage improves even before deep web discovery.
+        # ---------------------------------------------------------------
+        $pass6Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $sourceConfigMap = @{}
+        $sourceConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT bc.id, bc.normalized_company_name, bc.ats_type, bc.board_id, bc.domain, bc.careers_url, bc.resolved_board_url,
+       bc.discovery_status, bc.confidence_band, bc.discovery_method, bc.supported_import, bc.active
+FROM board_configs bc
+WHERE COALESCE(NULLIF(bc.discovery_status, ''), '') IN ('mapped', 'discovered', 'verified')
+  AND COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') IN ('high', 'medium')
+ORDER BY
+  CASE COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved')
+    WHEN 'high' THEN 3
+    WHEN 'medium' THEN 2
+    ELSE 1
+  END DESC,
+  bc.company_name ASC;
+"@)
+        foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            $normalizedCompanyName = [string]$sourceConfigRow.normalized_company_name
+            if (-not $normalizedCompanyName -or $sourceConfigMap.ContainsKey($normalizedCompanyName)) {
+                continue
+            }
+            $sourceConfigMap[$normalizedCompanyName] = $sourceConfigRow
+        }
+        foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            $sourceNormalizedName = [string]$sourceConfigRow.normalized_company_name
+            if (-not $sourceNormalizedName) {
+                continue
+            }
+
+            $sourceDisplayName = [string](Get-BdSqliteRecordValue -Record $sourceConfigRow -Name 'company_name' -Default $sourceNormalizedName)
+            $sourceCareersUrl = [string]$(if ($sourceConfigRow.careers_url) { $sourceConfigRow.careers_url } else { $sourceConfigRow.resolved_board_url })
+            $matchPhrases = @(Get-BdSqliteCompanyIdentityPhraseCandidates -DisplayName $sourceDisplayName -AliasesText '' -CanonicalDomain ([string]$sourceConfigRow.domain))
+            if ($matchPhrases.Count -eq 0) {
+                continue
+            }
+
+            $trustScore = switch ([string]$sourceConfigRow.confidence_band) {
+                'high' { 94 }
+                'medium' { 82 }
+                default { 70 }
+            }
+            if ([string]$sourceConfigRow.discovery_status -eq 'mapped') {
+                $trustScore += 4
+            }
+            if ($trustScore -gt 100) {
+                $trustScore = 100
+            }
+
+            $descriptor = [ordered]@{
+                id = [string]$sourceConfigRow.id
+                displayName = $sourceDisplayName
+                normalizedName = $sourceNormalizedName
+                canonicalDomain = [string]$sourceConfigRow.domain
+                careersUrl = $sourceCareersUrl
+                matchPhrases = $matchPhrases
+                trustScore = $trustScore
+            }
+
+            foreach ($phrase in @($matchPhrases)) {
+                $phraseTokens = @(([string]$phrase) -split ' ' | Where-Object { $_ })
+                if ($phraseTokens.Count -eq 0) {
+                    continue
+                }
+                $leadingKey = [string]$phraseTokens[0]
+                if ($leadingKey.Length -lt 4) {
+                    continue
+                }
+                if (-not $sourceIndex.ContainsKey($leadingKey)) {
+                    $sourceIndex[$leadingKey] = New-Object System.Collections.ArrayList
+                }
+                [void]$sourceIndex[$leadingKey].Add($descriptor)
+            }
+        }
+
+        $candidateConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT bc.id, bc.company_name, bc.normalized_company_name, bc.domain, bc.careers_url, bc.discovery_status, bc.confidence_band,
+       co.id AS account_id, co.display_name, co.normalized_name, co.aliases_text
+FROM board_configs bc
+LEFT JOIN companies co ON co.normalized_name = bc.normalized_company_name
+WHERE (COALESCE(NULLIF(bc.discovery_status, ''), 'missing_inputs') NOT IN ('mapped', 'discovered', 'verified')
+       OR COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))
+  $(
+    if (-not [string]::IsNullOrWhiteSpace([string]$AccountId)) {
+        "AND co.id = '$escapedAccountId'"
+    } else {
+        ''
+    }
+  )
+ORDER BY COALESCE(co.target_score, 0) DESC, COALESCE(co.connection_count, 0) DESC, bc.company_name ASC
+LIMIT $Limit;
+"@)
+        if ($candidateConfigRows.Count -gt 0 -and $sourceConfigMap.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($candidateConfigRow in @($candidateConfigRows)) {
+                    $candidateCompany = [ordered]@{
+                        id = [string]$candidateConfigRow.account_id
+                        display_name = [string]$(if ($candidateConfigRow.display_name) { $candidateConfigRow.display_name } else { $candidateConfigRow.company_name })
+                        normalized_name = [string]$(if ($candidateConfigRow.normalized_name) { $candidateConfigRow.normalized_name } else { $candidateConfigRow.normalized_company_name })
+                        aliases_text = [string]$candidateConfigRow.aliases_text
+                    }
+
+                    $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateCompany -SourceIndex $sourceIndex
+                    if ($null -eq $match) {
+                        continue
+                    }
+
+                    $source = Get-BdSqliteRecordValue -Record $match -Name 'source' -Default $null
+                    if ($null -eq $source) {
+                        continue
+                    }
+
+                    $sourceNormalizedName = [string](Get-BdSqliteRecordValue -Record $source -Name 'normalizedName' -Default '')
+                    if (-not $sourceNormalizedName -or -not $sourceConfigMap.ContainsKey($sourceNormalizedName)) {
+                        continue
+                    }
+
+                    $sourceConfig = $sourceConfigMap[$sourceNormalizedName]
+                    $sourceDomain = [string]$(if ($sourceConfig.domain) { $sourceConfig.domain } else { Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '' })
+                    $sourceCareersUrl = [string]$(if ($sourceConfig.careers_url) { $sourceConfig.careers_url } else { Get-BdSqliteRecordValue -Record $source -Name 'careersUrl' -Default '' })
+                    $sourceResolvedBoardUrl = [string]$(if ($sourceConfig.resolved_board_url) { $sourceConfig.resolved_board_url } else { $sourceCareersUrl })
+                    if (-not $sourceDomain -and -not $sourceCareersUrl -and -not $sourceResolvedBoardUrl) {
+                        continue
+                    }
+
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE board_configs
+SET ats_type = CASE WHEN COALESCE(NULLIF(ats_type, ''), '') = '' THEN @atsType ELSE ats_type END,
+    board_id = CASE WHEN COALESCE(NULLIF(board_id, ''), '') = '' THEN @boardId ELSE board_id END,
+    domain = CASE WHEN COALESCE(NULLIF(domain, ''), '') = '' THEN @domain ELSE domain END,
+    careers_url = CASE WHEN COALESCE(NULLIF(careers_url, ''), '') = '' THEN @careersUrl ELSE careers_url END,
+    resolved_board_url = CASE WHEN COALESCE(NULLIF(resolved_board_url, ''), '') = '' THEN @resolvedBoardUrl ELSE resolved_board_url END,
+    discovery_status = 'discovered',
+    discovery_method = 'sibling_propagation',
+    confidence_band = 'medium',
+    confidence_score = 76,
+    evidence_summary = @evidence,
+    review_status = 'pending',
+    supported_import = CASE WHEN COALESCE(supported_import, 0) = 1 THEN supported_import ELSE @supportedImport END,
+    active = CASE WHEN @supportedImport = 1 AND COALESCE(NULLIF(@sourceConfidenceBand, ''), 'medium') = 'high' THEN @sourceActive ELSE 0 END,
+    failure_reason = '',
+    last_checked_at = @now,
+    last_resolution_attempt_at = @now,
+    next_resolution_attempt_at = @cooldown
+WHERE id = @id
+  AND (COALESCE(NULLIF(discovery_status, ''), 'missing_inputs') NOT IN ('mapped', 'discovered', 'verified')
+       OR COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved'));
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@atsType'; $p.Value = [string]$sourceConfig.ats_type; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@boardId'; $p.Value = [string]$sourceConfig.board_id; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@domain'; $p.Value = $sourceDomain; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@careersUrl'; $p.Value = $sourceCareersUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@resolvedBoardUrl'; $p.Value = $sourceResolvedBoardUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@supportedImport'; $p.Value = [int](ConvertTo-BdSqliteNumber $sourceConfig.supported_import); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@sourceActive'; $p.Value = [int](ConvertTo-BdSqliteNumber $sourceConfig.active); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@sourceConfidenceBand'; $p.Value = [string]$sourceConfig.confidence_band; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@evidence'; $p.Value = ("Sibling board config propagated from {0} via brand phrase '{1}'" -f [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default 'related company'), [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default '')); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateConfigRow.id; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.boardConfigSiblingApplied += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+        }
+        $pass6Stopwatch.Stop()
+        $stats.timings.pass6SiblingConfigMs = [int]$pass6Stopwatch.ElapsedMilliseconds
+
+        $stats.totalUpdated = $stats.hostedDomainCleared + $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied + $stats.siblingPropagationApplied + $stats.boardConfigSiblingApplied
         return $stats
     } finally {
         $connection.Dispose()
@@ -4428,6 +5076,21 @@ SELECT
     SUM(CASE WHEN COALESCE(NULLIF(enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') THEN 1 ELSE 0 END) AS unenriched_count
 FROM companies;
 '@ | Select-Object -First 1)
+        $operationalSummary = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
+SELECT
+    COUNT(*) AS total_operational_companies,
+    SUM(CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '' OR COALESCE(NULLIF(enrichment_status, ''), '') IN ('enriched', 'verified', 'manual') THEN 1 ELSE 0 END) AS enriched_operational_companies
+FROM companies
+WHERE COALESCE(status, '') NOT IN ('client', 'paused')
+  AND (
+      COALESCE(target_score, 0) >= 25
+      OR COALESCE(connection_count, 0) >= 2
+      OR COALESCE(open_role_count, 0) > 0
+      OR COALESCE(hiring_velocity, 0) > 0
+      OR COALESCE(engagement_score, 0) > 0
+      OR COALESCE(alert_priority_score, 0) >= 20
+  );
+'@ | Select-Object -First 1)
 
         $coverageSplit = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
 SELECT
@@ -4446,6 +5109,9 @@ GROUP BY CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') <> '' OR COALESC
         $totalCompanies = [int](ConvertTo-BdSqliteNumber $summary.total_companies)
         $enrichedCount = [int](ConvertTo-BdSqliteNumber $summary.enriched_count)
         $coveragePct = if ($totalCompanies -gt 0) { [double][Math]::Round(($enrichedCount / $totalCompanies) * 100, 1) } else { 0 }
+        $operationalTotal = [int](ConvertTo-BdSqliteNumber $operationalSummary.total_operational_companies)
+        $operationalEnriched = [int](ConvertTo-BdSqliteNumber $operationalSummary.enriched_operational_companies)
+        $operationalCoveragePct = if ($operationalTotal -gt 0) { [double][Math]::Round(($operationalEnriched / $operationalTotal) * 100, 1) } else { 0 }
 
         return [ordered]@{
             summary = [ordered]@{
@@ -4456,6 +5122,9 @@ GROUP BY CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') <> '' OR COALESC
                 enrichedCount = $enrichedCount
                 unenrichedCount = [int](ConvertTo-BdSqliteNumber $summary.unenriched_count)
                 enrichmentCoveragePercent = $coveragePct
+                operationalTotalCompanies = $operationalTotal
+                operationalEnrichedCount = $operationalEnriched
+                operationalEnrichmentCoveragePercent = $operationalCoveragePct
             }
             byConfidence = @(
                 Invoke-BdSqliteRows -Connection $connection -Sql @'
@@ -4668,19 +5337,20 @@ function Get-BdSqliteEnrichmentCandidateCompanyIds {
         $parameters = @{ limit = if ($Limit -gt 0) { $Limit } else { 50 } }
         $isTargetedAccount = -not [string]::IsNullOrWhiteSpace([string]$AccountId)
         if ($AccountId) {
-            [void]$whereClauses.Add('id = @accountId')
+            [void]$whereClauses.Add('c.id = @accountId')
             $parameters.accountId = $AccountId
         } else {
-            [void]$whereClauses.Add("(COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' OR COALESCE(NULLIF(enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') OR COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))")
+            [void]$whereClauses.Add("(COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' OR COALESCE(NULLIF(c.enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') OR COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))")
+            [void]$whereClauses.Add("(COALESCE(cfg.has_unresolved_config, CASE WHEN COALESCE(cfg.has_resolved_config, 0) = 0 THEN 1 ELSE 0 END) = 1)")
         }
         if (-not $ForceRefresh -and -not $isTargetedAccount) {
-            [void]$whereClauses.Add("(next_enrichment_attempt_at IS NULL OR next_enrichment_attempt_at = '' OR next_enrichment_attempt_at <= @now)")
+            [void]$whereClauses.Add("(c.next_enrichment_attempt_at IS NULL OR c.next_enrichment_attempt_at = '' OR c.next_enrichment_attempt_at <= @now)")
             $parameters.now = (Get-Date).ToString('o')
         }
 
         $whereSql = if ($whereClauses.Count -gt 0) { ' WHERE ' + ([string]::Join(' AND ', @($whereClauses))) } else { '' }
         return @(
-            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT id FROM companies{0} ORDER BY COALESCE(target_score, 0) DESC, COALESCE(alert_priority_score, 0) DESC, COALESCE(relationship_strength_score, 0) DESC, COALESCE(connection_count, 0) DESC, COALESCE(open_role_count, 0) DESC, COALESCE(hiring_velocity, 0) DESC, COALESCE(engagement_score, 0) DESC, CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND COALESCE(NULLIF(careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(last_enriched_at, '') ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
+            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT c.id FROM companies c LEFT JOIN (SELECT normalized_company_name, MAX(CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 1 ELSE 0 END) AS has_resolved_config, MAX(CASE WHEN discovery_status NOT IN ('mapped', 'discovered', 'verified') OR COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved') THEN 1 ELSE 0 END) AS has_unresolved_config FROM board_configs GROUP BY normalized_company_name) cfg ON cfg.normalized_company_name = c.normalized_name{0} ORDER BY COALESCE(cfg.has_unresolved_config, CASE WHEN COALESCE(cfg.has_resolved_config, 0) = 0 THEN 1 ELSE 0 END) DESC, COALESCE(c.target_score, 0) DESC, COALESCE(c.alert_priority_score, 0) DESC, COALESCE(c.relationship_strength_score, 0) DESC, COALESCE(c.connection_count, 0) DESC, COALESCE(c.open_role_count, 0) DESC, COALESCE(c.hiring_velocity, 0) DESC, COALESCE(c.engagement_score, 0) DESC, CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(c.last_enriched_at, '') ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
                 ForEach-Object { [string]$_.id }
         )
     } finally {

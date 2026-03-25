@@ -159,6 +159,7 @@ function Get-CompanyAliasCatalog {
         @{ key = 'microsoft'; displayName = 'Microsoft'; aliases = @('microsoft', 'microsoft corporation', 'microsoft canada') }
         @{ key = 'google'; displayName = 'Google'; aliases = @('google', 'google llc', 'alphabet', 'alphabet inc') }
         @{ key = 'amazon'; displayName = 'Amazon'; aliases = @('amazon', 'amazon web services', 'aws', 'amazon.com') }
+        @{ key = 'akkodis'; displayName = 'Akkodis'; aliases = @('akkodis', 'akkodis canada', 'modis', 'modis canada', 'modis formerly ajilon', 'ajilon') }
     )
 }
 

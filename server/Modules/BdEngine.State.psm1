@@ -1684,6 +1684,7 @@ function New-RandomId {
 function Invoke-AppLocalEnrichmentPassFast {
     param(
         [string]$AccountId = '',
+        [int]$Limit = 0,
         [switch]$ForceRefresh
     )
 
@@ -1691,7 +1692,11 @@ function Invoke-AppLocalEnrichmentPassFast {
         return $null
     }
 
-    $limit = if ([string]::IsNullOrWhiteSpace([string]$AccountId)) { 5000 } else { 1 }
+    $limit = if ([string]::IsNullOrWhiteSpace([string]$AccountId)) {
+        if ($Limit -gt 0) { $Limit } else { 5000 }
+    } else {
+        1
+    }
     return (Invoke-BdSqliteLocalEnrichmentPass -Limit $limit -AccountId $AccountId -ForceRefresh:$ForceRefresh)
 }
 

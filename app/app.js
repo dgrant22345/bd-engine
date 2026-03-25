@@ -2567,18 +2567,22 @@ async function runDiscovery() {
 
 async function runLocalEnrichment() {
   const button = document.querySelector('[data-action="run-local-enrichment"]');
-  if (button) { button.disabled = true; button.textContent = 'Refreshing...'; }
+  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
   try {
+    const limit = Number(document.getElementById('enrichment-limit')?.value || 5000);
     const forceRefresh = (document.getElementById('enrichment-force-refresh')?.value || 'false') === 'true';
-    const result = await api('/api/enrichment/run-local', {
+    const accepted = await api('/api/enrichment/run-local', {
       method: 'POST',
-      body: JSON.stringify({ forceRefresh }),
+      body: JSON.stringify({ limit, forceRefresh }),
     });
-    invalidateAppData();
-    await renderRoute();
+    window.bdLocalApi.setAlert('Fast local enrich queued.', appAlert);
+    const job = await watchBackgroundJob(accepted.jobId, { label: 'Fast local enrichment' });
+    const result = job?.result || {};
     const stats = result?.stats || {};
+    const timings = result?.timings || {};
+    const totalDuration = Number(timings.localMs || 0) + Number(timings.snapshotMs || 0);
     window.bdLocalApi.setAlert(
-      `Fast local enrich updated ${formatNumber(stats.totalUpdated || 0)} rows in ${formatNumber(result.durationMs || 0)}ms. Domains from contacts: ${formatNumber(stats.contactEmailDomainApplied || 0)}, config domains: ${formatNumber(stats.boardConfigDomainApplied || 0)}, careers URLs: ${formatNumber(stats.boardConfigCareersApplied || 0)}.`,
+      `Fast local enrich updated ${formatNumber(stats.totalUpdated || 0)} rows in ${formatNumber(totalDuration)}ms. Domains from contacts: ${formatNumber(stats.contactEmailDomainApplied || 0)}, config domains: ${formatNumber(stats.boardConfigDomainApplied || 0)}, careers URLs: ${formatNumber(stats.boardConfigCareersApplied || 0)}, sibling lifts: ${formatNumber(stats.siblingPropagationApplied || 0)}, config lifts: ${formatNumber(stats.boardConfigSiblingApplied || 0)}.`,
       appAlert
     );
   } finally {
