@@ -6863,7 +6863,10 @@ function Sync-ImportedCompanyData {
         [Parameter(Mandatory = $true)]
         $State,
         [string[]]$CompanyKeys = @(),
-        [System.Collections.IDictionary]$TimingBag
+        [System.Collections.IDictionary]$TimingBag,
+        [switch]$SkipContactProjectionRefresh,
+        [switch]$SkipConnectionGraphRefresh,
+        [switch]$SkipOutreachDraftRefresh
     )
 
     $overallStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -6872,13 +6875,28 @@ function Sync-ImportedCompanyData {
     $jobDefaults = Get-JobRecordDefaults
     $boardConfigDefaults = Get-BoardConfigDefaults
     $activityDefaults = Get-ActivityRecordDefaults
-    $companies = New-Object System.Collections.ArrayList
+    $companyDefaultsRequired = -not (Test-CollectionHasFields -Items @($State.companies) -Fields @($companyDefaults.Keys))
+    $contactDefaultsRequired = -not (Test-CollectionHasFields -Items @($State.contacts) -Fields @($contactDefaults.Keys))
+    $jobDefaultsRequired = -not (Test-CollectionHasFields -Items @($State.jobs) -Fields @($jobDefaults.Keys))
+    $configDefaultsRequired = -not (Test-CollectionHasFields -Items @($State.boardConfigs) -Fields @($boardConfigDefaults.Keys))
+    $activityDefaultsRequired = -not (Test-CollectionHasFields -Items @($State.activities) -Fields @($activityDefaults.Keys))
+    $projectionReferenceNow = Get-Date
+    $sharedJobSignalTextCache = @{}
+    $sharedJobSignalTimestampCache = @{}
+    $sharedJobHiringSignalAnalysisCache = @{}
+    $companies = New-Object 'System.Collections.Generic.List[object]'
     $companyMap = @{}
     $companyIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($company in @($State.companies)) {
-        Ensure-RecordDefaults -Record $company -Defaults $companyDefaults | Out-Null
+        if ($companyDefaultsRequired) {
+            Ensure-RecordDefaults -Record $company -Defaults $companyDefaults | Out-Null
+        }
         [void]$companies.Add($company)
-        $key = Get-CanonicalCompanyKey $(if ($company.normalizedName) { $company.normalizedName } else { $company.displayName })
+        $key = if (-not [string]::IsNullOrWhiteSpace([string]$company.normalizedName)) {
+            ([string]$company.normalizedName).Trim().ToLowerInvariant()
+        } else {
+            Get-CanonicalCompanyKey $company.displayName
+        }
         if ($key) {
             $companyMap[$key] = $company
         }
@@ -6888,12 +6906,18 @@ function Sync-ImportedCompanyData {
     $contactsByCompany = @{}
     $contactIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($contact in @($State.contacts)) {
-        Ensure-RecordDefaults -Record $contact -Defaults $contactDefaults | Out-Null
-        $key = Get-CanonicalCompanyKey $(if ($contact.normalizedCompanyName) { $contact.normalizedCompanyName } else { $contact.companyName })
+        if ($contactDefaultsRequired) {
+            Ensure-RecordDefaults -Record $contact -Defaults $contactDefaults | Out-Null
+        }
+        $key = if (-not [string]::IsNullOrWhiteSpace([string]$contact.normalizedCompanyName)) {
+            ([string]$contact.normalizedCompanyName).Trim().ToLowerInvariant()
+        } else {
+            Get-CanonicalCompanyKey $contact.companyName
+        }
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $contact -Name 'normalizedCompanyName' -Value $key)
         if (-not $contactsByCompany.ContainsKey($key)) {
-            $contactsByCompany[$key] = New-Object System.Collections.ArrayList
+            $contactsByCompany[$key] = New-Object 'System.Collections.Generic.List[object]'
         }
         [void]$contactsByCompany[$key].Add($contact)
     }
@@ -6902,12 +6926,18 @@ function Sync-ImportedCompanyData {
     $jobsByCompany = @{}
     $jobIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($job in @($State.jobs)) {
-        Ensure-RecordDefaults -Record $job -Defaults $jobDefaults | Out-Null
-        $key = Get-CanonicalCompanyKey $(if ($job.normalizedCompanyName) { $job.normalizedCompanyName } else { $job.companyName })
+        if ($jobDefaultsRequired) {
+            Ensure-RecordDefaults -Record $job -Defaults $jobDefaults | Out-Null
+        }
+        $key = if (-not [string]::IsNullOrWhiteSpace([string]$job.normalizedCompanyName)) {
+            ([string]$job.normalizedCompanyName).Trim().ToLowerInvariant()
+        } else {
+            Get-CanonicalCompanyKey $job.companyName
+        }
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $job -Name 'normalizedCompanyName' -Value $key)
         if (-not $jobsByCompany.ContainsKey($key)) {
-            $jobsByCompany[$key] = New-Object System.Collections.ArrayList
+            $jobsByCompany[$key] = New-Object 'System.Collections.Generic.List[object]'
         }
         [void]$jobsByCompany[$key].Add($job)
     }
@@ -6916,12 +6946,18 @@ function Sync-ImportedCompanyData {
     $configsByCompany = @{}
     $configIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($config in @($State.boardConfigs)) {
-        Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
-        $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        if ($configDefaultsRequired) {
+            Ensure-RecordDefaults -Record $config -Defaults $boardConfigDefaults | Out-Null
+        }
+        $key = if (-not [string]::IsNullOrWhiteSpace([string]$config.normalizedCompanyName)) {
+            ([string]$config.normalizedCompanyName).Trim().ToLowerInvariant()
+        } else {
+            Get-CanonicalCompanyKey $config.companyName
+        }
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $config -Name 'normalizedCompanyName' -Value $key)
         if (-not $configsByCompany.ContainsKey($key)) {
-            $configsByCompany[$key] = New-Object System.Collections.ArrayList
+            $configsByCompany[$key] = New-Object 'System.Collections.Generic.List[object]'
         }
         [void]$configsByCompany[$key].Add($config)
     }
@@ -6930,12 +6966,19 @@ function Sync-ImportedCompanyData {
     $activitiesByCompany = @{}
     $activityIndexStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($activity in @($State.activities)) {
-        Ensure-RecordDefaults -Record $activity -Defaults $activityDefaults | Out-Null
-        $key = Get-CanonicalCompanyKey (Get-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Default '')
+        if ($activityDefaultsRequired) {
+            Ensure-RecordDefaults -Record $activity -Defaults $activityDefaults | Out-Null
+        }
+        $existingNormalizedCompanyName = [string](Get-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Default '')
+        $key = if (-not [string]::IsNullOrWhiteSpace($existingNormalizedCompanyName)) {
+            $existingNormalizedCompanyName.Trim().ToLowerInvariant()
+        } else {
+            ''
+        }
         if (-not $key) { continue }
         [void](Set-ObjectValue -Object $activity -Name 'normalizedCompanyName' -Value $key)
         if (-not $activitiesByCompany.ContainsKey($key)) {
-            $activitiesByCompany[$key] = New-Object System.Collections.ArrayList
+            $activitiesByCompany[$key] = New-Object 'System.Collections.Generic.List[object]'
         }
         [void]$activitiesByCompany[$key].Add($activity)
     }
@@ -6958,9 +7001,6 @@ function Sync-ImportedCompanyData {
     $keySelectStopwatch.Stop()
 
     $projectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $projectionReferenceNow = Get-Date
-    $sharedJobSignalTextCache = @{}
-    $sharedJobSignalTimestampCache = @{}
     $projectionPhaseTotals = [ordered]@{
         contactsMs = 0
         jobsMs = 0
@@ -6977,15 +7017,25 @@ function Sync-ImportedCompanyData {
     $scoringPhaseTotals = [ordered]@{
         activeJobsMs = 0
         hiringMs = 0
+        hiringTitleLoopMs = 0
+        hiringSignatureMs = 0
+        hiringTextAnalysisMs = 0
         engagementMs = 0
         growthMs = 0
         explanationMs = 0
     }
     $cacheTotals = [ordered]@{
+        hiringMetricsCacheHits = 0
         graphCacheHits = 0
         recommendationCacheHits = 0
         outreachDraftCacheHits = 0
         explanationCacheHits = 0
+    }
+    $alertPhaseTotals = [ordered]@{
+        jobAlertsMs = 0
+        contactAlertsMs = 0
+        sortMs = 0
+        totalMs = 0
     }
     $slowCompanies = New-Object System.Collections.ArrayList
     foreach ($key in ($keysToRefresh | Sort-Object)) {
@@ -6997,6 +7047,8 @@ function Sync-ImportedCompanyData {
         $jobItems = if ($jobsByCompany.ContainsKey($key)) { @($jobsByCompany[$key].ToArray()) } else { @() }
         $activityItems = if ($activitiesByCompany.ContainsKey($key)) { @($activitiesByCompany[$key].ToArray()) } else { @() }
 
+        $skipContactProjectionForCompany = ($SkipContactProjectionRefresh -and $null -ne $company)
+        $skipOutreachDraftForCompany = ($SkipOutreachDraftRefresh -and $null -ne $company)
         if (-not $company) {
             $displayName = ''
             if (@($contactItems).Count -gt 0 -and $contactItems[0].companyName) {
@@ -7011,7 +7063,7 @@ function Sync-ImportedCompanyData {
             $companyMap[$key] = $company
         }
 
-        $company = Update-CompanyProjection -Company $company -Contacts $contactItems -Jobs $jobItems -Configs $configItems -Activities $activityItems -JobSignalTextCache $sharedJobSignalTextCache -JobSignalTimestampCache $sharedJobSignalTimestampCache -ReferenceNow $projectionReferenceNow -TimingBag $companyPhaseTimingBag
+        $company = Update-CompanyProjection -Company $company -Contacts $contactItems -Jobs $jobItems -Configs $configItems -Activities $activityItems -JobSignalTextCache $sharedJobSignalTextCache -JobSignalTimestampCache $sharedJobSignalTimestampCache -JobHiringSignalAnalysisCache $sharedJobHiringSignalAnalysisCache -SkipContactProjectionRefresh:$skipContactProjectionForCompany -SkipConnectionGraphRefresh:$SkipConnectionGraphRefresh -SkipOutreachDraftRefresh:$skipOutreachDraftForCompany -ReferenceNow $projectionReferenceNow -TimingBag $companyPhaseTimingBag
         foreach ($phaseKey in @($projectionPhaseTotals.Keys)) {
             $projectionPhaseTotals[$phaseKey] = [int]$projectionPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyPhaseTimingBag -Name $phaseKey -Default 0))
         }
@@ -7019,6 +7071,9 @@ function Sync-ImportedCompanyData {
         if ($companyScoringDetails) {
             foreach ($phaseKey in @($scoringPhaseTotals.Keys)) {
                 $scoringPhaseTotals[$phaseKey] = [int]$scoringPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyScoringDetails -Name $phaseKey -Default 0))
+            }
+            if (Test-Truthy (Get-ObjectValue -Object $companyScoringDetails -Name 'hiringMetricsCacheHit' -Default $false)) {
+                $cacheTotals['hiringMetricsCacheHits'] = [int]$cacheTotals['hiringMetricsCacheHits'] + 1
             }
             if (Test-Truthy (Get-ObjectValue -Object $companyScoringDetails -Name 'explanationCacheHit' -Default $false)) {
                 $cacheTotals['explanationCacheHits'] = [int]$cacheTotals['explanationCacheHits'] + 1
@@ -7032,6 +7087,12 @@ function Sync-ImportedCompanyData {
         }
         if (Test-Truthy (Get-ObjectValue -Object $companyPhaseTimingBag -Name 'outreachDraftCacheHit' -Default $false)) {
             $cacheTotals['outreachDraftCacheHits'] = [int]$cacheTotals['outreachDraftCacheHits'] + 1
+        }
+        $companyAlertDetails = Get-ObjectValue -Object $companyPhaseTimingBag -Name 'alertDetails' -Default $null
+        if ($companyAlertDetails) {
+            foreach ($phaseKey in @($alertPhaseTotals.Keys)) {
+                $alertPhaseTotals[$phaseKey] = [int]$alertPhaseTotals[$phaseKey] + [int](Convert-ToNumber (Get-ObjectValue -Object $companyAlertDetails -Name $phaseKey -Default 0))
+            }
         }
         foreach ($contact in @($contactItems)) {
             if ($null -eq $contact) { continue }
@@ -7102,8 +7163,17 @@ function Sync-ImportedCompanyData {
         $TimingBag['touchedCompanyCount'] = $keysToRefresh.Count
         $TimingBag['jobSignalTextCacheCount'] = [int]$sharedJobSignalTextCache.Count
         $TimingBag['jobSignalTimestampCacheCount'] = [int]$sharedJobSignalTimestampCache.Count
+        $TimingBag['jobHiringSignalAnalysisCacheCount'] = [int]$sharedJobHiringSignalAnalysisCache.Count
+        $TimingBag['defaultsApplied'] = [ordered]@{
+            companies = [bool]$companyDefaultsRequired
+            contacts = [bool]$contactDefaultsRequired
+            jobs = [bool]$jobDefaultsRequired
+            configs = [bool]$configDefaultsRequired
+            activities = [bool]$activityDefaultsRequired
+        }
         $TimingBag['phaseTotals'] = $projectionPhaseTotals
         $TimingBag['scoringPhaseTotals'] = $scoringPhaseTotals
+        $TimingBag['alertPhaseTotals'] = $alertPhaseTotals
         $TimingBag['cacheTotals'] = $cacheTotals
         $TimingBag['slowCompanies'] = @(
             @($slowCompanies.ToArray()) |

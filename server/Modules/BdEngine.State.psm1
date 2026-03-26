@@ -293,6 +293,7 @@ function Get-CompanyRecordDefaults {
         recommendationSignature = ''
         outreachDraft = ''
         outreachDraftSignature = ''
+        hiringSignalMetricsSignature = ''
         targetScoreExplanationSignature = ''
         pipelineState = @{}
         connectionGraph = @{}
