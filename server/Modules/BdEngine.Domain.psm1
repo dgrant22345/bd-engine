@@ -4423,11 +4423,74 @@ function Update-CompanyProjection {
     return $Company
 }
 
-function Sort-Companies {
-    param($Companies)
+function Get-CompanySortKey {
+    param($Company)
+    $ts = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'targetScore' -Default 0))
+    $hv = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'hiringVelocity' -Default 0))
+    $es = [double](Convert-ToNumber (Get-ObjectValue -Object $Company -Name 'engagementScore' -Default 0))
+    $dn = [string](Get-ObjectValue -Object $Company -Name 'displayName' -Default '')
+    return @($ts, $hv, $es, $dn)
+}
 
+function Compare-CompanySortKeys {
+    param($KeyA, $KeyB)
+    # Compare targetScore DESC
+    if ($KeyA[0] -ne $KeyB[0]) { return if ($KeyA[0] -gt $KeyB[0]) { -1 } else { 1 } }
+    # Compare hiringVelocity DESC
+    if ($KeyA[1] -ne $KeyB[1]) { return if ($KeyA[1] -gt $KeyB[1]) { -1 } else { 1 } }
+    # Compare engagementScore DESC
+    if ($KeyA[2] -ne $KeyB[2]) { return if ($KeyA[2] -gt $KeyB[2]) { -1 } else { 1 } }
+    # Compare displayName ASC
+    return [string]::Compare([string]$KeyA[3], [string]$KeyB[3], [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Sort-Companies {
+    param(
+        $Companies,
+        [System.Collections.Generic.HashSet[string]]$ChangedKeys = $null
+    )
+
+    $items = @($Companies)
+    if ($items.Count -le 1) {
+        return $items
+    }
+
+    # If few companies changed and the list is large, use incremental re-insertion
+    if ($ChangedKeys -and $ChangedKeys.Count -gt 0 -and $ChangedKeys.Count -lt ([Math]::Max(20, [int]($items.Count * 0.15)))) {
+        # Extract changed and unchanged items
+        $unchanged = New-Object System.Collections.ArrayList
+        $changed = New-Object System.Collections.ArrayList
+        foreach ($c in $items) {
+            $key = [string](Get-ObjectValue -Object $c -Name 'normalizedName' -Default '')
+            if ($key -and $ChangedKeys.Contains($key)) {
+                [void]$changed.Add($c)
+            } else {
+                [void]$unchanged.Add($c)
+            }
+        }
+
+        # Binary insert each changed company into the already-sorted unchanged list
+        foreach ($company in $changed) {
+            $companyKey = Get-CompanySortKey -Company $company
+            $lo = 0
+            $hi = $unchanged.Count
+            while ($lo -lt $hi) {
+                $mid = [int](($lo + $hi) / 2)
+                $midKey = Get-CompanySortKey -Company $unchanged[$mid]
+                if ((Compare-CompanySortKeys -KeyA $companyKey -KeyB $midKey) -le 0) {
+                    $hi = $mid
+                } else {
+                    $lo = $mid + 1
+                }
+            }
+            $unchanged.Insert($lo, $company)
+        }
+        return @($unchanged.ToArray())
+    }
+
+    # Full sort fallback
     return @(
-        $Companies | Sort-Object @(
+        $items | Sort-Object @(
             @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'targetScore' -Default 0)) }; Descending = $true },
             @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'hiringVelocity' -Default 0)) }; Descending = $true },
             @{ Expression = { [double](Convert-ToNumber (Get-ObjectValue -Object $_ -Name 'engagementScore' -Default 0)) }; Descending = $true },
@@ -4442,11 +4505,13 @@ function Update-DerivedData {
         $State,
         [scriptblock]$ProgressCallback,
         [int]$ProgressInterval = 150,
-        [System.Collections.IDictionary]$TimingBag
+        [System.Collections.IDictionary]$TimingBag,
+        [string[]]$TouchedCompanyKeys = $null
     )
 
     $startedAt = (Get-Date).ToString('o')
-    Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Preparing derived data' -StartedAt $startedAt -Message 'Grouping contacts, jobs, configs, and activity'
+    $isIncremental = $null -ne $TouchedCompanyKeys -and @($TouchedCompanyKeys).Count -gt 0
+    Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Preparing derived data' -StartedAt $startedAt -Message $(if ($isIncremental) { "Incremental update for $(@($TouchedCompanyKeys).Count) companies" } else { 'Grouping contacts, jobs, configs, and activity' })
     $groupingStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     $companyMap = @{}
@@ -4510,6 +4575,15 @@ function Update-DerivedData {
     foreach ($key in $jobGroups.Keys) { [void]$allCompanyKeys.Add($key) }
     foreach ($key in $configGroups.Keys) { [void]$allCompanyKeys.Add($key) }
     foreach ($key in $activityGroups.Keys) { [void]$allCompanyKeys.Add($key) }
+
+    $touchedKeySet = $null
+    if ($isIncremental) {
+        $touchedKeySet = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($tk in @($TouchedCompanyKeys)) {
+            $canonical = Get-CanonicalCompanyKey $tk
+            if ($canonical) { [void]$touchedKeySet.Add($canonical) }
+        }
+    }
     $groupingStopwatch.Stop()
 
     $derivedCompanies = New-Object System.Collections.ArrayList
@@ -4518,12 +4592,22 @@ function Update-DerivedData {
     $sharedJobSignalTimestampCache = @{}
     $companyKeys = @($allCompanyKeys | Sort-Object)
     $totalCompanies = @($companyKeys).Count
+    $projectedCount = 0
+    $skippedCount = 0
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Recomputing company scores' -Processed 0 -Total $totalCompanies -StartedAt $startedAt -Message 'Updating target accounts and outreach signals'
     $projectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     for ($index = 0; $index -lt $companyKeys.Count; $index++) {
         $companyKey = $companyKeys[$index]
         $existing = $companyMap[$companyKey]
+
+        # Incremental mode: skip untouched companies that already have a projection
+        if ($touchedKeySet -and $existing -and -not $touchedKeySet.Contains($companyKey)) {
+            [void]$derivedCompanies.Add($existing)
+            $skippedCount++
+            continue
+        }
+
         $contacts = if ($contactGroups.ContainsKey($companyKey)) { @($contactGroups[$companyKey].ToArray()) } else { @() }
         $jobs = if ($jobGroups.ContainsKey($companyKey)) { @($jobGroups[$companyKey].ToArray()) } else { @() }
         $configs = if ($configGroups.ContainsKey($companyKey)) { @($configGroups[$companyKey].ToArray()) } else { @() }
@@ -4581,6 +4665,7 @@ function Update-DerivedData {
         }
 
         [void]$derivedCompanies.Add($company)
+        $projectedCount++
 
         $processed = $index + 1
         if ($ProgressCallback -and ($processed -eq 1 -or $processed -eq $totalCompanies -or ($ProgressInterval -gt 0 -and ($processed % $ProgressInterval) -eq 0))) {
@@ -4590,17 +4675,21 @@ function Update-DerivedData {
     $projectionStopwatch.Stop()
 
     $sortStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $State.companies = Sort-Companies -Companies @($derivedCompanies)
+    $State.companies = Sort-Companies -Companies @($derivedCompanies) -ChangedKeys $touchedKeySet
     $sortStopwatch.Stop()
     if ($TimingBag) {
         $TimingBag['groupingMs'] = [int]$groupingStopwatch.Elapsed.TotalMilliseconds
         $TimingBag['projectionMs'] = [int]$projectionStopwatch.Elapsed.TotalMilliseconds
         $TimingBag['sortMs'] = [int]$sortStopwatch.Elapsed.TotalMilliseconds
+        $TimingBag['sortMode'] = if ($touchedKeySet) { 'incremental' } else { 'full' }
         $TimingBag['companyCount'] = [int]$totalCompanies
+        $TimingBag['projectedCount'] = [int]$projectedCount
+        $TimingBag['skippedCount'] = [int]$skippedCount
+        $TimingBag['incremental'] = [bool]$isIncremental
         $TimingBag['jobSignalTextCacheCount'] = [int]$sharedJobSignalTextCache.Count
         $TimingBag['jobSignalTimestampCacheCount'] = [int]$sharedJobSignalTimestampCache.Count
     }
-    Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Recomputing company scores' -Processed $totalCompanies -Total $totalCompanies -StartedAt $startedAt -Message 'Finished derived scoring'
+    Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Recomputing company scores' -Processed $totalCompanies -Total $totalCompanies -StartedAt $startedAt -Message $(if ($isIncremental) { "Finished incremental scoring ($projectedCount projected, $skippedCount skipped)" } else { 'Finished derived scoring' })
     return $State
 }
 

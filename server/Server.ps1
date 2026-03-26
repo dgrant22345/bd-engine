@@ -79,6 +79,8 @@ $defaultConnectionsCsvPath = Get-DefaultConnectionsCsvPath
 $defaultSpreadsheetId = [string]$env:GOOGLE_SHEETS_SPREADSHEET_ID
 $script:ApiGetCache = @{}
 $script:ApiGetCacheSignature = ''
+$script:ApiSegmentCaches = @{}
+$script:ApiSegmentSignatures = @{}
 $script:CompanySnippetCache = @{}
 $script:ServerStartedAt = (Get-Date).ToString('o')
 $script:ServerWarmedAt = ''
@@ -325,6 +327,43 @@ function Get-CachedApiResult {
 
     $result = & $Factory
     $script:ApiGetCache[$cacheKey] = $result
+    return $result
+}
+
+function Get-SegmentCachedApiResult {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [hashtable]$Query = @{},
+        [Parameter(Mandatory = $true)]
+        [string[]]$Segments,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Factory
+    )
+
+    $segmentSig = New-Object System.Text.StringBuilder
+    foreach ($seg in @($Segments | Sort-Object)) {
+        [void]$segmentSig.Append($seg)
+        [void]$segmentSig.Append(':')
+        [void]$segmentSig.Append((Get-SegmentStorageSignature -Segment $seg))
+        [void]$segmentSig.Append('|')
+    }
+    $signature = $segmentSig.ToString()
+
+    $cacheKey = '{0}?{1}' -f $Path, (Get-QueryCacheKey -Query $Query)
+
+    if ($script:ApiSegmentCaches.ContainsKey($cacheKey)) {
+        $entry = $script:ApiSegmentCaches[$cacheKey]
+        if ($entry.signature -eq $signature) {
+            return $entry.result
+        }
+    }
+
+    $result = & $Factory
+    $script:ApiSegmentCaches[$cacheKey] = @{
+        signature = $signature
+        result = $result
+    }
     return $result
 }
 
@@ -848,7 +887,7 @@ function Handle-ApiRequest {
         return (New-JsonResult $job)
     }
     if ($path -eq '/api/admin/bootstrap' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs') -Factory {
             $workspace = Get-AppSegment -Segment 'Workspace'
             $settings = Get-AppSegment -Segment 'Settings'
             $filters = if (Test-AppStoreUsesSqlite) {
@@ -949,7 +988,7 @@ function Handle-ApiRequest {
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
     if ($path -eq '/api/bootstrap' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs') -Factory {
             $includeFilters = Test-Truthy $query.includeFilters
             if ($includeFilters) {
                 $workspace = Get-AppSegment -Segment 'Workspace'
@@ -996,7 +1035,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'Jobs', 'BoardConfigs', 'Settings') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 $snapshot = Get-AppDashboardSnapshotResult
                 Write-SnapshotLog -Name 'dashboard' -SnapshotResult $snapshot
@@ -1008,7 +1047,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/accounts' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppAccountsFast -Query $query)
             } else {
@@ -1238,7 +1277,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/contacts' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Contacts') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppContactsFast -Query $query)
             } else {
@@ -1255,7 +1294,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/jobs' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Jobs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppJobsFast -Query $query)
             } else {
@@ -1265,7 +1304,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/configs' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppConfigsFast -Query $query)
             } else {
@@ -1275,7 +1314,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/configs/report' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Get-AppResolverCoverageReportFast)
             } else {
@@ -1302,7 +1341,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/enrichment/report' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Get-AppEnrichmentCoverageReportFast)
             } else {
@@ -1333,7 +1372,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/enrichment/queue' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppEnrichmentQueueFast -Query $query)
             } else {
@@ -1609,9 +1648,12 @@ function Handle-ApiRequest {
     }
     if ($path -eq '/api/configs' -and $method -eq 'POST') {
         $state = Get-AppState
-        $state = Save-ConfigRecord -State $state -Payload (Read-JsonBody -Request $Request)
+        $configPayload = Read-JsonBody -Request $Request
+        $touchedKey = Get-CanonicalCompanyKey ([string]$configPayload.companyName)
+        $state = Save-ConfigRecord -State $state -Payload $configPayload
         $state = Sync-ImportedCompanyData -State $state
-        $state = Update-DerivedData -State $state
+        $touchedKeys = if ($touchedKey) { @($touchedKey) } else { $null }
+        $state = Update-DerivedData -State $state -TouchedCompanyKeys $touchedKeys
         Save-AppState -State $state
         return (New-JsonResult ([ordered]@{ ok = $true; count = @($state.boardConfigs).Count }) 201)
     }
@@ -1646,9 +1688,13 @@ function Handle-ApiRequest {
     }
     if ($path -match '^/api/configs/([^/]+)$' -and $method -eq 'PATCH') {
         $state = Get-AppState
-        $state = Save-ConfigRecord -State $state -Payload (Read-JsonBody -Request $Request) -ConfigId $matches[1]
+        $configPayload = Read-JsonBody -Request $Request
+        $existingConfig = @($state.boardConfigs | Where-Object { $_.id -eq $matches[1] } | Select-Object -First 1)
+        $touchedKey = if ($existingConfig) { Get-CanonicalCompanyKey ([string]$existingConfig.companyName) } else { $null }
+        $state = Save-ConfigRecord -State $state -Payload $configPayload -ConfigId $matches[1]
         $state = Sync-ImportedCompanyData -State $state
-        $state = Update-DerivedData -State $state
+        $touchedKeys = if ($touchedKey) { @($touchedKey) } else { $null }
+        $state = Update-DerivedData -State $state -TouchedCompanyKeys $touchedKeys
         Save-AppState -State $state
         return (New-JsonResult ([ordered]@{ ok = $true; count = @($state.boardConfigs).Count }))
     }
@@ -1674,7 +1720,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/activity' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Activities') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppActivityFast -Query $query)
             } else {
@@ -1700,7 +1746,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/search' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'Contacts', 'Jobs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppSearchResultsFast -Query $query.q)
             } else {

@@ -5653,7 +5653,9 @@ function Invoke-AtsDiscovery {
     $deriveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     if (-not $SkipDerivedData) {
         Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Finalizing ATS discovery' -Processed $stats.checked -Total $totalCandidates -StartedAt $startedAt -Message 'Refreshing derived account scores'
-        $State = Update-DerivedData -State $State -ProgressCallback $ProgressCallback
+        $discoveryTouchedKeys = @($candidates | ForEach-Object { Get-CanonicalCompanyKey ([string]$_.companyName) } | Where-Object { $_ } | Select-Object -Unique)
+        $discoveryTouched = if ($discoveryTouchedKeys.Count -gt 0) { $discoveryTouchedKeys } else { $null }
+        $State = Update-DerivedData -State $State -ProgressCallback $ProgressCallback -TouchedCompanyKeys $discoveryTouched
     } elseif ($ProgressCallback) {
         Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Finalizing ATS discovery' -Processed $stats.checked -Total $totalCandidates -StartedAt $startedAt -Message 'Persisting ATS discovery results'
     }

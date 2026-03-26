@@ -1872,7 +1872,8 @@ function Invoke-BackgroundGoogleSheetsRunEngineJob {
         $state.jobs = @($jobRunResult.state.jobs)
         $state.boardConfigs = @($jobRunResult.state.boardConfigs)
         $state.importRuns = @($jobRunResult.state.importRuns)
-        $state = Update-DerivedData -State $state -ProgressCallback $progressCallback
+        $touchedKeys = if ($jobRunResult.companyKeys -and @($jobRunResult.companyKeys).Count -gt 0) { @($jobRunResult.companyKeys) } else { $null }
+        $state = Update-DerivedData -State $state -ProgressCallback $progressCallback -TouchedCompanyKeys $touchedKeys
     }
 
     $persistence = Save-BackgroundJobState -State $state -Segments @('Contacts', 'Companies', 'Jobs', 'BoardConfigs', 'ImportRuns') -JobId $JobId -OperationName 'google-sheets-run-engine'
