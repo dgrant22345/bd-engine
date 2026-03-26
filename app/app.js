@@ -14,6 +14,10 @@ const appState = {
   configEditingId: '',
   runtimeStatus: null,
   runtimePollTimer: null,
+  adminCollapsed: {},
+  showAdvancedFilters: false,
+  outreachModalOpen: false,
+  statusPillsExpanded: false,
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -59,6 +63,15 @@ async function init() {
 
 function bindEvents() {
   window.addEventListener('hashchange', () => renderRoute());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const backdrop = document.getElementById('outreach-modal-backdrop');
+      if (backdrop && !backdrop.classList.contains('hidden')) {
+        backdrop.classList.add('hidden');
+        appState.outreachModalOpen = false;
+      }
+    }
+  });
   refreshBootstrapButton.addEventListener('click', async () => {
     refreshBootstrapButton.disabled = true;
     refreshBootstrapButton.textContent = 'Refreshing...';
@@ -84,6 +97,33 @@ function bindEvents() {
   });
 
   document.addEventListener('click', async (event) => {
+    // Open outreach modal
+    if (event.target.id === 'open-outreach-modal') {
+      const backdrop = document.getElementById('outreach-modal-backdrop');
+      if (backdrop) { backdrop.classList.remove('hidden'); appState.outreachModalOpen = true; syncOutreachComposerState(); }
+      return;
+    }
+    // Advanced filter toggle
+    if (event.target.id === 'toggle-advanced-filters') {
+      appState.showAdvancedFilters = !appState.showAdvancedFilters;
+      const fields = document.getElementById('advanced-filter-fields');
+      if (fields) fields.classList.toggle('hidden', !appState.showAdvancedFilters);
+      event.target.textContent = appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters';
+      return;
+    }
+    // Outreach modal close
+    if (event.target.closest('.modal-close') || (event.target.classList.contains('modal-backdrop') && !event.target.closest('.modal-panel'))) {
+      const backdrop = document.getElementById('outreach-modal-backdrop');
+      if (backdrop) { backdrop.classList.add('hidden'); appState.outreachModalOpen = false; }
+      return;
+    }
+    // Status pills expand
+    if (event.target.closest('.status-pills-overflow')) {
+      appState.statusPillsExpanded = true;
+      if (appState.accountDetail) renderAccountDetail(appState.accountDetail.account.id);
+      return;
+    }
+
     const action = event.target.closest('[data-action]');
     if (!action) {
       if (!event.target.closest('#search-results') && event.target !== searchInput) {
@@ -1115,8 +1155,14 @@ async function renderAccountsView() {
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
           ${renderField('Hiring', `<select name="hiring"><option value="">All</option><option value="true" ${selected(appState.accountQuery.hiring, 'true')}>Active hiring</option></select>`)}
-          ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
+          ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
+          <div class="field field--action">
+            <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
+            <button class="primary-button" type="submit">Apply</button>
+          </div>
+          <div class="filter-advanced-fields${appState.showAdvancedFilters ? '' : ' hidden'}" id="advanced-filter-fields">
+          ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
           ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
           ${renderField('Geography', `<select name="geography"><option value="">Any location</option><option value="canada" ${selected(appState.accountQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.accountQuery.geography, 'canada_us')}>Include US</option><option value="us" ${selected(appState.accountQuery.geography, 'us')}>US only</option></select>`)}
@@ -1125,10 +1171,9 @@ async function renderAccountsView() {
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Min target score', `<input name="minTargetScore" type="number" min="0" max="100" value="${escapeAttr(appState.accountQuery.minTargetScore)}">`)}
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
-          ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
-          <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+          </div>
         </form>
-        ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state">No accounts match the current filter set.</div>'}
+        ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>'}
         ${renderPagination('accounts', result.page, result.pageSize, result.total)}
       </div>
 
@@ -1216,16 +1261,18 @@ async function renderAccountDetail(accountId) {
           ${renderMetricTile('Jobs 90d', formatNumber(detail.account.jobsLast90Days || 0))}
         </div>
       </div>
-      <div class="kpi-ribbon">
-        ${renderStatusPill(detail.account.networkStrength, toneForNetwork(detail.account.networkStrength))}
-        ${renderStatusPill(detail.account.hiringStatus, detail.account.jobCount > 0 ? 'success' : 'neutral')}
+      <div class="status-pills-compact">
         ${renderStatusPill(detail.account.priority || 'medium', 'warm')}
         ${renderStatusPill(detail.account.status || 'new', 'neutral')}
         ${renderStatusPill(detail.account.outreachStatus || 'not_started', 'neutral')}
-        ${renderStatusPill(detail.account.enrichmentStatus || 'missing_inputs', toneForEnrichmentStatus(detail.account.enrichmentStatus || 'missing_inputs'))}
-        ${renderStatusPill(detail.account.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(detail.account.enrichmentConfidence || 'unresolved'))}
-        ${detail.account.staleFlag ? renderStatusPill(detail.account.staleFlag, 'danger') : ''}
-        ${(detail.account.atsTypes || []).map((item) => renderStatusPill(item, 'neutral')).join('')}
+        ${renderStatusPill(detail.account.networkStrength, toneForNetwork(detail.account.networkStrength))}
+        ${appState.statusPillsExpanded ? `
+          ${renderStatusPill(detail.account.hiringStatus, detail.account.jobCount > 0 ? 'success' : 'neutral')}
+          ${renderStatusPill(detail.account.enrichmentStatus || 'missing_inputs', toneForEnrichmentStatus(detail.account.enrichmentStatus || 'missing_inputs'))}
+          ${renderStatusPill(detail.account.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(detail.account.enrichmentConfidence || 'unresolved'))}
+          ${detail.account.staleFlag ? renderStatusPill(detail.account.staleFlag, 'danger') : ''}
+          ${(detail.account.atsTypes || []).map((item) => renderStatusPill(item, 'neutral')).join('')}
+        ` : `<span class="status-pills-overflow">+${3 + (detail.account.staleFlag ? 1 : 0) + (detail.account.atsTypes || []).length} more</span>`}
       </div>
     </section>
 
@@ -1238,36 +1285,8 @@ async function renderAccountDetail(accountId) {
 
     <section class="action-zone">
       <div class="action-zone-col">
-        <div class="detail-card" id="outreach-prompt-card">
-          <div class="panel-header"><div><h3>Outreach & next moves</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div></div>
-          <div class="outreach-controls outreach-controls--stacked">
-            <select id="outreach-contact-select" class="inline-select">
-              ${detail.contacts.length
-                ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
-                : '<option value="">No contacts</option>'}
-            </select>
-            <select id="outreach-template-select" class="inline-select">
-              <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
-              <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
-              <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
-              <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
-              <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
-              <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
-              <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
-            </select>
-            <div class="button-row">
-              <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
-              <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
-            </div>
-          </div>
-          <div class="micro-button-row">
-            <button class="micro-button micro-button--primary" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="cold" type="button">Balanced</button>
-            <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="talent_partner" type="button">Recruiter</button>
-            <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="hiring_manager" type="button">Hiring manager</button>
-            <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="executive" type="button">Executive</button>
-            <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="follow_up" type="button">Follow-up</button>
-          </div>
-          <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
+        <div class="detail-card">
+          <div class="panel-header"><div><h3>Next moves</h3><p class="muted small">Quick actions for this account.</p></div></div>
           <div class="next-action-bar">
             <div class="next-action-display">
               <strong>Next:</strong> <span>${escapeHtml(detail.account.nextAction || 'No next action set')}</span>
@@ -1279,16 +1298,56 @@ async function renderAccountDetail(accountId) {
             <input name="nextActionAt" type="date" class="compact-input" value="${formatDateInput(detail.account.nextActionAt)}">
             <button class="secondary-button compact-btn" type="submit">Save next action</button>
           </form>
-          <p class="small muted">You can update it here, or in Account controls further down the page.</p>
+          <div class="button-row" style="margin-top:10px">
+            <button class="primary-button" type="button" id="open-outreach-modal">Compose outreach</button>
+          </div>
         </div>
       </div>
+
+    <!-- Outreach composer modal -->
+    <div id="outreach-modal-backdrop" class="modal-backdrop${appState.outreachModalOpen ? '' : ' hidden'}">
+      <div class="modal-panel">
+        <div class="panel-header">
+          <div><h3>Outreach composer</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div>
+          <button class="modal-close" type="button">&times;</button>
+        </div>
+        <div class="outreach-controls outreach-controls--stacked">
+          <select id="outreach-contact-select" class="inline-select">
+            ${detail.contacts.length
+              ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
+              : '<option value="">No contacts</option>'}
+          </select>
+          <select id="outreach-template-select" class="inline-select">
+            <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
+            <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
+            <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
+            <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
+            <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
+            <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
+            <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
+          </select>
+          <div class="button-row">
+            <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
+            <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
+          </div>
+        </div>
+        <div class="micro-button-row">
+          <button class="micro-button micro-button--primary" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="cold" type="button">Balanced</button>
+          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="talent_partner" type="button">Recruiter</button>
+          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="hiring_manager" type="button">Hiring manager</button>
+          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="executive" type="button">Executive</button>
+          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="follow_up" type="button">Follow-up</button>
+        </div>
+        <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
+      </div>
+    </div>
 
       <div class="action-zone-col">
         <div class="table-card">
           <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
           ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>' +
             detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
-            '</tbody></table></div>' : '<div class="empty-state">No contacts imported yet.</div>'}
+            '</tbody></table></div>' : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDC64</div>No contacts imported yet.<div class="empty-state-suggestion">Import a <strong>LinkedIn Connections CSV</strong> from the Admin view to populate contacts.</div></div>'}
         </div>
       </div>
 
@@ -1304,7 +1363,7 @@ async function renderAccountDetail(accountId) {
             <button class="secondary-button compact-btn" type="submit">Log</button>
           </form>
           <div class="timeline" style="max-height:400px;overflow-y:auto;">
-            ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : '<div class="empty-state">No activity yet.</div>'}
+            ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDCDD</div>No activity yet.<div class="empty-state-suggestion">Log your first outreach or note using the form above.</div></div>'}
           </div>
         </div>
       </div>
@@ -1412,7 +1471,7 @@ async function renderAccountDetail(accountId) {
 
         <div class="table-card">
           <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Recent hiring context tied directly to this company.</p></div></div>
-          ${detail.jobs.length ? renderAccountJobsTable(detail.jobs) : '<div class="empty-state">No jobs connected to this account yet.</div>'}
+          ${detail.jobs.length ? renderAccountJobsTable(detail.jobs) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDCBC</div>No jobs connected to this account yet.<div class="empty-state-suggestion">Run <strong>ATS discovery</strong> or <strong>live import</strong> from Admin to pull in open roles.</div></div>'}
         </div>
 
         <div class="table-card">
@@ -1497,6 +1556,32 @@ async function renderJobsView() {
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
   `;
+}
+
+function renderCollapsibleStart(sectionId, title, subtitle) {
+  const collapsed = appState.adminCollapsed[sectionId];
+  return `<div class="form-card">
+    <div class="collapsible-header${collapsed ? ' collapsed' : ''}" data-collapse-id="${escapeAttr(sectionId)}">
+      <div class="panel-header" style="margin:0;flex:1"><div><h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="muted small">${subtitle}</p>` : ''}</div></div>
+      <span class="chevron">\u25BC</span>
+    </div>
+    <div class="collapsible-body${collapsed ? ' collapsed' : ''}">`;
+}
+
+function renderCollapsibleEnd() {
+  return `</div></div>`;
+}
+
+function wireCollapsibleSections() {
+  document.querySelectorAll('.collapsible-header[data-collapse-id]').forEach((header) => {
+    header.addEventListener('click', () => {
+      const id = header.dataset.collapseId;
+      const body = header.nextElementSibling;
+      const isCollapsed = header.classList.toggle('collapsed');
+      body.classList.toggle('collapsed', isCollapsed);
+      appState.adminCollapsed[id] = isCollapsed;
+    });
+  });
 }
 
 async function renderAdminView() {
@@ -1622,8 +1707,7 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       <div class="two-column">
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Company enrichment coverage</h3><p class="muted small">Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.</p></div></div>
+        ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}
             ${renderMetricCard('Careers URLs', enrichmentSummary.careersUrlCount || 0, 'Companies with a verified careers endpoint')}
@@ -1650,18 +1734,16 @@ async function renderAdminView() {
               ${renderMiniStatList((enrichmentReport.bySource || []).slice(0, 6).map((item) => ({ label: humanize(item.source), value: formatNumber(item.count) })))}
             </div>
           </div>
-        </div>
+        ${renderCollapsibleEnd()}
 
-        <div class="form-card" id="enrichment-queue-panel">
-          <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.</p></div></div>
+        ${renderCollapsibleStart('enrichment-queue', 'Enrichment review queue', `Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.`)}
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
-        </div>
+        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Resolver coverage</h3><p class="muted small">Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.</p></div></div>
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Tracked companies', summary.totalCompanies || 0, 'Board config rows in the resolver')}
             ${renderMetricCard('Resolved boards', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total coverage`)}
@@ -1678,10 +1760,9 @@ async function renderAdminView() {
               ${renderMiniStatList((resolverReport.topFailureReasons || []).map((item) => ({ label: item.failureReason, value: formatNumber(item.count) })))}
             </div>
           </div>
-        </div>
+        ${renderCollapsibleEnd()}
 
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Review queues</h3><p class="muted small">Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.</p></div></div>
+        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
           <div class="panel-stack">
             <div>
               <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
@@ -1692,23 +1773,20 @@ async function renderAdminView() {
               ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
             </div>
           </div>
-        </div>
+        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Runtime status</h3><p class="muted small">See whether the server is warm and whether background jobs are queued or running.</p></div></div>
+        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
           <div id="runtime-status-panel"></div>
-        </div>
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Background jobs</h3><p class="muted small">Long-running imports, discovery, and sheet syncs now run out of band.</p></div></div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
           <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
-        </div>
+        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Pipeline operations</h3><p class="muted small">Run discovery, import jobs, or reseed the app without touching the spreadsheet manually.</p></div></div>
+        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Run discovery, import jobs, or reseed the app without touching the spreadsheet manually.')}
           <div class="actions-grid">
             <div class="action-card">
               <p class="eyebrow">Full pipeline</p>
@@ -1797,10 +1875,9 @@ async function renderAdminView() {
               </div>
             </div>
           </div>
-        </div>
+        ${renderCollapsibleEnd()}
 
-        <div class="form-card">
-          <div class="panel-header"><div><h3>Scoring settings</h3><p class="muted small">These map directly to the old Setup controls.</p></div></div>
+        ${renderCollapsibleStart('scoring-settings', 'Scoring settings', 'These map directly to the old Setup controls.')}
           <form id="settings-form" class="settings-grid">
             ${renderField('Min company connections', `<input name="minCompanyConnections" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minCompanyConnections)}">`)}
             ${renderField('Min jobs posted', `<input name="minJobsPosted" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minJobsPosted)}">`)}
@@ -1810,12 +1887,12 @@ async function renderAdminView() {
             ${renderField('GTA priority', `<select name="gtaPriority"><option value="true" ${selected(String(stateBootstrap.settings.gtaPriority), 'true')}>Enabled</option><option value="false" ${selected(String(stateBootstrap.settings.gtaPriority), 'false')}>Disabled</option></select>`)}
             <div><button class="primary-button" type="submit">Save settings</button></div>
           </form>
-        </div>
+        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
-        <div class="form-card">
-          <div class="panel-header"><div><h3>${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}</h3><p class="muted small">Admin-managed job board records replace hardcoded spreadsheet helpers.</p></div>${appState.configEditingId ? '<button class="ghost-button" data-action="new-config">Clear form</button>' : ''}</div>
+        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Admin-managed job board records replace hardcoded spreadsheet helpers.')}
+          ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
             ${renderField('ATS type', '<select name="atsType"><option value="">Unknown</option><option value="greenhouse">greenhouse</option><option value="lever">lever</option><option value="ashby">ashby</option><option value="smartrecruiters">smartrecruiters</option><option value="workday">workday</option><option value="jobvite">jobvite</option><option value="icims">icims</option><option value="taleo">taleo</option></select>')}
@@ -1827,10 +1904,9 @@ async function renderAdminView() {
             <div class="field" style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes" rows="4"></textarea></div>
             <div><button class="primary-button" type="submit">${appState.configEditingId ? 'Save config' : 'Create config'}</button></div>
           </form>
-        </div>
+        ${renderCollapsibleEnd()}
 
-        <div class="table-card">
-          <div class="panel-header"><div><h3>ATS config records</h3><p class="muted small">Discovery results, manual overrides, and live import status for every tracked company.</p></div></div>
+        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
           <form id="configs-filter-form" class="filter-grid filter-grid--compact">
             ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
             ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
@@ -1842,7 +1918,7 @@ async function renderAdminView() {
           </form>
           ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
           ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
-        </div>
+        ${renderCollapsibleEnd()}
       </div>
     </section>
   `;
@@ -1854,6 +1930,7 @@ async function renderAdminView() {
   }
 
   hydrateAdminRuntimePanels(runtime);
+  wireCollapsibleSections();
 }
 function renderTodayQueueTable(items) {
   return `
@@ -2060,11 +2137,11 @@ function renderEnrichmentQueuePanel(result) {
 }
 
 async function refreshEnrichmentPanel() {
-  const panel = document.getElementById('enrichment-queue-panel');
+  const header = document.querySelector('[data-collapse-id="enrichment-queue"]');
+  const panel = header ? header.nextElementSibling : document.getElementById('enrichment-queue-panel');
   if (!panel) return;
   const result = await api(`/api/enrichment/queue${buildQuery(appState.enrichmentQuery)}`);
   panel.innerHTML = `
-    <div class="panel-header"><div><h3>Enrichment review queue</h3><p class="muted small">Sorted by target score, then hiring velocity, then engagement. ${formatNumber(result.total || 0)} companies in queue.</p></div></div>
     ${renderEnrichmentFilters()}
     ${renderEnrichmentQueuePanel(result)}
   `;
