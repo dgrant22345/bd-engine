@@ -2273,3 +2273,75 @@ a {
 .status-pills-overflow:hover {
   background: var(--line);
 }
+
+/* ── Saved filters ── */
+.saved-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding: 4px 0;
+}
+
+.saved-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0 2px 0 0;
+}
+
+.saved-filter-chip .ghost-button--xs {
+  padding: 4px 8px;
+  font-size: 0.74rem;
+}
+
+.saved-filter-delete {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.9rem;
+  line-height: 1;
+  border-radius: 50%;
+}
+
+.saved-filter-delete:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ── Score delta indicators ── */
+.score-delta {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.score-delta--up {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.score-delta--down {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ── Panel header actions ── */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Bulk action bar enhancements ── */
+.bulk-action-bar .compact-input {
+  max-width: 160px;
+}

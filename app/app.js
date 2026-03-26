@@ -14,10 +14,12 @@ const appState = {
   configEditingId: '',
   runtimeStatus: null,
   runtimePollTimer: null,
+  savedFilters: JSON.parse(localStorage.getItem('bd_saved_filters') || '[]'),
   adminCollapsed: {},
   showAdvancedFilters: false,
   outreachModalOpen: false,
   statusPillsExpanded: false,
+  previousScores: {},
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -52,6 +54,7 @@ async function init() {
       await renderRoute();
       loadBootstrap(false).catch((error) => {
         console.warn('Bootstrap hydration failed in background.', error);
+        window.bdLocalApi.setAlert('Background data refresh failed. Some filters may be stale.', appAlert);
         return null;
       });
     }
@@ -70,6 +73,19 @@ function bindEvents() {
         backdrop.classList.add('hidden');
         appState.outreachModalOpen = false;
       }
+    }
+    // Focus trap for modal
+    if (e.key === 'Tab') {
+      const backdrop = document.getElementById('outreach-modal-backdrop');
+      if (!backdrop || backdrop.classList.contains('hidden')) return;
+      const panel = backdrop.querySelector('.modal-panel');
+      if (!panel) return;
+      const focusable = panel.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   });
   refreshBootstrapButton.addEventListener('click', async () => {
@@ -100,7 +116,13 @@ function bindEvents() {
     // Open outreach modal
     if (event.target.id === 'open-outreach-modal') {
       const backdrop = document.getElementById('outreach-modal-backdrop');
-      if (backdrop) { backdrop.classList.remove('hidden'); appState.outreachModalOpen = true; syncOutreachComposerState(); }
+      if (backdrop) {
+        backdrop.classList.remove('hidden');
+        appState.outreachModalOpen = true;
+        syncOutreachComposerState();
+        const closeBtn = backdrop.querySelector('.modal-close');
+        if (closeBtn) closeBtn.focus();
+      }
       return;
     }
     // Advanced filter toggle
@@ -146,6 +168,28 @@ function bindEvents() {
         return;
       }
       await renderRoute();
+      return;
+    }
+    if (actionName === 'save-current-filter') {
+      const name = prompt('Name for this filter set:');
+      if (name) { saveFilter(name.trim()); await renderAccountsView(); }
+      return;
+    }
+    if (actionName === 'load-saved-filter') {
+      applySavedFilter(action.dataset.name);
+      await renderAccountsView();
+      return;
+    }
+    if (actionName === 'delete-saved-filter') {
+      deleteSavedFilter(action.dataset.name);
+      await renderAccountsView();
+      return;
+    }
+    if (actionName === 'export-csv') {
+      const view = action.dataset.view;
+      if (view === 'accounts') await exportAccountsCsv();
+      if (view === 'contacts') await exportContactsCsv();
+      if (view === 'jobs') await exportJobsCsv();
       return;
     }
     if (actionName === 'apply-enrichment-filter') {
@@ -355,6 +399,10 @@ function bindEvents() {
 
     if (form.id === 'account-create-form') {
       const payload = getFormValues(form);
+      if (!payload.company || !payload.company.trim()) {
+        window.bdLocalApi.setAlert('Company name is required.', appAlert);
+        return;
+      }
       payload.tags = splitTags(payload.tags);
       const created = await api('/api/accounts', {
         method: 'POST',
@@ -520,7 +568,7 @@ function bindEvents() {
         window.bdLocalApi.setAlert('Enrichment saved and ATS resolution queued.', appAlert);
         await renderAdminView();
         hydrateAdminRuntimePanels(await loadRuntimeStatus(true));
-        void watchBackgroundJob(accepted.jobId, { label: 'ATS resolution', refreshRoute: false }).catch(() => {});
+        void watchBackgroundJob(accepted.jobId, { label: 'ATS resolution', refreshRoute: false }).catch((err) => { window.bdLocalApi.setAlert(`ATS resolution failed: ${err.message || err}`, appAlert); });
         return;
       }
       await renderAdminView();
@@ -572,6 +620,19 @@ function splitTags(value) {
   return value.split(',').map((tag) => tag.trim()).filter(Boolean);
 }
 
+function exportToCsv(filename, headers, rows) {
+  const csvContent = [
+    headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','),
+    ...rows.map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')),
+  ].join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 function buildQuery(params) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -595,11 +656,52 @@ function routeNeedsBootstrapFilters(routeRoot) {
 function invalidateAppData() {
   appState.bootstrap = null;
   appState.accountDetail = null;
+  // Snapshot current scores so we can show deltas after refresh
+  Object.keys(appState.previousScores).forEach(id => {
+    appState.previousScores[id] = appState.previousScores[id];
+  });
   window.bdLocalApi.invalidate();
+}
+
+function saveFilter(name) {
+  const entry = { name, query: { ...appState.accountQuery }, savedAt: new Date().toISOString() };
+  appState.savedFilters = appState.savedFilters.filter(f => f.name !== name);
+  appState.savedFilters.unshift(entry);
+  localStorage.setItem('bd_saved_filters', JSON.stringify(appState.savedFilters));
+}
+
+function deleteSavedFilter(name) {
+  appState.savedFilters = appState.savedFilters.filter(f => f.name !== name);
+  localStorage.setItem('bd_saved_filters', JSON.stringify(appState.savedFilters));
+}
+
+function applySavedFilter(name) {
+  const filter = appState.savedFilters.find(f => f.name === name);
+  if (filter) {
+    appState.accountQuery = { ...filter.query, page: 1 };
+  }
+}
+
+function renderSavedFilters() {
+  if (!appState.savedFilters.length) return '';
+  return `<div class="saved-filters-bar">${appState.savedFilters.map(f =>
+    `<span class="saved-filter-chip"><button class="ghost-button ghost-button--xs" data-action="load-saved-filter" data-name="${escapeAttr(f.name)}">${escapeHtml(f.name)}</button><button class="saved-filter-delete" data-action="delete-saved-filter" data-name="${escapeAttr(f.name)}" aria-label="Delete filter ${escapeAttr(f.name)}">&times;</button></span>`
+  ).join('')}</div>`;
 }
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function withButtonState(selector, busyLabel, fn) {
+  const button = typeof selector === 'string' ? document.querySelector(selector) : selector;
+  const originalLabel = button?.textContent || busyLabel;
+  if (button) { button.disabled = true; button.textContent = busyLabel; }
+  try {
+    return await fn();
+  } finally {
+    if (button) { button.disabled = false; button.textContent = originalLabel; }
+  }
 }
 
 async function loadRuntimeStatus(force = false) {
@@ -791,7 +893,7 @@ async function renderDashboardView() {
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
   let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
-  try { extended = await api('/api/dashboard/extended'); } catch(e) { /* non-critical */ }
+  try { extended = await api('/api/dashboard/extended'); } catch(e) { console.warn('Extended dashboard data unavailable:', e); }
   const topCompany = dashboard.todayQueue[0];
   const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
   const coverageEvents = (extended.activityFeed || []).length + (dashboard.recentlyDiscoveredBoards || []).length;
@@ -1119,6 +1221,10 @@ async function renderAccountsView() {
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
   const filters = stateBootstrap.filters || { atsTypes: [], industries: [] };
   const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
+  result.items.forEach(a => {
+    const score = getTargetScore(a);
+    if (appState.previousScores[a.id] === undefined) appState.previousScores[a.id] = score;
+  });
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
   const industryOptions = filters.industries || [];
@@ -1150,7 +1256,7 @@ async function renderAccountsView() {
             <h3>Account queue</h3>
             <p class="muted small">This is the working list. Use filters to narrow it to the accounts you can act on right now.</p>
           </div>
-          <span class="table-meta">${formatNumber(result.total)} tracked accounts</span>
+          <div class="panel-header-actions"><button class="ghost-button" data-action="export-csv" data-view="accounts" aria-label="Export accounts to CSV">Export CSV</button><span class="table-meta">${formatNumber(result.total)} tracked accounts</span></div>
         </div>
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
@@ -1160,7 +1266,9 @@ async function renderAccountsView() {
           <div class="field field--action">
             <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
             <button class="primary-button" type="submit">Apply</button>
+            <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
           </div>
+          ${renderSavedFilters()}
           <div class="filter-advanced-fields${appState.showAdvancedFilters ? '' : ' hidden'}" id="advanced-filter-fields">
           ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
@@ -1239,7 +1347,7 @@ async function renderAccountDetail(accountId) {
     if (vData.weeks) {
       hiringVelocity = Object.entries(vData.weeks).map(([label, count]) => ({ label, count }));
     }
-  } catch(e) { /* non-critical */ }
+  } catch(e) { console.warn('Hiring velocity data unavailable:', e); }
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--dashboard">
@@ -1305,11 +1413,11 @@ async function renderAccountDetail(accountId) {
       </div>
 
     <!-- Outreach composer modal -->
-    <div id="outreach-modal-backdrop" class="modal-backdrop${appState.outreachModalOpen ? '' : ' hidden'}">
+    <div id="outreach-modal-backdrop" class="modal-backdrop${appState.outreachModalOpen ? '' : ' hidden'}" role="dialog" aria-modal="true" aria-label="Outreach composer">
       <div class="modal-panel">
         <div class="panel-header">
           <div><h3>Outreach composer</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div>
-          <button class="modal-close" type="button">&times;</button>
+          <button class="modal-close" type="button" aria-label="Close modal">&times;</button>
         </div>
         <div class="outreach-controls outreach-controls--stacked">
           <select id="outreach-contact-select" class="inline-select">
@@ -1505,7 +1613,7 @@ async function renderContactsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Contact intelligence</h3><p class="muted small">Your network ranked by company overlap and title relevance.</p></div></div>
+      <div class="panel-header"><div><h3>Contact intelligence</h3><p class="muted small">Your network ranked by company overlap and title relevance.</p></div><button class="ghost-button" data-action="export-csv" data-view="contacts" aria-label="Export contacts to CSV">Export CSV</button></div>
       <form id="contacts-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
@@ -1542,7 +1650,7 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate the freshest demand signals by company, ATS, and recency.</p></div></div>
+      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate the freshest demand signals by company, ATS, and recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
@@ -1574,12 +1682,20 @@ function renderCollapsibleEnd() {
 
 function wireCollapsibleSections() {
   document.querySelectorAll('.collapsible-header[data-collapse-id]').forEach((header) => {
-    header.addEventListener('click', () => {
+    header.setAttribute('role', 'button');
+    header.setAttribute('tabindex', '0');
+    header.setAttribute('aria-expanded', header.classList.contains('collapsed') ? 'false' : 'true');
+    const toggleCollapse = () => {
       const id = header.dataset.collapseId;
       const body = header.nextElementSibling;
       const isCollapsed = header.classList.toggle('collapsed');
       body.classList.toggle('collapsed', isCollapsed);
+      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
       appState.adminCollapsed[id] = isCollapsed;
+    };
+    header.addEventListener('click', toggleCollapse);
+    header.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCollapse(); }
     });
   });
 }
@@ -1932,6 +2048,30 @@ async function renderAdminView() {
   hydrateAdminRuntimePanels(runtime);
   wireCollapsibleSections();
 }
+async function exportAccountsCsv() {
+  const result = await api(`/api/accounts${buildQuery({ ...appState.accountQuery, page: 1, pageSize: 10000 })}`);
+  exportToCsv('accounts.csv',
+    ['Company', 'Domain', 'Target Score', 'Priority', 'Status', 'Owner', 'Outreach Status', 'Hiring Velocity', 'Jobs 30d', 'Next Action', 'Tags'],
+    result.items.map(a => [a.displayName, a.domain, getTargetScore(a), a.priority, a.status, a.owner, a.outreachStatus, a.hiringVelocity, a.jobsLast30Days, a.nextAction, (a.tags || []).join('; ')])
+  );
+}
+
+async function exportContactsCsv() {
+  const result = await api(`/api/contacts${buildQuery({ ...appState.contactQuery, page: 1, pageSize: 10000 })}`);
+  exportToCsv('contacts.csv',
+    ['Name', 'Company', 'Title', 'Score', 'Connected On', 'LinkedIn', 'Outreach Status'],
+    result.items.map(c => [c.fullName, c.companyName, c.title, c.priorityScore, c.connectedOn, c.linkedinUrl, c.outreachStatus])
+  );
+}
+
+async function exportJobsCsv() {
+  const result = await api(`/api/jobs${buildQuery({ ...appState.jobQuery, page: 1, pageSize: 10000 })}`);
+  exportToCsv('jobs.csv',
+    ['Title', 'Company', 'Location', 'ATS', 'Posted', 'Active', 'URL'],
+    result.items.map(j => [j.title, j.companyName, j.location, j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
+  );
+}
+
 function renderTodayQueueTable(items) {
   return `
     <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>Target score</th><th>Hiring velocity</th><th>Engagement</th><th>Network</th><th>Next move</th></tr></thead><tbody>
@@ -1953,10 +2093,12 @@ function renderRecentJobsTable(items) {
 
 function renderAccountsTable(items) {
   return `
-    <div id="bulk-action-bar" class="bulk-action-bar hidden">
+    <div id="bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Bulk actions">
       <span id="bulk-count">0 selected</span>
-      <select id="bulk-status"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="outreach">Outreach</option><option value="engaged">Engaged</option><option value="client">Client</option><option value="paused">Paused</option></select>
-      <select id="bulk-priority"><option value="">Change priority...</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      <select id="bulk-status" aria-label="Bulk status change"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="outreach">Outreach</option><option value="engaged">Engaged</option><option value="client">Client</option><option value="paused">Paused</option></select>
+      <select id="bulk-priority" aria-label="Bulk priority change"><option value="">Change priority...</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      ${renderOwnerSelect('bulk-owner', '', true).replace('name="bulk-owner"', 'id="bulk-owner" aria-label="Bulk owner change"')}
+      <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
     <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Target score</th><th>Signal mix</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
@@ -1964,7 +2106,7 @@ function renderAccountsTable(items) {
         <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
           <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
-          <td>${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
           <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
@@ -2484,12 +2626,15 @@ function renderStoryCard(label, value, description, tone = 'neutral') {
   `;
 }
 
+let fieldIdCounter = 0;
 function renderField(label, control) {
-  return `<div class="field"><label>${escapeHtml(label)}</label>${control}</div>`;
+  const id = `field-${++fieldIdCounter}`;
+  const controlWithId = control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
+  return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}</div>`;
 }
 
 function renderStatusPill(value, tone) {
-  return `<span class="status-pill ${tone}">${escapeHtml(humanize(value))}</span>`;
+  return `<span class="status-pill ${tone}" role="status" aria-label="${escapeAttr(humanize(value))}">${escapeHtml(humanize(value))}</span>`;
 }
 
 function renderInlineBadge(value) {
@@ -2501,7 +2646,7 @@ function renderPagination(view, page, pageSize, total) {
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
   const firstRecord = ((page - 1) * pageSize) + 1;
   const lastRecord = Math.min(total, page * pageSize);
-  return `<div class="pagination"><span class="small muted">Showing ${formatNumber(firstRecord)}-${formatNumber(lastRecord)} of ${formatNumber(total)} records · Page ${page} of ${lastPage}</span><div class="pagination-controls"><button class="ghost-button" data-action="paginate" data-view="${view}" data-page="${Math.max(1, page - 1)}" ${page <= 1 ? 'disabled' : ''}>Previous</button><button class="ghost-button" data-action="paginate" data-view="${view}" data-page="${Math.min(lastPage, page + 1)}" ${page >= lastPage ? 'disabled' : ''}>Next</button></div></div>`;
+  return `<nav class="pagination" aria-label="Page navigation"><span class="small muted">Showing ${formatNumber(firstRecord)}-${formatNumber(lastRecord)} of ${formatNumber(total)} records · Page ${page} of ${lastPage}</span><div class="pagination-controls"><button class="ghost-button" data-action="paginate" data-view="${view}" data-page="${Math.max(1, page - 1)}" ${page <= 1 ? 'disabled' : ''} aria-label="Previous page">Previous</button><button class="ghost-button" data-action="paginate" data-view="${view}" data-page="${Math.min(lastPage, page + 1)}" ${page >= lastPage ? 'disabled' : ''} aria-label="Next page">Next</button></div></nav>`;
 }
 
 function renderPrioritySelect(name, currentValue, includeAll = false) {
@@ -2588,23 +2733,17 @@ function resetConfigForm() {
 }
 
 async function reseedWorkbook(path) {
-  const button = document.querySelector('[data-action="reseed-workbook"]');
-  if (button) { button.disabled = true; button.textContent = 'Importing workbook...'; }
-  try {
+  await withButtonState('[data-action="reseed-workbook"]', 'Importing workbook...', async () => {
     const accepted = await api('/api/import/workbook', { method: 'POST', body: JSON.stringify({ workbookPath: path || appState.bootstrap.defaults.workbookPath }) });
     window.bdLocalApi.setAlert('Workbook import queued.', appAlert);
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Workbook import' });
     const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
     window.bdLocalApi.setAlert(`Workbook import finished: ${formatNumber(stats.companies || 0)} companies, ${formatNumber(stats.contacts || 0)} contacts, ${formatNumber(stats.jobs || 0)} jobs.`, appAlert);
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Reimport workbook'; }
-  }
+  });
 }
 
 async function runLiveImport() {
-  const button = document.querySelector('[data-action="run-live-import"]');
-  if (button) { button.disabled = true; button.textContent = 'Running import...'; }
-  try {
+  await withButtonState('[data-action="run-live-import"]', 'Running import...', async () => {
     const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
     window.bdLocalApi.setAlert('Live ATS import queued.', appAlert);
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
@@ -2614,15 +2753,11 @@ async function runLiveImport() {
       ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs. ${formatNumber(stats.errors || 0)} configs errored.`
       : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.`;
     window.bdLocalApi.setAlert(status, appAlert);
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Run live import'; }
-  }
+  });
 }
 
 async function runDiscovery() {
-  const button = document.querySelector('[data-action="run-discovery"]');
-  if (button) { button.disabled = true; button.textContent = 'Discovering...'; }
-  try {
+  await withButtonState('[data-action="run-discovery"]', 'Discovering...', async () => {
     const limit = Number(document.getElementById('discovery-limit')?.value || 75);
     const onlyMissing = (document.getElementById('discovery-only-missing')?.value || 'true') === 'true';
     const forceRefresh = (document.getElementById('discovery-force-refresh')?.value || 'false') === 'true';
@@ -2637,9 +2772,7 @@ async function runDiscovery() {
       `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.`,
       appAlert
     );
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Run discovery'; }
-  }
+  });
 }
 
 async function runLocalEnrichment() {
@@ -2714,17 +2847,13 @@ async function runTargetScoreRollout() {
 }
 
 async function syncConfigs() {
-  const button = document.querySelector('[data-action="sync-configs"]');
-  if (button) { button.disabled = true; button.textContent = 'Rebuilding...'; }
-  try {
+  await withButtonState('[data-action="sync-configs"]', 'Rebuilding...', async () => {
     const accepted = await api('/api/configs/sync', { method: 'POST', body: JSON.stringify({}) });
     resetConfigForm();
     window.bdLocalApi.setAlert('Config rebuild queued.', appAlert);
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Config rebuild' });
     window.bdLocalApi.setAlert(`Rebuilt ${formatNumber(job?.result?.count || 0)} job board config rows.`, appAlert);
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Rebuild configs'; }
-  }
+  });
 }
 
 async function rerunEnrichmentResolution(accountId, options = {}) {
@@ -2734,7 +2863,7 @@ async function rerunEnrichmentResolution(accountId, options = {}) {
   });
   window.bdLocalApi.setAlert(options.deepVerify ? 'Deep ATS resolution queued for this company.' : 'ATS resolution queued for this company.', appAlert);
   hydrateAdminRuntimePanels(await loadRuntimeStatus(true));
-  void watchBackgroundJob(accepted.jobId, { label: options.deepVerify ? 'Deep ATS resolution' : 'ATS resolution', refreshRoute: false }).catch(() => {});
+  void watchBackgroundJob(accepted.jobId, { label: options.deepVerify ? 'Deep ATS resolution' : 'ATS resolution', refreshRoute: false }).catch((err) => { window.bdLocalApi.setAlert(`ATS resolution failed: ${err.message || err}`, appAlert); });
 }
 
 async function quickEnrichAccount(accountId) {
@@ -3007,11 +3136,15 @@ async function applyBulkUpdate() {
   if (!ids.length) return;
   const status = document.getElementById('bulk-status')?.value || '';
   const priority = document.getElementById('bulk-priority')?.value || '';
+  const owner = document.getElementById('bulk-owner')?.value || '';
+  const tagsRaw = document.getElementById('bulk-tags')?.value || '';
   const patch = {};
   if (status) patch.status = status;
   if (priority) patch.priority = priority;
+  if (owner) patch.owner = owner;
+  if (tagsRaw.trim()) patch.addTags = splitTags(tagsRaw);
   if (!Object.keys(patch).length) {
-    window.bdLocalApi.setAlert('Select a status or priority to apply.', appAlert);
+    window.bdLocalApi.setAlert('Select a status, priority, owner, or tags to apply.', appAlert);
     return;
   }
   await api('/api/accounts/bulk', {
@@ -3043,7 +3176,8 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
 
     const subjectLine = result.subject_line || result.subjectLine || `Hiring signal at ${appState.accountDetail?.account?.displayName || 'this company'}`;
     const messageBody = result.message_body || result.messageBody || result.outreach || '';
-    const copyText = `Subject: ${subjectLine}\n\n${messageBody}`.trim();
+    const linkedinMsg = result.linkedin_message || result.linkedinMessage || '';
+    appState.generatedOutreach = normalizeGeneratedOutreachItem({ ...result, subject_line: subjectLine, message_body: messageBody, linkedin_message: linkedinMsg });
 
     // Update the outreach prompt card with the generated message
     const body = document.getElementById('outreach-prompt-body');
@@ -3052,7 +3186,6 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
       if (subjectLine) {
         const gmailSubjectStructured = encodeURIComponent(subjectLine);
         const gmailBodyStructured = encodeURIComponent(messageBody);
-        const linkedinMsg = result.linkedin_message || result.linkedinMessage || '';
         body.innerHTML = `
           <div style="display: grid; gap: 16px;">
             <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; background: var(--surface-muted);">
@@ -3061,7 +3194,7 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
                 Subject: ${escapeHtml(subjectLine)}<br><br>${escapeHtml(messageBody)}
               </div>
               <div class="button-row" style="margin-top:12px;">
-                <button class="secondary-button" onclick="const s='${escapeHtml(subjectLine).replace(/'/g,"\\'")}';const b=\`${escapeHtml(messageBody).replace(/`/g,"\\`")}\`;navigator.clipboard.writeText('Subject: '+s+'\\n\\n'+b);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy Email</button>
+                <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy Email</button>
                 <a class="primary-button" href="mailto:?subject=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Open in Default Mail</a>
                 <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Draft in Gmail</a>
               </div>
@@ -3073,7 +3206,7 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
                 ${escapeHtml(linkedinMsg)}
               </div>
               <div class="button-row" style="margin-top:12px;">
-                <button class="primary-button" onclick="navigator.clipboard.writeText(\`${escapeHtml(linkedinMsg).replace(/`/g,"\\`")}\`); window.open('https://www.linkedin.com/messaging/compose', '_blank'); this.textContent='Copied & Opened!';setTimeout(()=>this.textContent='Copy & Open LinkedIn',2500)">Copy & Open LinkedIn</button>
+                <button class="primary-button" data-action="open-generated-linkedin" type="button">Copy & Open LinkedIn</button>
               </div>
             </div>
           </div>
@@ -3489,6 +3622,14 @@ function getTargetScoreExplanation(item) {
     }
   }
   return item?.recommendedAction || item?.nextAction || '';
+}
+
+function renderScoreDelta(accountId, currentScore) {
+  const prev = appState.previousScores[accountId];
+  if (prev === undefined || prev === currentScore) return '';
+  const delta = currentScore - prev;
+  if (delta > 0) return `<span class="score-delta score-delta--up" aria-label="Score increased by ${delta}">+${delta}</span>`;
+  return `<span class="score-delta score-delta--down" aria-label="Score decreased by ${Math.abs(delta)}">${delta}</span>`;
 }
 
 function renderTargetScoreSignalSummary(item) {
