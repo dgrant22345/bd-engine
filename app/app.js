@@ -20,6 +20,11 @@ const appState = {
   outreachModalOpen: false,
   statusPillsExpanded: false,
   previousScores: {},
+  theme: localStorage.getItem('bd_theme') || 'system',
+  cmdPaletteOpen: false,
+  lastKeyTime: 0,
+  lastKey: '',
+  mobileNavOpen: false,
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -29,6 +34,289 @@ const searchInput = document.getElementById('global-search-input');
 const searchResults = document.getElementById('search-results');
 const appAlert = document.getElementById('app-alert');
 const refreshBootstrapButton = document.getElementById('refresh-bootstrap');
+const breadcrumbsEl = document.getElementById('breadcrumbs');
+const toastContainer = document.getElementById('toast-container');
+const cmdPaletteBackdrop = document.getElementById('cmd-palette-backdrop');
+const mobileNavBackdrop = document.getElementById('mobile-nav-backdrop');
+const themeToggle = document.getElementById('theme-toggle');
+const themeIcon = document.getElementById('theme-icon');
+const themeLabel = document.getElementById('theme-label');
+const hamburgerBtn = document.getElementById('mobile-hamburger');
+
+/* ── Theme system ── */
+function applyTheme(mode) {
+  appState.theme = mode;
+  localStorage.setItem('bd_theme', mode);
+  let effective = mode;
+  if (mode === 'system') {
+    effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', effective);
+  if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';
+  if (themeLabel) themeLabel.textContent = effective === 'dark' ? 'Light' : 'Dark';
+}
+
+function cycleTheme() {
+  const order = ['light', 'dark', 'system'];
+  const next = order[(order.indexOf(appState.theme) + 1) % order.length];
+  applyTheme(next);
+  showToast(`Theme: ${next === 'system' ? 'System' : next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
+}
+
+applyTheme(appState.theme);
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (appState.theme === 'system') applyTheme('system');
+});
+
+if (themeToggle) themeToggle.addEventListener('click', cycleTheme);
+
+/* ── Toast notification system ── */
+let toastId = 0;
+function showToast(message, type = 'info', duration = 4000) {
+  const icons = { success: '&#10003;', error: '&#10007;', warning: '&#9888;', info: '&#8505;' };
+  const id = ++toastId;
+  const el = document.createElement('div');
+  el.className = `toast toast--${type}`;
+  el.setAttribute('role', 'alert');
+  el.innerHTML = `
+    <span class="toast-icon">${icons[type] || icons.info}</span>
+    <span class="toast-msg">${escapeHtml(message)}</span>
+    <button class="toast-close" data-toast-id="${id}" aria-label="Dismiss">&times;</button>
+  `;
+  el.querySelector('.toast-close').addEventListener('click', () => dismissToast(el));
+  toastContainer.appendChild(el);
+  if (duration > 0) {
+    setTimeout(() => dismissToast(el), duration);
+  }
+  return el;
+}
+
+function dismissToast(el) {
+  if (!el || !el.parentNode) return;
+  el.classList.add('toast-exit');
+  setTimeout(() => el.remove(), 300);
+}
+
+/* ── Mobile navigation ── */
+function openMobileNav() {
+  appState.mobileNavOpen = true;
+  document.querySelector('.sidebar')?.classList.add('mobile-open');
+  mobileNavBackdrop?.classList.add('open');
+}
+
+function closeMobileNav() {
+  appState.mobileNavOpen = false;
+  document.querySelector('.sidebar')?.classList.remove('mobile-open');
+  mobileNavBackdrop?.classList.remove('open');
+}
+
+if (hamburgerBtn) hamburgerBtn.addEventListener('click', openMobileNav);
+if (mobileNavBackdrop) mobileNavBackdrop.addEventListener('click', closeMobileNav);
+document.querySelectorAll('.nav a').forEach(a => {
+  a.addEventListener('click', () => closeMobileNav());
+});
+
+/* ── Command palette ── */
+const cmdActions = [
+  { id: 'nav-dashboard', label: 'Go to Dashboard', icon: '&#9632;', key: 'G D', action: () => { location.hash = '#/dashboard'; } },
+  { id: 'nav-accounts', label: 'Go to Accounts', icon: '&#9632;', key: 'G A', action: () => { location.hash = '#/accounts'; } },
+  { id: 'nav-contacts', label: 'Go to Contacts', icon: '&#9632;', key: 'G C', action: () => { location.hash = '#/contacts'; } },
+  { id: 'nav-jobs', label: 'Go to Jobs', icon: '&#9632;', key: 'G J', action: () => { location.hash = '#/jobs'; } },
+  { id: 'nav-admin', label: 'Go to Admin', icon: '&#9632;', key: 'G X', action: () => { location.hash = '#/admin'; } },
+  { id: 'toggle-theme', label: 'Toggle theme', icon: '&#9789;', key: '', action: cycleTheme },
+  { id: 'refresh', label: 'Refresh data', icon: '&#8635;', key: '', action: () => refreshBootstrapButton?.click() },
+  { id: 'export-csv', label: 'Export current view as CSV', icon: '&#8615;', key: '', action: () => {
+    const v = appState.activeView;
+    if (v === 'accounts') document.querySelector('[data-action="exportAccountsCsv"]')?.click();
+    else if (v === 'contacts') document.querySelector('[data-action="exportContactsCsv"]')?.click();
+    else if (v === 'jobs') document.querySelector('[data-action="exportJobsCsv"]')?.click();
+    else showToast('Export not available for this view', 'warning');
+  }},
+  { id: 'focus-search', label: 'Focus search', icon: '&#128269;', key: '/', action: () => { searchInput?.focus(); } },
+];
+
+let cmdPaletteIndex = 0;
+let cmdFiltered = [...cmdActions];
+
+function openCmdPalette() {
+  appState.cmdPaletteOpen = true;
+  cmdPaletteIndex = 0;
+  cmdFiltered = [...cmdActions];
+  cmdPaletteBackdrop.classList.remove('hidden');
+  cmdPaletteBackdrop.innerHTML = `
+    <div class="cmd-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <input class="cmd-palette-input" id="cmd-input" type="text" placeholder="Type a command..." autocomplete="off" />
+      <div class="cmd-palette-list" id="cmd-list"></div>
+    </div>
+  `;
+  renderCmdList();
+  const input = document.getElementById('cmd-input');
+  input?.focus();
+  input?.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    cmdFiltered = cmdActions.filter(a => a.label.toLowerCase().includes(q));
+    cmdPaletteIndex = 0;
+    renderCmdList();
+  });
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); cmdPaletteIndex = Math.min(cmdPaletteIndex + 1, cmdFiltered.length - 1); renderCmdList(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cmdPaletteIndex = Math.max(cmdPaletteIndex - 1, 0); renderCmdList(); }
+    else if (e.key === 'Enter' && cmdFiltered[cmdPaletteIndex]) { e.preventDefault(); closeCmdPalette(); cmdFiltered[cmdPaletteIndex].action(); }
+    else if (e.key === 'Escape') { closeCmdPalette(); }
+  });
+}
+
+function closeCmdPalette() {
+  appState.cmdPaletteOpen = false;
+  cmdPaletteBackdrop.classList.add('hidden');
+  cmdPaletteBackdrop.innerHTML = '';
+}
+
+function renderCmdList() {
+  const list = document.getElementById('cmd-list');
+  if (!list) return;
+  if (!cmdFiltered.length) {
+    list.innerHTML = '<div class="cmd-palette-empty">No matching commands</div>';
+    return;
+  }
+  list.innerHTML = cmdFiltered.map((item, i) => `
+    <div class="cmd-palette-item ${i === cmdPaletteIndex ? 'active' : ''}" data-cmd-idx="${i}">
+      <span class="cmd-icon">${item.icon}</span>
+      <span>${escapeHtml(item.label)}</span>
+      ${item.key ? `<span class="cmd-key">${escapeHtml(item.key)}</span>` : ''}
+    </div>
+  `).join('');
+  list.querySelectorAll('.cmd-palette-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = Number(el.dataset.cmdIdx);
+      closeCmdPalette();
+      cmdFiltered[idx]?.action();
+    });
+    el.addEventListener('mouseenter', () => {
+      cmdPaletteIndex = Number(el.dataset.cmdIdx);
+      renderCmdList();
+    });
+  });
+}
+
+/* ── Breadcrumbs ── */
+function renderBreadcrumbs(crumbs) {
+  if (!breadcrumbsEl) return;
+  if (!crumbs || crumbs.length <= 1) {
+    breadcrumbsEl.innerHTML = '';
+    return;
+  }
+  breadcrumbsEl.innerHTML = crumbs.map((c, i) => {
+    if (i === crumbs.length - 1) return `<span class="bc-current">${escapeHtml(c.label)}</span>`;
+    return `<a href="${escapeAttr(c.href)}">${escapeHtml(c.label)}</a><span class="bc-sep">&#8250;</span>`;
+  }).join('');
+}
+
+/* ── Account health score helpers ── */
+function computeHealthScore(account) {
+  let score = 0;
+  let max = 0;
+
+  // Has contacts (20pts)
+  max += 20;
+  if ((account.contactCount || 0) > 0) score += Math.min(20, (account.contactCount || 0) * 5);
+
+  // Active jobs (25pts)
+  max += 25;
+  if ((account.activeJobCount || 0) > 0) score += Math.min(25, (account.activeJobCount || 0) * 8);
+
+  // Recent activity (20pts)
+  max += 20;
+  if (account.lastActivityDate) {
+    const days = (Date.now() - new Date(account.lastActivityDate).getTime()) / 86400000;
+    if (days < 7) score += 20;
+    else if (days < 30) score += 12;
+    else if (days < 90) score += 5;
+  }
+
+  // Target score (20pts)
+  max += 20;
+  const ts = account.targetScore || account.target_score || 0;
+  score += Math.min(20, Math.round(ts * 2));
+
+  // Has domain & enrichment (15pts)
+  max += 15;
+  if (account.domain) score += 8;
+  if (account.careersUrl || account.careers_url) score += 7;
+
+  return max > 0 ? Math.round((score / max) * 100) : 0;
+}
+
+function healthColor(score) {
+  if (score >= 75) return 'var(--success)';
+  if (score >= 45) return 'var(--warning)';
+  return 'var(--danger)';
+}
+
+function renderHealthRing(score) {
+  const r = 17;
+  const c = 2 * Math.PI * r;
+  const pct = score / 100;
+  const color = healthColor(score);
+  return `<span class="health-ring" title="Health: ${score}%">
+    <svg width="44" height="44"><circle cx="22" cy="22" r="${r}" fill="none" stroke="var(--bg-soft)" stroke-width="4"/>
+    <circle cx="22" cy="22" r="${r}" fill="none" stroke="${color}" stroke-width="4" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct)}" stroke-linecap="round"/></svg>
+    <span class="health-ring-label" style="color:${color}">${score}</span>
+  </span>`;
+}
+
+/* ── Pipeline heatmap ── */
+function renderPipelineHeatmap(accounts) {
+  if (!accounts || !accounts.length) return '';
+
+  const statuses = ['prospect', 'qualifying', 'active', 'nurture', 'closed_won', 'closed_lost'];
+  const priorities = ['high', 'medium', 'low'];
+  const grid = {};
+  statuses.forEach(s => { grid[s] = {}; priorities.forEach(p => { grid[s][p] = 0; }); });
+
+  accounts.forEach(a => {
+    const s = (a.status || 'prospect').toLowerCase();
+    const p = (a.priority || 'medium').toLowerCase();
+    if (grid[s] && grid[s][p] !== undefined) grid[s][p]++;
+  });
+
+  const maxVal = Math.max(1, ...Object.values(grid).flatMap(row => Object.values(row)));
+
+  function cellColor(count) {
+    if (count === 0) return 'var(--bg-soft)';
+    const intensity = Math.max(0.15, count / maxVal);
+    return `rgba(31, 99, 216, ${intensity.toFixed(2)})`;
+  }
+
+  const cols = statuses.length + 1;
+  let cells = `<div class="heatmap-label"></div>`;
+  statuses.forEach(s => { cells += `<div class="heatmap-label">${escapeHtml(humanize(s))}</div>`; });
+
+  priorities.forEach(p => {
+    cells += `<div class="heatmap-label" style="text-align:right;padding-right:6px;">${escapeHtml(humanize(p))}</div>`;
+    statuses.forEach(s => {
+      const v = grid[s][p];
+      const bg = cellColor(v);
+      const textColor = v / maxVal > 0.5 ? '#fff' : 'var(--text)';
+      cells += `<div class="heatmap-cell" style="background:${bg};color:${textColor}" title="${humanize(p)} / ${humanize(s)}: ${v}">${v || ''}</div>`;
+    });
+  });
+
+  return `
+    <div class="chart-card">
+      <div class="card-header"><h3>Pipeline Heatmap</h3><p class="small muted">Accounts by status &times; priority</p></div>
+      <div class="heatmap-grid" style="grid-template-columns: 70px repeat(${statuses.length}, 1fr);">${cells}</div>
+      <div class="heatmap-legend">
+        <span>Less</span>
+        <span class="heatmap-swatch" style="background:rgba(31,99,216,0.15)"></span>
+        <span class="heatmap-swatch" style="background:rgba(31,99,216,0.4)"></span>
+        <span class="heatmap-swatch" style="background:rgba(31,99,216,0.7)"></span>
+        <span class="heatmap-swatch" style="background:rgba(31,99,216,1)"></span>
+        <span>More</span>
+      </div>
+    </div>
+  `;
+}
 
 window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
@@ -67,13 +355,29 @@ async function init() {
 function bindEvents() {
   window.addEventListener('hashchange', () => renderRoute());
   document.addEventListener('keydown', (e) => {
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
+
+    // Escape: close modals/palette/mobile nav
     if (e.key === 'Escape') {
+      if (appState.cmdPaletteOpen) { closeCmdPalette(); return; }
+      if (appState.mobileNavOpen) { closeMobileNav(); return; }
       const backdrop = document.getElementById('outreach-modal-backdrop');
       if (backdrop && !backdrop.classList.contains('hidden')) {
         backdrop.classList.add('hidden');
         appState.outreachModalOpen = false;
       }
+      return;
     }
+
+    // Command palette: Ctrl+K / Cmd+K
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      if (appState.cmdPaletteOpen) closeCmdPalette();
+      else openCmdPalette();
+      return;
+    }
+
     // Focus trap for modal
     if (e.key === 'Tab') {
       const backdrop = document.getElementById('outreach-modal-backdrop');
@@ -86,6 +390,50 @@ function bindEvents() {
       const last = focusable[focusable.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      return;
+    }
+
+    // Skip shortcuts when typing in an input
+    if (isInput || appState.cmdPaletteOpen) return;
+
+    // "/" to focus search
+    if (e.key === '/') { e.preventDefault(); searchInput?.focus(); return; }
+
+    // "?" to open command palette
+    if (e.key === '?') { e.preventDefault(); openCmdPalette(); return; }
+
+    // G + <key> navigation (two-key chord)
+    const now = Date.now();
+    if (appState.lastKey === 'g' && now - appState.lastKeyTime < 800) {
+      appState.lastKey = '';
+      const navMap = { d: '#/dashboard', a: '#/accounts', c: '#/contacts', j: '#/jobs', x: '#/admin' };
+      if (navMap[e.key]) { e.preventDefault(); location.hash = navMap[e.key]; return; }
+    }
+    appState.lastKey = e.key;
+    appState.lastKeyTime = now;
+
+    // J/K for table row navigation
+    if (e.key === 'j' || e.key === 'k') {
+      const rows = Array.from(document.querySelectorAll('.table tbody tr'));
+      if (!rows.length) return;
+      const current = document.querySelector('.table tbody tr.kb-focus');
+      let idx = current ? rows.indexOf(current) : -1;
+      if (current) current.classList.remove('kb-focus');
+      idx = e.key === 'j' ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
+      rows[idx].classList.add('kb-focus');
+      rows[idx].scrollIntoView({ block: 'nearest' });
+      rows[idx].style.outline = '2px solid var(--accent)';
+      rows[idx].style.outlineOffset = '-2px';
+      if (current && current !== rows[idx]) { current.style.outline = ''; current.style.outlineOffset = ''; }
+    }
+
+    // Enter on focused row: navigate to detail
+    if (e.key === 'Enter') {
+      const focused = document.querySelector('.table tbody tr.kb-focus');
+      if (focused) {
+        const link = focused.querySelector('a[href]');
+        if (link) { link.click(); return; }
+      }
     }
   });
   refreshBootstrapButton.addEventListener('click', async () => {
@@ -454,7 +802,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(accountId);
-      window.bdLocalApi.setAlert('Account updated.', appAlert);
+      showToast('Account updated.', 'success');
       return;
     }
 
@@ -467,7 +815,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(accountId);
-      window.bdLocalApi.setAlert('Next action updated.', appAlert);
+      showToast('Next action updated.', 'success');
       return;
     }
 
@@ -481,7 +829,7 @@ function bindEvents() {
       invalidateAppData();
       const row = document.getElementById('quick-log-' + accountId);
       if (row) row.classList.add('hidden');
-      window.bdLocalApi.setAlert('Quick update saved.', appAlert);
+      showToast('Quick update saved.', 'success');
       return;
     }
 
@@ -493,7 +841,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAccountDetail(payload.accountId);
-      window.bdLocalApi.setAlert('Activity logged.', appAlert);
+      showToast('Activity logged.', 'success');
       return;
     }
 
@@ -517,7 +865,7 @@ function bindEvents() {
       });
       invalidateAppData();
       await renderAdminView();
-      window.bdLocalApi.setAlert('Scoring settings saved.', appAlert);
+      showToast('Scoring settings saved.', 'success');
       return;
     }
 
@@ -565,14 +913,14 @@ function bindEvents() {
           method: 'POST',
           body: JSON.stringify({}),
         });
-        window.bdLocalApi.setAlert('Enrichment saved and ATS resolution queued.', appAlert);
+        showToast('Enrichment saved and ATS resolution queued.', 'success');
         await renderAdminView();
         hydrateAdminRuntimePanels(await loadRuntimeStatus(true));
         void watchBackgroundJob(accepted.jobId, { label: 'ATS resolution', refreshRoute: false }).catch((err) => { window.bdLocalApi.setAlert(`ATS resolution failed: ${err.message || err}`, appAlert); });
         return;
       }
       await renderAdminView();
-      window.bdLocalApi.setAlert('Enrichment saved.', appAlert);
+      showToast('Enrichment saved.', 'success');
     }
   });
 }
@@ -853,39 +1201,50 @@ async function renderRoute() {
   const root = parts[0] || 'dashboard';
   appState.activeView = root;
   clearRuntimePoll();
+  closeMobileNav();
 
   if (root === 'accounts' && parts[1]) {
     activateNav('accounts');
+    renderBreadcrumbs([
+      { label: 'Dashboard', href: '#/dashboard' },
+      { label: 'Accounts', href: '#/accounts' },
+      { label: decodeURIComponent(parts[1]) },
+    ]);
     await renderAccountDetail(parts[1]);
     return;
   }
 
   if (root === 'accounts') {
     activateNav('accounts');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Accounts' }]);
     await renderAccountsView();
     return;
   }
 
   if (root === 'contacts') {
     activateNav('contacts');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Contacts' }]);
     await renderContactsView();
     return;
   }
 
   if (root === 'jobs') {
     activateNav('jobs');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Jobs' }]);
     await renderJobsView();
     return;
   }
 
   if (root === 'admin') {
     activateNav('admin');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Admin' }]);
     await renderAdminView();
     scheduleRuntimePoll();
     return;
   }
 
   activateNav('dashboard');
+  renderBreadcrumbs(null);
   await renderDashboardView();
 }
 async function renderDashboardView() {
@@ -895,7 +1254,8 @@ async function renderDashboardView() {
   let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
   try { extended = await api('/api/dashboard/extended'); } catch(e) { console.warn('Extended dashboard data unavailable:', e); }
   const topCompany = dashboard.todayQueue[0];
-  const maxNetwork = Math.max(1, ...(dashboard.networkLeaders || []).map((item) => item.connectionCount || 0));
+  const networkLeadersList = Array.isArray(dashboard.networkLeaders) ? dashboard.networkLeaders : [];
+  const maxNetwork = Math.max(1, ...networkLeadersList.map((item) => item.connectionCount || 0));
   const coverageEvents = (extended.activityFeed || []).length + (dashboard.recentlyDiscoveredBoards || []).length;
   const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
   const resolutionQueue = (dashboard.needsResolution && dashboard.needsResolution.length)
@@ -1212,6 +1572,7 @@ async function renderDashboardView() {
         </div>
       </div>
     </section>
+    ${renderPipelineHeatmap(dashboard.todayQueue)}
   `;
 }
 
@@ -2101,11 +2462,12 @@ function renderAccountsTable(items) {
       <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
-    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Target score</th><th>Signal mix</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Health</th><th>Target score</th><th>Signal mix</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
           <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
+          <td>${renderHealthRing(computeHealthScore(item))}</td>
           <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
           <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
@@ -2115,7 +2477,7 @@ function renderAccountsTable(items) {
           <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Log</button></div></td>
         </tr>
         <tr id="quick-log-${item.id}" class="quick-log-row hidden">
-          <td colspan="9">
+          <td colspan="10">
             <form class="quick-log-form" data-account-id="${item.id}">
               <input name="quickNote" placeholder="Quick note..." class="compact-input">
               <select name="outreachStatus" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
@@ -2735,7 +3097,7 @@ function resetConfigForm() {
 async function reseedWorkbook(path) {
   await withButtonState('[data-action="reseed-workbook"]', 'Importing workbook...', async () => {
     const accepted = await api('/api/import/workbook', { method: 'POST', body: JSON.stringify({ workbookPath: path || appState.bootstrap.defaults.workbookPath }) });
-    window.bdLocalApi.setAlert('Workbook import queued.', appAlert);
+    showToast('Workbook import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Workbook import' });
     const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
     window.bdLocalApi.setAlert(`Workbook import finished: ${formatNumber(stats.companies || 0)} companies, ${formatNumber(stats.contacts || 0)} contacts, ${formatNumber(stats.jobs || 0)} jobs.`, appAlert);
@@ -2745,7 +3107,7 @@ async function reseedWorkbook(path) {
 async function runLiveImport() {
   await withButtonState('[data-action="run-live-import"]', 'Running import...', async () => {
     const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
-    window.bdLocalApi.setAlert('Live ATS import queued.', appAlert);
+    showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
     const run = job?.result?.importRun || {};
     const stats = run?.stats || {};
@@ -2765,7 +3127,7 @@ async function runDiscovery() {
       method: 'POST',
       body: JSON.stringify({ limit, onlyMissing, forceRefresh }),
     });
-    window.bdLocalApi.setAlert('ATS discovery queued.', appAlert);
+    showToast('ATS discovery queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'ATS discovery' });
     const stats = job?.result?.stats || {};
     window.bdLocalApi.setAlert(
@@ -2785,7 +3147,7 @@ async function runLocalEnrichment() {
       method: 'POST',
       body: JSON.stringify({ limit, forceRefresh }),
     });
-    window.bdLocalApi.setAlert('Fast local enrich queued.', appAlert);
+    showToast('Fast local enrich queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Fast local enrichment' });
     const result = job?.result || {};
     const stats = result?.stats || {};
@@ -2810,7 +3172,7 @@ async function runEnrichment() {
       method: 'POST',
       body: JSON.stringify({ limit, forceRefresh }),
     });
-    window.bdLocalApi.setAlert('Deep verification queued.', appAlert);
+    showToast('Deep verification queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Deep verification' });
     const stats = job?.result?.stats || {};
     const timings = job?.result?.timings || {};
@@ -2833,7 +3195,7 @@ async function runTargetScoreRollout() {
       method: 'POST',
       body: JSON.stringify({ limit, maxBatches }),
     });
-    window.bdLocalApi.setAlert('Target-score rollout queued.', appAlert);
+    showToast('Target-score rollout queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Target-score rollout' });
     const result = job?.result || {};
     const timings = result.timings || {};
@@ -2850,7 +3212,7 @@ async function syncConfigs() {
   await withButtonState('[data-action="sync-configs"]', 'Rebuilding...', async () => {
     const accepted = await api('/api/configs/sync', { method: 'POST', body: JSON.stringify({}) });
     resetConfigForm();
-    window.bdLocalApi.setAlert('Config rebuild queued.', appAlert);
+    showToast('Config rebuild queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Config rebuild' });
     window.bdLocalApi.setAlert(`Rebuilt ${formatNumber(job?.result?.count || 0)} job board config rows.`, appAlert);
   });
@@ -2894,7 +3256,7 @@ async function resolveAccountNow(accountId) {
       method: 'POST',
       body: JSON.stringify({ forceRefresh: true }),
     });
-    window.bdLocalApi.setAlert('Balanced verification queued for this account.', appAlert);
+    showToast('Balanced verification queued for this account.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Balanced verification' });
     let resolutionQueued = false;
     if (accepted.canRerunResolution) {
@@ -2903,7 +3265,7 @@ async function resolveAccountNow(accountId) {
         method: 'POST',
         body: JSON.stringify({ deepVerify: false }),
       });
-      window.bdLocalApi.setAlert('Balanced verification finished. ATS resolution queued next.', appAlert);
+      showToast('Balanced verification finished. ATS resolution queued next.', 'success');
       await watchBackgroundJob(resolution.jobId, { label: 'ATS resolution' });
     }
     const timings = job?.result?.timings || {};
@@ -2926,7 +3288,7 @@ async function deepVerifyAccount(accountId) {
       method: 'POST',
       body: JSON.stringify({ forceRefresh: true }),
     });
-    window.bdLocalApi.setAlert('Deep verification queued for this account.', appAlert);
+    showToast('Deep verification queued for this account.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Deep verification' });
     let resolutionQueued = false;
     if (accepted.canRerunResolution) {
@@ -2935,7 +3297,7 @@ async function deepVerifyAccount(accountId) {
         method: 'POST',
         body: JSON.stringify({ deepVerify: true }),
       });
-      window.bdLocalApi.setAlert('Deep verification finished. ATS resolution queued next.', appAlert);
+      showToast('Deep verification finished. ATS resolution queued next.', 'success');
       await watchBackgroundJob(resolution.jobId, { label: 'Deep ATS resolution' });
     }
     const timings = job?.result?.timings || {};
@@ -2964,7 +3326,7 @@ async function runGoogleSheetSync() {
       method: 'POST',
       body: JSON.stringify({ spreadsheetId }),
     });
-    window.bdLocalApi.setAlert('Google Sheet sync queued.', appAlert);
+    showToast('Google Sheet sync queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Google Sheet sync', refreshRoute: false });
     window.bdLocalApi.setAlert(`Live sheet sync complete: ${formatNumber(job?.result?.writtenRows || 0)} rows written for ${formatNumber(job?.result?.targetCompanies || 0)} companies.`, appAlert);
   } finally {
@@ -2986,7 +3348,7 @@ async function runFullBdEngine() {
         skipJobImport: false,
       }),
     });
-    window.bdLocalApi.setAlert('Full BD engine run queued.', appAlert);
+    showToast('Full BD engine run queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Full BD engine run' });
     const result = job?.result || {};
     const tabs = result?.tabsWritten || {};
@@ -3026,7 +3388,7 @@ async function runConnectionsCsvImport(dryRun) {
     } else {
       const csvPath = getConnectionsCsvPath();
       if (!csvPath) {
-        window.bdLocalApi.setAlert('Please select a CSV file using the Browse button.', appAlert);
+        showToast('Please select a CSV file using the Browse button.', 'warning');
         return;
       }
       requestBody = JSON.stringify({ csvPath, dryRun, useEmptyState: dryRun });
@@ -3037,7 +3399,7 @@ async function runConnectionsCsvImport(dryRun) {
       body: requestBody,
     });
     if (!dryRun) {
-      window.bdLocalApi.setAlert('Connections import queued.', appAlert);
+      showToast('Connections import queued.', 'success');
       const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
       const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
       const message = `Imported ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
@@ -3058,9 +3420,9 @@ async function retryConfigResolution(configId) {
     method: 'POST',
     body: JSON.stringify({ forceRefresh: true }),
   });
-  window.bdLocalApi.setAlert('Config resolution queued.', appAlert);
+  showToast('Config resolution queued.', 'success');
   await watchBackgroundJob(accepted.jobId, { label: 'Config resolution' });
-  window.bdLocalApi.setAlert('Config resolution finished.', appAlert);
+  showToast('Config resolution finished.', 'success');
 }
 
 async function reviewConfig(configId, decision) {
@@ -3079,7 +3441,7 @@ async function cancelBackgroundJob(jobId) {
   await api(`/api/background-jobs/${jobId}/cancel`, { method: 'POST', body: JSON.stringify({}) });
   const runtime = await loadRuntimeStatus(true);
   hydrateAdminRuntimePanels(runtime);
-  window.bdLocalApi.setAlert('Queued background job cancelled.', appAlert);
+  showToast('Queued background job cancelled.', 'info');
 }
 
 document.addEventListener('change', (event) => {
@@ -3144,7 +3506,7 @@ async function applyBulkUpdate() {
   if (owner) patch.owner = owner;
   if (tagsRaw.trim()) patch.addTags = splitTags(tagsRaw);
   if (!Object.keys(patch).length) {
-    window.bdLocalApi.setAlert('Select a status, priority, owner, or tags to apply.', appAlert);
+    showToast('Select a status, priority, owner, or tags to apply.', 'warning');
     return;
   }
   await api('/api/accounts/bulk', {
@@ -3153,7 +3515,7 @@ async function applyBulkUpdate() {
   });
   invalidateAppData();
   await renderAccountsView();
-  window.bdLocalApi.setAlert('Updated ' + ids.length + ' accounts.', appAlert);
+  showToast('Updated ' + ids.length + ' accounts.', 'success');
 }
 
 async function generateSmartOutreachLegacy(accountId, buttonEl) {
@@ -3217,9 +3579,9 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
       const card = document.getElementById('outreach-prompt-card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-    window.bdLocalApi.setAlert('Outreach message generated! Check the Outreach prompt section.', appAlert);
+    showToast('Outreach message generated!', 'success');
   } catch (err) {
-    window.bdLocalApi.setAlert('Failed to generate outreach: ' + (err.message || err), appAlert);
+    showToast('Failed to generate outreach: ' + (err.message || err), 'error');
   } finally {
     buttonEl.textContent = origText;
     buttonEl.disabled = false;
@@ -3543,7 +3905,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
       ? `${outreach.templateLabel} plus ${outreach.variants?.length || 0} alternate angles generated.`
       : `${outreach.templateLabel} generated. Review the email, LinkedIn note, follow-up, and call opener in the outreach card.`, appAlert);
   } catch (err) {
-    window.bdLocalApi.setAlert('Failed to generate outreach: ' + (err.message || err), appAlert);
+    showToast('Failed to generate outreach: ' + (err.message || err), 'error');
   } finally {
     buttonEl.textContent = origText;
     syncOutreachComposerState();
@@ -3565,7 +3927,7 @@ async function archiveAccount(accountId) {
     await renderRoute();
   }
 
-  window.bdLocalApi.setAlert('Account paused. You can reactivate it later by editing its status.', appAlert);
+  showToast('Account paused. You can reactivate it later by editing its status.', 'info');
 }
 
 async function runSearch(value) {

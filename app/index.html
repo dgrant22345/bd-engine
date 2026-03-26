@@ -6,7 +6,7 @@
   <meta name="description" content="Commercial BD operating system for account prioritization, ATS visibility, live job intelligence, and admin pipeline control.">
   <meta name="application-name" content="BD Engine">
   <meta name="theme-color" content="#0f1728">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -20,11 +20,11 @@
         <p class="brand-copy">Commercial BD intelligence, live hiring coverage, and ATS import orchestration in one place.</p>
       </div>
       <nav class="nav" aria-label="Primary">
-        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
-        <a href="#/accounts" data-route="accounts">Accounts</a>
-        <a href="#/contacts" data-route="contacts">Contacts</a>
-        <a href="#/jobs" data-route="jobs">Jobs</a>
-        <a href="#/admin" data-route="admin">Admin</a>
+        <a href="#/dashboard" data-route="dashboard">Dashboard <span class="nav-shortcut">G D</span></a>
+        <a href="#/accounts" data-route="accounts">Accounts <span class="nav-shortcut">G A</span></a>
+        <a href="#/contacts" data-route="contacts">Contacts <span class="nav-shortcut">G C</span></a>
+        <a href="#/jobs" data-route="jobs">Jobs <span class="nav-shortcut">G J</span></a>
+        <a href="#/admin" data-route="admin">Admin <span class="nav-shortcut">G X</span></a>
       </nav>
       <div class="sidebar-footnote">
         <span class="dot"></span>
@@ -39,19 +39,29 @@
           <h2 id="view-title">Dashboard</h2>
         </div>
         <div class="topbar-tools">
+          <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation">&#9776;</button>
           <label class="search-shell" for="global-search-input">
-            <span>Search companies, contacts, jobs</span>
+            <span>Search companies, contacts, jobs <kbd class="kbd">Ctrl+K</kbd></span>
             <input id="global-search-input" type="search" placeholder="Type a company, person, or role">
           </label>
+          <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
+            <span class="theme-toggle-icon" id="theme-icon">&#9789;</span>
+            <span id="theme-label">Dark</span>
+          </button>
           <button class="ghost-button" id="refresh-bootstrap">Refresh snapshot</button>
         </div>
       </header>
 
+      <div id="breadcrumbs" class="breadcrumbs"></div>
       <div id="app-alert" class="app-alert hidden"></div>
       <div id="search-results" class="search-results hidden"></div>
       <div id="app" class="view-root"></div>
     </main>
   </div>
+
+  <div id="mobile-nav-backdrop" class="mobile-nav-backdrop"></div>
+  <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
   <script src="/local-api.js"></script>
   <script src="/app.js"></script>
