@@ -9,6 +9,9 @@
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
+  <link rel="apple-touch-icon" href="/icons/icon-192.svg">
 </head>
 <body>
   <div class="page-noise" aria-hidden="true"></div>
@@ -65,5 +68,10 @@
 
   <script src="/local-api.js"></script>
   <script src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>

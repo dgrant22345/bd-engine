@@ -25,6 +25,16 @@ const appState = {
   lastKeyTime: 0,
   lastKey: '',
   mobileNavOpen: false,
+  // Phase 5: Elite features
+  columnPrefs: JSON.parse(localStorage.getItem('bd_col_prefs') || '{}'),
+  kanbanMode: localStorage.getItem('bd_kanban') === 'true',
+  automationRules: JSON.parse(localStorage.getItem('bd_auto_rules') || '[]'),
+  scoreHistory: JSON.parse(localStorage.getItem('bd_score_history') || '{}'),
+  smartAlerts: [],
+  inlineEditCell: null,
+  pwaInstallPrompt: null,
+  accountNotes: JSON.parse(localStorage.getItem('bd_notes') || '{}'),
+  stageTimestamps: JSON.parse(localStorage.getItem('bd_stage_ts') || '{}'),
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -95,6 +105,26 @@ function dismissToast(el) {
   if (!el || !el.parentNode) return;
   el.classList.add('toast-exit');
   setTimeout(() => el.remove(), 300);
+}
+
+function showUndoToast(message, undoFn, duration = 6000) {
+  const el = document.createElement('div');
+  el.className = 'toast toast--info toast--undo';
+  el.setAttribute('role', 'alert');
+  el.innerHTML = `
+    <span class="toast-icon">&#8617;</span>
+    <span class="toast-msg">${escapeHtml(message)}</span>
+    <button class="toast-undo-btn">Undo</button>
+    <button class="toast-close" aria-label="Dismiss">&times;</button>
+  `;
+  let undone = false;
+  el.querySelector('.toast-undo-btn').addEventListener('click', () => {
+    if (!undone) { undone = true; undoFn(); dismissToast(el); showToast('Action undone.', 'success'); }
+  });
+  el.querySelector('.toast-close').addEventListener('click', () => dismissToast(el));
+  toastContainer.appendChild(el);
+  if (duration > 0) setTimeout(() => { if (!undone) dismissToast(el); }, duration);
+  return el;
 }
 
 /* ── Mobile navigation ── */
@@ -316,6 +346,441 @@ function renderPipelineHeatmap(accounts) {
       </div>
     </div>
   `;
+}
+
+/* ── Sparkline mini-charts ── */
+function recordScoreHistory(accountId, score) {
+  if (!accountId || score === undefined) return;
+  const history = appState.scoreHistory;
+  if (!history[accountId]) history[accountId] = [];
+  const today = new Date().toISOString().slice(0, 10);
+  const last = history[accountId][history[accountId].length - 1];
+  if (last && last.d === today) { last.v = score; }
+  else { history[accountId].push({ d: today, v: score }); }
+  if (history[accountId].length > 14) history[accountId] = history[accountId].slice(-14);
+  try { localStorage.setItem('bd_score_history', JSON.stringify(history)); } catch(e) { /* quota */ }
+}
+
+function renderSparkline(accountId, width = 60, height = 20) {
+  const points = (appState.scoreHistory[accountId] || []).map(p => p.v);
+  if (points.length < 2) return '';
+  const min = Math.min(...points);
+  const max = Math.max(...points, min + 1);
+  const step = width / (points.length - 1);
+  const coords = points.map((v, i) => `${(i * step).toFixed(1)},${(height - ((v - min) / (max - min)) * height).toFixed(1)}`).join(' ');
+  const trend = points[points.length - 1] >= points[0] ? 'var(--success)' : 'var(--danger)';
+  return `<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><polyline points="${coords}" fill="none" stroke="${trend}" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+}
+
+/* ── Kanban board ── */
+function renderKanbanBoard(items) {
+  const columns = [
+    { key: 'new', label: 'New', tone: 'neutral' },
+    { key: 'researching', label: 'Researching', tone: 'accent' },
+    { key: 'contacted', label: 'Contacted', tone: 'warning' },
+    { key: 'in_conversation', label: 'In Conversation', tone: 'success' },
+    { key: 'client', label: 'Client', tone: 'hot' },
+    { key: 'paused', label: 'Paused', tone: 'neutral' },
+  ];
+  const grouped = {};
+  columns.forEach(c => { grouped[c.key] = []; });
+  items.forEach(item => {
+    const status = (item.status || 'new').toLowerCase();
+    if (grouped[status]) grouped[status].push(item);
+    else grouped['new'].push(item);
+  });
+
+  return `
+    <div class="kanban-board" id="kanban-board">
+      ${columns.map(col => `
+        <div class="kanban-column" data-status="${col.key}">
+          <div class="kanban-column-header">
+            <span class="kanban-column-title">${col.label}</span>
+            <span class="kanban-column-count">${grouped[col.key].length}</span>
+          </div>
+          <div class="kanban-column-body" data-status="${col.key}">
+            ${grouped[col.key].map(item => `
+              <div class="kanban-card" draggable="true" data-id="${item.id}" data-status="${col.key}">
+                <div class="kanban-card-header">
+                  <a class="kanban-card-title" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a>
+                  ${renderHealthRing(computeHealthScore(item))}
+                </div>
+                <div class="kanban-card-score">${formatNumber(getTargetScore(item))} pts ${renderSparkline(item.id, 48, 16)}</div>
+                <div class="kanban-card-meta">${escapeHtml(item.owner || 'Unassigned')} · ${formatNumber(item.hiringVelocity || 0)} velocity</div>
+                ${item.nextAction ? `<div class="kanban-card-action small muted">${escapeHtml(item.nextAction)}</div>` : ''}
+                <div class="kanban-card-pills">
+                  ${renderStatusPill(item.priority || 'medium', 'warm')}
+                  ${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function wireKanbanDragDrop() {
+  const board = document.getElementById('kanban-board');
+  if (!board) return;
+  let dragEl = null;
+  board.addEventListener('dragstart', (e) => {
+    dragEl = e.target.closest('.kanban-card');
+    if (dragEl) { dragEl.classList.add('kanban-card--dragging'); e.dataTransfer.effectAllowed = 'move'; }
+  });
+  board.addEventListener('dragend', () => {
+    if (dragEl) dragEl.classList.remove('kanban-card--dragging');
+    document.querySelectorAll('.kanban-column-body--over').forEach(el => el.classList.remove('kanban-column-body--over'));
+    dragEl = null;
+  });
+  board.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const col = e.target.closest('.kanban-column-body');
+    if (col) col.classList.add('kanban-column-body--over');
+  });
+  board.addEventListener('dragleave', (e) => {
+    const col = e.target.closest('.kanban-column-body');
+    if (col) col.classList.remove('kanban-column-body--over');
+  });
+  board.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    document.querySelectorAll('.kanban-column-body--over').forEach(el => el.classList.remove('kanban-column-body--over'));
+    if (!dragEl) return;
+    const col = e.target.closest('.kanban-column-body');
+    if (!col) return;
+    const newStatus = col.dataset.status;
+    const accountId = dragEl.dataset.id;
+    const oldStatus = dragEl.dataset.status;
+    if (newStatus === oldStatus) return;
+    col.appendChild(dragEl);
+    dragEl.dataset.status = newStatus;
+    // Update counts
+    document.querySelectorAll('.kanban-column').forEach(c => {
+      const body = c.querySelector('.kanban-column-body');
+      const count = c.querySelector('.kanban-column-count');
+      if (body && count) count.textContent = body.children.length;
+    });
+    // Persist
+    try {
+      await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+      invalidateAppData();
+      trackStageChange(accountId, newStatus);
+      showUndoToast(`Moved to ${humanize(newStatus)}`, async () => {
+        await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: oldStatus }) });
+        invalidateAppData();
+        await renderAccountsView();
+      });
+    } catch (err) {
+      showToast('Failed to update status: ' + (err.message || err), 'error');
+    }
+  });
+}
+
+/* ── Column customization ── */
+const defaultAccountCols = ['company', 'health', 'targetScore', 'signalMix', 'owner', 'network', 'status', 'ats', 'actions'];
+function getVisibleCols(viewKey) {
+  return appState.columnPrefs[viewKey] || defaultAccountCols;
+}
+function setVisibleCols(viewKey, cols) {
+  appState.columnPrefs[viewKey] = cols;
+  localStorage.setItem('bd_col_prefs', JSON.stringify(appState.columnPrefs));
+}
+function renderColumnCustomizer(viewKey, allCols) {
+  const visible = getVisibleCols(viewKey);
+  return `
+    <div class="col-customizer">
+      <button class="ghost-button col-customizer-toggle" id="col-customizer-toggle" aria-label="Customize columns">&#9881; Columns</button>
+      <div class="col-customizer-dropdown hidden" id="col-customizer-dropdown">
+        ${allCols.map(col => `
+          <label class="col-customizer-item">
+            <input type="checkbox" data-col="${col.key}" ${visible.includes(col.key) ? 'checked' : ''}>
+            ${escapeHtml(col.label)}
+          </label>
+        `).join('')}
+        <button class="ghost-button ghost-button--xs col-customizer-reset" id="col-customizer-reset">Reset to default</button>
+      </div>
+    </div>
+  `;
+}
+function wireColumnCustomizer(viewKey, allCols, rerenderFn) {
+  const toggle = document.getElementById('col-customizer-toggle');
+  const dropdown = document.getElementById('col-customizer-dropdown');
+  if (!toggle || !dropdown) return;
+  toggle.addEventListener('click', () => dropdown.classList.toggle('hidden'));
+  dropdown.addEventListener('change', (e) => {
+    if (!e.target.dataset.col) return;
+    const visible = [];
+    dropdown.querySelectorAll('input[data-col]').forEach(cb => { if (cb.checked) visible.push(cb.dataset.col); });
+    setVisibleCols(viewKey, visible);
+    rerenderFn();
+  });
+  const reset = document.getElementById('col-customizer-reset');
+  if (reset) reset.addEventListener('click', () => { setVisibleCols(viewKey, defaultAccountCols); rerenderFn(); });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.col-customizer')) dropdown.classList.add('hidden');
+  }, { once: false });
+}
+
+/* ── Inline editing ── */
+function wireInlineEditing() {
+  document.querySelectorAll('[data-inline-edit]').forEach(cell => {
+    cell.addEventListener('dblclick', () => {
+      if (cell.querySelector('input, select')) return;
+      const field = cell.dataset.inlineEdit;
+      const accountId = cell.dataset.accountId;
+      const currentVal = cell.dataset.currentValue || cell.textContent.trim();
+      const original = cell.innerHTML;
+      cell.innerHTML = `<input class="inline-edit-input" value="${escapeAttr(currentVal)}" data-field="${field}" data-account-id="${accountId}" autofocus>`;
+      const input = cell.querySelector('input');
+      input.focus();
+      input.select();
+      const save = async () => {
+        const newVal = input.value.trim();
+        if (newVal === currentVal) { cell.innerHTML = original; return; }
+        cell.innerHTML = `<span class="inline-edit-saving">Saving...</span>`;
+        try {
+          await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ [field]: newVal }) });
+          invalidateAppData();
+          cell.textContent = newVal;
+          cell.dataset.currentValue = newVal;
+          showToast(`${humanize(field)} updated.`, 'success');
+        } catch(err) {
+          cell.innerHTML = original;
+          showToast('Save failed: ' + (err.message || err), 'error');
+        }
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { cell.innerHTML = original; } });
+      input.addEventListener('blur', save);
+    });
+  });
+}
+
+/* ── Smart alerts / anomaly detection ── */
+function detectSmartAlerts(accounts) {
+  const alerts = [];
+  accounts.forEach(a => {
+    const prev = appState.previousScores[a.id];
+    const current = getTargetScore(a);
+    // Score drop > 10
+    if (prev !== undefined && current < prev - 10) {
+      alerts.push({ type: 'score_drop', accountId: a.id, name: a.displayName, message: `Score dropped ${prev - current} points (${prev} → ${current})`, severity: 'warning' });
+    }
+    // Stale + high score
+    if (a.staleFlag === 'STALE' && current >= 70) {
+      alerts.push({ type: 'stale_high_value', accountId: a.id, name: a.displayName, message: `High-value account (${current} pts) hasn't been touched in 14+ days`, severity: 'danger' });
+    }
+    // Sudden hiring spike
+    if ((a.hiringSpikeRatio || 0) > 3 && (a.jobsLast30Days || 0) >= 5) {
+      alerts.push({ type: 'hiring_spike', accountId: a.id, name: a.displayName, message: `Hiring spike: ${a.jobsLast30Days} jobs in 30d (${a.hiringSpikeRatio}x normal)`, severity: 'success' });
+    }
+    // No contact on high-score account
+    if (current >= 80 && (a.contactCount || 0) === 0) {
+      alerts.push({ type: 'no_contacts', accountId: a.id, name: a.displayName, message: `${current}-point account has no mapped contacts`, severity: 'warning' });
+    }
+  });
+  appState.smartAlerts = alerts;
+  return alerts;
+}
+
+function renderSmartAlerts(alerts) {
+  if (!alerts || !alerts.length) return '';
+  const icons = { warning: '&#9888;', danger: '&#10071;', success: '&#9889;', info: '&#8505;' };
+  return `
+    <section class="smart-alerts-panel">
+      <div class="panel-header"><div><h3>&#9889; Smart Alerts</h3><p class="muted small">Anomalies and opportunities detected from your pipeline signals.</p></div><span class="smart-alerts-badge">${alerts.length}</span></div>
+      <div class="smart-alerts-list">
+        ${alerts.slice(0, 8).map(a => `
+          <div class="smart-alert smart-alert--${a.severity}">
+            <span class="smart-alert-icon">${icons[a.severity] || icons.info}</span>
+            <div class="smart-alert-body">
+              <strong>${escapeHtml(a.name)}</strong>
+              <p>${escapeHtml(a.message)}</p>
+            </div>
+            <button class="ghost-button ghost-button--xs" data-action="open-account" data-id="${a.accountId}">View</button>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+/* ── Deal velocity / stage tracking ── */
+function trackStageChange(accountId, newStage) {
+  const timestamps = appState.stageTimestamps;
+  if (!timestamps[accountId]) timestamps[accountId] = [];
+  timestamps[accountId].push({ stage: newStage, at: new Date().toISOString() });
+  if (timestamps[accountId].length > 20) timestamps[accountId] = timestamps[accountId].slice(-20);
+  try { localStorage.setItem('bd_stage_ts', JSON.stringify(timestamps)); } catch(e) { /* quota */ }
+}
+
+function computeStageVelocity(accountId) {
+  const history = appState.stageTimestamps[accountId] || [];
+  if (history.length < 2) return null;
+  const first = new Date(history[0].at).getTime();
+  const last = new Date(history[history.length - 1].at).getTime();
+  const stages = history.length - 1;
+  const avgDays = Math.round((last - first) / (stages * 86400000));
+  return { stages, avgDaysPerStage: avgDays, currentStage: history[history.length - 1].stage };
+}
+
+function renderDealVelocity(accounts) {
+  const velocities = accounts.map(a => {
+    const v = computeStageVelocity(a.id);
+    return v ? { ...v, name: a.displayName, id: a.id, score: getTargetScore(a) } : null;
+  }).filter(Boolean);
+  const stuck = velocities.filter(v => v.avgDaysPerStage > 14);
+  if (!velocities.length) return '';
+  return `
+    <div class="chart-card">
+      <div class="card-header"><h3>Deal Velocity</h3><p class="small muted">${stuck.length ? `${stuck.length} deals stuck (>14 days avg per stage)` : 'All deals moving at healthy pace'}</p></div>
+      <div class="velocity-stats">
+        ${velocities.slice(0, 6).map(v => `
+          <div class="velocity-stat ${v.avgDaysPerStage > 14 ? 'velocity-stat--stuck' : ''}">
+            <a href="#/accounts/${v.id}" class="row-link"><strong>${escapeHtml(v.name)}</strong></a>
+            <span>${v.avgDaysPerStage}d avg</span>
+            <span class="small muted">${v.stages} stage moves</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/* ── Account notes / comments ── */
+function addAccountNote(accountId, text) {
+  if (!text || !text.trim()) return;
+  const notes = appState.accountNotes;
+  if (!notes[accountId]) notes[accountId] = [];
+  notes[accountId].unshift({ text: text.trim(), at: new Date().toISOString(), id: Date.now() });
+  if (notes[accountId].length > 50) notes[accountId] = notes[accountId].slice(0, 50);
+  try { localStorage.setItem('bd_notes', JSON.stringify(notes)); } catch(e) { /* quota */ }
+}
+
+function deleteAccountNote(accountId, noteId) {
+  const notes = appState.accountNotes;
+  if (!notes[accountId]) return;
+  notes[accountId] = notes[accountId].filter(n => n.id !== noteId);
+  try { localStorage.setItem('bd_notes', JSON.stringify(notes)); } catch(e) { /* quota */ }
+}
+
+function renderAccountNotesPanel(accountId) {
+  const notes = appState.accountNotes[accountId] || [];
+  return `
+    <div class="detail-card notes-panel">
+      <div class="panel-header"><div><h3>Quick Notes</h3><p class="muted small">Team-visible notes saved locally.</p></div></div>
+      <div class="notes-input-row">
+        <input id="note-input" class="compact-input" placeholder="Add a note..." maxlength="500">
+        <button class="secondary-button compact-btn" id="add-note-btn" data-account-id="${accountId}">Add</button>
+      </div>
+      <div class="notes-list">
+        ${notes.length ? notes.map(n => `
+          <div class="note-item">
+            <p>${escapeHtml(n.text)}</p>
+            <div class="note-meta"><span class="small muted">${formatDate(n.at)}</span><button class="note-delete" data-account-id="${accountId}" data-note-id="${n.id}" aria-label="Delete note">&times;</button></div>
+          </div>
+        `).join('') : '<div class="empty-state empty-state--compact">No notes yet.</div>'}
+      </div>
+    </div>
+  `;
+}
+
+/* ── Automation rules engine ── */
+function addAutomationRule(rule) {
+  appState.automationRules.push({ ...rule, id: Date.now(), enabled: true });
+  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+}
+
+function deleteAutomationRule(ruleId) {
+  appState.automationRules = appState.automationRules.filter(r => r.id !== ruleId);
+  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+}
+
+function toggleAutomationRule(ruleId) {
+  const rule = appState.automationRules.find(r => r.id === ruleId);
+  if (rule) rule.enabled = !rule.enabled;
+  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+}
+
+function evaluateAutomationRules(account) {
+  const triggered = [];
+  appState.automationRules.filter(r => r.enabled).forEach(rule => {
+    let match = true;
+    if (rule.trigger === 'status_change' && rule.triggerValue && account.status !== rule.triggerValue) match = false;
+    if (rule.trigger === 'score_above' && getTargetScore(account) < Number(rule.triggerValue)) match = false;
+    if (rule.trigger === 'score_below' && getTargetScore(account) > Number(rule.triggerValue)) match = false;
+    if (rule.trigger === 'stale' && account.staleFlag !== 'STALE') match = false;
+    if (match) triggered.push(rule);
+  });
+  return triggered;
+}
+
+function renderAutomationRulesPanel() {
+  return `
+    <div class="detail-card automation-panel">
+      <div class="panel-header"><div><h3>Automation Rules</h3><p class="muted small">When conditions are met, auto-apply actions.</p></div></div>
+      <div class="automation-form" id="automation-form">
+        <select id="auto-trigger">
+          <option value="status_change">When status changes to...</option>
+          <option value="score_above">When score rises above...</option>
+          <option value="score_below">When score drops below...</option>
+          <option value="stale">When account goes stale</option>
+        </select>
+        <input id="auto-trigger-value" placeholder="Value (e.g. qualified, 80)" class="compact-input">
+        <select id="auto-action">
+          <option value="assign_owner">Assign owner</option>
+          <option value="set_priority">Set priority</option>
+          <option value="notify">Show notification</option>
+        </select>
+        <input id="auto-action-value" placeholder="Owner name / priority / message" class="compact-input">
+        <button class="secondary-button compact-btn" id="add-auto-rule">Add Rule</button>
+      </div>
+      <div class="automation-rules-list">
+        ${appState.automationRules.length ? appState.automationRules.map(r => `
+          <div class="automation-rule ${r.enabled ? '' : 'automation-rule--disabled'}">
+            <div class="automation-rule-text">When <strong>${escapeHtml(humanize(r.trigger))}</strong> ${r.triggerValue ? `= "${escapeHtml(r.triggerValue)}"` : ''} → <strong>${escapeHtml(humanize(r.action))}</strong>: "${escapeHtml(r.actionValue)}"</div>
+            <div class="automation-rule-actions">
+              <button class="ghost-button ghost-button--xs" data-toggle-rule="${r.id}">${r.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="ghost-button ghost-button--xs" data-delete-rule="${r.id}">&times;</button>
+            </div>
+          </div>
+        `).join('') : '<div class="empty-state empty-state--compact">No automation rules configured.</div>'}
+      </div>
+    </div>
+  `;
+}
+
+/* ── PWA support ── */
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  appState.pwaInstallPrompt = e;
+  const btn = document.getElementById('pwa-install-btn');
+  if (btn) btn.classList.remove('hidden');
+});
+
+function promptPwaInstall() {
+  if (!appState.pwaInstallPrompt) return;
+  appState.pwaInstallPrompt.prompt();
+  appState.pwaInstallPrompt.userChoice.then(choice => {
+    if (choice.outcome === 'accepted') showToast('BD Engine installed!', 'success');
+    appState.pwaInstallPrompt = null;
+    const btn = document.getElementById('pwa-install-btn');
+    if (btn) btn.classList.add('hidden');
+  });
+}
+
+/* ── Notification API ── */
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') return true;
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+function sendDesktopNotification(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try { new Notification(title, { body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' }); } catch(e) { /* mobile */ }
 }
 
 window.addEventListener('unhandledrejection', (event) => {
@@ -1573,7 +2038,15 @@ async function renderDashboardView() {
       </div>
     </section>
     ${renderPipelineHeatmap(dashboard.todayQueue)}
+    ${renderSmartAlerts(detectSmartAlerts(dashboard.todayQueue))}
+    ${renderDealVelocity(dashboard.todayQueue)}
   `;
+  // Record score history for sparklines
+  dashboard.todayQueue.forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
+  // Desktop notifications for critical alerts
+  if (appState.smartAlerts.filter(a => a.severity === 'danger').length > 0) {
+    sendDesktopNotification('BD Engine Alert', `${appState.smartAlerts.filter(a => a.severity === 'danger').length} critical pipeline alerts detected`);
+  }
 }
 
 async function renderAccountsView() {
@@ -1617,7 +2090,15 @@ async function renderAccountsView() {
             <h3>Account queue</h3>
             <p class="muted small">This is the working list. Use filters to narrow it to the accounts you can act on right now.</p>
           </div>
-          <div class="panel-header-actions"><button class="ghost-button" data-action="export-csv" data-view="accounts" aria-label="Export accounts to CSV">Export CSV</button><span class="table-meta">${formatNumber(result.total)} tracked accounts</span></div>
+          <div class="panel-header-actions">
+            <div class="view-toggle">
+              <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view">&#9776; Table</button>
+              <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view">&#9638; Board</button>
+            </div>
+            <button class="ghost-button" data-action="export-csv" data-view="accounts" aria-label="Export accounts to CSV">Export CSV</button>
+            <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
+            <span class="table-meta">${formatNumber(result.total)} tracked accounts</span>
+          </div>
         </div>
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
@@ -1642,8 +2123,10 @@ async function renderAccountsView() {
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           </div>
         </form>
-        ${result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>'}
-        ${renderPagination('accounts', result.page, result.pageSize, result.total)}
+        ${appState.kanbanMode
+          ? (result.items.length ? renderKanbanBoard(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
+          : (result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>')}
+        ${!appState.kanbanMode ? renderPagination('accounts', result.page, result.pageSize, result.total) : ''}
       </div>
 
       <div class="panel-stack">
@@ -1684,6 +2167,24 @@ async function renderAccountsView() {
       </div>
     </section>
   `;
+  // Record score history for sparklines
+  result.items.forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
+  // Wire kanban drag-and-drop
+  if (appState.kanbanMode) wireKanbanDragDrop();
+  // Wire inline editing
+  wireInlineEditing();
+  // View toggle handlers
+  document.getElementById('view-mode-table')?.addEventListener('click', () => {
+    appState.kanbanMode = false;
+    localStorage.setItem('bd_kanban', 'false');
+    renderAccountsView();
+  });
+  document.getElementById('view-mode-kanban')?.addEventListener('click', () => {
+    appState.kanbanMode = true;
+    localStorage.setItem('bd_kanban', 'true');
+    renderAccountsView();
+  });
+  document.getElementById('pwa-install-btn')?.addEventListener('click', promptPwaInstall);
 }
 
 async function renderAccountDetail(accountId) {
@@ -1840,6 +2341,7 @@ async function renderAccountDetail(accountId) {
 
     <section class="detail-grid detail-grid--workspace">
       <div class="panel-stack">
+        ${renderAccountNotesPanel(detail.account.id)}
         ${renderIdentityResolutionCard(detail)}
         ${renderResolutionHistoryCard(detail)}
         <div class="detail-card">
@@ -1951,6 +2453,26 @@ async function renderAccountDetail(accountId) {
     </section>
   `;
   syncOutreachComposerState();
+  // Wire notes
+  document.getElementById('add-note-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('note-input');
+    if (input?.value.trim()) {
+      addAccountNote(accountId, input.value);
+      const panel = document.querySelector('.notes-panel');
+      if (panel) panel.outerHTML = renderAccountNotesPanel(accountId);
+      // Re-wire after re-render
+      document.getElementById('add-note-btn')?.addEventListener('click', arguments.callee);
+    }
+  });
+  document.querySelectorAll('.note-delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      deleteAccountNote(btn.dataset.accountId, Number(btn.dataset.noteId));
+      const panel = document.querySelector('.notes-panel');
+      if (panel) panel.outerHTML = renderAccountNotesPanel(btn.dataset.accountId);
+    });
+  });
+  // Request notification permission on first detail view
+  requestNotificationPermission();
 }
 async function renderContactsView() {
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
@@ -2365,6 +2887,10 @@ async function renderAdminView() {
             <div><button class="primary-button" type="submit">Save settings</button></div>
           </form>
         ${renderCollapsibleEnd()}
+
+        ${renderCollapsibleStart('automation-rules', 'Automation Rules', 'Define rules that auto-apply when pipeline conditions are met.')}
+          ${renderAutomationRulesPanel()}
+        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
@@ -2408,6 +2934,23 @@ async function renderAdminView() {
 
   hydrateAdminRuntimePanels(runtime);
   wireCollapsibleSections();
+  // Wire automation rules
+  document.getElementById('add-auto-rule')?.addEventListener('click', () => {
+    const trigger = document.getElementById('auto-trigger')?.value;
+    const triggerValue = document.getElementById('auto-trigger-value')?.value || '';
+    const action = document.getElementById('auto-action')?.value;
+    const actionValue = document.getElementById('auto-action-value')?.value || '';
+    if (!trigger || !action || !actionValue) { showToast('Fill in all rule fields.', 'warning'); return; }
+    addAutomationRule({ trigger, triggerValue, action, actionValue });
+    showToast('Automation rule added.', 'success');
+    renderAdminView();
+  });
+  document.querySelectorAll('[data-toggle-rule]').forEach(btn => {
+    btn.addEventListener('click', () => { toggleAutomationRule(Number(btn.dataset.toggleRule)); renderAdminView(); });
+  });
+  document.querySelectorAll('[data-delete-rule]').forEach(btn => {
+    btn.addEventListener('click', () => { deleteAutomationRule(Number(btn.dataset.deleteRule)); renderAdminView(); });
+  });
 }
 async function exportAccountsCsv() {
   const result = await api(`/api/accounts${buildQuery({ ...appState.accountQuery, page: 1, pageSize: 10000 })}`);
@@ -2468,9 +3011,9 @@ function renderAccountsTable(items) {
           <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
           <td>${renderHealthRing(computeHealthScore(item))}</td>
-          <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
-          <td>${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
+          <td data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
           <td>${renderAccountResolutionSummary(item)}</td>
@@ -3915,8 +4458,6 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
 
 async function archiveAccount(accountId) {
   if (!accountId) return;
-  const confirmed = window.confirm('Pause this account? It will remain stored but stop surfacing in the active daily queue.');
-  if (!confirmed) return;
 
   await api(`/api/accounts/${accountId}`, { method: 'DELETE' });
   invalidateAppData();
@@ -3927,7 +4468,11 @@ async function archiveAccount(accountId) {
     await renderRoute();
   }
 
-  showToast('Account paused. You can reactivate it later by editing its status.', 'info');
+  showUndoToast('Account paused.', async () => {
+    await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: 'new' }) });
+    invalidateAppData();
+    await renderRoute();
+  });
 }
 
 async function runSearch(value) {

@@ -2448,6 +2448,15 @@ a {
   color: var(--accent);
 }
 
+[data-theme="dark"] .kanban-column { background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .kanban-card { background: var(--surface); border-color: var(--line-strong); }
+[data-theme="dark"] .smart-alert { background: rgba(255,255,255,0.03); }
+[data-theme="dark"] .note-item { background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .automation-rule { background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .col-customizer-dropdown { background: var(--surface); border-color: var(--line-strong); }
+[data-theme="dark"] .velocity-stat { background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .inline-edit-input { background: var(--surface); border-color: var(--accent); color: var(--text); }
+
 /* ── Theme toggle ── */
 .theme-toggle {
   display: flex;
@@ -2845,3 +2854,171 @@ a {
   color: var(--muted);
   opacity: 0.6;
 }
+
+/* ── Undo toast ── */
+.toast--undo { display: flex; align-items: center; gap: 10px; }
+.toast-undo-btn {
+  border: none; background: var(--accent); color: #fff; padding: 4px 12px; border-radius: 6px;
+  cursor: pointer; font-weight: 600; font-size: 0.82rem; white-space: nowrap;
+}
+.toast-undo-btn:hover { opacity: 0.85; }
+
+/* ── Sparklines ── */
+.sparkline { display: inline-block; vertical-align: middle; margin-left: 4px; }
+
+/* ── View toggle ── */
+.view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.view-toggle-btn {
+  border: none; background: transparent; padding: 5px 12px; cursor: pointer;
+  font-size: 0.8rem; color: var(--muted); transition: all 0.15s;
+}
+.view-toggle-btn.active { background: var(--accent); color: #fff; }
+.view-toggle-btn:hover:not(.active) { background: var(--bg-soft); }
+
+/* ── Kanban board ── */
+.kanban-board {
+  display: flex; gap: 12px; overflow-x: auto; padding: 8px 0 16px;
+  min-height: 400px;
+}
+.kanban-column {
+  min-width: 220px; max-width: 260px; flex: 1;
+  background: var(--bg-soft); border-radius: var(--radius-md);
+  display: flex; flex-direction: column;
+}
+.kanban-column-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--line);
+  font-weight: 600; font-size: 0.85rem;
+}
+.kanban-column-count {
+  background: var(--accent-soft); color: var(--accent); border-radius: 999px;
+  padding: 1px 8px; font-size: 0.72rem; font-weight: 700;
+}
+.kanban-column-body {
+  flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 8px;
+  min-height: 60px; transition: background 0.15s;
+}
+.kanban-column-body--over { background: var(--accent-soft); }
+.kanban-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px; cursor: grab; transition: box-shadow 0.15s, opacity 0.15s;
+}
+.kanban-card:hover { box-shadow: var(--shadow-sm); }
+.kanban-card--dragging { opacity: 0.4; }
+.kanban-card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.kanban-card-title { font-weight: 600; font-size: 0.82rem; color: var(--text); text-decoration: none; }
+.kanban-card-title:hover { color: var(--accent); }
+.kanban-card-score { font-size: 0.78rem; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+.kanban-card-meta { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+.kanban-card-action { margin-top: 4px; font-size: 0.72rem; }
+.kanban-card-pills { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.kanban-card-pills .status-pill { font-size: 0.65rem; padding: 1px 6px; }
+.kanban-card .health-ring { transform: scale(0.7); transform-origin: center; }
+
+/* ── Smart alerts ── */
+.smart-alerts-panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 16px; margin-bottom: 20px;
+}
+.smart-alerts-badge {
+  background: var(--danger); color: #fff; border-radius: 999px;
+  padding: 2px 8px; font-size: 0.72rem; font-weight: 700;
+}
+.smart-alerts-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.smart-alert {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: var(--radius-sm); border-left: 3px solid var(--line);
+}
+.smart-alert--warning { border-left-color: var(--warning); background: var(--warning-soft); }
+.smart-alert--danger { border-left-color: var(--danger); background: var(--danger-soft); }
+.smart-alert--success { border-left-color: var(--success); background: var(--success-soft); }
+.smart-alert-icon { font-size: 1.1rem; }
+.smart-alert-body { flex: 1; }
+.smart-alert-body strong { font-size: 0.85rem; }
+.smart-alert-body p { font-size: 0.78rem; color: var(--muted); margin: 2px 0 0; }
+
+/* ── Deal velocity ── */
+.velocity-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.velocity-stat {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 12px;
+  background: var(--bg-soft); border-radius: var(--radius-sm); border-left: 3px solid var(--success);
+}
+.velocity-stat--stuck { border-left-color: var(--danger); background: var(--danger-soft); }
+
+/* ── Notes panel ── */
+.notes-panel { }
+.notes-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.notes-input-row .compact-input { flex: 1; }
+.notes-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+.note-item {
+  padding: 8px 12px; background: var(--bg-soft); border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+}
+.note-item p { margin: 0 0 4px; font-size: 0.85rem; }
+.note-meta { display: flex; align-items: center; justify-content: space-between; }
+.note-delete {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 1rem; padding: 0 4px; line-height: 1;
+}
+.note-delete:hover { color: var(--danger); }
+
+/* ── Inline editing ── */
+[data-inline-edit] { cursor: default; position: relative; }
+[data-inline-edit]:hover::after {
+  content: '✎'; position: absolute; top: 2px; right: 4px;
+  font-size: 0.65rem; color: var(--muted); opacity: 0.6;
+}
+.inline-edit-input {
+  width: 100%; padding: 4px 8px; border: 2px solid var(--accent);
+  border-radius: 6px; font-size: 0.85rem; background: var(--surface);
+  color: var(--text); outline: none;
+}
+.inline-edit-saving { color: var(--muted); font-size: 0.8rem; font-style: italic; }
+
+/* ── Automation rules ── */
+.automation-panel { }
+.automation-form {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; align-items: center;
+}
+.automation-form select, .automation-form .compact-input { font-size: 0.82rem; padding: 5px 8px; }
+.automation-rules-list { display: flex; flex-direction: column; gap: 6px; }
+.automation-rule {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; background: var(--bg-soft); border-radius: var(--radius-sm);
+  border-left: 3px solid var(--success);
+}
+.automation-rule--disabled { opacity: 0.5; border-left-color: var(--muted); }
+.automation-rule-text { font-size: 0.82rem; flex: 1; }
+.automation-rule-actions { display: flex; gap: 4px; }
+
+/* ── Column customizer ── */
+.col-customizer { position: relative; display: inline-block; }
+.col-customizer-dropdown {
+  position: absolute; top: 100%; right: 0; z-index: 50;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px; min-width: 180px; box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.col-customizer-item { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; cursor: pointer; padding: 3px 4px; border-radius: 4px; }
+.col-customizer-item:hover { background: var(--bg-soft); }
+.col-customizer-reset { margin-top: 6px; }
+
+/* ── PWA install button ── */
+#pwa-install-btn { font-size: 0.82rem; }
+
+/* ── Email integration placeholder (future) ── */
+.email-preview-panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 16px; margin-top: 12px;
+}
+.email-thread { display: flex; flex-direction: column; gap: 8px; }
+.email-msg { padding: 10px 12px; background: var(--bg-soft); border-radius: var(--radius-sm); border-left: 3px solid var(--accent); }
+.email-msg-header { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+.email-msg-body { font-size: 0.85rem; }
+
+/* ── Notification permission UI ── */
+.notification-prompt {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  background: var(--accent-soft); border-radius: var(--radius-sm); margin-bottom: 12px;
+}
+.notification-prompt p { font-size: 0.85rem; flex: 1; }
