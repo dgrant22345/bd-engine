@@ -35,6 +35,16 @@ const appState = {
   pwaInstallPrompt: null,
   accountNotes: JSON.parse(localStorage.getItem('bd_notes') || '{}'),
   stageTimestamps: JSON.parse(localStorage.getItem('bd_stage_ts') || '{}'),
+  // Phase 6: Commercial-grade features
+  onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
+  dashboardLayout: JSON.parse(localStorage.getItem('bd_dash_layout') || 'null'),
+  dashboardCollapsed: JSON.parse(localStorage.getItem('bd_dash_collapsed') || '{}'),
+  customFields: JSON.parse(localStorage.getItem('bd_custom_fields') || '[]'),
+  outreachSequences: JSON.parse(localStorage.getItem('bd_sequences') || '[]'),
+  activityLog: JSON.parse(localStorage.getItem('bd_activity_log') || '[]'),
+  alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
+  bulkLastClickIdx: null,
+  duplicateCache: null,
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -783,6 +793,625 @@ function sendDesktopNotification(title, body) {
   try { new Notification(title, { body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' }); } catch(e) { /* mobile */ }
 }
 
+/* ── Phase 6: Interactive SVG charts ── */
+function renderSvgLineChart(data, width = 320, height = 120, label = '') {
+  if (!data || data.length < 2) return '';
+  const pad = { t: 20, r: 10, b: 30, l: 40 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const maxVal = Math.max(1, ...data.map(d => d.value));
+  const minVal = Math.min(0, ...data.map(d => d.value));
+  const range = maxVal - minVal || 1;
+  const points = data.map((d, i) => ({
+    x: pad.l + (i / (data.length - 1)) * w,
+    y: pad.t + h - ((d.value - minVal) / range) * h,
+    label: d.label,
+    value: d.value,
+  }));
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  const areaD = pathD + ` L${points[points.length-1].x},${pad.t+h} L${points[0].x},${pad.t+h} Z`;
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const y = pad.t + h - f * h;
+    const val = Math.round(minVal + f * range);
+    return `<line x1="${pad.l}" y1="${y}" x2="${pad.l+w}" y2="${y}" stroke="var(--line)" stroke-dasharray="3"/>
+      <text x="${pad.l-4}" y="${y+3}" text-anchor="end" fill="var(--muted)" font-size="9">${val}</text>`;
+  }).join('');
+  const xLabels = data.length <= 8 ? points.map(p => `<text x="${p.x}" y="${pad.t+h+14}" text-anchor="middle" fill="var(--muted)" font-size="8">${escapeHtml(p.label)}</text>`).join('')
+    : [points[0], points[Math.floor(points.length/2)], points[points.length-1]].map(p => `<text x="${p.x}" y="${pad.t+h+14}" text-anchor="middle" fill="var(--muted)" font-size="8">${escapeHtml(p.label)}</text>`).join('');
+  const dots = points.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="var(--accent)" stroke="var(--surface)" stroke-width="1.5"><title>${escapeHtml(p.label)}: ${p.value}</title></circle>`).join('');
+  return `<div class="svg-chart"><svg width="${width}" height="${height}" class="chart-svg">
+    ${gridLines}${xLabels}
+    <path d="${areaD}" fill="var(--accent-soft)" opacity="0.3"/>
+    <path d="${pathD}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+    ${dots}
+    ${label ? `<text x="${pad.l}" y="12" fill="var(--text)" font-size="11" font-weight="600">${escapeHtml(label)}</text>` : ''}
+  </svg></div>`;
+}
+
+function renderSvgBarChart(data, width = 320, height = 140, label = '') {
+  if (!data || !data.length) return '';
+  const pad = { t: 22, r: 10, b: 34, l: 44 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const maxVal = Math.max(1, ...data.map(d => d.value));
+  const barW = Math.min(30, (w / data.length) * 0.65);
+  const gap = (w - barW * data.length) / (data.length + 1);
+  const bars = data.map((d, i) => {
+    const x = pad.l + gap + i * (barW + gap);
+    const barH = (d.value / maxVal) * h;
+    const y = pad.t + h - barH;
+    const color = d.color || 'var(--accent)';
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="3" fill="${color}" opacity="0.85"><title>${escapeHtml(d.label)}: ${d.value}</title></rect>
+      <text x="${x + barW/2}" y="${y - 4}" text-anchor="middle" fill="var(--text)" font-size="9" font-weight="600">${d.value}</text>
+      <text x="${x + barW/2}" y="${pad.t+h+12}" text-anchor="middle" fill="var(--muted)" font-size="8">${escapeHtml(d.label.slice(0, 8))}</text>`;
+  }).join('');
+  return `<div class="svg-chart"><svg width="${width}" height="${height}" class="chart-svg">
+    <line x1="${pad.l}" y1="${pad.t+h}" x2="${pad.l+w}" y2="${pad.t+h}" stroke="var(--line)"/>
+    ${bars}
+    ${label ? `<text x="${pad.l}" y="14" fill="var(--text)" font-size="11" font-weight="600">${escapeHtml(label)}</text>` : ''}
+  </svg></div>`;
+}
+
+function renderConversionFunnel(stages, width = 320, height = 160) {
+  if (!stages || !stages.length) return '';
+  const maxVal = Math.max(1, stages[0].value);
+  const pad = 14;
+  const stageH = (height - pad * 2) / stages.length;
+  const shapes = stages.map((s, i) => {
+    const wPct = Math.max(0.15, s.value / maxVal);
+    const nextPct = i < stages.length - 1 ? Math.max(0.15, stages[i + 1].value / maxVal) : wPct * 0.85;
+    const x1 = (width / 2) - (wPct * width * 0.4);
+    const x2 = (width / 2) + (wPct * width * 0.4);
+    const x3 = (width / 2) + (nextPct * width * 0.4);
+    const x4 = (width / 2) - (nextPct * width * 0.4);
+    const y1 = pad + i * stageH;
+    const y2 = pad + (i + 1) * stageH;
+    const colors = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)', 'var(--muted)'];
+    const color = s.color || colors[i % colors.length];
+    const convRate = i > 0 ? Math.round((s.value / stages[i - 1].value) * 100) : 100;
+    return `<path d="M${x1},${y1} L${x2},${y1} L${x3},${y2} L${x4},${y2} Z" fill="${color}" opacity="0.7"/>
+      <text x="${width/2}" y="${y1 + stageH/2 + 4}" text-anchor="middle" fill="var(--surface-strong)" font-size="10" font-weight="600">${escapeHtml(s.label)} (${s.value})</text>
+      ${i > 0 ? `<text x="${width - 8}" y="${y1 + stageH/2 + 3}" text-anchor="end" fill="var(--muted)" font-size="8">${convRate}%</text>` : ''}`;
+  }).join('');
+  return `<div class="svg-chart"><svg width="${width}" height="${height}" class="chart-svg">${shapes}</svg></div>`;
+}
+
+/* ── Phase 6: Team performance leaderboard ── */
+function renderTeamLeaderboard(accounts) {
+  const owners = {};
+  accounts.forEach(a => {
+    const o = a.owner || 'Unassigned';
+    if (!owners[o]) owners[o] = { name: o, count: 0, totalScore: 0, hiring: 0, outreach: 0, engaged: 0 };
+    owners[o].count++;
+    owners[o].totalScore += getTargetScore(a);
+    if ((a.jobCount || 0) > 0) owners[o].hiring++;
+    if (a.outreachStatus === 'contacted' || a.outreachStatus === 'replied') owners[o].outreach++;
+    if (a.status === 'engaged' || a.status === 'client') owners[o].engaged++;
+  });
+  const ranked = Object.values(owners).sort((a, b) => b.totalScore - a.totalScore);
+  if (ranked.length < 2) return '';
+  return `
+    <section class="detail-card team-leaderboard">
+      <div class="panel-header"><div><h3>Team leaderboard</h3><p class="muted small">Owner performance ranked by aggregate pipeline score.</p></div></div>
+      <div class="table-scroll"><table class="table"><thead><tr><th>#</th><th>Owner</th><th>Accounts</th><th>Avg score</th><th>Hiring</th><th>Outreach</th><th>Engaged</th></tr></thead><tbody>
+        ${ranked.map((o, i) => `<tr${i === 0 ? ' class="row--highlight"' : ''}>
+          <td><span class="leaderboard-rank">${i + 1}</span></td>
+          <td><strong>${escapeHtml(o.name)}</strong></td>
+          <td>${o.count}</td>
+          <td>${Math.round(o.totalScore / o.count)}</td>
+          <td>${o.hiring}</td>
+          <td>${o.outreach}</td>
+          <td>${o.engaged}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </section>`;
+}
+
+/* ── Phase 6: Data quality scoring ── */
+function computeDataQuality(account) {
+  const checks = [
+    { label: 'Domain', ok: Boolean(account.domain) },
+    { label: 'Careers URL', ok: Boolean(account.careersUrl || account.careers_url) },
+    { label: 'Contacts', ok: (account.contactCount || 0) > 0 },
+    { label: 'Active jobs', ok: (account.activeJobCount || account.jobCount || 0) > 0 },
+    { label: 'Owner', ok: Boolean(account.owner) },
+    { label: 'Industry', ok: Boolean(account.industry) },
+    { label: 'Next action', ok: Boolean(account.nextAction) },
+    { label: 'Notes', ok: Boolean(account.notes) },
+  ];
+  const score = Math.round((checks.filter(c => c.ok).length / checks.length) * 100);
+  return { score, checks };
+}
+
+function renderDataQualityBadge(account) {
+  const { score } = computeDataQuality(account);
+  const color = score >= 75 ? 'var(--success)' : score >= 50 ? 'var(--warning)' : 'var(--danger)';
+  return `<span class="dq-badge" style="color:${color}" title="Data quality: ${score}%">${score}%</span>`;
+}
+
+function renderDataQualityPanel(accounts) {
+  const scores = accounts.map(a => computeDataQuality(a).score);
+  const avg = scores.length ? Math.round(scores.reduce((s, v) => s + v, 0) / scores.length) : 0;
+  const dist = { excellent: scores.filter(s => s >= 75).length, good: scores.filter(s => s >= 50 && s < 75).length, poor: scores.filter(s => s < 50).length };
+  const fieldGaps = {};
+  accounts.forEach(a => {
+    const { checks } = computeDataQuality(a);
+    checks.forEach(c => { if (!c.ok) { fieldGaps[c.label] = (fieldGaps[c.label] || 0) + 1; } });
+  });
+  const topGaps = Object.entries(fieldGaps).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return `
+    <section class="detail-card data-quality-panel">
+      <div class="panel-header"><div><h3>Data quality</h3><p class="muted small">Completeness of your pipeline data across ${accounts.length} accounts.</p></div></div>
+      <div class="dq-summary">
+        <div class="dq-score-big" style="color:${avg >= 75 ? 'var(--success)' : avg >= 50 ? 'var(--warning)' : 'var(--danger)'}">${avg}%</div>
+        <div class="dq-distribution">
+          ${renderSignalChip('Excellent', dist.excellent, 'success')}
+          ${renderSignalChip('Good', dist.good, 'accent')}
+          ${renderSignalChip('Poor', dist.poor, 'warning')}
+        </div>
+      </div>
+      ${topGaps.length ? `<div class="dq-gaps"><p class="small muted">Top missing fields:</p>${topGaps.map(([f, c]) => `<span class="dq-gap-chip">${escapeHtml(f)} <strong>${c}</strong></span>`).join('')}</div>` : ''}
+    </section>`;
+}
+
+/* ── Phase 6: Duplicate detection ── */
+function normalizeForDupeCheck(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(inc|corp|ltd|llc|co|company|technologies|tech|group|holdings|solutions)$/g, '');
+}
+
+function levenshtein(a, b) {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      matrix[i][j] = b[i - 1] === a[j - 1]
+        ? matrix[i - 1][j - 1]
+        : Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+function detectDuplicates(accounts) {
+  const groups = [];
+  const used = new Set();
+  for (let i = 0; i < accounts.length; i++) {
+    if (used.has(accounts[i].id)) continue;
+    const normI = normalizeForDupeCheck(accounts[i].displayName);
+    if (!normI) continue;
+    const dupes = [];
+    for (let j = i + 1; j < accounts.length; j++) {
+      if (used.has(accounts[j].id)) continue;
+      const normJ = normalizeForDupeCheck(accounts[j].displayName);
+      if (!normJ) continue;
+      const dist = levenshtein(normI, normJ);
+      const maxLen = Math.max(normI.length, normJ.length, 1);
+      const similarity = 1 - dist / maxLen;
+      if (similarity >= 0.75 || normI.includes(normJ) || normJ.includes(normI)) {
+        dupes.push(accounts[j]);
+        used.add(accounts[j].id);
+      }
+    }
+    if (dupes.length) {
+      used.add(accounts[i].id);
+      groups.push({ primary: accounts[i], duplicates: dupes });
+    }
+  }
+  appState.duplicateCache = groups;
+  return groups;
+}
+
+function renderDuplicatePanel(dupeGroups) {
+  if (!dupeGroups || !dupeGroups.length) return '';
+  return `
+    <section class="detail-card duplicate-panel">
+      <div class="panel-header"><div><h3>Possible duplicates</h3><p class="muted small">${dupeGroups.length} potential duplicate group${dupeGroups.length > 1 ? 's' : ''} found.</p></div></div>
+      <div class="duplicate-groups">
+        ${dupeGroups.slice(0, 10).map(g => `
+          <div class="duplicate-group">
+            <div class="dupe-primary">
+              <a href="#/accounts/${g.primary.id}" class="row-link"><strong>${escapeHtml(g.primary.displayName)}</strong></a>
+              <span class="small muted">${escapeHtml(g.primary.domain || '')} · Score: ${getTargetScore(g.primary)}</span>
+            </div>
+            <div class="dupe-matches">
+              ${g.duplicates.map(d => `
+                <div class="dupe-match">
+                  <a href="#/accounts/${d.id}" class="row-link">${escapeHtml(d.displayName)}</a>
+                  <span class="small muted">${escapeHtml(d.domain || '')} · Score: ${getTargetScore(d)}</span>
+                  <button class="ghost-button ghost-button--xs" data-action="merge-duplicate" data-keep="${g.primary.id}" data-remove="${d.id}">Merge into primary</button>
+                </div>`).join('')}
+            </div>
+          </div>`).join('')}
+      </div>
+    </section>`;
+}
+
+/* ── Phase 6: Guided onboarding tour ── */
+function renderOnboardingTour() {
+  if (appState.onboardingDone) return '';
+  return `
+    <div class="onboarding-overlay" id="onboarding-overlay">
+      <div class="onboarding-modal">
+        <div class="onboarding-header">
+          <h2>Welcome to BD Engine</h2>
+          <p>Let's get you set up in 3 steps.</p>
+        </div>
+        <div class="onboarding-steps">
+          <div class="onboarding-step" data-step="1">
+            <div class="onboarding-step-number">1</div>
+            <div class="onboarding-step-content">
+              <h4>Import your target accounts</h4>
+              <p>Go to <strong>Accounts</strong> and paste a list of companies or import a CSV. You can also add them one at a time.</p>
+            </div>
+          </div>
+          <div class="onboarding-step" data-step="2">
+            <div class="onboarding-step-number">2</div>
+            <div class="onboarding-step-content">
+              <h4>Run ATS discovery</h4>
+              <p>Head to <strong>Admin</strong> and click "Run ATS discovery" to automatically find job boards for your accounts.</p>
+            </div>
+          </div>
+          <div class="onboarding-step" data-step="3">
+            <div class="onboarding-step-number">3</div>
+            <div class="onboarding-step-content">
+              <h4>Work the ranked queue</h4>
+              <p>Your <strong>Dashboard</strong> will now show prioritized accounts with hiring signals, ready for outreach.</p>
+            </div>
+          </div>
+        </div>
+        <div class="onboarding-actions">
+          <button class="primary-button" id="onboarding-dismiss">Get started</button>
+          <button class="ghost-button" id="onboarding-skip">Skip tour</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function wireOnboarding() {
+  const overlay = document.getElementById('onboarding-overlay');
+  if (!overlay) return;
+  const dismiss = () => {
+    appState.onboardingDone = true;
+    localStorage.setItem('bd_onboarding_done', 'true');
+    overlay.remove();
+  };
+  document.getElementById('onboarding-dismiss')?.addEventListener('click', dismiss);
+  document.getElementById('onboarding-skip')?.addEventListener('click', dismiss);
+}
+
+/* ── Phase 6: Outreach sequences ── */
+function renderOutreachSequencePanel(accountId) {
+  const seqs = appState.outreachSequences.filter(s => s.accountId === accountId);
+  return `
+    <div class="detail-card sequence-panel">
+      <div class="panel-header"><div><h3>Outreach sequence</h3><p class="muted small">Multi-step cadence for this account.</p></div></div>
+      <form class="sequence-form" data-account-id="${accountId}">
+        <select name="channel" class="compact-select"><option value="email">Email</option><option value="linkedin">LinkedIn</option><option value="call">Call</option></select>
+        <input name="note" placeholder="Step description..." class="compact-input">
+        <input name="dueIn" type="number" min="0" value="3" class="compact-input" style="max-width:60px" title="Days from now">
+        <span class="small muted">days</span>
+        <button type="submit" class="secondary-button compact-btn">Add step</button>
+      </form>
+      <div class="sequence-timeline">
+        ${seqs.length ? seqs.sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)).map((s, i) => `
+          <div class="sequence-step ${s.done ? 'sequence-step--done' : ''} ${!s.done && new Date(s.dueAt) < Date.now() ? 'sequence-step--overdue' : ''}">
+            <span class="sequence-step-num">${i + 1}</span>
+            <div class="sequence-step-body">
+              <strong>${escapeHtml(s.channel)}</strong>: ${escapeHtml(s.note)}
+              <div class="small muted">${s.done ? 'Completed' : 'Due ' + formatDate(s.dueAt)}</div>
+            </div>
+            ${!s.done ? `<button class="ghost-button ghost-button--xs" data-action="complete-sequence-step" data-seq-id="${s.id}">Done</button>` : ''}
+          </div>`).join('') : '<div class="empty-state empty-state--compact">No sequence steps defined yet.</div>'}
+      </div>
+    </div>`;
+}
+
+/* ── Phase 6: Activity timeline (client-side) ── */
+function logActivity(type, detail) {
+  const entry = { id: Date.now(), type, ...detail, at: new Date().toISOString() };
+  appState.activityLog.unshift(entry);
+  if (appState.activityLog.length > 500) appState.activityLog = appState.activityLog.slice(0, 500);
+  try { localStorage.setItem('bd_activity_log', JSON.stringify(appState.activityLog)); } catch(e) { /* quota */ }
+}
+
+function renderActivityTimeline(accountId) {
+  const items = appState.activityLog.filter(a => a.accountId === accountId).slice(0, 30);
+  if (!items.length) return '';
+  return `
+    <div class="detail-card">
+      <div class="panel-header"><div><h3>Activity timeline</h3><p class="muted small">Recent local actions on this account.</p></div></div>
+      <div class="timeline">
+        ${items.map(a => `
+          <article class="timeline-item">
+            <div class="inline-header">
+              <strong>${escapeHtml(humanize(a.type))}</strong>
+              <span class="small muted">${formatDate(a.at)}</span>
+            </div>
+            <p class="small">${escapeHtml(a.summary || a.note || '')}</p>
+          </article>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* ── Phase 6: Sales cycle analytics ── */
+function renderSalesCycleAnalytics(accounts) {
+  const stageOrder = ['new', 'researching', 'outreach', 'engaged', 'client'];
+  const stageCounts = {};
+  const stageAvgDays = {};
+  stageOrder.forEach(s => { stageCounts[s] = 0; stageAvgDays[s] = []; });
+  accounts.forEach(a => {
+    const stage = a.status || 'new';
+    if (stageCounts[stage] !== undefined) stageCounts[stage]++;
+    const history = appState.stageTimestamps[a.id] || [];
+    for (let i = 1; i < history.length; i++) {
+      const days = (new Date(history[i].at) - new Date(history[i - 1].at)) / 86400000;
+      const prevStage = history[i - 1].stage;
+      if (stageAvgDays[prevStage]) stageAvgDays[prevStage].push(days);
+    }
+  });
+  const avgByStage = {};
+  stageOrder.forEach(s => {
+    const arr = stageAvgDays[s];
+    avgByStage[s] = arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+  });
+  const funnelData = stageOrder.map(s => ({ label: humanize(s), value: stageCounts[s] }));
+  const velocityData = stageOrder.filter(s => avgByStage[s] !== null).map(s => ({ label: humanize(s), value: avgByStage[s] }));
+  return `
+    <section class="detail-card sales-cycle-panel">
+      <div class="panel-header"><div><h3>Sales cycle analytics</h3><p class="muted small">Pipeline funnel and average time per stage.</p></div></div>
+      <div class="sales-cycle-grid">
+        ${renderConversionFunnel(funnelData)}
+        ${velocityData.length ? renderSvgBarChart(velocityData, 280, 130, 'Avg days per stage') : '<div class="empty-state empty-state--compact">Not enough stage transitions tracked yet.</div>'}
+      </div>
+    </section>`;
+}
+
+/* ── Phase 6: Configurable alert thresholds ── */
+function renderAlertThresholdsPanel() {
+  const t = appState.alertThresholds;
+  return `
+    <div class="detail-card alert-thresholds-panel">
+      <div class="panel-header"><div><h3>Alert thresholds</h3><p class="muted small">Customize when smart alerts fire.</p></div></div>
+      <form id="alert-thresholds-form" class="detail-form">
+        ${renderField('Stale days', `<input name="staleDays" type="number" min="1" value="${t.staleDays}">`)}
+        ${renderField('Min score drop', `<input name="scoreDropMin" type="number" min="1" value="${t.scoreDropMin}">`)}
+        ${renderField('Hiring spike factor', `<input name="hiringSpikeFactor" type="number" min="1" step="0.5" value="${t.hiringSpikeFactor}">`)}
+        ${renderField('Spike min jobs', `<input name="hiringSpikMinJobs" type="number" min="1" value="${t.hiringSpikMinJobs}">`)}
+        ${renderField('High score no contacts', `<input name="highScoreNoContacts" type="number" min="1" value="${t.highScoreNoContacts}">`)}
+        ${renderField('High value stale min', `<input name="highValueStaleMin" type="number" min="1" value="${t.highValueStaleMin}">`)}
+        <div><button class="secondary-button" type="submit">Save thresholds</button></div>
+      </form>
+    </div>`;
+}
+
+/* ── Phase 6: Override detectSmartAlerts to use configurable thresholds ── */
+const _origDetectSmartAlerts = detectSmartAlerts;
+detectSmartAlerts = function(accounts) {
+  const t = appState.alertThresholds;
+  const alerts = [];
+  accounts.forEach(a => {
+    const prev = appState.previousScores[a.id];
+    const current = getTargetScore(a);
+    if (prev !== undefined && current < prev - t.scoreDropMin) {
+      alerts.push({ type: 'score_drop', accountId: a.id, name: a.displayName, message: `Score dropped ${prev - current} points (${prev} \u2192 ${current})`, severity: 'warning' });
+    }
+    if (a.staleFlag === 'STALE' && current >= t.highValueStaleMin) {
+      alerts.push({ type: 'stale_high_value', accountId: a.id, name: a.displayName, message: `High-value account (${current} pts) hasn't been touched in ${t.staleDays}+ days`, severity: 'danger' });
+    }
+    if ((a.hiringSpikeRatio || 0) > t.hiringSpikeFactor && (a.jobsLast30Days || 0) >= t.hiringSpikMinJobs) {
+      alerts.push({ type: 'hiring_spike', accountId: a.id, name: a.displayName, message: `Hiring spike: ${a.jobsLast30Days} jobs in 30d (${a.hiringSpikeRatio}x normal)`, severity: 'success' });
+    }
+    if (current >= t.highScoreNoContacts && (a.contactCount || 0) === 0) {
+      alerts.push({ type: 'no_contacts', accountId: a.id, name: a.displayName, message: `${current}-point account has no mapped contacts`, severity: 'warning' });
+    }
+  });
+  appState.smartAlerts = alerts;
+  return alerts;
+};
+
+/* ── Phase 6: Bulk keyboard operations ── */
+function wireBulkKeyboard() {
+  const table = document.querySelector('.table');
+  if (!table) return;
+  table.addEventListener('click', (e) => {
+    const checkbox = e.target.closest('.bulk-checkbox');
+    if (!checkbox) return;
+    const allBoxes = Array.from(document.querySelectorAll('.bulk-checkbox'));
+    const idx = allBoxes.indexOf(checkbox);
+    if (e.shiftKey && appState.bulkLastClickIdx !== null) {
+      const start = Math.min(appState.bulkLastClickIdx, idx);
+      const end = Math.max(appState.bulkLastClickIdx, idx);
+      for (let i = start; i <= end; i++) {
+        allBoxes[i].checked = true;
+      }
+    }
+    appState.bulkLastClickIdx = idx;
+    updateBulkBar();
+  });
+  // Ctrl+A to select all visible
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      const boxes = document.querySelectorAll('.bulk-checkbox');
+      if (boxes.length && document.querySelector('.table')) {
+        e.preventDefault();
+        const allChecked = Array.from(boxes).every(b => b.checked);
+        boxes.forEach(b => b.checked = !allChecked);
+        updateBulkBar();
+      }
+    }
+  });
+}
+
+/* ── Phase 6: Dashboard layout customization ── */
+function getDashboardSections() {
+  return [
+    { id: 'hero', label: 'Hero card', required: true },
+    { id: 'trust', label: 'Trust strip' },
+    { id: 'metrics', label: 'Metrics grid' },
+    { id: 'playbook', label: "Today's playbook" },
+    { id: 'alerts-bar', label: 'Alert bar' },
+    { id: 'boards', label: 'Trigger boards' },
+    { id: 'queue', label: 'Today queue & panels' },
+    { id: 'enrichment', label: 'Enrichment pipeline' },
+    { id: 'jobs-activity', label: 'New jobs & activity' },
+    { id: 'heatmap', label: 'Pipeline heatmap' },
+    { id: 'smart-alerts', label: 'Smart alerts' },
+    { id: 'velocity', label: 'Deal velocity' },
+    { id: 'leaderboard', label: 'Team leaderboard' },
+    { id: 'data-quality', label: 'Data quality' },
+    { id: 'duplicates', label: 'Duplicate detection' },
+    { id: 'sales-cycle', label: 'Sales cycle analytics' },
+    { id: 'charts', label: 'Pipeline charts' },
+  ];
+}
+
+function renderDashboardCustomizer() {
+  const sections = getDashboardSections();
+  const collapsed = appState.dashboardCollapsed;
+  return `
+    <div class="dash-customizer">
+      <button class="ghost-button ghost-button--xs" id="dash-customize-toggle">Customize dashboard</button>
+      <div class="dash-customizer-dropdown hidden" id="dash-customizer-dropdown">
+        <p class="small muted" style="margin-bottom:8px">Show/hide dashboard sections:</p>
+        ${sections.map(s => `
+          <label class="dash-customizer-item">
+            <input type="checkbox" ${s.required ? 'checked disabled' : (collapsed[s.id] ? '' : 'checked')} data-section-id="${s.id}">
+            ${escapeHtml(s.label)}
+          </label>`).join('')}
+      </div>
+    </div>`;
+}
+
+function wireDashboardCustomizer() {
+  const toggle = document.getElementById('dash-customize-toggle');
+  const dropdown = document.getElementById('dash-customizer-dropdown');
+  if (!toggle || !dropdown) return;
+  toggle.addEventListener('click', () => dropdown.classList.toggle('hidden'));
+  dropdown.addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-section-id]');
+    if (!cb) return;
+    const id = cb.dataset.sectionId;
+    if (cb.checked) {
+      delete appState.dashboardCollapsed[id];
+    } else {
+      appState.dashboardCollapsed[id] = true;
+    }
+    localStorage.setItem('bd_dash_collapsed', JSON.stringify(appState.dashboardCollapsed));
+    // Toggle visibility
+    const section = document.querySelector(`[data-dash-section="${id}"]`);
+    if (section) section.style.display = cb.checked ? '' : 'none';
+  });
+}
+
+function dashSection(id, html) {
+  const hidden = appState.dashboardCollapsed[id];
+  return `<div data-dash-section="${id}" style="${hidden ? 'display:none' : ''}">${html}</div>`;
+}
+
+/* ── Phase 6: PDF export (client-side) ── */
+function exportToPdf() {
+  // Use print-optimized styles and browser print dialog
+  document.body.classList.add('print-mode');
+  showToast('Print dialog opening... use "Save as PDF" to export.', 'info');
+  setTimeout(() => {
+    window.print();
+    document.body.classList.remove('print-mode');
+  }, 300);
+}
+
+/* ── Phase 6: Custom fields ── */
+function renderCustomFieldsPanel(accountId) {
+  const fields = appState.customFields;
+  const values = JSON.parse(localStorage.getItem(`bd_cf_${accountId}`) || '{}');
+  if (!fields.length) {
+    return `
+      <div class="detail-card custom-fields-panel">
+        <div class="panel-header"><div><h3>Custom fields</h3><p class="muted small">Define your own fields to track per account.</p></div></div>
+        <form class="custom-field-def-form" id="custom-field-def-form">
+          <input name="fieldName" placeholder="Field name..." class="compact-input">
+          <select name="fieldType" class="compact-select"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select (comma-separated)</option></select>
+          <input name="fieldOptions" placeholder="Options (for select)" class="compact-input">
+          <button type="submit" class="secondary-button compact-btn">Add field</button>
+        </form>
+      </div>`;
+  }
+  return `
+    <div class="detail-card custom-fields-panel">
+      <div class="panel-header">
+        <div><h3>Custom fields</h3><p class="muted small">${fields.length} custom field${fields.length > 1 ? 's' : ''} defined.</p></div>
+        <button class="ghost-button ghost-button--xs" id="add-custom-field-toggle">+ Add field</button>
+      </div>
+      <form class="custom-field-def-form hidden" id="custom-field-def-form">
+        <input name="fieldName" placeholder="Field name..." class="compact-input">
+        <select name="fieldType" class="compact-select"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select</option></select>
+        <input name="fieldOptions" placeholder="Options (for select)" class="compact-input">
+        <button type="submit" class="secondary-button compact-btn">Add field</button>
+      </form>
+      <form class="custom-fields-values-form" data-account-id="${accountId}">
+        ${fields.map(f => {
+          const val = values[f.name] || '';
+          if (f.type === 'select') {
+            const opts = (f.options || '').split(',').map(o => o.trim());
+            return renderField(f.name, `<select name="cf_${escapeAttr(f.name)}"><option value="">—</option>${opts.map(o => `<option value="${escapeAttr(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`);
+          }
+          return renderField(f.name, `<input name="cf_${escapeAttr(f.name)}" type="${f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}" value="${escapeAttr(val)}">`);
+        }).join('')}
+        <div><button type="submit" class="secondary-button compact-btn">Save custom fields</button></div>
+      </form>
+    </div>`;
+}
+
+/* ── Phase 6: Dashboard charts builder ── */
+function renderDashboardCharts(accounts) {
+  // Pipeline by status
+  const statusCounts = {};
+  accounts.forEach(a => {
+    const s = a.status || 'new';
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+  const statusData = Object.entries(statusCounts).map(([label, value]) => ({ label: humanize(label), value }));
+
+  // Pipeline by owner
+  const ownerCounts = {};
+  accounts.forEach(a => {
+    const o = a.owner || 'Unassigned';
+    ownerCounts[o] = (ownerCounts[o] || 0) + 1;
+  });
+  const ownerData = Object.entries(ownerCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([label, value]) => ({ label, value }));
+
+  // Score distribution over time (using score history)
+  const avgScores = [];
+  const historyKeys = Object.keys(appState.scoreHistory);
+  if (historyKeys.length > 0) {
+    // Group by date
+    const byDate = {};
+    historyKeys.forEach(id => {
+      (appState.scoreHistory[id] || []).forEach(entry => {
+        const d = entry.date?.slice(0, 10) || '';
+        if (!d) return;
+        if (!byDate[d]) byDate[d] = [];
+        byDate[d].push(entry.score);
+      });
+    });
+    Object.entries(byDate).sort().slice(-14).forEach(([date, scores]) => {
+      avgScores.push({ label: date.slice(5), value: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) });
+    });
+  }
+
+  return `
+    <section class="detail-card dashboard-charts">
+      <div class="panel-header"><div><h3>Pipeline charts</h3><p class="muted small">Visual breakdown of your pipeline distribution.</p></div></div>
+      <div class="charts-grid">
+        ${renderSvgBarChart(statusData, 300, 140, 'Accounts by status')}
+        ${renderSvgBarChart(ownerData, 300, 140, 'Accounts by owner')}
+        ${avgScores.length >= 2 ? renderSvgLineChart(avgScores, 300, 140, 'Avg score trend') : '<div class="svg-chart"><p class="small muted" style="padding:20px">Score trend needs 2+ days of data</p></div>'}
+      </div>
+    </section>`;
+}
+
 window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
   window.bdLocalApi.handleError(event.reason, appAlert);
@@ -1197,6 +1826,39 @@ function bindEvents() {
       await deepVerifyAccount(action.dataset.id);
       return;
     }
+
+    if (actionName === 'export-pdf') {
+      exportToPdf();
+      return;
+    }
+
+    if (actionName === 'complete-sequence-step') {
+      const seqId = Number(action.dataset.seqId);
+      const seq = appState.outreachSequences.find(s => s.id === seqId);
+      if (seq) {
+        seq.done = true;
+        localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+        logActivity('sequence_complete', { accountId: seq.accountId, summary: `Completed ${seq.channel}: ${seq.note}` });
+        showToast('Sequence step completed.', 'success');
+        if (appState.accountDetail) renderAccountDetail(appState.accountDetail.account.id);
+      }
+      return;
+    }
+
+    if (actionName === 'merge-duplicate') {
+      const keepId = action.dataset.keep;
+      const removeId = action.dataset.remove;
+      if (confirm('Merge duplicate into primary account? This will archive the duplicate.')) {
+        try {
+          await api(`/api/accounts/${removeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'paused', notes: `Merged into account ${keepId}` }) });
+          showToast('Duplicate archived.', 'success');
+          logActivity('merge_duplicate', { accountId: keepId, summary: `Merged duplicate ${removeId}` });
+          invalidateAppData();
+          await renderRoute();
+        } catch(e) { showToast('Merge failed: ' + (e.message || e), 'error'); }
+      }
+      return;
+    }
   });
 
   document.addEventListener('submit', async (event) => {
@@ -1257,6 +1919,60 @@ function bindEvents() {
       return;
     }
 
+    // Phase 6: Sequence step form
+    if (form.classList.contains('sequence-form')) {
+      const accountId = form.dataset.accountId;
+      const values = getFormValues(form);
+      const dueIn = Number(values.dueIn || 3);
+      const dueAt = new Date(Date.now() + dueIn * 86400000).toISOString();
+      appState.outreachSequences.push({ id: Date.now(), accountId, channel: values.channel, note: values.note, dueAt, done: false });
+      localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+      logActivity('sequence_add', { accountId, summary: `Added ${values.channel} step: ${values.note}` });
+      showToast('Sequence step added.', 'success');
+      if (appState.accountDetail) renderAccountDetail(accountId);
+      return;
+    }
+
+    // Phase 6: Custom field definition
+    if (form.id === 'custom-field-def-form') {
+      const values = getFormValues(form);
+      if (!values.fieldName?.trim()) { showToast('Field name required.', 'warning'); return; }
+      appState.customFields.push({ name: values.fieldName.trim(), type: values.fieldType || 'text', options: values.fieldOptions || '' });
+      localStorage.setItem('bd_custom_fields', JSON.stringify(appState.customFields));
+      showToast('Custom field added.', 'success');
+      if (appState.accountDetail) renderAccountDetail(appState.accountDetail.account.id);
+      return;
+    }
+
+    // Phase 6: Custom field values
+    if (form.classList.contains('custom-fields-values-form')) {
+      const accountId = form.dataset.accountId;
+      const values = getFormValues(form);
+      const cfValues = {};
+      Object.entries(values).forEach(([k, v]) => {
+        if (k.startsWith('cf_')) cfValues[k.slice(3)] = v;
+      });
+      localStorage.setItem(`bd_cf_${accountId}`, JSON.stringify(cfValues));
+      showToast('Custom fields saved.', 'success');
+      return;
+    }
+
+    // Phase 6: Alert thresholds
+    if (form.id === 'alert-thresholds-form') {
+      const values = getFormValues(form);
+      appState.alertThresholds = {
+        staleDays: Number(values.staleDays) || 14,
+        scoreDropMin: Number(values.scoreDropMin) || 10,
+        hiringSpikeFactor: Number(values.hiringSpikeFactor) || 3,
+        hiringSpikMinJobs: Number(values.hiringSpikMinJobs) || 5,
+        highScoreNoContacts: Number(values.highScoreNoContacts) || 80,
+        highValueStaleMin: Number(values.highValueStaleMin) || 70,
+      };
+      localStorage.setItem('bd_alert_thresholds', JSON.stringify(appState.alertThresholds));
+      showToast('Alert thresholds saved.', 'success');
+      return;
+    }
+
     if (form.id === 'account-edit-form') {
       const accountId = form.dataset.accountId;
       const payload = getFormValues(form);
@@ -1266,6 +1982,7 @@ function bindEvents() {
         body: JSON.stringify(payload),
       });
       invalidateAppData();
+      logActivity('account_update', { accountId, summary: `Updated account fields` });
       await renderAccountDetail(accountId);
       showToast('Account updated.', 'success');
       return;
@@ -1305,6 +2022,7 @@ function bindEvents() {
         body: JSON.stringify(payload),
       });
       invalidateAppData();
+      logActivity(payload.type || 'note', { accountId: payload.accountId, summary: payload.summary || 'Activity logged' });
       await renderAccountDetail(payload.accountId);
       showToast('Activity logged.', 'success');
       return;
@@ -1754,8 +2472,12 @@ async function renderDashboardView() {
     },
   ];
 
+  const dupeGroups = detectDuplicates(dashboard.todayQueue);
+
   appRoot.innerHTML = `
-    <section class="hero-card hero-card--dashboard">
+    ${renderOnboardingTour()}
+    <div class="dash-toolbar">${renderDashboardCustomizer()}<button class="ghost-button ghost-button--xs" data-action="export-pdf">Export PDF</button></div>
+    ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Daily operating view</p>
@@ -1805,23 +2527,23 @@ async function renderDashboardView() {
           </div>
         </div>
       ` : ''}
-    </section>
+    </section>`)}
 
-    <section class="trust-strip">
+    ${dashSection('trust', `<section class="trust-strip">
       ${renderTrustCard('Launch in 3 moves', 'Import, resolve, work', 'Seed accounts, run ATS discovery, then work the ranked queue.', 'Workbook, CSV, or manual entry', 'accent')}
       ${renderTrustCard('Coverage snapshot', `${formatNumber(dashboard.summary.accountCount || 0)} tracked accounts`, 'Contacts, configs, and imported jobs stay visible in one model.', `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards found`, 'success')}
       ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
-    </section>
+    </section>`)}
 
-    <section class="metrics-grid">
+    ${dashSection('metrics', `<section class="metrics-grid">
       ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
       ${renderMetricCard('New jobs, 24h', dashboard.summary.newJobsLast24h, 'Freshly imported postings in the last day')}
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
       ${renderMetricCard('Needs resolution', resolutionPressure, 'Accounts still missing trusted company identity or ATS resolution')}
-    </section>
+    </section>`)}
 
-    ${extended.playbook.length ? `
+    ${dashSection('playbook', extended.playbook.length ? `
     <section class="detail-card playbook-section">
       <div class="panel-header">
         <div><h3>Today's playbook</h3><p class="muted small">Your top 5 accounts to work right now, ranked by target score.</p></div>
@@ -1844,16 +2566,16 @@ async function renderDashboardView() {
         `).join('')}
       </div>
     </section>
-    ` : ''}
+    ` : '')}
 
-    ${extended.overdueFollowUps.length || extended.staleAccounts.length ? `
+    ${dashSection('alerts-bar', (extended.overdueFollowUps.length || extended.staleAccounts.length) ? `
     <section class="alert-bar">
       ${extended.overdueFollowUps.length ? `<div class="alert-item alert-item--danger"><strong>${extended.overdueFollowUps.length} overdue follow-up${extended.overdueFollowUps.length > 1 ? 's' : ''}</strong> \u2014 ${extended.overdueFollowUps.slice(0,3).map(a => escapeHtml(a.displayName)).join(', ')}${extended.overdueFollowUps.length > 3 ? '...' : ''}</div>` : ''}
       ${extended.staleAccounts.length ? `<div class="alert-item alert-item--warning"><strong>${extended.staleAccounts.length} stale account${extended.staleAccounts.length > 1 ? 's' : ''}</strong> \u2014 haven't been touched in 14+ days</div>` : ''}
     </section>
-    ` : ''}
+    ` : '')}
 
-    ${extended.alertQueue.length || extended.sequenceQueue.length || extended.introQueue.length ? `
+    ${dashSection('boards', (extended.alertQueue.length || extended.sequenceQueue.length || extended.introQueue.length) ? `
     <section class="dashboard-grid">
       <div class="list-card detail-card">
         <div class="panel-header">
@@ -1921,9 +2643,9 @@ async function renderDashboardView() {
         `).join('')}</div>` : '<div class="empty-state">No warm intro opportunities are mapped yet.</div>'}
       </div>
     </section>
-    ` : ''}
+    ` : '')}
 
-    <section class="dashboard-grid">
+    ${dashSection('queue', `<section class="dashboard-grid">
       <div class="table-card emphasis-card">
         <div class="panel-header">
           <div>
@@ -1973,9 +2695,9 @@ async function renderDashboardView() {
           `).join('')}</div>` : '<div class="empty-state">No actions available yet.</div>'}
         </div>
       </div>
-    </section>
+    </section>`)}
 
-    ${extended.enrichmentFunnel && extended.enrichmentFunnel.total ? `
+    ${dashSection('enrichment', (extended.enrichmentFunnel && extended.enrichmentFunnel.total) ? `
     <section class="detail-card" style="margin-bottom:20px;">
       <div class="panel-header"><div><h3>Enrichment pipeline</h3><p class="muted small">Account data completeness at a glance.</p></div></div>
       <div class="funnel-bar-container">
@@ -1994,9 +2716,9 @@ async function renderDashboardView() {
         })()}
       </div>
     </section>
-    ` : ''}
+    ` : '')}
 
-    <section class="dashboard-grid">
+    ${dashSection('jobs-activity', `<section class="dashboard-grid">
       <div class="table-card">
         <div class="panel-header">
           <div>
@@ -2036,10 +2758,15 @@ async function renderDashboardView() {
           ${dashboard.recentlyDiscoveredBoards.length ? renderDiscoveryList(dashboard.recentlyDiscoveredBoards) : '<div class="empty-state">Run ATS discovery to populate supported boards.</div>'}
         </div>
       </div>
-    </section>
-    ${renderPipelineHeatmap(dashboard.todayQueue)}
-    ${renderSmartAlerts(detectSmartAlerts(dashboard.todayQueue))}
-    ${renderDealVelocity(dashboard.todayQueue)}
+    </section>`)}
+    ${dashSection('heatmap', renderPipelineHeatmap(dashboard.todayQueue))}
+    ${dashSection('smart-alerts', renderSmartAlerts(detectSmartAlerts(dashboard.todayQueue)))}
+    ${dashSection('velocity', renderDealVelocity(dashboard.todayQueue))}
+    ${dashSection('leaderboard', renderTeamLeaderboard(dashboard.todayQueue))}
+    ${dashSection('data-quality', renderDataQualityPanel(dashboard.todayQueue))}
+    ${dashSection('duplicates', renderDuplicatePanel(dupeGroups))}
+    ${dashSection('sales-cycle', renderSalesCycleAnalytics(dashboard.todayQueue))}
+    ${dashSection('charts', renderDashboardCharts(dashboard.todayQueue))}
   `;
   // Record score history for sparklines
   dashboard.todayQueue.forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
@@ -2047,6 +2774,10 @@ async function renderDashboardView() {
   if (appState.smartAlerts.filter(a => a.severity === 'danger').length > 0) {
     sendDesktopNotification('BD Engine Alert', `${appState.smartAlerts.filter(a => a.severity === 'danger').length} critical pipeline alerts detected`);
   }
+  // Wire dashboard customizer
+  wireDashboardCustomizer();
+  // Wire onboarding
+  wireOnboarding();
 }
 
 async function renderAccountsView() {
@@ -2173,6 +2904,12 @@ async function renderAccountsView() {
   if (appState.kanbanMode) wireKanbanDragDrop();
   // Wire inline editing
   wireInlineEditing();
+  // Wire bulk keyboard operations
+  wireBulkKeyboard();
+  // Wire custom field toggle
+  document.getElementById('add-custom-field-toggle')?.addEventListener('click', () => {
+    document.getElementById('custom-field-def-form')?.classList.toggle('hidden');
+  });
   // View toggle handlers
   document.getElementById('view-mode-table')?.addEventListener('click', () => {
     appState.kanbanMode = false;
@@ -2342,6 +3079,9 @@ async function renderAccountDetail(accountId) {
     <section class="detail-grid detail-grid--workspace">
       <div class="panel-stack">
         ${renderAccountNotesPanel(detail.account.id)}
+        ${renderOutreachSequencePanel(detail.account.id)}
+        ${renderActivityTimeline(detail.account.id)}
+        ${renderCustomFieldsPanel(detail.account.id)}
         ${renderIdentityResolutionCard(detail)}
         ${renderResolutionHistoryCard(detail)}
         <div class="detail-card">
@@ -2890,6 +3630,10 @@ async function renderAdminView() {
 
         ${renderCollapsibleStart('automation-rules', 'Automation Rules', 'Define rules that auto-apply when pipeline conditions are met.')}
           ${renderAutomationRulesPanel()}
+        ${renderCollapsibleEnd()}
+
+        ${renderCollapsibleStart('alert-thresholds', 'Alert Thresholds', 'Customize when smart alerts trigger on your pipeline.')}
+          ${renderAlertThresholdsPanel()}
         ${renderCollapsibleEnd()}
       </div>
 
