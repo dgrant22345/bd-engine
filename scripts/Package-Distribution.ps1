@@ -5,7 +5,7 @@ $zipName = 'BD-Engine.zip'
 $zipPath = Join-Path $projectRoot $zipName
 $tempDir = Join-Path $env:TEMP 'BD-Engine-pkg'
 
-# Items to exclude from the package
+# Items to exclude from the commercial package
 $excludeTopLevel = @(
     '.claude'
     '.git'
@@ -15,11 +15,25 @@ $excludeTopLevel = @(
     'server-test.log'
     'Package-BDEngine.bat'
     'BD-Engine.zip'
+    'AGENTS.md'
+    'google-apps-script'
+    'docs'
+)
+
+# Scripts that should NOT be shipped (vendor-only tools)
+$excludeScripts = @(
+    'Generate-License.ps1'
 )
 
 $excludeDataFiles = @(
     'background-worker.pid'
     'diagnostic.txt'
+    'bd-engine.db'
+    'bd-engine.db-wal'
+    'bd-engine.db-shm'
+    'before_metrics.txt'
+    'after_metrics.txt'
+    'license.json'
 )
 
 $excludeDataDirs = @(
@@ -45,6 +59,12 @@ Get-ChildItem -Path $projectRoot -Force | Where-Object {
     }
 }
 
+# ─── Remove excluded scripts ───
+foreach ($f in $excludeScripts) {
+    $p = Join-Path $tempDir "scripts\$f"
+    if (Test-Path $p) { Remove-Item $p -Force }
+}
+
 # ─── Remove excluded data files ───
 foreach ($f in $excludeDataFiles) {
     $p = Join-Path $tempDir "data\$f"
@@ -57,9 +77,20 @@ foreach ($d in $excludeDataDirs) {
     if (Test-Path $p) { Remove-Item $p -Recurse -Force }
 }
 
-# ─── Remove WAL/SHM files (SQLite will recreate them) ───
-Get-ChildItem (Join-Path $tempDir 'data') -Filter 'bd-engine.db-*' -ErrorAction SilentlyContinue |
-    Remove-Item -Force
+# ─── Ensure clean data templates are in place ───
+$dataDir = Join-Path $tempDir 'data'
+if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-Null }
+
+# Empty seed config (header only)
+$seedFile = Join-Path $dataDir 'seed-job-boards-config.json'
+@'
+[
+  ["Company","ATS_Type","Board_ID","Domain","Careers_URL","Active","Notes","Source","","","","Last_Checked","Discovery_Status","Discovery_Method"]
+]
+'@ | Set-Content $seedFile -Encoding UTF8
+
+# Empty resolver mappings
+'{}' | Set-Content (Join-Path $dataDir 'resolver-known-mappings.json') -Encoding UTF8
 
 # ─── Create zip ───
 Write-Host '  [..] Compressing...'
@@ -78,5 +109,8 @@ Write-Host ''
 Write-Host "  [OK] Created $zipName ($size MB, $fileCount files)" -ForegroundColor Green
 Write-Host "       Location: $zipPath"
 Write-Host ''
-Write-Host '  Send this file to your coworker.'
-Write-Host '  They unzip it and double-click Start-BDEngine.bat'
+Write-Host '  This is a COMMERCIAL build:'
+Write-Host '  - No customer data included'
+Write-Host '  - License activation required on first launch'
+Write-Host '  - License generation script excluded'
+Write-Host ''

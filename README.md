@@ -1,33 +1,63 @@
-# BD Engine
+# BD Engine — Commercial Edition
 
-Business development operating system. Daily account prioritization, contact intelligence, and ATS import orchestration in one place.
+Business development operating system. Daily account prioritization, contact intelligence, and live ATS job import in one desktop app.
 
-## Quick Start
+## Requirements
 
-**Windows:**
+- **Windows 10 or 11**
+- **PowerShell 5.1+** (included with Windows)
+- No other dependencies — everything is bundled
+
+## Installation
+
+### 1. Unzip
+
+Extract the `BD-Engine.zip` file to any folder (e.g., `C:\BD-Engine`).
+
+### 2. First-Run Setup
+
+Double-click **`Start-BDEngine.bat`**. On the first launch, the setup wizard will run automatically and ask for:
+
+1. **License key and payload** — provided to you at purchase
+2. **Workspace name** — name your workspace (e.g., your company name)
+3. **Team members** — add the people who will use the app
+4. **Geography focus** — optional, filters account prioritization by region
+
+You can also run setup manually anytime:
 
 ```
-Double-click Start-BDEngine.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File Setup-BDEngine.ps1
 ```
 
-Or from PowerShell:
+### 3. Launch
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File server\Server.ps1 -Port 8173 -OpenBrowser
-```
+After setup, double-click **`Start-BDEngine.bat`**. The app will:
+- Start a local server on port 8173
+- Open your browser to the dashboard at http://localhost:8173
 
-Open [http://localhost:8173](http://localhost:8173).
+To stop: double-click **`Stop-BDEngine.bat`** or close the PowerShell window.
+
+## License Activation
+
+Each copy of BD Engine requires a unique license key. You'll receive two values at purchase:
+
+- **License Key**: formatted as `BDENG-XXXXX-XXXXX-XXXXX-XXXXX`
+- **License Payload**: a base64 string
+
+Enter both during first-run setup. The license is stored locally in `data\license.json`.
+
+If your license expires, contact your vendor for a renewal key.
 
 ## What It Does
 
-BD Engine replaces the spreadsheet-based BD workflow with a web app that:
+BD Engine replaces spreadsheet-based BD workflows with a web app that:
 
 - **Ranks accounts** by hiring signals, contact density, and engagement score
 - **Scores contacts** by title relevance, seniority, and relationship strength
 - **Imports live jobs** from ATS platforms (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite)
-- **Discovers job boards** automatically via slug-based ATS probing
+- **Discovers job boards** automatically via ATS probing
 - **Tracks outreach** with activity logging and stage management
-- **Assigns ownership** across a fixed roster (Derek Grant, Alex Chong, Danny Chung)
+- **Assigns ownership** across your team roster
 
 ## App Views
 
@@ -39,94 +69,63 @@ BD Engine replaces the spreadsheet-based BD workflow with a web app that:
 | **Jobs** | Live job postings imported from connected ATS boards |
 | **Admin** | ATS board config management, enrichment tools, and import controls |
 
+## Configuration
+
+### Team Members
+
+Edit `data\owners.json` to add, remove, or rename team members:
+
+```json
+[
+  { "ownerId": "jane-smith", "displayName": "Jane Smith" },
+  { "ownerId": "john-doe", "displayName": "John Doe" }
+]
+```
+
+### Settings
+
+Edit `data\settings.json` or use the Admin view in the app:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `minCompanyConnections` | 3 | Minimum contacts needed to surface a company |
+| `minJobsPosted` | 2 | Minimum active jobs to flag as "hiring" |
+| `contactPriorityThreshold` | 10 | Minimum score for high-priority contacts |
+| `maxCompaniesToReview` | 25 | Max companies shown on the dashboard |
+| `geographyFocus` | (empty) | Filter by country/region |
+
+### ATS Board Configuration
+
+Add your target companies in the Admin view, or import via the `data\seed-job-boards-config.json` file. Use the built-in ATS discovery to automatically detect which job board platform each company uses.
+
 ## Architecture
 
 ```
-app/                    Frontend (static HTML/CSS/vanilla JS)
-server/Server.ps1       HTTP server (PowerShell, port 8173)
-server/Modules/         Business logic modules
-  BdEngine.Domain.psm1    Scoring, ranking, search, filters
-  BdEngine.Import.psm1    Workbook parser and seed import
-  BdEngine.JobImport.psm1 Live ATS importers + discovery pipeline
-  BdEngine.State.psm1     File-backed persistence
-  BdEngine.SqliteStore.psm1  SQLite storage adapter
-  BdEngine.GoogleSheetSync.psm1  Google Sheets integration
-data/                   Persisted state (JSON + SQLite)
-scripts/                Utility and maintenance scripts
+Start-BDEngine.bat       Windows launcher (double-click to start)
+Setup-BDEngine.ps1       First-run setup wizard
+Stop-BDEngine.bat        Shutdown script
+
+app/                     Frontend (static HTML/CSS/vanilla JS)
+server/Server.ps1        HTTP server (PowerShell, port 8173)
+server/Modules/          Business logic modules
+data/                    Your data (JSON + SQLite, created at runtime)
+scripts/                 Utility and maintenance scripts
 ```
 
-## ATS Board Discovery
+## Data & Privacy
 
-The app automatically discovers which ATS platform each company uses. Current coverage: **609/839 companies resolved (72.6%)**.
+All data stays on your machine. BD Engine runs entirely locally — no cloud services, no telemetry, no external data transmission. The only outbound requests are ATS API calls to fetch public job postings from platforms like Greenhouse and Lever.
 
-Discovery methods:
-- **Slug probing** — tests company name variants against Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite APIs
-- **Workday probing** — tests against Workday subdomain variants (wd1-wd12)
-- **Known enterprise mappings** — curated career page URLs for 400+ major companies
-- **Google Sheets sync** — imports config from a shared Google Sheet
+## Troubleshooting
 
-### Running Discovery Scripts
+| Issue | Solution |
+|-------|----------|
+| "No license found" error | Run `Setup-BDEngine.ps1` and enter your key |
+| "License expired" error | Contact your vendor for a renewal |
+| Port 8173 in use | Close other BD Engine instances, or edit the port in `Open-BD-Engine.ps1` |
+| PowerShell error | Ensure PowerShell 5.1+ is installed (run `$PSVersionTable.PSVersion`) |
+| App won't load in browser | Wait 30 seconds for the server to warm up, then refresh |
 
-```powershell
-# Main ATS probe (Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite)
-powershell -NoProfile -File scripts\Fast-Probe.ps1
+## Support
 
-# Workday subdomain probing
-powershell -NoProfile -File scripts\Fast-Probe-Extra.ps1
-
-# Additional ATS types (Workable, Recruitee, Rippling)
-powershell -NoProfile -File scripts\Fast-Probe-More.ps1
-
-# Apply known enterprise career page mappings
-powershell -NoProfile -File scripts\Apply-Known-Enterprise.ps1
-powershell -NoProfile -File scripts\Apply-Known-Enterprise-2.ps1
-powershell -NoProfile -File scripts\Apply-Known-Enterprise-3.ps1
-
-# Check resolution stats
-powershell -NoProfile -File scripts\check-stats.ps1
-```
-
-## Live Job Import
-
-1. Open **Admin** in the app
-2. Verify ATS configs are resolved (green status)
-3. Click **Run job import**
-4. Jobs appear in the **Jobs** view
-
-Supported import sources: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite.
-
-## Data
-
-- **SQLite database**: `data/bd-engine.db` — board configs, discovery state
-- **JSON files**: `data/*.json` — accounts, contacts, settings, workspace state
-- **Known mappings**: `data/resolver-known-mappings.json` — curated ATS mappings
-
-## Sharing the App
-
-**Local distribution**: Run `scripts\Package-Distribution.ps1` to create `BD-Engine.zip`. Recipients unzip and double-click `Start-BDEngine.bat`.
-
-**Network sharing (Tailscale)**: The server binds to all interfaces by default. Install [Tailscale](https://tailscale.com/) on all machines, then share the Tailscale URL shown at startup. Use `-LocalOnly` flag to restrict to localhost.
-
-## API
-
-Key endpoints:
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Health check |
-| `GET /api/dashboard` | Prioritized account list |
-| `GET /api/accounts` | Account data with search/filter |
-| `GET /api/contacts` | Contact directory |
-| `GET /api/jobs` | Imported job postings |
-| `GET /api/configs` | ATS board configurations |
-| `GET /api/owners` | Owner roster |
-| `POST /api/import/jobs` | Trigger live job import |
-| `POST /api/discovery/run` | Run ATS discovery pipeline |
-| `POST /api/enrichment/run` | Run company enrichment |
-
-## Stack
-
-- **Frontend**: Static HTML/CSS/vanilla JS (no build step)
-- **Backend**: PowerShell HTTP server (.NET TcpListener)
-- **Database**: SQLite + JSON file persistence
-- **Dependencies**: PowerShell 5.1+, .NET Framework (included with Windows)
+Contact your vendor for license issues, bug reports, or feature requests.

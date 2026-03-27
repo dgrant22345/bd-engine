@@ -24,6 +24,9 @@ server-test.log
 # Claude Code config
 .claude/
 
+# License (customer-specific, not for version control)
+data/license.json
+
 # Credentials (never commit)
 *.credentials.json
 *.service-account.json

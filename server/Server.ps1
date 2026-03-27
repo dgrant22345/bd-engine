@@ -19,6 +19,22 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheets.psm1') -Fo
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.Intelligence.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.License.psm1') -Force -DisableNameChecking
+
+# ─── License validation ───
+Initialize-LicensePath -DataDir $dataRoot
+$_license = Get-InstalledLicense
+$_licenseSecret = 'bd-engine-commercial-2026'
+if (-not $_license) {
+    Write-Host '[LICENSE] No license found. Run Setup-BDEngine.ps1 first.' -ForegroundColor Red
+    throw 'BD Engine requires a valid license. Run Setup-BDEngine.ps1 to activate.'
+}
+$_check = Test-LicenseKey -Key $_license.key -Payload $_license.payload -Secret $_licenseSecret
+if (-not $_check.valid) {
+    Write-Host "[LICENSE] Invalid license: $($_check.reason)" -ForegroundColor Red
+    throw "License validation failed: $($_check.reason)"
+}
+Write-Host "[LICENSE] Licensed to: $($_check.licensee) (expires $($_check.expiry))" -ForegroundColor Green
 $targetScoreRepair = Repair-AppTargetScoreRollout -Limit 100 -Persist -MaxBatches 1 -SkipSnapshots
 if ($targetScoreRepair.needed) {
     Write-Host ("Target-score rollout repair refreshed {0} accounts across {1} batch{2} in {3}ms derive / {4}ms scope / {5}ms persist / {6}ms snapshots (remaining={7}, maxTargetScore={8})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.batchCount, $(if ([int]$targetScoreRepair.batchCount -eq 1) { '' } else { 'es' }), [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.snapshotRefreshMs, [int]$targetScoreRepair.remainingCount, [int]$targetScoreRepair.maxTargetScore)

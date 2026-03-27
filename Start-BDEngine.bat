@@ -60,6 +60,20 @@ if not exist "%PROJECT_ROOT%\data\" (
     mkdir "%PROJECT_ROOT%\data"
 )
 
+:: ─── First-run setup check ───
+if not exist "%PROJECT_ROOT%\data\license.json" (
+    echo  [INFO] No license found. Running first-time setup...
+    echo.
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\Setup-BDEngine.ps1"
+    if %ERRORLEVEL% neq 0 (
+        echo.
+        echo  [ERROR] Setup did not complete. BD Engine cannot start without a license.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+
 :: ─── Launch ───
 echo  [OK] All checks passed.
 echo  [..] Starting BD Engine server on http://localhost:8173

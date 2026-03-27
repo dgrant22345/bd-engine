@@ -8,12 +8,26 @@ $script:FilterOptionsCacheSignature = ''
 $script:RoleSeniorityScoreCache = @{}
 $script:DecisionMakerFitScoreCache = @{}
 
-# ─── Fixed owner roster ───
+# ─── Owner roster (configure via data/owners.json) ───
 $script:OwnerRoster = @(
-    [ordered]@{ ownerId = 'derek-grant';  displayName = 'Derek Grant' }
-    [ordered]@{ ownerId = 'alex-chong';   displayName = 'Alex Chong' }
-    [ordered]@{ ownerId = 'danny-chung';  displayName = 'Danny Chung' }
+    [ordered]@{ ownerId = 'user-1';  displayName = 'Team Member 1' }
 )
+
+# Load custom owners from data/owners.json if present
+$_ownersFile = Join-Path $PSScriptRoot '..\..\data\owners.json'
+if (Test-Path $_ownersFile) {
+    try {
+        $customOwners = Get-Content $_ownersFile -Raw | ConvertFrom-Json
+        if ($customOwners -and $customOwners.Count -gt 0) {
+            $script:OwnerRoster = @()
+            foreach ($o in $customOwners) {
+                $script:OwnerRoster += [ordered]@{ ownerId = $o.ownerId; displayName = $o.displayName }
+            }
+        }
+    } catch {
+        Write-Warning "Could not load owners.json: $_"
+    }
+}
 
 function Get-OwnerRoster {
     return @($script:OwnerRoster)

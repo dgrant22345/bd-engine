@@ -1,17 +1,1 @@
-{
-    "ey":  {
-               "atsType":  "bamboohr",
-               "boardId":  "ey",
-               "domain":  "ey.bamboohr.com",
-               "careersUrl":  "https://ey.bamboohr.com/careers",
-               "resolvedBoardUrl":  "https://ey.bamboohr.com/careers",
-               "source":  "https://ey.bamboohr.com/careers",
-               "notes":  "Resolved using alias slug \u0027ey\u0027",
-               "discoveryStatus":  "mapped",
-               "discoveryMethod":  "known_override",
-               "confidenceScore":  100,
-               "confidenceBand":  "high",
-               "supportedImport":  false,
-               "active":  false
-           }
-}
+{}
