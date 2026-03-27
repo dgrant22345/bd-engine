@@ -39,14 +39,18 @@ To stop: double-click **`Stop-BDEngine.bat`** or close the PowerShell window.
 
 ## License Activation
 
-Each copy of BD Engine requires a unique license key. You'll receive two values at purchase:
+Each license is **locked to a single computer**. Here's how it works:
 
-- **License Key**: formatted as `BDENG-XXXXX-XXXXX-XXXXX-XXXXX`
-- **License Payload**: a base64 string
+1. Run `Start-BDEngine.bat` (or `Setup-BDEngine.ps1`) — the setup wizard displays your **Machine ID** (e.g., `MACH-A1B2-C3D4-E5F6-7890`)
+2. Send your Machine ID and name to your vendor
+3. You'll receive two values:
+   - **License Key**: formatted as `BDENG-XXXXX-XXXXX-XXXXX-XXXXX`
+   - **License Payload**: a base64 string
+4. Enter both into the setup wizard
 
-Enter both during first-run setup. The license is stored locally in `data\license.json`.
+The license is stored locally in `data\license.json`. It only works on the computer it was generated for.
 
-If your license expires, contact your vendor for a renewal key.
+If you get a new computer or your license expires, contact your vendor for a new key.
 
 ## What It Does
 

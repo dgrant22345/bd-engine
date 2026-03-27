@@ -8,8 +8,9 @@ Set-StrictMode -Version Latest
     License keys use HMAC-SHA256 signing with a secret. Keys are formatted as:
     BDENG-XXXXX-XXXXX-XXXXX-XXXXX
 
-    The key encodes: licensee name, expiry date, and a signature.
-    Validation checks the signature and expiry without needing a server.
+    The key encodes: licensee name, expiry date, machine ID, and a signature.
+    Validation checks the signature, expiry, and machine fingerprint.
+    Each license is locked to a single computer.
 #>
 
 $script:LicenseFilePath = $null
@@ -19,12 +20,55 @@ function Initialize-LicensePath {
     $script:LicenseFilePath = Join-Path $DataDir 'license.json'
 }
 
+function Get-MachineId {
+    <#
+    .SYNOPSIS
+        Generates a unique fingerprint for the current machine using
+        motherboard serial + CPU ID + Windows product ID.
+        Returns a short hex hash.
+    #>
+    try {
+        $parts = @()
+
+        # Motherboard serial number
+        $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue
+        if ($board.SerialNumber) { $parts += $board.SerialNumber.Trim() }
+
+        # CPU processor ID (hardware-burned identifier)
+        $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cpu.ProcessorId) { $parts += $cpu.ProcessorId.Trim() }
+
+        # Windows product ID (tied to the OS install)
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os.SerialNumber) { $parts += $os.SerialNumber.Trim() }
+
+        if ($parts.Count -eq 0) {
+            # Fallback: computer name + volume serial
+            $parts += $env:COMPUTERNAME
+            $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
+            if ($vol.VolumeSerialNumber) { $parts += $vol.VolumeSerialNumber }
+        }
+
+        $raw = ($parts -join '|')
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($raw))
+        $hashHex = ($hashBytes[0..7] | ForEach-Object { $_.ToString('X2') }) -join ''
+
+        # Format as MACH-XXXX-XXXX-XXXX-XXXX for readability
+        return "MACH-$($hashHex.Substring(0,4))-$($hashHex.Substring(4,4))-$($hashHex.Substring(8,4))-$($hashHex.Substring(12,4))"
+    } catch {
+        throw "Could not generate machine ID: $_"
+    }
+}
+
 function New-LicenseKey {
     <#
     .SYNOPSIS
         Generates a new license key for a customer. Run this as the vendor.
     .PARAMETER LicenseeName
         The customer's name or company.
+    .PARAMETER MachineId
+        The customer's machine ID (they get this from the setup wizard).
     .PARAMETER ExpiryDate
         When the license expires (default: 1 year from now).
     .PARAMETER Secret
@@ -32,14 +76,16 @@ function New-LicenseKey {
     #>
     param(
         [Parameter(Mandatory)][string]$LicenseeName,
+        [Parameter(Mandatory)][string]$MachineId,
         [DateTime]$ExpiryDate = (Get-Date).AddYears(1),
         [Parameter(Mandatory)][string]$Secret
     )
 
     $payload = @{
-        licensee = $LicenseeName
-        expiry   = $ExpiryDate.ToString('yyyy-MM-dd')
-        issued   = (Get-Date).ToString('yyyy-MM-dd')
+        licensee  = $LicenseeName
+        machineId = $MachineId
+        expiry    = $ExpiryDate.ToString('yyyy-MM-dd')
+        issued    = (Get-Date).ToString('yyyy-MM-dd')
     }
 
     $payloadJson = $payload | ConvertTo-Json -Compress
@@ -57,17 +103,18 @@ function New-LicenseKey {
     $keyFormatted = "BDENG-$($sigPart.Substring(0,5))-$($sigPart.Substring(5,5))-$($sigPart.Substring(10,5))-$($sigPart.Substring(15,5))"
 
     return @{
-        key      = $keyFormatted
-        payload  = $payloadB64
-        licensee = $LicenseeName
-        expiry   = $ExpiryDate.ToString('yyyy-MM-dd')
+        key       = $keyFormatted
+        payload   = $payloadB64
+        licensee  = $LicenseeName
+        machineId = $MachineId
+        expiry    = $ExpiryDate.ToString('yyyy-MM-dd')
     }
 }
 
 function Test-LicenseKey {
     <#
     .SYNOPSIS
-        Validates a license key + payload pair.
+        Validates a license key + payload pair against the current machine.
     .PARAMETER Key
         The formatted license key (BDENG-XXXXX-XXXXX-XXXXX-XXXXX).
     .PARAMETER Payload
@@ -99,6 +146,12 @@ function Test-LicenseKey {
             return @{ valid = $false; reason = 'Invalid license key' }
         }
 
+        # Check machine ID matches this computer
+        $currentMachineId = Get-MachineId
+        if ($payloadObj.machineId -ne $currentMachineId) {
+            return @{ valid = $false; reason = 'License is not valid for this computer' }
+        }
+
         # Check expiry
         $expiryDate = [DateTime]::ParseExact($payloadObj.expiry, 'yyyy-MM-dd', $null)
         if ($expiryDate -lt (Get-Date).Date) {
@@ -106,10 +159,11 @@ function Test-LicenseKey {
         }
 
         return @{
-            valid    = $true
-            licensee = $payloadObj.licensee
-            expiry   = $payloadObj.expiry
-            issued   = $payloadObj.issued
+            valid     = $true
+            licensee  = $payloadObj.licensee
+            machineId = $payloadObj.machineId
+            expiry    = $payloadObj.expiry
+            issued    = $payloadObj.issued
         }
     } catch {
         return @{ valid = $false; reason = "License validation error: $_" }
@@ -152,6 +206,7 @@ function Install-License {
         key       = $Key
         payload   = $Payload
         licensee  = $LicenseeName
+        machineId = Get-MachineId
         installed = (Get-Date).ToString('o')
     }
 
@@ -161,6 +216,7 @@ function Install-License {
 
 Export-ModuleMember -Function @(
     'Initialize-LicensePath'
+    'Get-MachineId'
     'New-LicenseKey'
     'Test-LicenseKey'
     'Get-InstalledLicense'

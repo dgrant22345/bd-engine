@@ -42,11 +42,20 @@ function Step-License {
             return $true
         } else {
             Write-Host "  [!] Existing license invalid: $($check.reason)" -ForegroundColor Yellow
+            Write-Host ''
         }
     }
 
-    Write-Host '  Enter your license information below.'
-    Write-Host '  (You received a key and payload when you purchased BD Engine.)'
+    # Show the machine ID so the customer can send it to the vendor
+    $machineId = Get-MachineId
+    Write-Host '  Your Machine ID (send this to your vendor to get a license):' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "    $machineId" -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  ────────────────────────────────────────────'
+    Write-Host ''
+    Write-Host '  If you already have a license, enter it below.'
+    Write-Host '  (Your license key is tied to this specific computer.)'
     Write-Host ''
 
     $key = Read-Host '  License Key (BDENG-XXXXX-XXXXX-XXXXX-XXXXX)'
@@ -70,6 +79,7 @@ function Step-License {
     Write-Host ''
     Write-Host "  [OK] License activated for: $($check.licensee)" -ForegroundColor Green
     Write-Host "       Expires: $($check.expiry)" -ForegroundColor Green
+    Write-Host "       Machine: $machineId" -ForegroundColor Green
     Write-Host ''
     return $true
 }
