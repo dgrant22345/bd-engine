@@ -636,6 +636,7 @@ function computeStageVelocity(accountId) {
 }
 
 function renderDealVelocity(accounts) {
+  if (!Array.isArray(accounts)) return '';
   const velocities = accounts.map(a => {
     const v = computeStageVelocity(a.id);
     return v ? { ...v, name: a.displayName, id: a.id, score: getTargetScore(a) } : null;
@@ -878,6 +879,7 @@ function renderConversionFunnel(stages, width = 320, height = 160) {
 
 /* ── Phase 6: Team performance leaderboard ── */
 function renderTeamLeaderboard(accounts) {
+  if (!Array.isArray(accounts)) return '';
   const owners = {};
   accounts.forEach(a => {
     const o = a.owner || 'Unassigned';
@@ -930,6 +932,7 @@ function renderDataQualityBadge(account) {
 }
 
 function renderDataQualityPanel(accounts) {
+  if (!Array.isArray(accounts) || !accounts.length) return '';
   const scores = accounts.map(a => computeDataQuality(a).score);
   const avg = scores.length ? Math.round(scores.reduce((s, v) => s + v, 0) / scores.length) : 0;
   const dist = { excellent: scores.filter(s => s >= 75).length, good: scores.filter(s => s >= 50 && s < 75).length, poor: scores.filter(s => s < 50).length };
@@ -976,6 +979,7 @@ function levenshtein(a, b) {
 }
 
 function detectDuplicates(accounts) {
+  if (!Array.isArray(accounts)) return [];
   const groups = [];
   const used = new Set();
   for (let i = 0; i < accounts.length; i++) {
@@ -1138,6 +1142,7 @@ function renderActivityTimeline(accountId) {
 
 /* ── Phase 6: Sales cycle analytics ── */
 function renderSalesCycleAnalytics(accounts) {
+  if (!Array.isArray(accounts)) return '';
   const stageOrder = ['new', 'researching', 'outreach', 'engaged', 'client'];
   const stageCounts = {};
   const stageAvgDays = {};
@@ -1190,6 +1195,7 @@ function renderAlertThresholdsPanel() {
 /* ── Phase 6: Override detectSmartAlerts to use configurable thresholds ── */
 const _origDetectSmartAlerts = detectSmartAlerts;
 detectSmartAlerts = function(accounts) {
+  if (!Array.isArray(accounts)) { appState.smartAlerts = []; return []; }
   const t = appState.alertThresholds;
   const alerts = [];
   accounts.forEach(a => {
@@ -1366,6 +1372,7 @@ function renderCustomFieldsPanel(accountId) {
 
 /* ── Phase 6: Dashboard charts builder ── */
 function renderDashboardCharts(accounts) {
+  if (!Array.isArray(accounts) || !accounts.length) return '';
   // Pipeline by status
   const statusCounts = {};
   accounts.forEach(a => {
@@ -2434,6 +2441,12 @@ async function renderDashboardView() {
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
+  if (!dashboard.todayQueue) dashboard.todayQueue = [];
+  if (!dashboard.followUpAccounts) dashboard.followUpAccounts = [];
+  if (!dashboard.newJobsToday) dashboard.newJobsToday = [];
+  if (!dashboard.recommendedActions) dashboard.recommendedActions = [];
+  if (!dashboard.recentlyDiscoveredBoards) dashboard.recentlyDiscoveredBoards = [];
+  if (!dashboard.summary) dashboard.summary = {};
   let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
   try { extended = await api('/api/dashboard/extended'); } catch(e) { console.warn('Extended dashboard data unavailable:', e); }
   const topCompany = dashboard.todayQueue[0];
@@ -2769,7 +2782,7 @@ async function renderDashboardView() {
     ${dashSection('charts', renderDashboardCharts(dashboard.todayQueue))}
   `;
   // Record score history for sparklines
-  dashboard.todayQueue.forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
+  (dashboard.todayQueue || []).forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
   // Desktop notifications for critical alerts
   if (appState.smartAlerts.filter(a => a.severity === 'danger').length > 0) {
     sendDesktopNotification('BD Engine Alert', `${appState.smartAlerts.filter(a => a.severity === 'danger').length} critical pipeline alerts detected`);
@@ -3346,7 +3359,10 @@ async function renderAdminView() {
   if (eq.minTargetScore) batchQuery.enrichmentMinTargetScore = eq.minTargetScore;
   if (eq.topN) batchQuery.enrichmentTopN = eq.topN;
   const batch = await api(`/api/admin/bootstrap${buildQuery(batchQuery)}`);
-  const stateBootstrap = batch.bootstrap;
+  const stateBootstrap = batch.bootstrap || {};
+  if (!stateBootstrap.settings) stateBootstrap.settings = {};
+  if (!stateBootstrap.defaults) stateBootstrap.defaults = {};
+  if (!stateBootstrap.workspace) stateBootstrap.workspace = {};
   appState.bootstrap = { ...(appState.bootstrap || {}), ...stateBootstrap };
   workspaceName.textContent = stateBootstrap?.workspace?.name || 'BD Engine Workspace';
   window.bdLocalApi.setAlert('', appAlert);
