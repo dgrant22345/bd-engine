@@ -18,6 +18,18 @@ Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.JobImport.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheets.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.GoogleSheetSync.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.BackgroundJobs.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.Intelligence.psm1') -Force -DisableNameChecking
+$targetScoreRepair = Repair-AppTargetScoreRollout -Limit 100 -Persist -MaxBatches 1 -SkipSnapshots
+if ($targetScoreRepair.needed) {
+    Write-Host ("Target-score rollout repair refreshed {0} accounts across {1} batch{2} in {3}ms derive / {4}ms scope / {5}ms persist / {6}ms snapshots (remaining={7}, maxTargetScore={8})." -f [int]$targetScoreRepair.accountCount, [int]$targetScoreRepair.batchCount, $(if ([int]$targetScoreRepair.batchCount -eq 1) { '' } else { 'es' }), [int]$targetScoreRepair.deriveMs, [int]$targetScoreRepair.scopeLoadMs, [int]$targetScoreRepair.persistMs, [int]$targetScoreRepair.snapshotRefreshMs, [int]$targetScoreRepair.remainingCount, [int]$targetScoreRepair.maxTargetScore)
+}
+if ((Test-AppStoreUsesSqlite) -and [int]$targetScoreRepair.remainingCount -gt 0) {
+    $targetScoreRolloutJob = Enqueue-BackgroundJob -Type 'target-score-rollout' -Payload ([ordered]@{
+            limit = 150
+            maxBatches = 6
+        }) -Summary 'Repair target-score intelligence backlog' -ProgressMessage 'Queued target-score rollout'
+    Write-Host ("Target-score rollout worker job {0} queued for {1} remaining accounts." -f [string]$targetScoreRolloutJob.id, [int]$targetScoreRepair.remainingCount)
+}
 
 function Get-DefaultWorkbookPath {
     $userProfile = [Environment]::GetFolderPath('UserProfile')
@@ -67,6 +79,9 @@ $defaultConnectionsCsvPath = Get-DefaultConnectionsCsvPath
 $defaultSpreadsheetId = [string]$env:GOOGLE_SHEETS_SPREADSHEET_ID
 $script:ApiGetCache = @{}
 $script:ApiGetCacheSignature = ''
+$script:ApiSegmentCaches = @{}
+$script:ApiSegmentSignatures = @{}
+$script:CompanySnippetCache = @{}
 $script:ServerStartedAt = (Get-Date).ToString('o')
 $script:ServerWarmedAt = ''
 
@@ -95,6 +110,122 @@ function Write-SnapshotLog {
     $sourceRevision = if ($SnapshotResult.sourceRevision) { [string]$SnapshotResult.sourceRevision } else { '' }
     $currentRevision = if ($SnapshotResult.currentRevision) { [string]$SnapshotResult.currentRevision } else { '' }
     Write-ServerLog ("SNAPSHOT {0} source={1} hit={2} ageSeconds={3} rebuildMs={4} dirty={5} dirtyReason={6} sourceRevision={7} currentRevision={8}" -f $Name, $source, $hit, $age, $rebuildMs, $dirty, $dirtyReason, $sourceRevision, $currentRevision)
+}
+
+function Get-CompanySnippetForOutreach {
+    param(
+        [string]$CacheKey,
+        [string]$CompanyName,
+        [switch]$SkipSearch
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $key = if ([string]::IsNullOrWhiteSpace([string]$CacheKey)) { ([string]$CompanyName).Trim().ToLowerInvariant() } else { ([string]$CacheKey).Trim().ToLowerInvariant() }
+    $ttlHours = 18
+
+    if ($script:CompanySnippetCache.ContainsKey($key)) {
+        $cached = $script:CompanySnippetCache[$key]
+        if ($cached -and $cached.fetchedAt) {
+            $ageHours = ((Get-Date) - [datetime]$cached.fetchedAt).TotalHours
+            if ($ageHours -lt $ttlHours) {
+                $stopwatch.Stop()
+                return [ordered]@{
+                    snippet = [string](Get-ObjectValue -Object $cached -Name 'snippet' -Default '')
+                    source = 'cache_hit'
+                    durationMs = [int]$stopwatch.ElapsedMilliseconds
+                }
+            }
+        }
+    }
+
+    if ($SkipSearch) {
+        $stopwatch.Stop()
+        return [ordered]@{
+            snippet = ''
+            source = 'skipped_internal_signal'
+            durationMs = [int]$stopwatch.ElapsedMilliseconds
+        }
+    }
+
+    $snippet = ''
+    $source = 'search_miss'
+    try {
+        $searchQuery = "$CompanyName company about"
+        $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
+        $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 3 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
+        $snippets = @(
+            [regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') |
+                ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } |
+                Where-Object { $_.Length -gt 40 } |
+                Select-Object -First 1
+        )
+        if ($snippets.Count -gt 0) {
+            $snippet = [string]$snippets[0]
+            if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 197) + '...' }
+            $source = 'search_hit'
+        }
+    } catch {
+        $source = 'search_error'
+    }
+
+    $script:CompanySnippetCache[$key] = [ordered]@{
+        snippet = $snippet
+        fetchedAt = (Get-Date).ToString('o')
+    }
+    $stopwatch.Stop()
+    return [ordered]@{
+        snippet = $snippet
+        source = $source
+        durationMs = [int]$stopwatch.ElapsedMilliseconds
+    }
+}
+
+function Convert-ToOutreachApiModel {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Outreach,
+        [string]$CompanySnippet = '',
+        $Timings = $null
+    )
+
+    $subjectOptions = @($(Get-ObjectValue -Object $Outreach -Name 'subject_options' -Default @()) | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    return [ordered]@{
+        outreach = [string](Get-ObjectValue -Object $Outreach -Name 'message_body' -Default '')
+        subject_line = [string](Get-ObjectValue -Object $Outreach -Name 'subject_line' -Default '')
+        subject_options = @($subjectOptions)
+        message_body = [string](Get-ObjectValue -Object $Outreach -Name 'message_body' -Default '')
+        linkedin_message = [string](Get-ObjectValue -Object $Outreach -Name 'linkedin_message' -Default '')
+        follow_up_message = [string](Get-ObjectValue -Object $Outreach -Name 'follow_up_message' -Default '')
+        call_opener = [string](Get-ObjectValue -Object $Outreach -Name 'call_opener' -Default '')
+        why_now = [string](Get-ObjectValue -Object $Outreach -Name 'why_now' -Default '')
+        contact_hook = [string](Get-ObjectValue -Object $Outreach -Name 'contact_hook' -Default '')
+        angle_summary = [string](Get-ObjectValue -Object $Outreach -Name 'angle_summary' -Default '')
+        template_key = [string](Get-ObjectValue -Object $Outreach -Name 'template_key' -Default 'cold')
+        template_label = [string](Get-ObjectValue -Object $Outreach -Name 'template_label' -Default '')
+        template_button_label = [string](Get-ObjectValue -Object $Outreach -Name 'template_button_label' -Default '')
+        persona = [string](Get-ObjectValue -Object $Outreach -Name 'persona' -Default '')
+        persona_label = [string](Get-ObjectValue -Object $Outreach -Name 'persona_label' -Default '')
+        contact_name = [string](Get-ObjectValue -Object $Outreach -Name 'contact_name' -Default '')
+        contact_title = [string](Get-ObjectValue -Object $Outreach -Name 'contact_title' -Default '')
+        companySnippet = $CompanySnippet
+        signal_focus = [string](Get-ObjectValue -Object $Outreach -Name 'signal_focus' -Default '')
+        suggested_next_step = [string](Get-ObjectValue -Object $Outreach -Name 'suggested_next_step' -Default '')
+        signal_metrics = Get-ObjectValue -Object $Outreach -Name 'signal_metrics' -Default ([ordered]@{})
+        outreach_status = [string](Get-ObjectValue -Object $Outreach -Name 'outreach_status' -Default '')
+        sequence_status = [string](Get-ObjectValue -Object $Outreach -Name 'sequence_status' -Default '')
+        sequence_guidance = [string](Get-ObjectValue -Object $Outreach -Name 'sequence_guidance' -Default '')
+        timings = if ($Timings) { $Timings } else { [ordered]@{} }
+    }
+}
+
+function Get-OutreachVariantTemplates {
+    param(
+        [string]$PrimaryTemplate = 'cold'
+    )
+
+    $preferred = @('talent_partner', 'hiring_manager', 'executive')
+    $primaryKey = if ([string]::IsNullOrWhiteSpace([string]$PrimaryTemplate)) { 'cold' } else { ([string]$PrimaryTemplate).Trim().ToLowerInvariant() }
+    return @($preferred | Where-Object { $_ -ne $primaryKey } | Select-Object -Unique)
 }
 
 function Get-ContentType {
@@ -196,6 +327,43 @@ function Get-CachedApiResult {
 
     $result = & $Factory
     $script:ApiGetCache[$cacheKey] = $result
+    return $result
+}
+
+function Get-SegmentCachedApiResult {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [hashtable]$Query = @{},
+        [Parameter(Mandatory = $true)]
+        [string[]]$Segments,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Factory
+    )
+
+    $segmentSig = New-Object System.Text.StringBuilder
+    foreach ($seg in @($Segments | Sort-Object)) {
+        [void]$segmentSig.Append($seg)
+        [void]$segmentSig.Append(':')
+        [void]$segmentSig.Append((Get-SegmentStorageSignature -Segment $seg))
+        [void]$segmentSig.Append('|')
+    }
+    $signature = $segmentSig.ToString()
+
+    $cacheKey = '{0}?{1}' -f $Path, (Get-QueryCacheKey -Query $Query)
+
+    if ($script:ApiSegmentCaches.ContainsKey($cacheKey)) {
+        $entry = $script:ApiSegmentCaches[$cacheKey]
+        if ($entry.signature -eq $signature) {
+            return $entry.result
+        }
+    }
+
+    $result = & $Factory
+    $script:ApiSegmentCaches[$cacheKey] = @{
+        signature = $signature
+        result = $result
+    }
     return $result
 }
 
@@ -689,6 +857,15 @@ function Handle-ApiRequest {
     $query = $Request.Query
 
     if ($path -eq '/api/health' -and $method -eq 'GET') { return (New-JsonResult ([ordered]@{ ok = $true })) }
+    if ($path -eq '/api/intelligence/draft-outreach' -and $method -eq 'GET') {
+        try {
+            $state = Get-AppStateView -Segments @('Companies', 'Jobs', 'Contacts')
+            $draft = Invoke-AiOutreachDraft -CompanyId $query.companyId -State $state
+            return (New-JsonResult $draft)
+        } catch {
+            return (New-JsonResult ([ordered]@{ error = $_.Exception.Message }) 500)
+        }
+    }
     if ($path -eq '/api/runtime/status' -and $method -eq 'GET') {
         return (New-JsonResult (Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt))
     }
@@ -710,7 +887,7 @@ function Handle-ApiRequest {
         return (New-JsonResult $job)
     }
     if ($path -eq '/api/admin/bootstrap' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs') -Factory {
             $workspace = Get-AppSegment -Segment 'Workspace'
             $settings = Get-AppSegment -Segment 'Settings'
             $filters = if (Test-AppStoreUsesSqlite) {
@@ -744,6 +921,16 @@ function Handle-ApiRequest {
             }
 
             $runtime = Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt
+            $activeTargetScoreRolloutJob = @($runtime.activeJobs | Where-Object { [string](Get-ObjectValue -Object $_ -Name 'type' -Default '') -eq 'target-score-rollout' } | Select-Object -First 1)
+            $targetScoreRollout = [ordered]@{
+                remainingCount = [int](Convert-ToNumber (Get-AppTargetScoreBackfillCount))
+                defaultLimit = 150
+                defaultMaxBatches = 6
+                hasActiveJob = [bool]$activeTargetScoreRolloutJob
+                activeJobId = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'id' -Default '') } else { '' }
+                activeJobStatus = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'status' -Default '') } else { '' }
+                activeJobProgressMessage = if ($activeTargetScoreRolloutJob) { [string](Get-ObjectValue -Object $activeTargetScoreRolloutJob -Name 'progressMessage' -Default '') } else { '' }
+            }
 
             if (Test-AppStoreUsesSqlite) {
                 $configs = Find-AppConfigsFast -Query $configQuery
@@ -776,6 +963,7 @@ function Handle-ApiRequest {
                 }
                 configs = $configs
                 runtime = $runtime
+                targetScoreRollout = $targetScoreRollout
                 resolverReport = $resolverReport
                 enrichmentReport = $enrichmentReport
                 unresolvedQueue = $unresolvedQueue
@@ -784,8 +972,23 @@ function Handle-ApiRequest {
             })
         })
     }
+    if ($path -eq '/api/admin/target-score-rollout' -and $method -eq 'POST') {
+        $payload = Read-JsonBody -Request $Request
+        $limit = [int](Convert-ToNumber $payload.limit)
+        if ($limit -lt 1) { $limit = 150 }
+        if ($limit -gt 500) { $limit = 500 }
+        $maxBatches = [int](Convert-ToNumber $payload.maxBatches)
+        if ($maxBatches -lt 1) { $maxBatches = 6 }
+        if ($maxBatches -gt 25) { $maxBatches = 25 }
+        $job = Enqueue-BackgroundJob -Type 'target-score-rollout' -Payload ([ordered]@{
+            limit = $limit
+            maxBatches = $maxBatches
+        }) -Summary 'Repair target-score intelligence backlog' -ProgressMessage 'Queued target-score rollout'
+        Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
+        return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
+    }
     if ($path -eq '/api/bootstrap' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Workspace', 'Settings', 'Companies', 'BoardConfigs') -Factory {
             $includeFilters = Test-Truthy $query.includeFilters
             if ($includeFilters) {
                 $workspace = Get-AppSegment -Segment 'Workspace'
@@ -823,23 +1026,16 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/dashboard/extended' -and $method -eq 'GET') {
+        if (Test-AppStoreUsesSqlite) {
+            return (New-JsonResult (Get-AppDashboardExtendedFast))
+        }
+
         $state = Get-AppStateView -Segments @('Companies', 'Activities', 'BoardConfigs')
-        $playbook = Get-PlaybookAccounts -State $state
-        $overdue = Get-OverdueFollowUps -State $state
-        $stale = Get-StaleAccounts -State $state
-        $activityFeed = Get-GlobalActivityFeed -State $state -Limit 10
-        $enrichmentFunnel = Get-EnrichmentFunnelStats -State $state
-        return (New-JsonResult ([ordered]@{
-            playbook = $playbook
-            overdueFollowUps = $overdue
-            staleAccounts = $stale
-            activityFeed = $activityFeed
-            enrichmentFunnel = $enrichmentFunnel
-        }))
+        return (New-JsonResult (Get-DashboardExtendedModel -State $state))
     }
 
     if ($path -eq '/api/dashboard' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'Jobs', 'BoardConfigs', 'Settings') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 $snapshot = Get-AppDashboardSnapshotResult
                 Write-SnapshotLog -Name 'dashboard' -SnapshotResult $snapshot
@@ -851,7 +1047,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/accounts' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppAccountsFast -Query $query)
             } else {
@@ -893,30 +1089,28 @@ function Handle-ApiRequest {
         $accountId = $matches[1]
         $payload = Read-JsonBody -Request $Request
         $bookingLink = if ($payload.bookingLink) { [string]$payload.bookingLink } else { 'https://tinyurl.com/ysdep7cn' }
+        $includeVariants = [bool](Test-Truthy (Get-PayloadValue -Record $payload -Names @('includeVariants')))
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
         # Fetch account detail
+        $detailWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $detail = if (Test-AppStoreUsesSqlite) {
             Get-AppAccountDetailFast -AccountId $accountId
         } else {
             $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
             Get-AccountDetail -State $state -AccountId $accountId
         }
+        $detailWatch.Stop()
         if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
 
-        # Quick web search for company context
-        $companySnippet = ''
-        try {
-            $searchQuery = "$($detail.account.displayName) company about"
-            $searchUrl = 'https://duckduckgo.com/html/?q=' + [uri]::EscapeDataString($searchQuery)
-            $searchResp = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 5 -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' -ErrorAction Stop
-            $snippets = @([regex]::Matches($searchResp.Content, '<a class="result__snippet"[^>]*>(.*?)</a>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '') -replace '&amp;', '&' -replace '&#x27;', "'" -replace '&quot;', '"' } | Where-Object { $_.Length -gt 40 } | Select-Object -First 1)
-            if ($snippets.Count -gt 0) {
-                $companySnippet = [string]$snippets[0]
-                if ($companySnippet.Length -gt 200) { $companySnippet = $companySnippet.Substring(0, 197) + '...' }
-            }
-        } catch {
-            # Non-critical, proceed without snippet
-        }
+        $hasInternalSignal = (@($detail.jobs).Count -gt 0) -or
+            ([int](Get-ObjectValue -Object $detail.account -Name 'openRoleCount' -Default 0) -gt 0) -or
+            ([int](Get-ObjectValue -Object $detail.account -Name 'jobsLast30Days' -Default 0) -gt 0) -or
+            (-not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $detail.account -Name 'companyGrowthSignalSummary' -Default ''))) -or
+            (-not [string]::IsNullOrWhiteSpace([string](Get-ObjectValue -Object $detail.account -Name 'recommendedAction' -Default '')))
+
+        $snippetResult = Get-CompanySnippetForOutreach -CacheKey ([string](Get-ObjectValue -Object $detail.account -Name 'normalizedName' -Default $accountId)) -CompanyName ([string]$detail.account.displayName) -SkipSearch:$hasInternalSignal
+        $companySnippet = [string](Get-ObjectValue -Object $snippetResult -Name 'snippet' -Default '')
 
         $outreachParams = @{
             Account = $detail.account
@@ -928,9 +1122,56 @@ function Handle-ApiRequest {
         if ($payload.contactName) { $outreachParams.OverrideContactName = [string]$payload.contactName }
         if ($payload.contactTitle) { $outreachParams.OverrideContactTitle = [string]$payload.contactTitle }
         if ($payload.template) { $outreachParams.Template = [string]$payload.template }
+        $buildWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $outreach = Build-SmartOutreachDraft @outreachParams
+        $buildWatch.Stop()
+        $variantBuildWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $variantResults = @()
+        if ($includeVariants) {
+            $primaryTemplateKey = [string](Get-ObjectValue -Object $outreach -Name 'template_key' -Default (Get-PayloadValue -Record $payload -Names @('template')))
+            foreach ($variantTemplate in @(Get-OutreachVariantTemplates -PrimaryTemplate $primaryTemplateKey)) {
+                $variantOutreachParams = @{
+                    Account = $detail.account
+                    Jobs = $detail.jobs
+                    Contacts = $detail.contacts
+                    BookingLink = $bookingLink
+                    CompanySnippet = $companySnippet
+                    Template = [string]$variantTemplate
+                }
+                if ($payload.contactName) { $variantOutreachParams.OverrideContactName = [string]$payload.contactName }
+                if ($payload.contactTitle) { $variantOutreachParams.OverrideContactTitle = [string]$payload.contactTitle }
+                $variantResults += @(Build-SmartOutreachDraft @variantOutreachParams)
+            }
+        }
+        $variantBuildWatch.Stop()
+        $stopwatch.Stop()
+        Write-ServerLog ("OUTREACH accountId={0} detailMs={1} snippetMs={2} snippetSource={3} buildMs={4} variantBuildMs={5} variantCount={6} durationMs={7} template={8}" -f `
+                $accountId,
+                [int]$detailWatch.ElapsedMilliseconds,
+                [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0),
+                [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default ''),
+                [int]$buildWatch.ElapsedMilliseconds,
+                [int]$variantBuildWatch.ElapsedMilliseconds,
+                [int](@($variantResults).Count),
+                [int]$stopwatch.ElapsedMilliseconds,
+                [string](Get-ObjectValue -Object $outreach -Name 'template_label' -Default ([string]$payload.template)))
 
-        return (New-JsonResult ([ordered]@{ outreach = $outreach; companySnippet = $companySnippet }))
+        $response = Convert-ToOutreachApiModel -Outreach $outreach -CompanySnippet $companySnippet -Timings ([ordered]@{
+                detailMs = [int]$detailWatch.ElapsedMilliseconds
+                snippetMs = [int](Get-ObjectValue -Object $snippetResult -Name 'durationMs' -Default 0)
+                buildMs = [int]$buildWatch.ElapsedMilliseconds
+                variantBuildMs = [int]$variantBuildWatch.ElapsedMilliseconds
+                variantCount = [int](@($variantResults).Count)
+                durationMs = [int]$stopwatch.ElapsedMilliseconds
+                snippetSource = [string](Get-ObjectValue -Object $snippetResult -Name 'source' -Default '')
+            })
+        if ($includeVariants -and @($variantResults).Count -gt 0) {
+            $response.variants = @($variantResults | ForEach-Object {
+                    Convert-ToOutreachApiModel -Outreach $_ -CompanySnippet $companySnippet
+                })
+        }
+
+        return (New-JsonResult $response)
     }
 
     # Quick update endpoint - lightweight account patch with auto activity log
@@ -969,16 +1210,17 @@ function Handle-ApiRequest {
     if ($path -match '^/api/accounts/([^/]+)$') {
         $accountId = $matches[1]
         if ($method -eq 'GET') {
-            return (Get-CachedApiResult -Path $path -Query $query -Factory {
-                $detail = if (Test-AppStoreUsesSqlite) {
-                    Get-AppAccountDetailFast -AccountId $accountId
-                } else {
-                    $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
-                    Get-AccountDetail -State $state -AccountId $accountId
-                }
-                if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
-                New-JsonResult $detail
-            })
+            $detailStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $detail = if (Test-AppStoreUsesSqlite) {
+                Get-AppAccountDetailFast -AccountId $accountId
+            } else {
+                $state = Get-AppStateView -Segments @('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities')
+                Get-AccountDetail -State $state -AccountId $accountId
+            }
+            $detailStopwatch.Stop()
+            Write-ServerLog ("ACCOUNT-DETAIL accountId={0} cache=disabled detailMs={1}" -f $accountId, [int]$detailStopwatch.ElapsedMilliseconds)
+            if (-not $detail) { return (New-JsonResult ([ordered]@{ error = 'Not found' }) 404) }
+            return (New-JsonResult $detail)
         }
         if ($method -eq 'PATCH') {
             $state = Get-AppState
@@ -1035,7 +1277,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/contacts' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Contacts') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppContactsFast -Query $query)
             } else {
@@ -1052,7 +1294,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/jobs' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Jobs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppJobsFast -Query $query)
             } else {
@@ -1062,7 +1304,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/configs' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppConfigsFast -Query $query)
             } else {
@@ -1072,7 +1314,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/configs/report' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Get-AppResolverCoverageReportFast)
             } else {
@@ -1099,7 +1341,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/enrichment/report' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'BoardConfigs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Get-AppEnrichmentCoverageReportFast)
             } else {
@@ -1130,7 +1372,7 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/enrichment/queue' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppEnrichmentQueueFast -Query $query)
             } else {
@@ -1190,53 +1432,228 @@ function Handle-ApiRequest {
         Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
         return (New-JsonResult $result.account 200)
     }
+    if ($path -match '^/api/accounts/([^/]+)/quick-enrich$' -and $method -eq 'POST') {
+        $accountId = $matches[1]
+        $payload = Read-JsonBody -Request $Request
+        $forceRefresh = [bool]$(if (@($payload.Keys) -contains 'forceRefresh') { Test-Truthy $payload.forceRefresh } else { $false })
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $localStats = Invoke-AppLocalEnrichmentPassFast -AccountId $accountId -ForceRefresh:$forceRefresh
+        $stopwatch.Stop()
+        $account = if (Test-AppStoreUsesSqlite) {
+            $detail = Get-AppAccountDetailFast -AccountId $accountId
+            if ($detail) { $detail.account } else { $null }
+        } else {
+            $state = Get-AppStateView -Segments @('Companies')
+            @($state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+        }
+        if (-not $account) {
+            return (New-JsonResult ([ordered]@{ error = 'Account not found' }) 404)
+        }
+        Write-ServerLog ("LOCAL-ENRICH accountId={0} contactEmail={1} boardDomain={2} boardCareers={3} jobDomain={4} total={5} durationMs={6}" -f `
+            $accountId,
+            [int]$localStats.contactEmailDomainApplied,
+            [int]$localStats.boardConfigDomainApplied,
+            [int]$localStats.boardConfigCareersApplied,
+            [int]$(if ($localStats.jobDomainApplied) { $localStats.jobDomainApplied } else { 0 }),
+            [int]$localStats.totalUpdated,
+            [int]$stopwatch.ElapsedMilliseconds)
+        return (New-JsonResult ([ordered]@{
+                    success = $true
+                    accountId = $accountId
+                    stats = $localStats
+                    durationMs = [int]$stopwatch.ElapsedMilliseconds
+                    account = $account
+                }) 200)
+    }
+    if ($path -match '^/api/accounts/([^/]+)/resolve-now$' -and $method -eq 'POST') {
+        $accountId = $matches[1]
+        $payload = Read-JsonBody -Request $Request
+        $forceRefresh = if (@($payload.Keys) -contains 'forceRefresh') { [bool](Test-Truthy $payload.forceRefresh) } else { $true }
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $contextLoadMs = 0
+        $enqueueMs = 0
+        if (Test-AppStoreUsesSqlite) {
+            $context = Get-AppAccountResolutionContextFast -AccountId $accountId
+            $contextLoadMs = [int](Get-ObjectValue -Object (Get-ObjectValue -Object $context -Name 'metrics' -Default ([ordered]@{})) -Name 'loadMs' -Default 0)
+            $account = Get-ObjectValue -Object $context -Name 'account' -Default $null
+            $primaryConfig = Get-ObjectValue -Object $context -Name 'primaryConfig' -Default $null
+        } else {
+            $contextLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+            $account = @($state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+            $primaryConfig = if ($account) {
+                @($state.boardConfigs | Where-Object { $_.accountId -eq $accountId -or $_.normalizedCompanyName -eq $account.normalizedName } | Select-Object -First 1)
+            } else {
+                $null
+            }
+            $contextLoadWatch.Stop()
+            $contextLoadMs = [int]$contextLoadWatch.ElapsedMilliseconds
+        }
+        if (-not $account) {
+            $stopwatch.Stop()
+            Write-ServerLog ("RESOLVE-NOW accountId={0} status=not_found contextLoadMs={1} durationMs={2}" -f $accountId, $contextLoadMs, [int]$stopwatch.ElapsedMilliseconds)
+            return (New-JsonResult ([ordered]@{ error = 'Account not found' }) 404)
+        }
+        $enqueueWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Enqueue-BackgroundJob -Type 'company-enrichment' -Payload ([ordered]@{
+            limit = 1
+            forceRefresh = $forceRefresh
+            deepVerify = $false
+            accountId = $accountId
+        }) -Summary ('Resolve {0} company identity' -f [string]$account.displayName) -ProgressMessage ('Queued balanced verification for {0}' -f [string]$account.displayName)
+        $enqueueWatch.Stop()
+        $enqueueMs = [int]$enqueueWatch.ElapsedMilliseconds
+        Write-ServerLog ("JOB enqueue id={0} type={1} accountId={2} deepVerify=false" -f $job.id, $job.type, $accountId)
+        $accepted = Get-BackgroundJobAcceptedResult -Job $job
+        [void](Set-ObjectValue -Object $accepted -Name 'canRerunResolution' -Value ([bool]$primaryConfig))
+        [void](Set-ObjectValue -Object $accepted -Name 'primaryConfigId' -Value ([string]$(if ($primaryConfig) { $primaryConfig.id } else { '' })))
+        $stopwatch.Stop()
+        Write-ServerLog ("RESOLVE-NOW accountId={0} contextLoadMs={1} enqueueMs={2} durationMs={3} hasConfig={4}" -f $accountId, $contextLoadMs, $enqueueMs, [int]$stopwatch.ElapsedMilliseconds, [bool]$primaryConfig)
+        return (New-JsonResult $accepted 202)
+    }
+    if ($path -match '^/api/accounts/([^/]+)/deep-verify$' -and $method -eq 'POST') {
+        $accountId = $matches[1]
+        $payload = Read-JsonBody -Request $Request
+        $forceRefresh = if (@($payload.Keys) -contains 'forceRefresh') { [bool](Test-Truthy $payload.forceRefresh) } else { $true }
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $contextLoadMs = 0
+        $enqueueMs = 0
+        if (Test-AppStoreUsesSqlite) {
+            $context = Get-AppAccountResolutionContextFast -AccountId $accountId
+            $contextLoadMs = [int](Get-ObjectValue -Object (Get-ObjectValue -Object $context -Name 'metrics' -Default ([ordered]@{})) -Name 'loadMs' -Default 0)
+            $account = Get-ObjectValue -Object $context -Name 'account' -Default $null
+            $primaryConfig = Get-ObjectValue -Object $context -Name 'primaryConfig' -Default $null
+        } else {
+            $contextLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+            $account = @($state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+            $primaryConfig = if ($account) {
+                @($state.boardConfigs | Where-Object { $_.accountId -eq $accountId -or $_.normalizedCompanyName -eq $account.normalizedName } | Select-Object -First 1)
+            } else {
+                $null
+            }
+            $contextLoadWatch.Stop()
+            $contextLoadMs = [int]$contextLoadWatch.ElapsedMilliseconds
+        }
+        if (-not $account) {
+            $stopwatch.Stop()
+            Write-ServerLog ("DEEP-VERIFY accountId={0} status=not_found contextLoadMs={1} durationMs={2}" -f $accountId, $contextLoadMs, [int]$stopwatch.ElapsedMilliseconds)
+            return (New-JsonResult ([ordered]@{ error = 'Account not found' }) 404)
+        }
+        $enqueueWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Enqueue-BackgroundJob -Type 'company-enrichment' -Payload ([ordered]@{
+            limit = 1
+            forceRefresh = $forceRefresh
+            deepVerify = $true
+            accountId = $accountId
+        }) -Summary ('Deep verify {0} company identity' -f [string]$account.displayName) -ProgressMessage ('Queued extended web verification for {0}' -f [string]$account.displayName)
+        $enqueueWatch.Stop()
+        $enqueueMs = [int]$enqueueWatch.ElapsedMilliseconds
+        Write-ServerLog ("JOB enqueue id={0} type={1} accountId={2} deepVerify=true" -f $job.id, $job.type, $accountId)
+        $accepted = Get-BackgroundJobAcceptedResult -Job $job
+        [void](Set-ObjectValue -Object $accepted -Name 'canRerunResolution' -Value ([bool]$primaryConfig))
+        [void](Set-ObjectValue -Object $accepted -Name 'primaryConfigId' -Value ([string]$(if ($primaryConfig) { $primaryConfig.id } else { '' })))
+        $stopwatch.Stop()
+        Write-ServerLog ("DEEP-VERIFY accountId={0} contextLoadMs={1} enqueueMs={2} durationMs={3} hasConfig={4}" -f $accountId, $contextLoadMs, $enqueueMs, [int]$stopwatch.ElapsedMilliseconds, [bool]$primaryConfig)
+        return (New-JsonResult $accepted 202)
+    }
     if ($path -eq '/api/enrichment/run' -and $method -eq 'POST') {
         $payload = Read-JsonBody -Request $Request
         $job = Enqueue-BackgroundJob -Type 'company-enrichment' -Payload ([ordered]@{
             limit = [int]$(if ($payload.limit) { $payload.limit } else { 500 })
             forceRefresh = [bool]$(if (@($payload.Keys) -contains 'forceRefresh') { Test-Truthy $payload.forceRefresh } else { $false })
+            deepVerify = [bool]$(if (@($payload.Keys) -contains 'deepVerify') { Test-Truthy $payload.deepVerify } else { $false })
             accountId = [string]$(if ($payload.accountId) { $payload.accountId } else { '' })
         }) -Summary 'Enrich company identity inputs' -ProgressMessage 'Queued company enrichment'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
     if ($path -eq '/api/enrichment/run-local' -and $method -eq 'POST') {
-        # Direct fast-path: run local SQL enrichment pass synchronously and return stats.
+        # Queue the fast local SQL enrichment pass so larger sibling/domain sweeps do not block the UI.
         # No HTTP probing — just derives domain/careers from contact emails and board configs.
         $payload = Read-JsonBody -Request $Request
+        $limit = [int](Convert-ToNumber $payload.limit)
+        if ($limit -lt 1) { $limit = 5000 }
         $forceRefresh = [bool]$(if (@($payload.Keys) -contains 'forceRefresh') { Test-Truthy $payload.forceRefresh } else { $false })
-        $localStats = Invoke-AppLocalEnrichmentPassFast -ForceRefresh:$forceRefresh
-        Write-ServerLog ("LOCAL-ENRICH contactEmail={0} boardDomain={1} boardCareers={2} total={3}" -f `
-            [int]$localStats.contactEmailDomainApplied, [int]$localStats.boardConfigDomainApplied,
-            [int]$localStats.boardConfigCareersApplied, [int]$localStats.totalUpdated)
-        return (New-JsonResult ([ordered]@{ success = $true; stats = $localStats }) 200)
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $enqueueWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Enqueue-BackgroundJob -Type 'local-enrichment' -Payload ([ordered]@{
+            limit = $limit
+            forceRefresh = $forceRefresh
+        }) -Summary 'Run fast local company identity enrichment' -ProgressMessage 'Queued fast local enrichment'
+        $enqueueWatch.Stop()
+        $enqueueMs = [int]$enqueueWatch.ElapsedMilliseconds
+        $accepted = Get-BackgroundJobAcceptedResult -Job $job
+        [void](Set-ObjectValue -Object $accepted -Name 'limit' -Value $limit)
+        [void](Set-ObjectValue -Object $accepted -Name 'forceRefresh' -Value $forceRefresh)
+        [void](Set-ObjectValue -Object $accepted -Name 'mode' -Value 'background')
+        $stopwatch.Stop()
+        Write-ServerLog ("LOCAL-ENRICH queue id={0} limit={1} forceRefresh={2} enqueueMs={3} durationMs={4}" -f `
+            [string]$job.id,
+            $limit,
+            [int]$forceRefresh,
+            $enqueueMs,
+            [int]$stopwatch.ElapsedMilliseconds)
+        return (New-JsonResult $accepted 202)
     }
 
     if ($path -match '^/api/enrichment/([^/]+)/rerun-resolution$' -and $method -eq 'POST') {
         $accountId = $matches[1]
-        $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
-        $account = @($state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+        $payload = Read-JsonBody -Request $Request
+        $deepVerify = [bool]$(if (@($payload.Keys) -contains 'deepVerify') { Test-Truthy $payload.deepVerify } else { $false })
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $contextLoadMs = 0
+        $enqueueMs = 0
+        if (Test-AppStoreUsesSqlite) {
+            $context = Get-AppAccountResolutionContextFast -AccountId $accountId
+            $contextLoadMs = [int](Get-ObjectValue -Object (Get-ObjectValue -Object $context -Name 'metrics' -Default ([ordered]@{})) -Name 'loadMs' -Default 0)
+            $account = Get-ObjectValue -Object $context -Name 'account' -Default $null
+            $config = Get-ObjectValue -Object $context -Name 'primaryConfig' -Default $null
+        } else {
+            $contextLoadWatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $state = Get-AppStateView -Segments @('Companies', 'BoardConfigs')
+            $account = @($state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+            $config = if ($account) {
+                @($state.boardConfigs | Where-Object { $_.accountId -eq $accountId -or $_.normalizedCompanyName -eq $account.normalizedName } | Select-Object -First 1)
+            } else {
+                $null
+            }
+            $contextLoadWatch.Stop()
+            $contextLoadMs = [int]$contextLoadWatch.ElapsedMilliseconds
+        }
         if (-not $account) {
+            $stopwatch.Stop()
+            Write-ServerLog ("RERUN-RESOLUTION accountId={0} status=not_found contextLoadMs={1} durationMs={2}" -f $accountId, $contextLoadMs, [int]$stopwatch.ElapsedMilliseconds)
             return (New-JsonResult ([ordered]@{ error = 'Account not found' }) 404)
         }
-        $config = @($state.boardConfigs | Where-Object { $_.accountId -eq $accountId -or $_.normalizedCompanyName -eq $account.normalizedName } | Select-Object -First 1)
         if (-not $config) {
+            $stopwatch.Stop()
+            Write-ServerLog ("RERUN-RESOLUTION accountId={0} status=no_config contextLoadMs={1} durationMs={2}" -f $accountId, $contextLoadMs, [int]$stopwatch.ElapsedMilliseconds)
             return (New-JsonResult ([ordered]@{ error = 'No ATS config found for that account' }) 404)
         }
+        $enqueueWatch = [System.Diagnostics.Stopwatch]::StartNew()
         $job = Enqueue-BackgroundJob -Type 'ats-discovery' -Payload ([ordered]@{
             limit = 1
             onlyMissing = $false
             forceRefresh = $true
+            deepVerify = $deepVerify
             configId = [string]$config.id
-        }) -Summary 'Rerun ATS resolution after enrichment update' -ProgressMessage 'Queued ATS resolution'
+        }) -Summary $(if ($deepVerify) { 'Deep rerun ATS resolution after enrichment update' } else { 'Rerun ATS resolution after enrichment update' }) -ProgressMessage $(if ($deepVerify) { 'Queued deep ATS resolution' } else { 'Queued ATS resolution' })
+        $enqueueWatch.Stop()
+        $enqueueMs = [int]$enqueueWatch.ElapsedMilliseconds
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
+        $stopwatch.Stop()
+        Write-ServerLog ("RERUN-RESOLUTION accountId={0} contextLoadMs={1} enqueueMs={2} durationMs={3} configId={4} deepVerify={5}" -f $accountId, $contextLoadMs, $enqueueMs, [int]$stopwatch.ElapsedMilliseconds, [string]$config.id, [bool]$deepVerify)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
     if ($path -eq '/api/configs' -and $method -eq 'POST') {
         $state = Get-AppState
-        $state = Save-ConfigRecord -State $state -Payload (Read-JsonBody -Request $Request)
+        $configPayload = Read-JsonBody -Request $Request
+        $touchedKey = Get-CanonicalCompanyKey ([string]$configPayload.companyName)
+        $state = Save-ConfigRecord -State $state -Payload $configPayload
         $state = Sync-ImportedCompanyData -State $state
-        $state = Update-DerivedData -State $state
+        $touchedKeys = if ($touchedKey) { @($touchedKey) } else { $null }
+        $state = Update-DerivedData -State $state -TouchedCompanyKeys $touchedKeys
         Save-AppState -State $state
         return (New-JsonResult ([ordered]@{ ok = $true; count = @($state.boardConfigs).Count }) 201)
     }
@@ -1263,6 +1680,7 @@ function Handle-ApiRequest {
             limit = 1
             onlyMissing = $false
             forceRefresh = $true
+            deepVerify = [bool]$(if (@($payload.Keys) -contains 'deepVerify') { Test-Truthy $payload.deepVerify } else { $false })
             configId = $matches[1]
         }) -Summary 'Resolve ATS config' -ProgressMessage 'Queued config resolution'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
@@ -1270,9 +1688,13 @@ function Handle-ApiRequest {
     }
     if ($path -match '^/api/configs/([^/]+)$' -and $method -eq 'PATCH') {
         $state = Get-AppState
-        $state = Save-ConfigRecord -State $state -Payload (Read-JsonBody -Request $Request) -ConfigId $matches[1]
+        $configPayload = Read-JsonBody -Request $Request
+        $existingConfig = @($state.boardConfigs | Where-Object { $_.id -eq $matches[1] } | Select-Object -First 1)
+        $touchedKey = if ($existingConfig) { Get-CanonicalCompanyKey ([string]$existingConfig.companyName) } else { $null }
+        $state = Save-ConfigRecord -State $state -Payload $configPayload -ConfigId $matches[1]
         $state = Sync-ImportedCompanyData -State $state
-        $state = Update-DerivedData -State $state
+        $touchedKeys = if ($touchedKey) { @($touchedKey) } else { $null }
+        $state = Update-DerivedData -State $state -TouchedCompanyKeys $touchedKeys
         Save-AppState -State $state
         return (New-JsonResult ([ordered]@{ ok = $true; count = @($state.boardConfigs).Count }))
     }
@@ -1284,6 +1706,7 @@ function Handle-ApiRequest {
             limit = $limit
             onlyMissing = Test-Truthy $payload.onlyMissing
             forceRefresh = Test-Truthy $payload.forceRefresh
+            deepVerify = Test-Truthy $payload.deepVerify
             configId = [string]$payload.configId
         }) -Summary 'Discover supported ATS boards' -ProgressMessage 'Queued ATS discovery'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
@@ -1297,7 +1720,7 @@ function Handle-ApiRequest {
     }
 
     if ($path -eq '/api/activity' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Activities') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppActivityFast -Query $query)
             } else {
@@ -1315,18 +1738,15 @@ function Handle-ApiRequest {
         $state = Get-AppState
         $payload = Read-JsonBody -Request $Request
         $result = Add-Activity -State $state -Payload $payload
-        if ($payload.accountId -and $payload.pipelineStage) {
-            $patched = Set-AccountFields -State $result.state -AccountId $payload.accountId -Patch ([ordered]@{ outreachStatus = $payload.pipelineStage })
-            Save-AppSegment -Segment 'Activities' -Data $patched.state.activities -SkipSnapshots
-            Save-AppSegment -Segment 'Companies' -Data $patched.state.companies -SkipSnapshots
-        } else {
-            Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
+        Save-AppSegment -Segment 'Activities' -Data $result.state.activities -SkipSnapshots
+        if ($payload.accountId) {
+            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
         }
         return (New-JsonResult $result.activity 201)
     }
 
     if ($path -eq '/api/search' -and $method -eq 'GET') {
-        return (Get-CachedApiResult -Path $path -Query $query -Factory {
+        return (Get-SegmentCachedApiResult -Path $path -Query $query -Segments @('Companies', 'Contacts', 'Jobs') -Factory {
             if (Test-AppStoreUsesSqlite) {
                 New-JsonResult (Find-AppSearchResultsFast -Query $query.q)
             } else {
@@ -1544,5 +1964,3 @@ try {
 } finally {
     $listener.Stop()
 }
-
-

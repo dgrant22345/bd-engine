@@ -1,5 +1,5 @@
 Add-Type -Path '.\vendor\sqlite\System.Data.SQLite.dll'
-$conn = New-Object System.Data.SQLite.SQLiteConnection('Data Source=.\data\bd-engine.db;Version=3;')
+$conn = New-Object System.Data.SQLite.SQLiteConnection('Data Source=..\data\bd-engine.db;Version=3;')
 $conn.Open()
 
 function Get-Scalar($sql) {

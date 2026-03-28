@@ -217,13 +217,14 @@ foreach ($config in $configs) {
             $boardId = $matched.boardId
             $supportedInt = if ($atsType -in @('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workday', 'jobvite')) { 1 } else { 0 }
             $supportedJson = if ($supportedInt -eq 1) { "true" } else { "false" }
+            $activeJson = if ($supportedInt -eq 1) { "true" } else { "false" }
             $safeEvidence = "Known enterprise mapping for $name"
             $updateCmd.CommandText = @"
 UPDATE board_configs SET
   ats_type = '$atsType',
   board_id = '$boardId',
   resolved_board_url = '$boardUrl',
-  active = 1,
+  active = $supportedInt,
   supported_import = $supportedInt,
   discovery_status = 'discovered',
   discovery_method = 'known_enterprise_map',
@@ -239,7 +240,7 @@ UPDATE board_configs SET
     '$.atsType', '$atsType',
     '$.boardId', '$boardId',
     '$.resolvedBoardUrl', '$boardUrl',
-    '$.active', json('true'),
+    '$.active', json('$activeJson'),
     '$.supportedImport', json('$supportedJson'),
     '$.discoveryStatus', 'discovered',
     '$.discoveryMethod', 'known_enterprise_map',
