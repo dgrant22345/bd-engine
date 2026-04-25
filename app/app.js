@@ -45,6 +45,20 @@ const appState = {
   alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
   bulkLastClickIdx: null,
   duplicateCache: null,
+  setupStatus: null,
+  setupStep: 1,
+  setupBusy: false,
+  setupCsvContent: '',
+  setupCsvFileName: '',
+  setupPreview: null,
+  setupResult: null,
+  setupDraft: {
+    workspaceName: '',
+    userName: '',
+    userEmail: '',
+    ownersText: '',
+    licenseKey: '',
+  },
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -1435,7 +1449,13 @@ async function init() {
   window.bdLocalApi.setAlert('', appAlert);
   renderLoadingState('Dashboard', 'Loading your operating view...');
   try {
+    const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
+    if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
+      location.hash = '#/setup';
+      await renderRoute();
+      return;
+    }
     if (routeNeedsBootstrapFilters(initialRoot)) {
       await loadBootstrap(true, { includeFilters: true });
       await renderRoute();
@@ -1604,6 +1624,38 @@ function bindEvents() {
     }
 
     const actionName = action.dataset.action;
+    if (actionName === 'setup-browse-csv') {
+      document.getElementById('setup-csv-file')?.click();
+      return;
+    }
+    if (actionName === 'setup-back') {
+      persistSetupDraftFromDom();
+      appState.setupStep = Math.max(1, appState.setupStep - 1);
+      await renderSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-skip-import') {
+      appState.setupCsvContent = '';
+      appState.setupCsvFileName = '';
+      appState.setupPreview = null;
+      await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-preview-csv') {
+      await previewSetupCsv();
+      return;
+    }
+    if (actionName === 'setup-complete') {
+      await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-open-dashboard') {
+      invalidateAppData();
+      await loadBootstrap(true, { includeFilters: true });
+      location.hash = '#/dashboard';
+      await renderRoute();
+      return;
+    }
     if (actionName === 'paginate') {
       const view = action.dataset.view;
       const page = Number(action.dataset.page);
@@ -1873,6 +1925,25 @@ function bindEvents() {
     if (!(form instanceof HTMLFormElement)) return;
     event.preventDefault();
 
+    if (form.id === 'setup-profile-form') {
+      persistSetupDraftFromDom();
+      const { workspaceName: workspace, userName: name, userEmail: email } = appState.setupDraft;
+      if (!workspace.trim() || !name.trim() || !email.trim()) {
+        showToast('Workspace, name, and email are required.', 'warning');
+        return;
+      }
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
+
+    if (form.id === 'setup-team-form' || form.id === 'setup-license-form') {
+      persistSetupDraftFromDom();
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
+
     if (form.id === 'accounts-filter-form') {
       appState.accountQuery = { ...appState.accountQuery, page: 1, ...getFormValues(form) };
       await renderAccountsView();
@@ -2124,6 +2195,18 @@ async function loadBootstrap(force, options = {}) {
 
 async function api(path, options = {}) {
   return window.bdLocalApi.api(appState, path, options);
+}
+
+async function loadSetupStatus(force = false) {
+  if (appState.setupStatus && !force) {
+    return appState.setupStatus;
+  }
+  appState.setupStatus = await api('/api/setup/status', { skipCache: true });
+  if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
+    const existingName = appState.setupStatus.workspace.name;
+    appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
+  }
+  return appState.setupStatus;
 }
 
 function getFormValues(form) {
@@ -2393,6 +2476,30 @@ async function renderRoute() {
   clearRuntimePoll();
   closeMobileNav();
 
+  if (!appState.setupStatus) {
+    await loadSetupStatus(false);
+  }
+
+  if (root === 'setup') {
+    if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
+      location.hash = '#/dashboard';
+      await renderDashboardView();
+      return;
+    }
+    activateNav('');
+    renderBreadcrumbs(null);
+    await renderSetupWizard();
+    return;
+  }
+
+  if (appState.setupStatus?.requiresSetup) {
+    location.hash = '#/setup';
+    activateNav('');
+    renderBreadcrumbs(null);
+    await renderSetupWizard();
+    return;
+  }
+
   if (root === 'accounts' && parts[1]) {
     activateNav('accounts');
     renderBreadcrumbs([
@@ -2437,6 +2544,336 @@ async function renderRoute() {
   renderBreadcrumbs(null);
   await renderDashboardView();
 }
+
+function getSetupSteps() {
+  const steps = [
+    { key: 'profile', label: 'Profile' },
+    { key: 'team', label: 'Team' },
+  ];
+  if (appState.setupStatus?.licensingEnabled) {
+    steps.push({ key: 'license', label: 'License' });
+  }
+  steps.push({ key: 'import', label: 'Import' });
+  steps.push({ key: 'launch', label: 'Launch' });
+  return steps;
+}
+
+function getCurrentSetupStep() {
+  const steps = getSetupSteps();
+  const index = Math.min(Math.max(appState.setupStep, 1), steps.length) - 1;
+  return steps[index] || steps[0];
+}
+
+function persistSetupDraftFromDom() {
+  const workspaceInput = document.getElementById('setup-workspace-name');
+  const userNameInput = document.getElementById('setup-user-name');
+  const userEmailInput = document.getElementById('setup-user-email');
+  const ownersInput = document.getElementById('setup-owners-text');
+  const licenseInput = document.getElementById('setup-license-key');
+  if (workspaceInput) appState.setupDraft.workspaceName = workspaceInput.value.trim();
+  if (userNameInput) appState.setupDraft.userName = userNameInput.value.trim();
+  if (userEmailInput) appState.setupDraft.userEmail = userEmailInput.value.trim();
+  if (ownersInput) appState.setupDraft.ownersText = ownersInput.value;
+  if (licenseInput) appState.setupDraft.licenseKey = licenseInput.value.trim();
+}
+
+function parseSetupOwners(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let displayName = line;
+      let email = '';
+      const emailMatch = line.match(/<([^>]+)>/);
+      if (emailMatch) {
+        email = emailMatch[1].trim();
+        displayName = line.replace(/<[^>]+>/g, '').trim();
+      } else if (line.includes(',')) {
+        const parts = line.split(',');
+        displayName = parts[0].trim();
+        email = parts.slice(1).join(',').trim();
+      }
+      return { displayName, email };
+    });
+}
+
+async function renderSetupWizard() {
+  await loadSetupStatus(false);
+  if (appState.setupResult) {
+    appState.setupStep = getSetupSteps().length;
+  }
+
+  const steps = getSetupSteps();
+  const current = getCurrentSetupStep();
+  const draft = appState.setupDraft;
+  const setupTitle = current.key === 'launch' ? 'Setup complete' : 'First-run setup';
+  setViewTitle(setupTitle);
+  workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
+  window.bdLocalApi.setAlert('', appAlert);
+
+  appRoot.innerHTML = `
+    <section class="setup-shell" aria-labelledby="setup-title">
+      <div class="setup-card">
+        <div class="setup-header">
+          <div>
+            <p class="eyebrow">BD Engine local setup</p>
+            <h2 id="setup-title">${escapeHtml(setupTitle)}</h2>
+            <p class="muted">Create your workspace, bring in your LinkedIn connections, and start from your own data.</p>
+          </div>
+          <ol class="setup-steps" aria-label="Setup progress">
+            ${steps.map((step, index) => `
+              <li class="setup-step ${index + 1 === appState.setupStep ? 'active' : ''} ${index + 1 < appState.setupStep ? 'complete' : ''}">
+                <span>${index + 1}</span>
+                <strong>${escapeHtml(step.label)}</strong>
+              </li>
+            `).join('')}
+          </ol>
+        </div>
+        ${renderSetupStepContent(current.key)}
+      </div>
+    </section>
+  `;
+
+  wireSetupDropZone();
+}
+
+function renderSetupStepContent(stepKey) {
+  const draft = appState.setupDraft;
+  if (stepKey === 'profile') {
+    return `
+      <form id="setup-profile-form" class="setup-form">
+        <div class="setup-grid">
+          <label>Workspace or company name
+            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="Your company or team" />
+          </label>
+          <label>Your name
+            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(draft.userName)}" placeholder="Full name" />
+          </label>
+          <label>Your email
+            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(draft.userEmail)}" placeholder="you@example.com" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'team') {
+    return `
+      <form id="setup-team-form" class="setup-form">
+        <label>Optional team or owner roster
+          <textarea id="setup-owners-text" name="ownersText" rows="7" placeholder="One person per line, for example: Name, email@example.com">${escapeHtml(draft.ownersText)}</textarea>
+        </label>
+        <p class="muted small">Leave this blank if you are the only owner. You can add or edit owners later.</p>
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'license') {
+    return `
+      <form id="setup-license-form" class="setup-form">
+        <label>License key
+          <input id="setup-license-key" name="licenseKey" autocomplete="off" value="${escapeHtml(draft.licenseKey)}" placeholder="Paste your license key" />
+        </label>
+        <p class="muted small">This step appears only when licensing is enabled for this build.</p>
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'import') {
+    const hasCsv = Boolean(appState.setupCsvContent);
+    return `
+      <div class="setup-form">
+        <div class="setup-import-copy">
+          <h3>Import LinkedIn Connections.csv</h3>
+          <p class="muted">From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.</p>
+        </div>
+        <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
+        <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
+          <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
+          <span>${hasCsv ? 'Ready to preview or import.' : 'or choose the file from your computer'}</span>
+          <button class="secondary-button" type="button" data-action="setup-browse-csv">Choose CSV</button>
+        </div>
+        ${renderSetupPreview()}
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="secondary-button" type="button" data-action="setup-preview-csv" ${hasCsv && !appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>
+          <button class="ghost-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Skip import</button>
+          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy ? 'disabled' : ''}>${appState.setupBusy ? 'Finishing...' : 'Finish setup'}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const result = appState.setupResult || {};
+  const stats = result.stats || {};
+  return `
+    <div class="setup-success">
+      <div class="setup-success-mark" aria-hidden="true">OK</div>
+      <h3>Your workspace is ready</h3>
+      <p class="muted">BD Engine will now open your dashboard using the local data stored on this computer.</p>
+      <div class="setup-summary-grid">
+        <div><strong>${formatNumber(stats.imported || 0)}</strong><span>Imported</span></div>
+        <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updated</span></div>
+        <div><strong>${formatNumber(stats.skipped || 0)}</strong><span>Skipped</span></div>
+        <div><strong>${formatNumber(stats.failed || 0)}</strong><span>Failed</span></div>
+      </div>
+      <div class="button-row center">
+        <button class="primary-button" type="button" data-action="setup-open-dashboard">Open dashboard</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSetupPreview() {
+  const preview = appState.setupPreview;
+  if (!preview) {
+    return `<p class="muted small">Preview checks the file before anything is saved.</p>`;
+  }
+
+  const stats = preview.stats || {};
+  const rows = Array.isArray(preview.preview) ? preview.preview : [];
+  return `
+    <div class="setup-preview">
+      <div class="setup-summary-grid">
+        <div><strong>${formatNumber(stats.imported || 0)}</strong><span>New</span></div>
+        <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updates</span></div>
+        <div><strong>${formatNumber(stats.skipped || 0)}</strong><span>Skipped</span></div>
+        <div><strong>${formatNumber(stats.failed || 0)}</strong><span>Failed</span></div>
+      </div>
+      <div class="table-scroll">
+        <table class="table setup-preview-table">
+          <thead><tr><th>Action</th><th>Name</th><th>Company</th><th>Title</th><th>Email</th><th>Connected</th></tr></thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td><span class="status-pill">${escapeHtml(row.action || '')}</span></td>
+                <td>${escapeHtml(row.fullName || '')}</td>
+                <td>${escapeHtml(row.companyName || '')}</td>
+                <td>${escapeHtml(row.title || '')}</td>
+                <td>${escapeHtml(row.email || '')}</td>
+                <td>${escapeHtml(row.connectedOn || '')}</td>
+              </tr>
+              ${row.message ? `<tr class="setup-preview-message"><td></td><td colspan="5">${escapeHtml(row.message)}</td></tr>` : ''}
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function wireSetupDropZone() {
+  const zone = document.getElementById('setup-drop-zone');
+  if (!zone) return;
+  zone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      document.getElementById('setup-csv-file')?.click();
+    }
+  });
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    zone.classList.add('dragover');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.classList.remove('dragover');
+    void handleSetupCsvFile(event.dataTransfer?.files?.[0]);
+  });
+}
+
+async function readTextFile(file) {
+  if (!file) return '';
+  if (typeof file.text === 'function') {
+    return await file.text();
+  }
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => resolve(event.target.result || '');
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsText(file);
+  });
+}
+
+async function handleSetupCsvFile(file) {
+  if (!file) return;
+  persistSetupDraftFromDom();
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    showToast('Please choose the Connections.csv file from LinkedIn.', 'warning');
+  }
+  appState.setupCsvContent = await readTextFile(file);
+  appState.setupCsvFileName = file.name;
+  appState.setupPreview = null;
+  await renderSetupWizard();
+}
+
+async function previewSetupCsv() {
+  persistSetupDraftFromDom();
+  if (!appState.setupCsvContent) {
+    showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+    return;
+  }
+
+  appState.setupBusy = true;
+  try {
+    appState.setupPreview = await api('/api/import/connections-csv/preview', {
+      method: 'POST',
+      body: JSON.stringify({ csvContent: appState.setupCsvContent, useEmptyState: false }),
+    });
+    showToast('CSV preview is ready.', 'success');
+  } finally {
+    appState.setupBusy = false;
+    await renderSetupWizard();
+  }
+}
+
+async function completeSetupWizard() {
+  persistSetupDraftFromDom();
+  const draft = appState.setupDraft;
+  if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
+    appState.setupStep = 1;
+    await renderSetupWizard();
+    showToast('Workspace, name, and email are required.', 'warning');
+    return;
+  }
+
+  appState.setupBusy = true;
+  try {
+    const result = await api('/api/setup/complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceName: draft.workspaceName,
+        userName: draft.userName,
+        userEmail: draft.userEmail,
+        owners: parseSetupOwners(draft.ownersText),
+        licenseKey: draft.licenseKey,
+        csvContent: appState.setupCsvContent,
+      }),
+    });
+    appState.setupResult = result;
+    appState.setupStatus = result.status;
+    appState.setupStep = getSetupSteps().length;
+    invalidateAppData();
+    showToast('Setup complete.', 'success');
+  } finally {
+    appState.setupBusy = false;
+    await renderSetupWizard();
+  }
+}
+
 async function renderDashboardView() {
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
@@ -4748,6 +5185,10 @@ async function cancelBackgroundJob(jobId) {
 }
 
 document.addEventListener('change', (event) => {
+  if (event.target.id === 'setup-csv-file') {
+    void handleSetupCsvFile(event.target.files?.[0]);
+    return;
+  }
   if (event.target.id === 'bulk-select-all') {
     const checked = event.target.checked;
     document.querySelectorAll('.bulk-checkbox').forEach(cb => { cb.checked = checked; });

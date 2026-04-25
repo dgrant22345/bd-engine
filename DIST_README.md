@@ -25,6 +25,33 @@ The launcher starts the local BD Engine server on `http://localhost:8173`, waits
 
 If BD Engine is already running, the launcher reuses the existing local server instead of starting another one.
 
+## First-Run Setup
+
+On a fresh install, BD Engine opens a setup wizard before the dashboard.
+
+You will enter:
+
+- Your workspace or company name
+- Your name and email
+- Optional team/owner names
+- Your LinkedIn connections CSV, if you have it ready
+
+After setup is complete, future launches skip the wizard and open the normal dashboard.
+
+## Import LinkedIn Connections
+
+LinkedIn lets you export your connections as a CSV file. In LinkedIn, request a copy of your data and choose the Connections export. When the archive is ready, unzip it and upload the included `Connections.csv` file in BD Engine.
+
+BD Engine accepts the standard LinkedIn headers:
+
+`First Name, Last Name, URL, Email Address, Company, Position, Connected On`
+
+Missing email, company, title, or connected date fields are allowed. Before saving anything, the wizard shows a preview and summary of new, updated, skipped, and failed rows. Re-importing the same file updates existing contacts instead of creating duplicates.
+
+An empty template is included with the installed app at:
+
+`data-template\sample-linkedin-connections.csv`
+
 ## Update
 
 Run the newer `BD-Engine-Setup.exe`. Your database, settings, logs, and import history remain in `%LOCALAPPDATA%\BD Engine\Data`.

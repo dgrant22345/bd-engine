@@ -496,6 +496,121 @@ function Convert-ToStringList {
     return @($Value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() })
 }
 
+function Get-SetupStatus {
+    $state = Get-AppStateView -Segments @('Workspace', 'Settings', 'Companies', 'Contacts', 'ImportRuns')
+    $settings = if ($state.settings) { $state.settings } else { New-DefaultSettings }
+    $workspace = if ($state.workspace) { $state.workspace } else { New-DefaultWorkspace }
+    $setupComplete = Test-Truthy (Get-ObjectValue -Object $settings -Name 'setupComplete' -Default $false)
+    $contactCount = @($state.contacts).Count
+    $companyCount = @($state.companies).Count
+    $importRunCount = @($state.importRuns).Count
+    $hasUserData = ($contactCount -gt 0 -or $companyCount -gt 0 -or $importRunCount -gt 0)
+    $licensingEnabled = (Test-Truthy (Get-ObjectValue -Object $settings -Name 'licensingEnabled' -Default $false)) -or (Test-Truthy $env:BD_ENGINE_LICENSE_ENABLED)
+
+    return [ordered]@{
+        setupComplete = [bool]$setupComplete
+        requiresSetup = (-not [bool]$setupComplete -and -not [bool]$hasUserData)
+        hasUserData = [bool]$hasUserData
+        licensingEnabled = [bool]$licensingEnabled
+        workspace = [ordered]@{
+            id = [string](Get-ObjectValue -Object $workspace -Name 'id' -Default 'workspace-default')
+            name = [string](Get-ObjectValue -Object $workspace -Name 'name' -Default '')
+        }
+        user = Get-ObjectValue -Object $settings -Name 'user' -Default ([ordered]@{})
+        counts = [ordered]@{
+            contacts = $contactCount
+            companies = $companyCount
+            importRuns = $importRunCount
+        }
+    }
+}
+
+function New-SetupOwnerId {
+    param(
+        [string]$DisplayName,
+        [string]$Email,
+        [hashtable]$UsedIds
+    )
+
+    $seed = if (-not [string]::IsNullOrWhiteSpace($Email)) {
+        ($Email -split '@', 2)[0]
+    } else {
+        $DisplayName
+    }
+    $base = (Normalize-TextKey $seed) -replace '\s+', '-'
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        $base = 'owner'
+    }
+
+    $candidate = $base
+    $suffix = 2
+    while ($UsedIds.ContainsKey($candidate)) {
+        $candidate = '{0}-{1}' -f $base, $suffix
+        $suffix++
+    }
+    $UsedIds[$candidate] = $true
+    return $candidate
+}
+
+function Convert-ToSetupOwnerRoster {
+    param(
+        $Owners,
+        [string]$UserName = '',
+        [string]$UserEmail = ''
+    )
+
+    $rows = New-Object System.Collections.ArrayList
+    if ($Owners -is [string]) {
+        foreach ($line in ($Owners -split "`r?`n")) {
+            $text = $line.Trim()
+            if (-not $text) { continue }
+            $email = ''
+            if ($text -match '<([^>]+)>') {
+                $email = $matches[1].Trim()
+                $text = ($text -replace '<[^>]+>', '').Trim()
+            } elseif ($text -match ',') {
+                $parts = $text -split ',', 2
+                $text = $parts[0].Trim()
+                $email = $parts[1].Trim()
+            }
+            [void]$rows.Add([ordered]@{ displayName = $text; email = $email })
+        }
+    } elseif ($Owners) {
+        foreach ($owner in @($Owners)) {
+            $displayName = [string](Get-ObjectValue -Object $owner -Name 'displayName' -Default (Get-ObjectValue -Object $owner -Name 'name' -Default ''))
+            $email = [string](Get-ObjectValue -Object $owner -Name 'email' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($displayName) -or -not [string]::IsNullOrWhiteSpace($email)) {
+                [void]$rows.Add([ordered]@{ displayName = $displayName.Trim(); email = $email.Trim() })
+            }
+        }
+    }
+
+    if ($rows.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($UserName)) {
+        [void]$rows.Add([ordered]@{ displayName = $UserName.Trim(); email = $UserEmail.Trim() })
+    }
+
+    $usedIds = @{}
+    $ownersOut = New-Object System.Collections.ArrayList
+    foreach ($row in @($rows)) {
+        $displayName = [string](Get-ObjectValue -Object $row -Name 'displayName' -Default '')
+        $email = [string](Get-ObjectValue -Object $row -Name 'email' -Default '')
+        if ([string]::IsNullOrWhiteSpace($displayName) -and -not [string]::IsNullOrWhiteSpace($email)) {
+            $displayName = $email
+        }
+        if ([string]::IsNullOrWhiteSpace($displayName)) {
+            continue
+        }
+
+        [void]$ownersOut.Add([ordered]@{
+            ownerId = New-SetupOwnerId -DisplayName $displayName -Email $email -UsedIds $usedIds
+            displayName = $displayName
+            email = $email
+        })
+    }
+
+    return @($ownersOut)
+}
+
 function Convert-ToAccountImportRow {
     param(
         [Parameter(Mandatory = $true)]
@@ -876,6 +991,86 @@ function Handle-ApiRequest {
     }
     if ($path -eq '/api/runtime/status' -and $method -eq 'GET') {
         return (New-JsonResult (Get-BackgroundRuntimeStatus -ServerStartedAt $script:ServerStartedAt -ServerWarmedAt $script:ServerWarmedAt))
+    }
+    if ($path -eq '/api/setup/status' -and $method -eq 'GET') {
+        return (New-JsonResult (Get-SetupStatus))
+    }
+    if ($path -eq '/api/setup/complete' -and $method -eq 'POST') {
+        $payload = Read-JsonBody -Request $Request
+        $workspaceName = ([string](Get-ObjectValue -Object $payload -Name 'workspaceName' -Default '')).Trim()
+        $userName = ([string](Get-ObjectValue -Object $payload -Name 'userName' -Default '')).Trim()
+        $userEmail = ([string](Get-ObjectValue -Object $payload -Name 'userEmail' -Default '')).Trim()
+
+        if ([string]::IsNullOrWhiteSpace($workspaceName)) {
+            return (New-JsonResult ([ordered]@{ error = 'Workspace or company name is required.' }) 400)
+        }
+        if ([string]::IsNullOrWhiteSpace($userName)) {
+            return (New-JsonResult ([ordered]@{ error = 'Your name is required.' }) 400)
+        }
+        if ([string]::IsNullOrWhiteSpace($userEmail)) {
+            return (New-JsonResult ([ordered]@{ error = 'Your email is required.' }) 400)
+        }
+
+        $state = Get-AppState
+        foreach ($collectionName in 'companies', 'contacts', 'jobs', 'boardConfigs', 'activities', 'importRuns') {
+            if ($null -eq $state[$collectionName]) {
+                $state[$collectionName] = @()
+            }
+        }
+
+        $workspace = if ($state.workspace) { $state.workspace } else { New-DefaultWorkspace }
+        Set-ObjectValue -Object $workspace -Name 'name' -Value $workspaceName | Out-Null
+        Set-ObjectValue -Object $workspace -Name 'companyName' -Value $workspaceName | Out-Null
+        Set-ObjectValue -Object $workspace -Name 'updatedAt' -Value (Get-Date).ToString('o') | Out-Null
+
+        $settings = if ($state.settings) { $state.settings } else { New-DefaultSettings }
+        $licensingEnabled = (Test-Truthy (Get-ObjectValue -Object $settings -Name 'licensingEnabled' -Default $false)) -or (Test-Truthy $env:BD_ENGINE_LICENSE_ENABLED)
+        Set-ObjectValue -Object $settings -Name 'setupComplete' -Value $true | Out-Null
+        Set-ObjectValue -Object $settings -Name 'setupCompletedAt' -Value (Get-Date).ToString('o') | Out-Null
+        Set-ObjectValue -Object $settings -Name 'updatedAt' -Value (Get-Date).ToString('o') | Out-Null
+        Set-ObjectValue -Object $settings -Name 'user' -Value ([ordered]@{
+            name = $userName
+            email = $userEmail
+        }) | Out-Null
+        Set-ObjectValue -Object $settings -Name 'ownerRoster' -Value (Convert-ToSetupOwnerRoster -Owners (Get-ObjectValue -Object $payload -Name 'owners' -Default @()) -UserName $userName -UserEmail $userEmail) | Out-Null
+        if ($licensingEnabled -and (Get-ObjectValue -Object $payload -Name 'licenseKey' -Default '')) {
+            Set-ObjectValue -Object $settings -Name 'license' -Value ([ordered]@{
+                status = 'provided'
+                key = [string](Get-ObjectValue -Object $payload -Name 'licenseKey' -Default '')
+                updatedAt = (Get-Date).ToString('o')
+            }) | Out-Null
+        }
+
+        $importResult = $null
+        $csvContent = [string](Get-ObjectValue -Object $payload -Name 'csvContent' -Default '')
+        $tempFile = ''
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
+                $tempFile = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+                [System.IO.File]::WriteAllText($tempFile, $csvContent, [System.Text.Encoding]::UTF8)
+                $importResult = Import-BdConnectionsCsv -CsvPath $tempFile -SourceLabel 'setup-linkedin-connections-csv' -MergeExisting -SkipPersistence
+                $state = $importResult.state
+            }
+
+            Set-ObjectValue -Object $state -Name 'workspace' -Value $workspace | Out-Null
+            Set-ObjectValue -Object $state -Name 'settings' -Value $settings | Out-Null
+            $segments = @('Workspace', 'Settings')
+            if ($importResult) {
+                $segments += @('Contacts', 'Companies', 'BoardConfigs', 'ImportRuns')
+            }
+            Sync-AppStateSegments -State $state -Segments $segments | Out-Null
+        } finally {
+            if ($tempFile -and (Test-Path -LiteralPath $tempFile)) {
+                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        return (New-JsonResult ([ordered]@{
+            status = Get-SetupStatus
+            importRun = if ($importResult) { $importResult.importRun } else { $null }
+            stats = if ($importResult) { $importResult.importRun.stats } else { [ordered]@{ contacts = 0; companies = 0; imported = 0; updated = 0; skipped = 0; failed = 0 } }
+            preview = if ($importResult) { @($importResult.preview) } else { @() }
+        }) 200)
     }
     if ($path -eq '/api/background-jobs' -and $method -eq 'GET') {
         return (New-JsonResult (Find-AppBackgroundJobs -Query $query))
@@ -1771,6 +1966,39 @@ function Handle-ApiRequest {
         }) -Summary 'Reimport workbook seed data' -ProgressMessage 'Queued workbook import'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
+    }
+    if ($path -eq '/api/import/connections-csv/preview' -and $method -eq 'POST') {
+        $payload = Read-JsonBody -Request $Request
+        $csvPath = [string](Get-ObjectValue -Object $payload -Name 'csvPath' -Default '')
+        $isTempFile = $false
+        $csvContent = [string](Get-ObjectValue -Object $payload -Name 'csvContent' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
+            $tempFile = Join-Path $env:TEMP ("bd-csv-preview-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            [System.IO.File]::WriteAllText($tempFile, $csvContent, [System.Text.Encoding]::UTF8)
+            $csvPath = $tempFile
+            $isTempFile = $true
+        }
+
+        if ([string]::IsNullOrWhiteSpace($csvPath)) {
+            return (New-JsonResult ([ordered]@{ error = 'csvPath or csvContent is required' }) 400)
+        }
+
+        try {
+            $result = Import-BdConnectionsCsv `
+                -CsvPath $csvPath `
+                -DryRun `
+                -MergeExisting `
+                -UseEmptyState:(Test-Truthy (Get-ObjectValue -Object $payload -Name 'useEmptyState' -Default $false))
+            return (New-JsonResult ([ordered]@{
+                importRun = $result.importRun
+                stats = $result.importRun.stats
+                preview = @($result.preview)
+            }) 200)
+        } finally {
+            if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
+                Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
     if ($path -eq '/api/import/connections-csv' -and $method -eq 'POST') {
         $payload = Read-JsonBody -Request $Request

@@ -63,8 +63,12 @@ function Get-StorageSignature {
 
     foreach ($path in @($map.Values)) {
         if (Test-Path -LiteralPath $path) {
-            $item = Get-Item -LiteralPath $path
-            [void]$parts.Add(('{0}:{1}' -f $path, $item.LastWriteTimeUtc.Ticks))
+            $item = @(Get-Item -LiteralPath $path -ErrorAction SilentlyContinue) | Select-Object -First 1
+            if ($item -and $item.PSObject.Properties['LastWriteTimeUtc']) {
+                [void]$parts.Add(('{0}:{1}' -f $path, $item.LastWriteTimeUtc.Ticks))
+            } else {
+                [void]$parts.Add(('{0}:unavailable' -f $path))
+            }
         } else {
             [void]$parts.Add(('{0}:missing' -f $path))
         }
@@ -87,8 +91,11 @@ function Get-SegmentStorageSignature {
     $map = Get-StorageMap
     $path = $map[$Segment]
     if (Test-Path -LiteralPath $path) {
-        $item = Get-Item -LiteralPath $path
-        return '{0}:{1}' -f $path, $item.LastWriteTimeUtc.Ticks
+        $item = @(Get-Item -LiteralPath $path -ErrorAction SilentlyContinue) | Select-Object -First 1
+        if ($item -and $item.PSObject.Properties['LastWriteTimeUtc']) {
+            return '{0}:{1}' -f $path, $item.LastWriteTimeUtc.Ticks
+        }
+        return '{0}:unavailable' -f $path
     }
 
     return '{0}:missing' -f $path

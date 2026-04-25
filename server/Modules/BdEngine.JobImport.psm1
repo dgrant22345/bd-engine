@@ -920,8 +920,8 @@ function New-GeneratedBoardConfig {
     $id = New-DeterministicId -Prefix 'cfgauto' -Seed $normalizedName
     return [ordered]@{
         id = $id
-        workspaceId = $State.workspace.id
-        accountId = $Company.id
+        workspaceId = [string](Get-ObjectValue -Object $State.workspace -Name 'id' -Default 'workspace-default')
+        accountId = [string](Get-ObjectValue -Object $Company -Name 'id' -Default '')
         companyName = $companyName
         normalizedCompanyName = $normalizedName
         atsType = [string]$template.atsType
@@ -5692,14 +5692,18 @@ function Sync-BoardConfigsFromCompanies {
     $existingByCompany = @{}
     $companyKeySet = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($company in @($State.companies)) {
-        $companyKey = Get-CanonicalCompanyKey $(if ($company.normalizedName) { $company.normalizedName } else { $company.displayName })
+        $normalizedName = [string](Get-ObjectValue -Object $company -Name 'normalizedName' -Default '')
+        $displayName = [string](Get-ObjectValue -Object $company -Name 'displayName' -Default '')
+        $companyKey = Get-CanonicalCompanyKey $(if ($normalizedName) { $normalizedName } else { $displayName })
         if ($companyKey) {
             [void]$companyKeySet.Add($companyKey)
         }
     }
 
     foreach ($config in @($State.boardConfigs)) {
-        $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        $normalizedCompanyName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
+        $companyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $key = Get-CanonicalCompanyKey $(if ($normalizedCompanyName) { $normalizedCompanyName } else { $companyName })
         if (-not $key) {
             continue
         }
@@ -5721,14 +5725,14 @@ function Sync-BoardConfigsFromCompanies {
             continue
         }
 
-        $key = $generated.normalizedCompanyName
+        $key = [string](Get-ObjectValue -Object $generated -Name 'normalizedCompanyName' -Default '')
         $existingItems = if ($existingByCompany.ContainsKey($key)) { @($existingByCompany[$key].ToArray()) } else { @() }
         $manualItems = @($existingItems | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'source' -Default '')).ToLowerInvariant() -eq 'manual' -or ([string](Get-ObjectValue -Object $_ -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' })
 
         if ($manualItems.Count -gt 0) {
             foreach ($item in $existingItems) {
-                [void](Set-ObjectValue -Object $item -Name 'accountId' -Value $company.id)
-                [void](Set-ObjectValue -Object $item -Name 'companyName' -Value $company.displayName)
+                [void](Set-ObjectValue -Object $item -Name 'accountId' -Value (Get-ObjectValue -Object $company -Name 'id' -Default ''))
+                [void](Set-ObjectValue -Object $item -Name 'companyName' -Value (Get-ObjectValue -Object $company -Name 'displayName' -Default ''))
                 [void](Set-ObjectValue -Object $item -Name 'normalizedCompanyName' -Value $key)
                 $itemDomain = [string](Get-ObjectValue -Object $item -Name 'domain')
                 $itemLastCheckedAt = [string](Get-ObjectValue -Object $item -Name 'lastCheckedAt')
@@ -5771,7 +5775,9 @@ function Sync-BoardConfigsFromCompanies {
     }
 
     foreach ($config in @($State.boardConfigs)) {
-        $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        $normalizedCompanyName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
+        $companyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $key = Get-CanonicalCompanyKey $(if ($normalizedCompanyName) { $normalizedCompanyName } else { $companyName })
         if ($key -and $companyKeySet.Contains($key)) {
             continue
         }
