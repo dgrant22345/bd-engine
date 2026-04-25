@@ -4,12 +4,20 @@ param(
     [switch]$LocalOnly
 )
 
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+try {
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+} catch {
+    # Some locked-down Windows profiles block execution-policy changes even for the current process.
+}
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $appRoot = Join-Path $projectRoot 'app'
-$dataRoot = Join-Path $projectRoot 'data'
+$dataRoot = if (-not [string]::IsNullOrWhiteSpace([string]$env:BD_ENGINE_DATA_ROOT)) {
+    [System.IO.Path]::GetFullPath([string]$env:BD_ENGINE_DATA_ROOT)
+} else {
+    Join-Path $projectRoot 'data'
+}
 
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.State.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Modules\BdEngine.Domain.psm1') -Force -DisableNameChecking

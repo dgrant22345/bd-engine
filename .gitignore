@@ -14,7 +14,13 @@ data_backup_before_reseed/
 
 # Runtime artifacts
 data/background-worker.pid
+data/server.pid
 data/diagnostic.txt
+
+# Distribution / packaging artifacts
+dist/
+dist-*/
+*.tmp
 
 # Scratch / logs
 scratch.txt
