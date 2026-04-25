@@ -1,147 +1,135 @@
-﻿# BD Engine Web App MVP
+# BD Engine — Commercial Edition
 
-BD Engine turns the spreadsheet-based business development workflow into a lightweight web app with a clean dashboard, ranked accounts, contact intelligence, job ingestion, and ATS config management.
+Business development operating system. Daily account prioritization, contact intelligence, and live ATS job import in one desktop app.
 
-## What This Repo Contains
+## Requirements
 
-- `app/`
-  - browser UI for dashboard, accounts, contacts, jobs, and admin
-- `server/Server.ps1`
-  - local HTTP server and JSON API
-- `server/Modules/BdEngine.Domain.psm1`
-  - scoring, ranking, search, filters, and account-detail models
-- `server/Modules/BdEngine.Import.psm1`
-  - workbook parser and seed import
-- `server/Modules/BdEngine.JobImport.psm1`
-  - live Greenhouse, Lever, and Ashby importers
-- `server/Modules/BdEngine.State.psm1`
-  - file-backed persistence
-- `data/`
-  - persisted workspace state
-- `docs/migration-plan.md`
-  - spreadsheet audit, app architecture, and schema
+- **Windows 10 or 11**
+- **PowerShell 5.1+** (included with Windows)
+- No other dependencies — everything is bundled
 
-## Workbook Audit Summary
+## Installation
 
-The workbook at `C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx` exports these visible sheets:
+### 1. Unzip
 
-- `Setup`
-- `Connections`
-- `Hiring_Import`
-- `Target_Accounts`
-- `Daily_Hot_List`
-- `Today_View`
-- `Top_Contacts`
-- `Outreach_Templates`
-- `History`
+Extract the `BD-Engine.zip` file to any folder (e.g., `C:\BD-Engine`).
 
-Important findings from the audit:
+### 2. First-Run Setup
 
-- `Setup` contains the live operating thresholds the app now imports:
-  - min company connections: `3`
-  - min jobs posted: `2`
-  - contact priority threshold: `55`
-  - max companies to review: `25`
-- `Connections` is the real source of truth in this export. It contains 20k+ people rows plus formula-driven flags for title relevance, company overlap, years connected, and contact priority.
-- `Hiring_Import` in this `.xlsx` only contains placeholder/example rows, not a real jobs snapshot.
-- `Target_Accounts`, `Today_View`, `Top_Contacts`, and `History` are mostly empty in the exported file because the live Google Sheets workflow depended on formulas/scripts that do not survive the `.xlsx` export cleanly.
-- There is no visible `Job_Boards_Config` sheet in this workbook export, so ATS config data starts empty and is managed in the app admin UI.
+Double-click **`Start-BDEngine.bat`**. On the first launch, the setup wizard will run automatically and ask for:
 
-## What The App Preserves
+1. **License key and payload** — provided to you at purchase
+2. **Workspace name** — name your workspace (e.g., your company name)
+3. **Team members** — add the people who will use the app
+4. **Geography focus** — optional, filters account prioritization by region
 
-- contact title classification and priority scoring from `Connections`
-- setup-driven threshold controls from `Setup`
-- ranked account rollups derived from company overlap and contact quality
-- `Daily_Hot_List` style scoring as an app-native service
-- `Today_View` style shortlist logic
-- admin-managed ATS config and live job refresh flow
-- outreach stages, notes, and activity tracking
+You can also run setup manually anytime:
 
-## Current Seed State
-
-The repo is currently seeded from your workbook and now contains:
-
-- `12,261` accounts
-- `20,736` contacts
-- `0` jobs
-- `0` ATS config rows
-- `0` activity history rows
-
-That is expected for this workbook export. To populate jobs in the app, add ATS config rows in **Admin** and run **Run job import**.
-
-## Stack
-
-This MVP stays intentionally lightweight in this environment:
-
-- frontend: static HTML/CSS/vanilla JS
-- backend: PowerShell HTTP server
-- persistence: JSON files in `data/`
-- import layer: Open XML workbook parsing plus live ATS HTTP importers
-
-The product model is structured so it can later move to a React/Next.js + relational database stack without changing the core workflow.
-
-## Run The App
-
-Windows:
-
-```powershell
-.\Start-App.cmd
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File Setup-BDEngine.ps1
 ```
 
-Or directly:
+### 3. Launch
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-App.ps1
+After setup, double-click **`Start-BDEngine.bat`**. The app will:
+- Start a local server on port 8173
+- Open your browser to the dashboard at http://localhost:8173
+
+To stop: double-click **`Stop-BDEngine.bat`** or close the PowerShell window.
+
+## License Activation
+
+Each license is **locked to a single computer**. Here's how it works:
+
+1. Run `Start-BDEngine.bat` (or `Setup-BDEngine.ps1`) — the setup wizard displays your **Machine ID** (e.g., `MACH-A1B2-C3D4-E5F6-7890`)
+2. Send your Machine ID and name to your vendor
+3. You'll receive two values:
+   - **License Key**: formatted as `BDENG-XXXXX-XXXXX-XXXXX-XXXXX`
+   - **License Payload**: a base64 string
+4. Enter both into the setup wizard
+
+The license is stored locally in `data\license.json`. It only works on the computer it was generated for.
+
+If you get a new computer or your license expires, contact your vendor for a new key.
+
+## What It Does
+
+BD Engine replaces spreadsheet-based BD workflows with a web app that:
+
+- **Ranks accounts** by hiring signals, contact density, and engagement score
+- **Scores contacts** by title relevance, seniority, and relationship strength
+- **Imports live jobs** from ATS platforms (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite)
+- **Discovers job boards** automatically via ATS probing
+- **Tracks outreach** with activity logging and stage management
+- **Assigns ownership** across your team roster
+
+## App Views
+
+| View | What it shows |
+|------|---------------|
+| **Dashboard** | Today's prioritized account list with hiring signals and scores |
+| **Accounts** | Full account list with search, filters, and detail drilldowns |
+| **Contacts** | Contact directory with priority scoring and title classification |
+| **Jobs** | Live job postings imported from connected ATS boards |
+| **Admin** | ATS board config management, enrichment tools, and import controls |
+
+## Configuration
+
+### Team Members
+
+Edit `data\owners.json` to add, remove, or rename team members:
+
+```json
+[
+  { "ownerId": "jane-smith", "displayName": "Jane Smith" },
+  { "ownerId": "john-doe", "displayName": "John Doe" }
+]
 ```
 
-Optional port override:
+### Settings
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-App.ps1 -Port 8188
+Edit `data\settings.json` or use the Admin view in the app:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `minCompanyConnections` | 3 | Minimum contacts needed to surface a company |
+| `minJobsPosted` | 2 | Minimum active jobs to flag as "hiring" |
+| `contactPriorityThreshold` | 10 | Minimum score for high-priority contacts |
+| `maxCompaniesToReview` | 25 | Max companies shown on the dashboard |
+| `geographyFocus` | (empty) | Filter by country/region |
+
+### ATS Board Configuration
+
+Add your target companies in the Admin view, or import via the `data\seed-job-boards-config.json` file. Use the built-in ATS discovery to automatically detect which job board platform each company uses.
+
+## Architecture
+
+```
+Start-BDEngine.bat       Windows launcher (double-click to start)
+Setup-BDEngine.ps1       First-run setup wizard
+Stop-BDEngine.bat        Shutdown script
+
+app/                     Frontend (static HTML/CSS/vanilla JS)
+server/Server.ps1        HTTP server (PowerShell, port 8173)
+server/Modules/          Business logic modules
+data/                    Your data (JSON + SQLite, created at runtime)
+scripts/                 Utility and maintenance scripts
 ```
 
-Then open [http://localhost:8173](http://localhost:8173).
+## Data & Privacy
 
-## Import Behavior
+All data stays on your machine. BD Engine runs entirely locally — no cloud services, no telemetry, no external data transmission. The only outbound requests are ATS API calls to fetch public job postings from platforms like Greenhouse and Lever.
 
-Default workbook path:
+## Troubleshooting
 
-- `C:\Users\ddere\OneDrive\Desktop\Google_Sheets_Daily_BD_Engine (1).xlsx`
+| Issue | Solution |
+|-------|----------|
+| "No license found" error | Run `Setup-BDEngine.ps1` and enter your key |
+| "License expired" error | Contact your vendor for a renewal |
+| Port 8173 in use | Close other BD Engine instances, or edit the port in `Open-BD-Engine.ps1` |
+| PowerShell error | Ensure PowerShell 5.1+ is installed (run `$PSVersionTable.PSVersion`) |
+| App won't load in browser | Wait 30 seconds for the server to warm up, then refresh |
 
-The workbook import is now resilient to:
+## Support
 
-- missing `Job_Boards_Config` tabs
-- formula cells exported as literal `=...` strings
-- placeholder rows in `Hiring_Import`
-- empty history/config/job sections
-- clean reseeds where collections are empty
-
-## Live Job Import
-
-Supported live ATS sources:
-
-- Greenhouse
-- Lever
-- Ashby
-- SmartRecruiters
-
-Workflow:
-
-1. Open **Admin**.
-2. Add or edit ATS config rows.
-3. Click **Run job import**.
-4. Refresh the dashboard/accounts/jobs views.
-
-## Google Sheets API Access
-
-Service-account based Google Sheets access is now scaffolded for this project.
-
-- setup guide: `docs/google-sheets-api-setup.md`
-- test script: `scripts/Test-GoogleSheetsAccess.ps1`
-- server endpoint: `POST /api/google-sheets/test`
-
-## Notes
-
-- Reads are served from the JSON snapshot in `data/`. Workbook imports and live ATS refreshes use the PowerShell API, while day-to-day UI edits are stored locally in the browser for this MVP.
-- The app is single-user at runtime today, but the data model keeps `workspaceId` on major entities for future SaaS expansion.
-- Because the provided workbook export does not carry real job/config/history rows, the first meaningful “hiring” dashboard experience depends on adding ATS configs and running a live import.
+Contact your vendor for license issues, bug reports, or feature requests.

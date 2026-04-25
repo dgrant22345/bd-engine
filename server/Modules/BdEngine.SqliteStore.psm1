@@ -2,6 +2,26 @@ Set-StrictMode -Version Latest
 
 $script:SqliteAssemblyLoaded = $false
 $script:JsonSerializer = $null
+$script:SqliteSchemaInitialized = $false
+$script:StoreSignatureCache = ''
+$script:StoreSignatureFileStamp = ''
+$script:SiblingCompanySourceIndexCache = $null
+$script:SiblingCompanySourceIndexStamp = ''
+$script:SiblingConfigSourceIndexCache = $null
+$script:SiblingConfigSourceIndexStamp = ''
+$script:CompanySummaryColumns = 'id, sort_order, normalized_name, display_name, display_name_normalized, industry, location, domain, careers_url, owner, owner_normalized, priority, priority_tier, status, outreach_status, connection_count, senior_contact_count, talent_contact_count, buyer_title_count, target_score, target_score_explanation_json, daily_score, follow_up_score, job_count, open_role_count, jobs_last_30_days, jobs_last_90_days, new_role_count_7d, stale_role_count_30d, avg_role_seniority_score, hiring_spike_ratio, external_recruiter_likelihood_score, company_growth_signal_score, company_growth_signal_summary, engagement_score, engagement_summary, hiring_velocity, department_focus, department_focus_count, department_concentration, hiring_spike_score, network_strength, hiring_status, last_job_posted_at, last_contacted_at, days_since_contact, stale_flag, next_action, next_action_at, alert_priority_score, relationship_strength_score, sequence_status, sequence_next_step, sequence_next_step_at, recommended_action, outreach_draft, top_contact_name, top_contact_title, ats_types_text, tags_text, notes, search_text, canonical_domain, linkedin_company_slug, aliases_text, enrichment_status, enrichment_source, enrichment_confidence, enrichment_confidence_score, enrichment_notes, enrichment_evidence, enrichment_failure_reason, enrichment_attempted_urls_text, last_enriched_at, last_verified_at, next_enrichment_attempt_at'
+$script:CanadaLocationHints = @(
+    'canada', 'toronto', 'ontario', 'vancouver', 'british columbia', 'montreal', 'quebec', 'quebec city',
+    'calgary', 'alberta', 'edmonton', 'ottawa', 'mississauga', 'markham', 'halifax', 'nova scotia', 'gatineau',
+    'kitchener', 'waterloo', 'longueuil', 'manitoba', 'saskatchewan', 'new brunswick', 'newfoundland', 'labrador',
+    'prince edward island', 'pei', 'yukon', 'nunavut', 'northwest territories'
+)
+$script:UsLocationHints = @(
+    'united states', 'usa', 'new york', 'california', 'san francisco', 'los angeles', 'chicago', 'denver',
+    'bethesda', 'philadelphia', 'connecticut', 'new jersey', 'dallas', 'texas', 'pennsylvania', 'washington',
+    'seattle', 'massachusetts', 'boston', 'atlanta', 'georgia', 'colorado', 'virginia', 'north carolina',
+    'florida', 'illinois', 'remote usa', 'remote united states'
+)
 
 function Get-BdSqliteProjectRoot {
     return (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -17,6 +37,26 @@ function Get-BdSqliteVendorRoot {
 
 function Get-BdSqliteDatabasePath {
     return (Join-Path (Get-BdSqliteDataRoot) 'bd-engine.db')
+}
+
+function Get-BdSqliteDatabaseFileStamp {
+    $dbPath = Get-BdSqliteDatabasePath
+    if (-not (Test-Path -LiteralPath $dbPath)) {
+        return "$dbPath:missing"
+    }
+
+    $stampParts = New-Object System.Collections.ArrayList
+    foreach ($path in @($dbPath, "$dbPath-wal", "$dbPath-shm")) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            [void]$stampParts.Add("$path:missing")
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $path
+        [void]$stampParts.Add(('{0}:{1}:{2}' -f $path, $item.LastWriteTimeUtc.Ticks, $item.Length))
+    }
+
+    return [string]::Join('|', @($stampParts))
 }
 
 function Test-BdSqliteStoreEnabled {
@@ -98,7 +138,7 @@ function ConvertFrom-BdSqliteJsonText {
     }
 
     $serializer = Get-BdSqliteJsonSerializer
-    return (ConvertTo-BdSqlitePlainObject -InputObject ($serializer.DeserializeObject($JsonText)))
+    return ($serializer.DeserializeObject($JsonText))
 }
 
 function ConvertTo-BdSqliteJsonText {
@@ -118,6 +158,66 @@ function Normalize-BdSqliteText {
     $normalized = $normalized -replace '&', ' and '
     $normalized = $normalized -replace '[^a-z0-9]+', ' '
     return $normalized.Trim()
+}
+
+function New-BdSqliteLocationPatternClause {
+    param(
+        [string]$ColumnName,
+        [string[]]$Patterns,
+        [string]$ParameterPrefix,
+        [hashtable]$Parameters
+    )
+
+    $normalizedPatterns = @($Patterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    if ($normalizedPatterns.Count -eq 0) {
+        return ''
+    }
+
+    $clauses = New-Object System.Collections.ArrayList
+    for ($index = 0; $index -lt $normalizedPatterns.Count; $index++) {
+        $name = '{0}{1}' -f $ParameterPrefix, $index
+        $Parameters[$name] = '%' + ([string]$normalizedPatterns[$index]).ToLowerInvariant() + '%'
+        [void]$clauses.Add(("LOWER(COALESCE({0}, '')) LIKE @{1}" -f $ColumnName, $name))
+    }
+
+    return '(' + ([string]::Join(' OR ', @($clauses))) + ')'
+}
+
+function Add-BdSqliteGeographyFilterClauses {
+    param(
+        [System.Collections.ArrayList]$WhereClauses,
+        [hashtable]$Parameters,
+        [string]$Geography
+    )
+
+    $scope = ([string]$Geography).Trim().ToLowerInvariant()
+    if (-not $scope) {
+        return
+    }
+
+    $canadaClause = New-BdSqliteLocationPatternClause -ColumnName 'location' -Patterns $script:CanadaLocationHints -ParameterPrefix 'geoCanada' -Parameters $Parameters
+    $usClause = New-BdSqliteLocationPatternClause -ColumnName 'location' -Patterns $script:UsLocationHints -ParameterPrefix 'geoUs' -Parameters $Parameters
+    switch ($scope) {
+        'canada' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($canadaClause AND NOT $usClause)")
+            }
+        }
+        'canada_us' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($canadaClause OR $usClause)")
+            } elseif ($canadaClause) {
+                [void]$WhereClauses.Add($canadaClause)
+            } elseif ($usClause) {
+                [void]$WhereClauses.Add($usClause)
+            }
+        }
+        'us' {
+            if ($canadaClause -and $usClause) {
+                [void]$WhereClauses.Add("($usClause AND NOT $canadaClause)")
+            }
+        }
+    }
 }
 
 function Get-BdSqliteRecordValue {
@@ -194,6 +294,93 @@ function ConvertTo-BdSqliteNullIfBlank {
     return $text.Trim()
 }
 
+function Get-BdSqliteFallbackTargetScoreExplanation {
+    param($Row)
+
+    $jobsLast30Days = [int](ConvertTo-BdSqliteNumber $Row.jobs_last_30_days)
+    $jobsLast90Days = [int](ConvertTo-BdSqliteNumber $Row.jobs_last_90_days)
+    $avgRoleSeniorityScore = [double](ConvertTo-BdSqliteNumber $Row.avg_role_seniority_score)
+    $hiringSpikeRatio = [double](ConvertTo-BdSqliteNumber $Row.hiring_spike_ratio)
+    $externalRecruiterLikelihoodScore = [double](ConvertTo-BdSqliteNumber $Row.external_recruiter_likelihood_score)
+    $companyGrowthSignalScore = [double](ConvertTo-BdSqliteNumber $Row.company_growth_signal_score)
+    $engagementScore = [double](ConvertTo-BdSqliteNumber $Row.engagement_score)
+    $volumeScore = [Math]::Min(100, [Math]::Round(([Math]::Min(70, ($jobsLast30Days * 10))) + ([Math]::Min(30, ($jobsLast90Days * 2))), 0))
+    $spikeScore = [Math]::Min(100, [Math]::Round(([Math]::Max(0, $hiringSpikeRatio) * 50), 0))
+
+    $components = @(
+        [ordered]@{
+            key = 'hiringVolume'
+            label = 'Fresh hiring volume'
+            score = $volumeScore
+            weight = 0.26
+            summary = '{0} jobs in 30d and {1} in 90d' -f $jobsLast30Days, $jobsLast90Days
+        },
+        [ordered]@{
+            key = 'roleSeniority'
+            label = 'Role seniority mix'
+            score = $avgRoleSeniorityScore
+            weight = 0.14
+            summary = 'Average role seniority {0}/100' -f ([string]([Math]::Round($avgRoleSeniorityScore, 1)))
+        },
+        [ordered]@{
+            key = 'hiringSpike'
+            label = 'Hiring spike'
+            score = $spikeScore
+            weight = 0.18
+            summary = '{0}x versus the 90-day baseline' -f ([string]([Math]::Round($hiringSpikeRatio, 2)))
+        },
+        [ordered]@{
+            key = 'externalRecruiter'
+            label = 'External recruiter fit'
+            score = $externalRecruiterLikelihoodScore
+            weight = 0.16
+            summary = 'JD patterns suggest a {0}/100 partner-likelihood' -f ([string]([Math]::Round($externalRecruiterLikelihoodScore, 1)))
+        },
+        [ordered]@{
+            key = 'growthSignals'
+            label = 'Growth signals'
+            score = $companyGrowthSignalScore
+            weight = 0.14
+            summary = [string]$(if ([string]::IsNullOrWhiteSpace([string]$Row.company_growth_signal_summary)) { 'Signals driven mainly by hiring volume' } else { [string]$Row.company_growth_signal_summary })
+        },
+        [ordered]@{
+            key = 'engagement'
+            label = 'Engagement'
+            score = $engagementScore
+            weight = 0.12
+            summary = [string]$(if ([string]::IsNullOrWhiteSpace([string]$Row.engagement_summary)) { 'No live engagement captured yet' } else { [string]$Row.engagement_summary })
+        }
+    )
+
+    $topDrivers = @(
+        @($components | ForEach-Object {
+                $contribution = [int][Math]::Round(([double](ConvertTo-BdSqliteNumber $_.score) * [double]$_.weight))
+                [ordered]@{
+                    key = [string]$_.key
+                    label = [string]$_.label
+                    contribution = $contribution
+                    score = [int][Math]::Round([double](ConvertTo-BdSqliteNumber $_.score))
+                    summary = [string]$_.summary
+                }
+            } |
+            Sort-Object @{ Expression = { [double](ConvertTo-BdSqliteNumber $_.contribution) }; Descending = $true } |
+            Select-Object -First 3)
+    )
+
+    $summary = if ($topDrivers.Count -gt 0) {
+        [string]::Join('; ', @($topDrivers | ForEach-Object { '{0}: {1}' -f $_.label, $_.summary }))
+    } else {
+        'No strong target-score drivers yet.'
+    }
+
+    return [ordered]@{
+        model = 'target-score-v2'
+        generatedAt = (Get-Date).ToString('o')
+        topDrivers = $topDrivers
+        summary = $summary
+    }
+}
+
 function Get-BdSqliteStringList {
     param($Value)
 
@@ -240,6 +427,305 @@ function ConvertFrom-BdSqliteDelimitedList {
     return @($Value.Trim('|').Split('|') | Where-Object { $_ })
 }
 
+function Get-BdSqliteCompanyIdentityStopwords {
+    return @(
+        'and', 'the', 'of', 'for', 'to', 'in',
+        'inc', 'incorporated', 'corp', 'corporation', 'co', 'company',
+        'llc', 'ltd', 'limited', 'plc', 'lp', 'group', 'holdings', 'holding',
+        'services', 'service', 'solutions', 'solution', 'professional', 'professionals',
+        'global', 'international', 'systems', 'system', 'technologies', 'technology',
+        'consulting', 'consultants', 'partners', 'partner', 'staffing', 'recruiting',
+        'employment', 'canada', 'usa', 'us', 'north', 'america', 'formerly', 'former'
+    )
+}
+
+function Get-BdSqliteCompanyIdentityPhraseCandidates {
+    param(
+        [string]$DisplayName,
+        [string]$AliasesText = '',
+        [string]$CanonicalDomain = ''
+    )
+
+    $results = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $stopwords = @(Get-BdSqliteCompanyIdentityStopwords)
+
+    function Add-PhraseCandidate {
+        param(
+            [System.Collections.ArrayList]$List,
+            [hashtable]$Seen,
+            [string]$Value,
+            [string[]]$Stopwords
+        )
+
+        $normalized = Normalize-BdSqliteText ([string]$Value)
+        if (-not $normalized) {
+            return
+        }
+
+        if ($normalized.Length -lt 4 -or $normalized -match '^\d+$') {
+            return
+        }
+
+        $tokens = @($normalized -split ' ' | Where-Object { $_ })
+        if ($tokens.Count -eq 0) {
+            return
+        }
+
+        $firstToken = [string]$tokens[0]
+        if ($firstToken.Length -lt 4) {
+            return
+        }
+
+        if ($Stopwords -contains $normalized) {
+            return
+        }
+
+        $key = $normalized.ToLowerInvariant()
+        if ($Seen.ContainsKey($key)) {
+            return
+        }
+
+        $Seen[$key] = $true
+        [void]$List.Add($normalized)
+    }
+
+    Add-PhraseCandidate -List $results -Seen $seen -Value $DisplayName -Stopwords $stopwords
+
+    foreach ($alias in @(ConvertFrom-BdSqliteDelimitedList $AliasesText)) {
+        Add-PhraseCandidate -List $results -Seen $seen -Value ([string]$alias) -Stopwords $stopwords
+    }
+
+    $normalizedDisplayName = Normalize-BdSqliteText $DisplayName
+    if ($normalizedDisplayName) {
+        $trimmedDisplay = ($normalizedDisplayName -replace '\b(inc|incorporated|corp|corporation|co|company|llc|ltd|limited|group|holdings|holding|services|service|solutions|solution|professional|professionals|canada|formerly|former)\b', ' ')
+        $trimmedDisplay = ($trimmedDisplay -replace '\s+', ' ').Trim()
+        Add-PhraseCandidate -List $results -Seen $seen -Value $trimmedDisplay -Stopwords $stopwords
+    }
+
+    $domainName = Get-BdSqliteDomainHost -Value $CanonicalDomain
+    if ($domainName -and -not (Test-BdSqliteHostedAtsDomain -Value $domainName)) {
+        $hostParts = @($domainName.Split('.') | Where-Object { $_ })
+        if ($hostParts.Count -gt 0) {
+            $root = [string]$hostParts[0]
+            if ($root -in @('www', 'jobs', 'careers', 'boards', 'apply') -and $hostParts.Count -gt 1) {
+                $root = [string]$hostParts[1]
+            }
+            Add-PhraseCandidate -List $results -Seen $seen -Value $root -Stopwords $stopwords
+            Add-PhraseCandidate -List $results -Seen $seen -Value ($root -replace '-', ' ') -Stopwords $stopwords
+        }
+    }
+
+    return @(
+        $results.ToArray() |
+            Sort-Object @{ Expression = { ([string]$_).Length }; Descending = $true }, @{ Expression = { [string]$_ }; Descending = $false }
+    )
+}
+
+function Get-BdSqliteCandidateLeadingKeys {
+    param(
+        [string]$DisplayName,
+        [string]$NormalizedName,
+        [string]$AliasesText = ''
+    )
+
+    $keys = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $stopwords = @(Get-BdSqliteCompanyIdentityStopwords)
+
+    function Add-LeadingKey {
+        param(
+            [System.Collections.ArrayList]$List,
+            [hashtable]$Seen,
+            [string]$Value
+        )
+
+        $normalized = Normalize-BdSqliteText ([string]$Value)
+        if (-not $normalized) {
+            return
+        }
+
+        $tokens = @($normalized -split ' ' | Where-Object { $_ })
+        if ($tokens.Count -eq 0) {
+            return
+        }
+
+        $leading = [string]$tokens[0]
+        if ($leading.Length -lt 4) {
+            return
+        }
+
+        if ($stopwords -contains $leading) {
+            return
+        }
+
+        if ($Seen.ContainsKey($leading)) {
+            return
+        }
+
+        $Seen[$leading] = $true
+        [void]$List.Add($leading)
+    }
+
+    Add-LeadingKey -List $keys -Seen $seen -Value $NormalizedName
+    Add-LeadingKey -List $keys -Seen $seen -Value $DisplayName
+    foreach ($alias in @(ConvertFrom-BdSqliteDelimitedList $AliasesText)) {
+        Add-LeadingKey -List $keys -Seen $seen -Value ([string]$alias)
+    }
+
+    return @($keys.ToArray())
+}
+
+function Find-BdSqliteSiblingPropagationSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Candidate,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$SourceIndex
+    )
+
+    $candidateId = [string](Get-BdSqliteRecordValue -Record $Candidate -Name 'id' -Default '')
+    $candidateNormalizedName = Normalize-BdSqliteText ([string](Get-BdSqliteRecordValue -Record $Candidate -Name 'normalized_name' -Default (Get-BdSqliteRecordValue -Record $Candidate -Name 'display_name' -Default '')))
+    $candidateAliasesText = [string](Get-BdSqliteRecordValue -Record $Candidate -Name 'aliases_text' -Default '')
+    $candidateAliasValues = @(ConvertFrom-BdSqliteDelimitedList $candidateAliasesText | ForEach-Object { Normalize-BdSqliteText ([string]$_) } | Where-Object { $_ })
+    $candidateLeadingKeys = @(Get-BdSqliteCandidateLeadingKeys -DisplayName ([string](Get-BdSqliteRecordValue -Record $Candidate -Name 'display_name' -Default '')) -NormalizedName $candidateNormalizedName -AliasesText $candidateAliasesText)
+
+    $candidateSets = New-Object System.Collections.ArrayList
+    $seenDescriptorIds = @{}
+    foreach ($leadingKey in @($candidateLeadingKeys)) {
+        if (-not $leadingKey -or -not $SourceIndex.ContainsKey($leadingKey)) {
+            continue
+        }
+
+        foreach ($descriptor in @($SourceIndex[$leadingKey])) {
+            $descriptorId = [string](Get-BdSqliteRecordValue -Record $descriptor -Name 'id' -Default '')
+            if ($descriptorId -and $seenDescriptorIds.ContainsKey($descriptorId)) {
+                continue
+            }
+            if ($descriptorId) {
+                $seenDescriptorIds[$descriptorId] = $true
+            }
+            [void]$candidateSets.Add($descriptor)
+        }
+    }
+
+    if ($candidateSets.Count -eq 0) {
+        return $null
+    }
+
+    $best = $null
+    $bestScore = -1
+    foreach ($descriptor in @($candidateSets.ToArray())) {
+        if ($null -eq $descriptor) {
+            continue
+        }
+
+        if ([string]$descriptor.id -eq $candidateId) {
+            continue
+        }
+
+        $matchedPhrase = ''
+        foreach ($phrase in @($descriptor.matchPhrases)) {
+            if (-not $phrase) {
+                continue
+            }
+
+            if ($candidateNormalizedName -eq $phrase -or $candidateNormalizedName.StartsWith("$phrase ")) {
+                $matchedPhrase = $phrase
+                break
+            }
+
+            $aliasMatched = $false
+            foreach ($candidateAlias in @($candidateAliasValues)) {
+                if (-not $candidateAlias) {
+                    continue
+                }
+                if ($candidateAlias -eq $phrase -or $candidateAlias.StartsWith("$phrase ")) {
+                    $aliasMatched = $true
+                    break
+                }
+            }
+            if ($aliasMatched) {
+                $matchedPhrase = $phrase
+                break
+            }
+        }
+
+        if (-not $matchedPhrase) {
+            continue
+        }
+
+        $score = [int](ConvertTo-BdSqliteNumber $descriptor.trustScore) + ([string]$matchedPhrase).Length
+        if ($score -le $bestScore) {
+            continue
+        }
+
+        $bestScore = $score
+        $best = [ordered]@{
+            source = $descriptor
+            matchedPhrase = $matchedPhrase
+            score = $score
+        }
+    }
+
+    return $best
+}
+
+function Get-BdSqliteSiblingCompanySourceCacheStamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    $rows = @(Invoke-BdSqliteRows -Connection $Connection -Sql @"
+SELECT
+  COUNT(*) AS source_count,
+  COALESCE(MAX(NULLIF(last_enriched_at, '')), '') AS max_enriched_at,
+  COALESCE(MAX(NULLIF(last_verified_at, '')), '') AS max_verified_at,
+  COALESCE(SUM(LENGTH(COALESCE(canonical_domain, '')) + LENGTH(COALESCE(careers_url, '')) + LENGTH(COALESCE(aliases_text, ''))), 0) AS source_weight
+FROM companies
+WHERE (COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '')
+  AND COALESCE(NULLIF(enrichment_status, ''), '') IN ('manual', 'verified', 'enriched')
+  AND COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('high', 'medium');
+"@)
+    $row = if (@($rows).Count -gt 0) { $rows[0] } else { $null }
+    return ('companies|count={0}|enriched={1}|verified={2}|weight={3}' -f
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_count' -Default 0)),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_enriched_at' -Default ''),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_verified_at' -Default ''),
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_weight' -Default 0)))
+}
+
+function Get-BdSqliteSiblingConfigSourceCacheStamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Data.SQLite.SQLiteConnection]$Connection
+    )
+
+    $rows = @(Invoke-BdSqliteRows -Connection $Connection -Sql @"
+SELECT
+  COUNT(*) AS source_count,
+  COALESCE(MAX(NULLIF(last_checked_at, '')), '') AS max_checked_at,
+  COALESCE(MAX(NULLIF(last_resolution_attempt_at, '')), '') AS max_resolution_attempt_at,
+  COALESCE(SUM(
+      LENGTH(COALESCE(domain, '')) +
+      LENGTH(COALESCE(careers_url, '')) +
+      LENGTH(COALESCE(resolved_board_url, '')) +
+      LENGTH(COALESCE(board_id, '')) +
+      LENGTH(COALESCE(normalized_company_name, ''))
+  ), 0) AS source_weight
+FROM board_configs
+WHERE COALESCE(NULLIF(discovery_status, ''), '') IN ('mapped', 'discovered', 'verified')
+  AND COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('high', 'medium');
+"@)
+    $row = if (@($rows).Count -gt 0) { $rows[0] } else { $null }
+    return ('configs|count={0}|checked={1}|attempted={2}|weight={3}' -f
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_count' -Default 0)),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_checked_at' -Default ''),
+        [string](Get-BdSqliteRecordValue -Record $row -Name 'max_resolution_attempt_at' -Default ''),
+        [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $row -Name 'source_weight' -Default 0)))
+}
+
 function Get-BdSqliteSearchText {
     param([string[]]$Parts)
 
@@ -281,6 +767,11 @@ function Open-BdSqliteConnection {
         } finally {
             $command.Dispose()
         }
+    }
+
+    if (-not $script:SqliteSchemaInitialized) {
+        Initialize-BdSqliteSchema -Connection $connection
+        $script:SqliteSchemaInitialized = $true
     }
 
     return $connection
@@ -438,6 +929,407 @@ function Get-BdSqliteMetaValue {
     )
 
     return [string](Invoke-BdSqliteScalar -Connection $Connection -Sql 'SELECT value FROM meta WHERE [key] = @key;' -Parameters @{ key = $Key })
+}
+
+function Get-BdSqliteResolverProbeCacheRecords {
+    param(
+        [string[]]$Urls,
+        [switch]$IncludeExpired
+    )
+
+    $normalizedUrls = @($Urls | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($normalizedUrls.Count -eq 0) {
+        return @()
+    }
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+
+        $urlClause = New-BdSqliteInClauseParts -Prefix 'probeUrl' -Values $normalizedUrls
+        $parameters = @{}
+        foreach ($key in @($urlClause.parameters.Keys)) {
+            $parameters[$key] = $urlClause.parameters[$key]
+        }
+
+        $sql = "SELECT url, response_json, fetched_at, expires_at, last_accessed_at, hit_count FROM resolver_probe_cache WHERE url IN ($($urlClause.clause))"
+        if (-not $IncludeExpired) {
+            $sql += ' AND expires_at >= @now'
+            $parameters.now = (Get-Date).ToString('o')
+        }
+        $sql += ';'
+
+        $rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $sql -Parameters $parameters)
+        if ($rows.Count -gt 0) {
+            $hitClause = New-BdSqliteInClauseParts -Prefix 'hitUrl' -Values @($rows | ForEach-Object { [string]$_.url })
+            if ($hitClause.count -gt 0) {
+                $hitParameters = @{ accessedAt = (Get-Date).ToString('o') }
+                foreach ($key in @($hitClause.parameters.Keys)) {
+                    $hitParameters[$key] = $hitClause.parameters[$key]
+                }
+                Invoke-BdSqliteNonQuery -Connection $connection -Sql ("UPDATE resolver_probe_cache SET last_accessed_at = @accessedAt, hit_count = hit_count + 1 WHERE url IN ({0});" -f $hitClause.clause) -Parameters $hitParameters | Out-Null
+            }
+        }
+
+        $records = New-Object System.Collections.ArrayList
+        foreach ($row in @($rows)) {
+            $response = $null
+            try {
+                $response = ConvertFrom-BdSqliteJsonText ([string]$row.response_json)
+            } catch {
+                continue
+            }
+
+            [void]$records.Add([ordered]@{
+                    url = [string]$row.url
+                    response = $response
+                    fetchedAt = [string]$row.fetched_at
+                    expiresAt = [string]$row.expires_at
+                    lastAccessedAt = [string]$row.last_accessed_at
+                    hitCount = [int](ConvertTo-BdSqliteNumber $row.hit_count)
+                })
+        }
+
+        return @($records.ToArray())
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Save-BdSqliteResolverProbeCacheRecords {
+    param([object[]]$Records)
+
+    $entries = New-Object System.Collections.ArrayList
+    foreach ($record in @($Records)) {
+        $url = ([string]$(if ($record) { $record.url } else { '' })).Trim()
+        if (-not $url) {
+            continue
+        }
+
+        $response = if ($record) { $record.response } else { $null }
+        if ($null -eq $response) {
+            continue
+        }
+
+        $fetchedAt = [string]$(if ($record.fetchedAt) { $record.fetchedAt } else { (Get-Date).ToString('o') })
+        $expiresAt = [string]$(if ($record.expiresAt) { $record.expiresAt } else { (Get-Date).AddHours(6).ToString('o') })
+        [void]$entries.Add([ordered]@{
+                url = $url
+                responseJson = (ConvertTo-BdSqliteJsonText $response)
+                fetchedAt = $fetchedAt
+                expiresAt = $expiresAt
+            })
+    }
+
+    if ($entries.Count -eq 0) {
+        return 0
+    }
+
+    $connection = Open-BdSqliteConnection
+    $transaction = $connection.BeginTransaction()
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $savedCount = 0
+        foreach ($entry in @($entries.ToArray())) {
+            $savedCount += [int](Invoke-BdSqliteNonQuery -Connection $connection -Transaction $transaction -Sql @'
+INSERT INTO resolver_probe_cache(url, response_json, fetched_at, expires_at, last_accessed_at, hit_count)
+VALUES (@url, @responseJson, @fetchedAt, @expiresAt, @lastAccessedAt, 0)
+ON CONFLICT(url) DO UPDATE SET
+    response_json = excluded.response_json,
+    fetched_at = excluded.fetched_at,
+    expires_at = excluded.expires_at,
+    last_accessed_at = excluded.last_accessed_at
+'@ -Parameters @{
+                    url = [string]$entry.url
+                    responseJson = [string]$entry.responseJson
+                    fetchedAt = [string]$entry.fetchedAt
+                    expiresAt = [string]$entry.expiresAt
+                    lastAccessedAt = [string]$entry.fetchedAt
+                })
+        }
+
+        $transaction.Commit()
+        return $savedCount
+    } catch {
+        try { $transaction.Rollback() } catch {}
+        throw
+    } finally {
+        $transaction.Dispose()
+        $connection.Dispose()
+    }
+}
+
+function Clear-BdSqliteExpiredResolverProbeCache {
+    param([string]$Before = '')
+
+    $cutoff = if ($Before) { [string]$Before } else { (Get-Date).ToString('o') }
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        return [int](Invoke-BdSqliteNonQuery -Connection $connection -Sql 'DELETE FROM resolver_probe_cache WHERE expires_at < @cutoff;' -Parameters @{ cutoff = $cutoff })
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Get-BdSqliteResolverSearchCacheRecord {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CacheKey,
+        [switch]$IncludeExpired
+    )
+
+    $normalizedKey = ([string]$CacheKey).Trim()
+    if (-not $normalizedKey) {
+        return $null
+    }
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $parameters = @{ cacheKey = $normalizedKey }
+        $sql = 'SELECT cache_key, urls_json, fetched_at, expires_at, last_accessed_at, hit_count FROM resolver_search_cache WHERE cache_key = @cacheKey'
+        if (-not $IncludeExpired) {
+            $sql += ' AND expires_at >= @now'
+            $parameters.now = (Get-Date).ToString('o')
+        }
+        $sql += ' LIMIT 1;'
+
+        $row = @(Invoke-BdSqliteRows -Connection $connection -Sql $sql -Parameters $parameters | Select-Object -First 1)
+        if (-not $row) {
+            return $null
+        }
+
+        Invoke-BdSqliteNonQuery -Connection $connection -Sql 'UPDATE resolver_search_cache SET last_accessed_at = @accessedAt, hit_count = hit_count + 1 WHERE cache_key = @cacheKey;' -Parameters @{
+            cacheKey = $normalizedKey
+            accessedAt = (Get-Date).ToString('o')
+        } | Out-Null
+
+        return [ordered]@{
+            cacheKey = [string]$row.cache_key
+            urls = @(
+                if ([string]::IsNullOrWhiteSpace([string]$row.urls_json)) {
+                    @()
+                } else {
+                    $parsedUrls = ConvertFrom-BdSqliteJsonText ([string]$row.urls_json)
+                    if ($null -eq $parsedUrls) { @() } else { @($parsedUrls) }
+                }
+            )
+            fetchedAt = [string]$row.fetched_at
+            expiresAt = [string]$row.expires_at
+            lastAccessedAt = [string]$row.last_accessed_at
+            hitCount = [int](ConvertTo-BdSqliteNumber $row.hit_count)
+        }
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Save-BdSqliteResolverSearchCacheRecord {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CacheKey,
+        [string[]]$Urls = @(),
+        [string]$FetchedAt = '',
+        [string]$ExpiresAt = ''
+    )
+
+    $normalizedKey = ([string]$CacheKey).Trim()
+    if (-not $normalizedKey) {
+        return 0
+    }
+
+    $urlValues = @($Urls | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
+    $urlsJson = if ($urlValues.Count -eq 0) { '[]' } else { [string](ConvertTo-BdSqliteJsonText @($urlValues)) }
+    $fetchedValue = if ($FetchedAt) { [string]$FetchedAt } else { (Get-Date).ToString('o') }
+    $expiresValue = if ($ExpiresAt) { [string]$ExpiresAt } else { (Get-Date).AddHours(6).ToString('o') }
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        return [int](Invoke-BdSqliteNonQuery -Connection $connection -Sql @'
+INSERT INTO resolver_search_cache(cache_key, urls_json, fetched_at, expires_at, last_accessed_at, hit_count)
+VALUES (@cacheKey, @urlsJson, @fetchedAt, @expiresAt, @lastAccessedAt, 0)
+ON CONFLICT(cache_key) DO UPDATE SET
+    urls_json = excluded.urls_json,
+    fetched_at = excluded.fetched_at,
+    expires_at = excluded.expires_at,
+    last_accessed_at = excluded.last_accessed_at
+'@ -Parameters @{
+                cacheKey = $normalizedKey
+                urlsJson = $urlsJson
+                fetchedAt = $fetchedValue
+                expiresAt = $expiresValue
+                lastAccessedAt = $fetchedValue
+            })
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Clear-BdSqliteExpiredResolverSearchCache {
+    param([string]$Before = '')
+
+    $cutoff = if ($Before) { [string]$Before } else { (Get-Date).ToString('o') }
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        return [int](Invoke-BdSqliteNonQuery -Connection $connection -Sql 'DELETE FROM resolver_search_cache WHERE expires_at < @cutoff;' -Parameters @{ cutoff = $cutoff })
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Get-BdSqliteResolverSeedCooldownRecords {
+    param(
+        [string[]]$SeedKeys,
+        [switch]$IncludeExpired
+    )
+
+    $normalizedKeys = @($SeedKeys | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($normalizedKeys.Count -eq 0) {
+        return @()
+    }
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+
+        $seedClause = New-BdSqliteInClauseParts -Prefix 'seedKey' -Values $normalizedKeys
+        $parameters = @{}
+        foreach ($key in @($seedClause.parameters.Keys)) {
+            $parameters[$key] = $seedClause.parameters[$key]
+        }
+
+        $sql = "SELECT seed_key, reason_text, fetched_at, expires_at, last_accessed_at, hit_count FROM resolver_search_seed_cooldowns WHERE seed_key IN ($($seedClause.clause))"
+        if (-not $IncludeExpired) {
+            $sql += ' AND expires_at >= @now'
+            $parameters.now = (Get-Date).ToString('o')
+        }
+        $sql += ';'
+
+        $rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $sql -Parameters $parameters)
+        if ($rows.Count -gt 0) {
+            $hitClause = New-BdSqliteInClauseParts -Prefix 'hitSeedKey' -Values @($rows | ForEach-Object { [string]$_.seed_key })
+            if ($hitClause.count -gt 0) {
+                $hitParameters = @{ accessedAt = (Get-Date).ToString('o') }
+                foreach ($key in @($hitClause.parameters.Keys)) {
+                    $hitParameters[$key] = $hitClause.parameters[$key]
+                }
+                Invoke-BdSqliteNonQuery -Connection $connection -Sql ("UPDATE resolver_search_seed_cooldowns SET last_accessed_at = @accessedAt, hit_count = hit_count + 1 WHERE seed_key IN ({0});" -f $hitClause.clause) -Parameters $hitParameters | Out-Null
+            }
+        }
+
+        $records = New-Object System.Collections.ArrayList
+        foreach ($row in @($rows)) {
+            [void]$records.Add([ordered]@{
+                    seedKey = [string]$row.seed_key
+                    reason = [string]$row.reason_text
+                    fetchedAt = [string]$row.fetched_at
+                    expiresAt = [string]$row.expires_at
+                    lastAccessedAt = [string]$row.last_accessed_at
+                    hitCount = [int](ConvertTo-BdSqliteNumber $row.hit_count)
+                })
+        }
+
+        return @($records.ToArray())
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Save-BdSqliteResolverSeedCooldownRecords {
+    param([object[]]$Records)
+
+    $entries = New-Object System.Collections.ArrayList
+    foreach ($record in @($Records)) {
+        $seedKey = ([string]$(if ($record) { $record.seedKey } else { '' })).Trim()
+        if (-not $seedKey) {
+            continue
+        }
+
+        $fetchedAt = [string]$(if ($record.fetchedAt) { $record.fetchedAt } else { (Get-Date).ToString('o') })
+        $expiresAt = [string]$(if ($record.expiresAt) { $record.expiresAt } else { (Get-Date).AddHours(12).ToString('o') })
+        $reason = [string]$(if ($record.reason) { $record.reason } else { 'no_result' })
+        [void]$entries.Add([ordered]@{
+                seedKey = $seedKey
+                reason = $reason
+                fetchedAt = $fetchedAt
+                expiresAt = $expiresAt
+            })
+    }
+
+    if ($entries.Count -eq 0) {
+        return 0
+    }
+
+    $connection = Open-BdSqliteConnection
+    $transaction = $connection.BeginTransaction()
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $savedCount = 0
+        foreach ($entry in @($entries.ToArray())) {
+            $savedCount += [int](Invoke-BdSqliteNonQuery -Connection $connection -Transaction $transaction -Sql @'
+INSERT INTO resolver_search_seed_cooldowns(seed_key, reason_text, fetched_at, expires_at, last_accessed_at, hit_count)
+VALUES (@seedKey, @reason, @fetchedAt, @expiresAt, @lastAccessedAt, 0)
+ON CONFLICT(seed_key) DO UPDATE SET
+    reason_text = excluded.reason_text,
+    fetched_at = excluded.fetched_at,
+    expires_at = excluded.expires_at,
+    last_accessed_at = excluded.last_accessed_at
+'@ -Parameters @{
+                    seedKey = [string]$entry.seedKey
+                    reason = [string]$entry.reason
+                    fetchedAt = [string]$entry.fetchedAt
+                    expiresAt = [string]$entry.expiresAt
+                    lastAccessedAt = [string]$entry.fetchedAt
+                })
+        }
+
+        $transaction.Commit()
+        return $savedCount
+    } catch {
+        try { $transaction.Rollback() } catch {}
+        throw
+    } finally {
+        $transaction.Dispose()
+        $connection.Dispose()
+    }
+}
+
+function Remove-BdSqliteResolverSeedCooldownRecords {
+    param([string[]]$SeedKeys)
+
+    $normalizedKeys = @($SeedKeys | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($normalizedKeys.Count -eq 0) {
+        return 0
+    }
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $seedClause = New-BdSqliteInClauseParts -Prefix 'removeSeedKey' -Values $normalizedKeys
+        $parameters = @{}
+        foreach ($key in @($seedClause.parameters.Keys)) {
+            $parameters[$key] = $seedClause.parameters[$key]
+        }
+        return [int](Invoke-BdSqliteNonQuery -Connection $connection -Sql ("DELETE FROM resolver_search_seed_cooldowns WHERE seed_key IN ({0});" -f $seedClause.clause) -Parameters $parameters)
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Clear-BdSqliteExpiredResolverSeedCooldowns {
+    param([string]$Before = '')
+
+    $cutoff = if ($Before) { [string]$Before } else { (Get-Date).ToString('o') }
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        return [int](Invoke-BdSqliteNonQuery -Connection $connection -Sql 'DELETE FROM resolver_search_seed_cooldowns WHERE expires_at < @cutoff;' -Parameters @{ cutoff = $cutoff })
+    } finally {
+        $connection.Dispose()
+    }
 }
 
 function New-BdSqliteDataRevision {
@@ -887,6 +1779,10 @@ function Initialize-BdSqliteSchema {
         [System.Data.SQLite.SQLiteConnection]$Connection
     )
 
+    if ($script:SqliteSchemaInitialized) {
+        return
+    }
+
     $statements = @(
 @'
 CREATE TABLE IF NOT EXISTS meta (
@@ -930,12 +1826,23 @@ CREATE TABLE IF NOT EXISTS companies (
     talent_contact_count INTEGER,
     buyer_title_count INTEGER,
     target_score REAL,
+    target_score_explanation_json TEXT,
     daily_score REAL,
     follow_up_score REAL,
     job_count INTEGER,
     open_role_count INTEGER,
+    jobs_last_30_days INTEGER,
+    jobs_last_90_days INTEGER,
     new_role_count_7d INTEGER,
     stale_role_count_30d INTEGER,
+    avg_role_seniority_score REAL,
+    hiring_spike_ratio REAL,
+    external_recruiter_likelihood_score REAL,
+    company_growth_signal_score REAL,
+    company_growth_signal_summary TEXT,
+    engagement_score REAL,
+    engagement_summary TEXT,
+    hiring_velocity REAL,
     department_focus TEXT,
     department_focus_count INTEGER,
     department_concentration REAL,
@@ -948,6 +1855,11 @@ CREATE TABLE IF NOT EXISTS companies (
     stale_flag TEXT,
     next_action TEXT,
     next_action_at TEXT,
+    alert_priority_score REAL,
+    relationship_strength_score REAL,
+    sequence_status TEXT,
+    sequence_next_step TEXT,
+    sequence_next_step_at TEXT,
     recommended_action TEXT,
     outreach_draft TEXT,
     top_contact_name TEXT,
@@ -1095,6 +2007,36 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 );
 '@,
 @'
+CREATE TABLE IF NOT EXISTS resolver_probe_cache (
+    url TEXT PRIMARY KEY,
+    response_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0
+);
+'@,
+@'
+CREATE TABLE IF NOT EXISTS resolver_search_cache (
+    cache_key TEXT PRIMARY KEY,
+    urls_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0
+);
+'@,
+@'
+CREATE TABLE IF NOT EXISTS resolver_search_seed_cooldowns (
+    seed_key TEXT PRIMARY KEY,
+    reason_text TEXT,
+    fetched_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0
+);
+'@,
+@'
 CREATE TABLE IF NOT EXISTS resolver_coverage_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     captured_at TEXT NOT NULL,
@@ -1158,6 +2100,12 @@ CREATE TABLE IF NOT EXISTS enrichment_coverage_history (
             'CREATE INDEX IF NOT EXISTS idx_activities_company_occurred ON activities(normalized_company_name, occurred_at DESC);',
             'CREATE INDEX IF NOT EXISTS idx_background_jobs_status_queued ON background_jobs(status, queued_at ASC);',
             'CREATE INDEX IF NOT EXISTS idx_background_jobs_updated ON background_jobs(updated_at DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_probe_cache_expires ON resolver_probe_cache(expires_at);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_probe_cache_accessed ON resolver_probe_cache(last_accessed_at DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_search_cache_expires ON resolver_search_cache(expires_at);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_search_cache_accessed ON resolver_search_cache(last_accessed_at DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_seed_cooldown_expires ON resolver_search_seed_cooldowns(expires_at);',
+            'CREATE INDEX IF NOT EXISTS idx_resolver_seed_cooldown_accessed ON resolver_search_seed_cooldowns(last_accessed_at DESC);',
             'CREATE INDEX IF NOT EXISTS idx_resolver_coverage_captured ON resolver_coverage_history(captured_at DESC);',
             'CREATE INDEX IF NOT EXISTS idx_resolver_coverage_revision ON resolver_coverage_history(data_revision);',
             'CREATE INDEX IF NOT EXISTS idx_enrichment_coverage_captured ON enrichment_coverage_history(captured_at DESC);',
@@ -1181,7 +2129,23 @@ CREATE TABLE IF NOT EXISTS enrichment_coverage_history (
             @{ name = 'enrichment_attempted_urls_text'; definition = 'TEXT' },
             @{ name = 'last_enriched_at'; definition = 'TEXT' },
             @{ name = 'last_verified_at'; definition = 'TEXT' },
-            @{ name = 'next_enrichment_attempt_at'; definition = 'TEXT' }
+            @{ name = 'next_enrichment_attempt_at'; definition = 'TEXT' },
+            @{ name = 'jobs_last_30_days'; definition = 'INTEGER' },
+            @{ name = 'jobs_last_90_days'; definition = 'INTEGER' },
+            @{ name = 'avg_role_seniority_score'; definition = 'REAL' },
+            @{ name = 'hiring_spike_ratio'; definition = 'REAL' },
+            @{ name = 'external_recruiter_likelihood_score'; definition = 'REAL' },
+            @{ name = 'company_growth_signal_score'; definition = 'REAL' },
+            @{ name = 'company_growth_signal_summary'; definition = 'TEXT' },
+            @{ name = 'engagement_score'; definition = 'REAL' },
+            @{ name = 'engagement_summary'; definition = 'TEXT' },
+            @{ name = 'hiring_velocity'; definition = 'REAL' },
+            @{ name = 'target_score_explanation_json'; definition = 'TEXT' },
+            @{ name = 'alert_priority_score'; definition = 'REAL' },
+            @{ name = 'relationship_strength_score'; definition = 'REAL' },
+            @{ name = 'sequence_status'; definition = 'TEXT' },
+            @{ name = 'sequence_next_step'; definition = 'TEXT' },
+            @{ name = 'sequence_next_step_at'; definition = 'TEXT' }
         )) {
         if (Add-BdSqliteTableColumnIfMissing -Connection $Connection -TableName 'companies' -ColumnName ([string]$columnSpec.name) -Definition ([string]$columnSpec.definition)) {
             $companyColumnAdded = $true
@@ -1213,7 +2177,9 @@ CREATE TABLE IF NOT EXISTS enrichment_coverage_history (
     foreach ($statement in @(
             'CREATE INDEX IF NOT EXISTS idx_companies_canonical_domain ON companies(canonical_domain);',
             'CREATE INDEX IF NOT EXISTS idx_companies_enrichment_status ON companies(enrichment_status, enrichment_confidence);',
-            'CREATE INDEX IF NOT EXISTS idx_companies_next_enrichment ON companies(next_enrichment_attempt_at ASC, daily_score DESC);'
+            'CREATE INDEX IF NOT EXISTS idx_companies_next_enrichment ON companies(next_enrichment_attempt_at ASC, target_score DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_companies_target_velocity ON companies(target_score DESC, hiring_velocity DESC, engagement_score DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_companies_status_target ON companies(status, target_score DESC, hiring_velocity DESC);'
         )) {
         Invoke-BdSqliteNonQuery -Connection $Connection -Sql $statement | Out-Null
     }
@@ -1260,6 +2226,9 @@ CREATE TABLE IF NOT EXISTS enrichment_coverage_history (
     }
 
     foreach ($statement in @(
+            'CREATE INDEX IF NOT EXISTS idx_companies_alert_priority ON companies(alert_priority_score DESC, target_score DESC, hiring_velocity DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_companies_sequence_next ON companies(sequence_status, sequence_next_step_at ASC, target_score DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_companies_relationship_strength ON companies(relationship_strength_score DESC, target_score DESC, alert_priority_score DESC);',
             'CREATE INDEX IF NOT EXISTS idx_configs_confidence_review ON board_configs(confidence_band, review_status);',
             'CREATE INDEX IF NOT EXISTS idx_configs_next_attempt ON board_configs(next_resolution_attempt_at ASC);',
             'CREATE INDEX IF NOT EXISTS idx_configs_failure_reason ON board_configs(failure_reason);'
@@ -1267,7 +2236,8 @@ CREATE TABLE IF NOT EXISTS enrichment_coverage_history (
         Invoke-BdSqliteNonQuery -Connection $Connection -Sql $statement | Out-Null
     }
 
-    Set-BdSqliteMetaValue -Connection $Connection -Key 'schema_version' -Value '5'
+    Set-BdSqliteMetaValue -Connection $Connection -Key 'schema_version' -Value '6'
+    $script:SqliteSchemaInitialized = $true
 }
 
 function Test-BdSqliteHasData {
@@ -1322,12 +2292,23 @@ function ConvertTo-BdSqliteCompanyRow {
         talent_contact_count = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'talentContactCount'))
         buyer_title_count = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'buyerTitleCount'))
         target_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'targetScore'))
+        target_score_explanation_json = ConvertTo-BdSqliteJsonText (Get-BdSqliteRecordValue -Record $Record -Name 'targetScoreExplanation' -Default ([ordered]@{}))
         daily_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'dailyScore'))
         follow_up_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'followUpScore'))
         job_count = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'jobCount'))
         open_role_count = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'openRoleCount'))
+        jobs_last_30_days = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'jobsLast30Days'))
+        jobs_last_90_days = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'jobsLast90Days'))
         new_role_count_7d = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'newRoleCount7d'))
         stale_role_count_30d = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'staleRoleCount30d'))
+        avg_role_seniority_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'avgRoleSeniorityScore'))
+        hiring_spike_ratio = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'hiringSpikeRatio'))
+        external_recruiter_likelihood_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'externalRecruiterLikelihoodScore'))
+        company_growth_signal_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'companyGrowthSignalScore'))
+        company_growth_signal_summary = [string](Get-BdSqliteRecordValue -Record $Record -Name 'companyGrowthSignalSummary')
+        engagement_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'engagementScore'))
+        engagement_summary = [string](Get-BdSqliteRecordValue -Record $Record -Name 'engagementSummary')
+        hiring_velocity = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'hiringVelocity'))
         department_focus = [string](Get-BdSqliteRecordValue -Record $Record -Name 'departmentFocus')
         department_focus_count = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'departmentFocusCount'))
         department_concentration = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'departmentConcentration'))
@@ -1340,6 +2321,11 @@ function ConvertTo-BdSqliteCompanyRow {
         stale_flag = [string](Get-BdSqliteRecordValue -Record $Record -Name 'staleFlag')
         next_action = [string](Get-BdSqliteRecordValue -Record $Record -Name 'nextAction')
         next_action_at = ConvertTo-BdSqliteNullIfBlank (Get-BdSqliteRecordValue -Record $Record -Name 'nextActionAt')
+        alert_priority_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'alertPriorityScore'))
+        relationship_strength_score = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $Record -Name 'relationshipStrengthScore'))
+        sequence_status = [string](Get-BdSqliteRecordValue -Record (Get-BdSqliteRecordValue -Record $Record -Name 'sequenceState' -Default $null) -Name 'status')
+        sequence_next_step = [string](Get-BdSqliteRecordValue -Record (Get-BdSqliteRecordValue -Record $Record -Name 'sequenceState' -Default $null) -Name 'nextStep')
+        sequence_next_step_at = ConvertTo-BdSqliteNullIfBlank (Get-BdSqliteRecordValue -Record (Get-BdSqliteRecordValue -Record $Record -Name 'sequenceState' -Default $null) -Name 'nextStepAt')
         recommended_action = [string](Get-BdSqliteRecordValue -Record $Record -Name 'recommendedAction')
         outreach_draft = [string](Get-BdSqliteRecordValue -Record $Record -Name 'outreachDraft')
         top_contact_name = [string](Get-BdSqliteRecordValue -Record $Record -Name 'topContactName')
@@ -2281,11 +3267,18 @@ function Get-BdSqliteStoreSignature {
         return "$dbPath:missing"
     }
 
+    $fileStamp = Get-BdSqliteDatabaseFileStamp
+    if ($script:StoreSignatureCache -and $script:StoreSignatureFileStamp -eq $fileStamp) {
+        return $script:StoreSignatureCache
+    }
+
     $connection = Open-BdSqliteConnection
     try {
-        Initialize-BdSqliteSchema -Connection $connection
         $revision = Get-BdSqliteDataRevision -Connection $connection
-        return '{0}:{1}' -f $dbPath, $revision
+        $signature = '{0}:{1}' -f $dbPath, $revision
+        $script:StoreSignatureCache = $signature
+        $script:StoreSignatureFileStamp = $fileStamp
+        return $signature
     } finally {
         $connection.Dispose()
     }
@@ -2332,7 +3325,10 @@ function Get-BdSqliteSegment {
 }
 
 function Get-BdSqliteScopedStateForAccountIds {
-    param([string[]]$AccountIds)
+    param(
+        [string[]]$AccountIds,
+        [switch]$IncludeActivities
+    )
 
     $connection = Open-BdSqliteConnection
     try {
@@ -2372,6 +3368,11 @@ function Get-BdSqliteScopedStateForAccountIds {
         $contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM contacts WHERE {0} ORDER BY sort_order ASC;" -f $sharedWhere) -Parameters $sharedParams) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
         $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM jobs WHERE {0} ORDER BY sort_order ASC;" -f $sharedWhere) -Parameters $sharedParams) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
         $boardConfigs = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM board_configs WHERE {0} ORDER BY sort_order ASC;" -f $sharedWhere) -Parameters $sharedParams) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        $activities = if ($IncludeActivities) {
+            @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM activities WHERE {0} ORDER BY sort_order ASC;" -f $sharedWhere) -Parameters $sharedParams) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        } else {
+            @()
+        }
 
         return [ordered]@{
             workspace = $workspace
@@ -2380,7 +3381,7 @@ function Get-BdSqliteScopedStateForAccountIds {
             contacts = $contacts
             jobs = $jobs
             boardConfigs = $boardConfigs
-            activities = @()
+            activities = $activities
             importRuns = @()
         }
     } finally {
@@ -2450,6 +3451,48 @@ function Get-BdSqliteScopedStateForConfigIds {
     }
 }
 
+function Get-BdSqliteScopedStateForCompanyKeys {
+    param([string[]]$CompanyKeys)
+
+    $connection = Open-BdSqliteConnection
+    try {
+        $workspace = ConvertFrom-BdSqliteJsonText (Get-BdSqliteMetaValue -Connection $connection -Key 'workspace_json')
+        $settings = ConvertFrom-BdSqliteJsonText (Get-BdSqliteMetaValue -Connection $connection -Key 'settings_json')
+        $nameClause = New-BdSqliteInClauseParts -Prefix 'companyKey' -Values $CompanyKeys
+        if ($nameClause.count -eq 0) {
+            return [ordered]@{
+                workspace = $workspace
+                settings = $settings
+                companies = @()
+                contacts = @()
+                jobs = @()
+                boardConfigs = @()
+                activities = @()
+                importRuns = @()
+            }
+        }
+
+        $companies = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM companies WHERE normalized_name IN ({0}) ORDER BY sort_order ASC;" -f $nameClause.clause) -Parameters $nameClause.parameters) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        $contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM contacts WHERE normalized_company_name IN ({0}) ORDER BY sort_order ASC;" -f $nameClause.clause) -Parameters $nameClause.parameters) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM jobs WHERE normalized_company_name IN ({0}) ORDER BY sort_order ASC;" -f $nameClause.clause) -Parameters $nameClause.parameters) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        $boardConfigs = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM board_configs WHERE normalized_company_name IN ({0}) ORDER BY sort_order ASC;" -f $nameClause.clause) -Parameters $nameClause.parameters) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+        $activities = @((Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT data_json FROM activities WHERE normalized_company_name IN ({0}) ORDER BY sort_order ASC;" -f $nameClause.clause) -Parameters $nameClause.parameters) | ForEach-Object { ConvertFrom-BdSqliteJsonText $_.data_json })
+
+        return [ordered]@{
+            workspace = $workspace
+            settings = $settings
+            companies = $companies
+            contacts = $contacts
+            jobs = $jobs
+            boardConfigs = $boardConfigs
+            activities = $activities
+            importRuns = @()
+        }
+    } finally {
+        $connection.Dispose()
+    }
+}
+
 function Get-BdSqliteState {
     return [ordered]@{
         workspace = Get-BdSqliteSegment -Segment 'Workspace'
@@ -2510,15 +3553,111 @@ function ConvertFrom-BdSqliteIntBool {
     return ([int](ConvertTo-BdSqliteNumber $Value) -ne 0)
 }
 
+function Get-BdSqliteHostedAtsDomains {
+    return @(
+        'greenhouse.io',
+        'lever.co',
+        'jobvite.com',
+        'myworkdayjobs.com',
+        'workday.com',
+        'icims.com',
+        'taleo.net',
+        'successfactors.com',
+        'bamboohr.com',
+        'ashbyhq.com',
+        'rippling.com',
+        'breezy.hr',
+        'smartrecruiters.com',
+        'recruiterbox.com',
+        'pinpointhq.com',
+        'teamtailor.com',
+        'applytojob.com',
+        'recruitee.com',
+        'workable.com',
+        'jazz.co',
+        'comeet.com',
+        'hirebridge.com',
+        'silkroad.com',
+        'kenexa.com',
+        'careers.linkedin.com',
+        'indeed.com',
+        'glassdoor.com',
+        'ziprecruiter.com'
+    )
+}
+
+function Get-BdSqliteDomainHost {
+    param([string]$Value)
+
+    $candidate = ([string]$Value).Trim()
+    if (-not $candidate) {
+        return ''
+    }
+
+    $uri = $null
+    if (-not ($candidate -match '^[a-z]+://')) {
+        [void][Uri]::TryCreate("https://$candidate", [UriKind]::Absolute, [ref]$uri)
+    } else {
+        [void][Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri)
+    }
+
+    $host = if ($uri) { [string]$uri.Host } else { $candidate }
+    $host = $host.ToLowerInvariant()
+    if ($host.StartsWith('www.')) {
+        $host = $host.Substring(4)
+    }
+    return $host
+}
+
+function Test-BdSqliteHostedAtsDomain {
+    param([string]$Value)
+
+    $host = Get-BdSqliteDomainHost -Value $Value
+    if (-not $host) {
+        return $false
+    }
+
+    foreach ($suffix in @(Get-BdSqliteHostedAtsDomains)) {
+        if ($host -eq $suffix -or $host.EndsWith(".$suffix")) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Convert-BdSqliteCompanyRowToSummary {
     param($Row)
+
+    $targetScoreExplanation = ConvertTo-BdSqlitePlainObject (ConvertFrom-BdSqliteJsonText ([string]$Row.target_score_explanation_json))
+    $hasExplanation = $false
+    if ($targetScoreExplanation -is [System.Collections.IDictionary]) {
+        $hasExplanation = ($targetScoreExplanation.Count -gt 0)
+    } elseif ($null -ne $targetScoreExplanation) {
+        $hasExplanation = $true
+    }
+    if (-not $hasExplanation) {
+        $targetScoreExplanation = Get-BdSqliteFallbackTargetScoreExplanation -Row $Row
+    }
+
+    $rawDomain = [string]$Row.domain
+    if (Test-BdSqliteHostedAtsDomain -Value $rawDomain) {
+        $rawDomain = ''
+    }
+    $canonicalDomain = [string]$Row.canonical_domain
+    if (Test-BdSqliteHostedAtsDomain -Value $canonicalDomain) {
+        $canonicalDomain = ''
+    }
+    if (-not $canonicalDomain) {
+        $canonicalDomain = $rawDomain
+    }
 
     return [ordered]@{
         id = [string]$Row.id
         normalizedName = [string]$Row.normalized_name
         displayName = [string]$Row.display_name
-        domain = [string]$Row.domain
-        canonicalDomain = [string]$(if ($Row.canonical_domain) { $Row.canonical_domain } else { $Row.domain })
+        domain = $rawDomain
+        canonicalDomain = $canonicalDomain
         careersUrl = [string]$Row.careers_url
         linkedinCompanySlug = [string]$Row.linkedin_company_slug
         aliases = @(ConvertFrom-BdSqliteDelimitedList $Row.aliases_text)
@@ -2540,18 +3679,36 @@ function Convert-BdSqliteCompanyRowToSummary {
         nextActionAt = $Row.next_action_at
         dailyScore = [int](ConvertTo-BdSqliteNumber $Row.daily_score)
         targetScore = [int](ConvertTo-BdSqliteNumber $Row.target_score)
+        normalizedTargetScore = [int](ConvertTo-BdSqliteNumber $Row.target_score)
+        targetScoreExplanation = $targetScoreExplanation
         connectionCount = [int](ConvertTo-BdSqliteNumber $Row.connection_count)
         seniorContactCount = [int](ConvertTo-BdSqliteNumber $Row.senior_contact_count)
         talentContactCount = [int](ConvertTo-BdSqliteNumber $Row.talent_contact_count)
         jobCount = [int](ConvertTo-BdSqliteNumber $Row.job_count)
         openRoleCount = [int](ConvertTo-BdSqliteNumber $Row.open_role_count)
+        jobsLast30Days = [int](ConvertTo-BdSqliteNumber $Row.jobs_last_30_days)
+        jobsLast90Days = [int](ConvertTo-BdSqliteNumber $Row.jobs_last_90_days)
         newRoleCount7d = [int](ConvertTo-BdSqliteNumber $Row.new_role_count_7d)
         staleRoleCount30d = [int](ConvertTo-BdSqliteNumber $Row.stale_role_count_30d)
+        avgRoleSeniorityScore = [double](ConvertTo-BdSqliteNumber $Row.avg_role_seniority_score)
+        hiringSpikeRatio = [double](ConvertTo-BdSqliteNumber $Row.hiring_spike_ratio)
+        externalRecruiterLikelihoodScore = [double](ConvertTo-BdSqliteNumber $Row.external_recruiter_likelihood_score)
+        companyGrowthSignalScore = [double](ConvertTo-BdSqliteNumber $Row.company_growth_signal_score)
+        companyGrowthSignalSummary = [string]$Row.company_growth_signal_summary
+        engagementScore = [double](ConvertTo-BdSqliteNumber $Row.engagement_score)
+        engagementSummary = [string]$Row.engagement_summary
+        hiringVelocity = [double](ConvertTo-BdSqliteNumber $Row.hiring_velocity)
         departmentFocus = [string]$Row.department_focus
         networkStrength = [string]$Row.network_strength
         hiringStatus = [string]$Row.hiring_status
         lastJobPostedAt = $Row.last_job_posted_at
+        lastContactedAt = $Row.last_contacted_at
         followUpScore = [int](ConvertTo-BdSqliteNumber $Row.follow_up_score)
+        relationshipStrengthScore = [int](ConvertTo-BdSqliteNumber $Row.relationship_strength_score)
+        alertPriorityScore = [int](ConvertTo-BdSqliteNumber $Row.alert_priority_score)
+        sequenceStatus = [string]$Row.sequence_status
+        sequenceNextStep = [string]$Row.sequence_next_step
+        sequenceNextStepAt = $Row.sequence_next_step_at
         daysSinceContact = if ($null -eq $Row.days_since_contact) { $null } else { [int](ConvertTo-BdSqliteNumber $Row.days_since_contact) }
         staleFlag = [string]$Row.stale_flag
         recommendedAction = [string]$Row.recommended_action
@@ -2565,6 +3722,8 @@ function Convert-BdSqliteCompanyRowToSummary {
 function Convert-BdSqliteContactRowToSummary {
     param($Row)
 
+    $record = ConvertFrom-BdSqliteJsonText ([string]$Row.data_json)
+
     return [ordered]@{
         id = [string]$Row.id
         accountId = [string]$Row.account_id
@@ -2572,7 +3731,15 @@ function Convert-BdSqliteContactRowToSummary {
         fullName = [string]$Row.full_name
         title = [string]$Row.title
         linkedinUrl = [string]$Row.linkedin_url
+        email = [string](Get-BdSqliteRecordValue -Record $record -Name 'email' -Default '')
         connectedOn = $Row.connected_on
+        yearsConnected = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'yearsConnected' -Default 0))
+        companyOverlapCount = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'companyOverlapCount' -Default 0))
+        buyerFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'buyerFlag' -Default 0))
+        seniorFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'seniorFlag' -Default 0))
+        talentFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'talentFlag' -Default 0))
+        techFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'techFlag' -Default 0))
+        financeFlag = [bool](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $record -Name 'financeFlag' -Default 0))
         priorityScore = [int](ConvertTo-BdSqliteNumber $Row.priority_score)
         outreachStatus = [string]$Row.outreach_status
         notes = [string]$Row.notes
@@ -2768,8 +3935,14 @@ function Get-BdSqliteFilterOptionsInternal {
         statuses = @((Invoke-BdSqliteTimedStep -Name 'statusesMs' -TimingBag $TimingBag -Action {
                     Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT status AS value FROM companies WHERE status IS NOT NULL AND status <> '' ORDER BY status ASC;"
                 }) | ForEach-Object { [string]$_.value })
-        owners = @((Invoke-BdSqliteTimedStep -Name 'ownersMs' -TimingBag $TimingBag -Action {
-                    Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT owner AS value FROM companies WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner ASC;"
+        owners = @(
+                    @(try { (Get-OwnerRoster) | ForEach-Object { [string]$_.displayName } } catch { @() }) +
+                    @((Invoke-BdSqliteTimedStep -Name 'ownersMs' -TimingBag $TimingBag -Action {
+                        Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT owner AS value FROM companies WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner ASC;"
+                    }) | ForEach-Object { [string]$_.value }) | Select-Object -Unique
+                )
+        industries = @((Invoke-BdSqliteTimedStep -Name 'industriesMs' -TimingBag $TimingBag -Action {
+                    Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT industry AS value FROM companies WHERE industry IS NOT NULL AND industry <> '' ORDER BY industry ASC;"
                 }) | ForEach-Object { [string]$_.value })
         outreachStatuses = @((Invoke-BdSqliteTimedStep -Name 'outreachStatusesMs' -TimingBag $TimingBag -Action {
                     Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT DISTINCT outreach_status AS value FROM companies WHERE outreach_status IS NOT NULL AND outreach_status <> '' ORDER BY outreach_status ASC;"
@@ -2815,11 +3988,14 @@ function Find-BdSqliteAccounts {
         $hiringQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'hiring')
         $atsQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'ats')
         $minContactsQuery = Get-BdSqliteQueryValue -Query $Query -Name 'minContacts'
+        $minTargetScoreQuery = Get-BdSqliteQueryValue -Query $Query -Name 'minTargetScore'
         $priorityTierQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'priorityTier')
         $priorityQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'priority')
         $statusQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'status')
         $ownerQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'owner')
         $outreachStatusQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'outreachStatus')
+        $industryQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'industry')
+        $geographyQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'geography')
         $recencyDaysQuery = Get-BdSqliteQueryValue -Query $Query -Name 'recencyDays'
         $sortByQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'sortBy')
         $pageQuery = Get-BdSqliteQueryValue -Query $Query -Name 'page'
@@ -2839,6 +4015,10 @@ function Find-BdSqliteAccounts {
         if ($minContactsQuery) {
             [void]$whereClauses.Add('connection_count >= @minContacts')
             $parameters.minContacts = [int](ConvertTo-BdSqliteNumber $minContactsQuery)
+        }
+        if ($minTargetScoreQuery) {
+            [void]$whereClauses.Add('target_score >= @minTargetScore')
+            $parameters.minTargetScore = [double](ConvertTo-BdSqliteNumber $minTargetScoreQuery)
         }
         if ($priorityTierQuery) {
             [void]$whereClauses.Add('priority_tier = @priorityTier')
@@ -2860,22 +4040,91 @@ function Find-BdSqliteAccounts {
             [void]$whereClauses.Add('outreach_status = @outreachStatus')
             $parameters.outreachStatus = $outreachStatusQuery
         }
+        if ($industryQuery) {
+            [void]$whereClauses.Add('LOWER(COALESCE(industry, '''')) LIKE @industry')
+            $parameters.industry = '%' + $industryQuery.Trim().ToLowerInvariant() + '%'
+        }
+        if ($geographyQuery) {
+            Add-BdSqliteGeographyFilterClauses -WhereClauses $whereClauses -Parameters $parameters -Geography $geographyQuery
+        }
         if ($recencyDaysQuery) {
             [void]$whereClauses.Add('last_job_posted_at >= @recencyCutoff')
             $parameters.recencyCutoff = (Get-Date).AddDays(-1 * (ConvertTo-BdSqliteNumber $recencyDaysQuery)).ToString('o')
         }
 
         $orderBy = switch ($sortByQuery) {
-            'new_roles' { 'new_role_count_7d DESC, daily_score DESC, display_name ASC' }
-            'connections' { 'connection_count DESC, daily_score DESC, display_name ASC' }
-            'follow_up' { 'follow_up_score DESC, daily_score DESC, display_name ASC' }
-            'recent_jobs' { 'last_job_posted_at DESC, daily_score DESC, display_name ASC' }
-            default { 'daily_score DESC, job_count DESC, connection_count DESC, display_name ASC' }
+            'new_roles' { 'new_role_count_7d DESC, target_score DESC, hiring_velocity DESC, display_name ASC' }
+            'connections' { 'connection_count DESC, target_score DESC, hiring_velocity DESC, display_name ASC' }
+            'follow_up' { 'follow_up_score DESC, target_score DESC, hiring_velocity DESC, display_name ASC' }
+            'recent_jobs' { 'last_job_posted_at DESC, target_score DESC, hiring_velocity DESC, display_name ASC' }
+            default { 'target_score DESC, hiring_velocity DESC, engagement_score DESC, display_name ASC' }
         }
 
-        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'companies' -SelectColumns '*' -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy $orderBy -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
+        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'companies' -SelectColumns $script:CompanySummaryColumns -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy $orderBy -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
         $result.items = @($result.items | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
         return $result
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Get-BdSqliteTargetScoreBackfillWhereSql {
+    return @'
+COALESCE(target_score, 0) > 100
+   OR hiring_velocity IS NULL
+   OR jobs_last_30_days IS NULL
+   OR jobs_last_90_days IS NULL
+   OR avg_role_seniority_score IS NULL
+   OR hiring_spike_ratio IS NULL
+   OR external_recruiter_likelihood_score IS NULL
+   OR company_growth_signal_score IS NULL
+   OR engagement_score IS NULL
+   OR alert_priority_score IS NULL
+   OR relationship_strength_score IS NULL
+   OR COALESCE(sequence_status, '') = ''
+   OR INSTR(COALESCE(data_json, ''), '"pipelineState"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"connectionGraph"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"triggerAlerts"') = 0
+   OR INSTR(COALESCE(data_json, ''), '"sequenceState"') = 0
+   OR COALESCE(target_score_explanation_json, '') = ''
+'@
+}
+
+function Get-BdSqliteTargetScoreBackfillAccountIds {
+    param([int]$Limit = 250)
+
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $whereSql = Get-BdSqliteTargetScoreBackfillWhereSql
+        return @(
+            (Invoke-BdSqliteRows -Connection $connection -Sql @'
+SELECT id
+FROM companies
+WHERE
+@whereSql@
+ORDER BY COALESCE(target_score, 0) DESC, sort_order ASC
+LIMIT @limit;
+'@.Replace('@whereSql@', $whereSql) -Parameters @{ limit = $Limit }) |
+                ForEach-Object { [string]$_.id } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Get-BdSqliteTargetScoreBackfillCount {
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $whereSql = Get-BdSqliteTargetScoreBackfillWhereSql
+        return [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $connection -Sql @'
+SELECT COUNT(*)
+FROM companies
+WHERE
+@whereSql@;
+'@.Replace('@whereSql@', $whereSql)))
     } finally {
         $connection.Dispose()
     }
@@ -3037,14 +4286,40 @@ SELECT
     SUM(CASE WHEN COALESCE(NULLIF(review_status, ''), CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 'auto' ELSE 'pending' END) <> 'rejected' AND (CASE WHEN COALESCE(NULLIF(confidence_band, ''), '') <> '' THEN confidence_band WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 'high' ELSE 'unresolved' END) = 'unresolved' THEN 1 ELSE 0 END) AS unresolved_review_queue_count
 FROM board_configs;
 '@ | Select-Object -First 1)
+        $operationalSummary = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
+SELECT
+    COUNT(*) AS total_operational_companies,
+    SUM(CASE WHEN COALESCE(bc.has_resolved, 0) = 1 THEN 1 ELSE 0 END) AS resolved_operational_companies
+FROM companies c
+LEFT JOIN (
+    SELECT normalized_company_name, MAX(CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 1 ELSE 0 END) AS has_resolved
+    FROM board_configs
+    GROUP BY normalized_company_name
+) bc ON bc.normalized_company_name = c.normalized_name
+WHERE COALESCE(c.status, '') NOT IN ('client', 'paused')
+  AND (
+      COALESCE(c.target_score, 0) >= 25
+      OR COALESCE(c.connection_count, 0) >= 2
+      OR COALESCE(c.open_role_count, 0) > 0
+      OR COALESCE(c.hiring_velocity, 0) > 0
+      OR COALESCE(c.engagement_score, 0) > 0
+      OR COALESCE(c.alert_priority_score, 0) >= 20
+  );
+'@ | Select-Object -First 1)
         if (-not $summary) {
             $summary = [ordered]@{}
+        }
+        if (-not $operationalSummary) {
+            $operationalSummary = [ordered]@{}
         }
 
         $totalConfigs = [int](ConvertTo-BdSqliteNumber $summary.total_configs)
         $resolvedCount = [int](ConvertTo-BdSqliteNumber $summary.resolved_count)
         $unresolvedCount = [int][Math]::Max(0, $totalConfigs - $resolvedCount)
         $coveragePct = if ($totalConfigs -gt 0) { [double][Math]::Round(($resolvedCount / $totalConfigs) * 100, 1) } else { 0 }
+        $operationalTotal = [int](ConvertTo-BdSqliteNumber $operationalSummary.total_operational_companies)
+        $operationalResolved = [int](ConvertTo-BdSqliteNumber $operationalSummary.resolved_operational_companies)
+        $operationalCoveragePct = if ($operationalTotal -gt 0) { [double][Math]::Round(($operationalResolved / $operationalTotal) * 100, 1) } else { 0 }
 
         return [ordered]@{
             summary = [ordered]@{
@@ -3053,6 +4328,9 @@ FROM board_configs;
                 unresolvedCount = $unresolvedCount
                 activeCount = [int](ConvertTo-BdSqliteNumber $summary.active_count)
                 coveragePercent = $coveragePct
+                operationalTotalCompanies = $operationalTotal
+                operationalResolvedCount = $operationalResolved
+                operationalCoveragePercent = $operationalCoveragePct
                 mediumReviewQueueCount = [int](ConvertTo-BdSqliteNumber $summary.medium_review_queue_count)
                 unresolvedReviewQueueCount = [int](ConvertTo-BdSqliteNumber $summary.unresolved_review_queue_count)
             }
@@ -3139,6 +4417,7 @@ function Invoke-BdSqliteLocalEnrichmentPass {
     #>
     param(
         [int]$Limit = 2000,
+        [string]$AccountId = '',
         [switch]$ForceRefresh
     )
 
@@ -3149,6 +4428,13 @@ function Invoke-BdSqliteLocalEnrichmentPass {
         $now = (Get-Date).ToString('o')
         $highCooldown = (Get-Date).AddDays(30).ToString('o')
         $medCooldown  = (Get-Date).AddDays(3).ToString('o')
+        $targetedCompanyClause = ''
+        $targetedCompanyAliasClause = ''
+        if (-not [string]::IsNullOrWhiteSpace([string]$AccountId)) {
+            $escapedAccountId = [string]$AccountId.Replace("'", "''")
+            $targetedCompanyClause = "AND id = '$escapedAccountId'"
+            $targetedCompanyAliasClause = "AND co.id = '$escapedAccountId'"
+        }
 
         # ---------------------------------------------------------------
         # FREE-EMAIL exclusion list (shared with JobImport module)
@@ -3161,27 +4447,89 @@ function Invoke-BdSqliteLocalEnrichmentPass {
         $freeExclusion = ($freeEmailDomains | ForEach-Object { "'$_'" }) -join ','
 
         # Hosted ATS domains to exclude from canonical domain candidates
-        $hostedAtsDomains = @('greenhouse.io','lever.co','jobvite.com','myworkdayjobs.com',
-            'workday.com','icims.com','taleo.net','successfactors.com','bamboohr.com',
-            'ashbyhq.com','rippling.com','breezy.hr','smartrecruiters.com','recruiterbox.com',
-            'pinpointhq.com','teamtailor.com','applytojob.com','recruitee.com','workable.com',
-            'jazz.co','comeet.com','hirebridge.com','silkroad.com','kenexa.com',
-            'careers.linkedin.com','indeed.com','glassdoor.com','ziprecruiter.com')
+        $hostedAtsDomains = @(Get-BdSqliteHostedAtsDomains)
         $atsExclusion = ($hostedAtsDomains | ForEach-Object { "'$_'" }) -join ','
 
         $stats = [ordered]@{
+            hostedDomainCleared      = 0
             contactEmailDomainApplied = 0
             boardConfigDomainApplied  = 0
             boardConfigCareersApplied = 0
+            siblingPropagationApplied = 0
+            siblingPropagationCooldownApplied = 0
+            boardConfigSiblingApplied = 0
+            boardConfigSiblingCooldownApplied = 0
+            jobDomainApplied          = 0
             skippedAlreadyEnriched    = 0
             totalUpdated              = 0
+            timings                   = [ordered]@{}
         }
+
+        # ---------------------------------------------------------------
+        # PASS 0: Clear bad canonical domains that point at hosted ATS infra
+        # This prevents board hosts like boards-api.greenhouse.io from
+        # masquerading as the company's real domain on future enrichments.
+        # ---------------------------------------------------------------
+        $pass0Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $hostedCanonicalRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, canonical_domain
+FROM companies
+WHERE canonical_domain IS NOT NULL
+  AND canonical_domain <> ''
+  $targetedCompanyClause;
+"@)
+        $hostedCanonicalUpdates = @($hostedCanonicalRows | Where-Object { Test-BdSqliteHostedAtsDomain -Value ([string]$_.canonical_domain) })
+        if ($hostedCanonicalUpdates.Count -gt 0) {
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($row in $hostedCanonicalUpdates) {
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE companies
+SET canonical_domain = '',
+    enrichment_status = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN 'enriched'
+      ELSE 'missing_inputs'
+    END,
+    enrichment_confidence = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN enrichment_confidence
+      ELSE 'unresolved'
+    END,
+    enrichment_confidence_score = CASE
+      WHEN COALESCE(careers_url, '') <> '' THEN enrichment_confidence_score
+      ELSE 0
+    END,
+    enrichment_notes = 'Hosted ATS domain removed from canonical company identity',
+    enrichment_evidence = CASE
+      WHEN COALESCE(enrichment_evidence, '') = '' THEN 'Hosted ATS domain cleared from canonical identity'
+      ELSE enrichment_evidence || '; Hosted ATS domain cleared from canonical identity'
+    END,
+    last_enriched_at = @now,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id;
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$row.id; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.hostedDomainCleared += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+        }
+        $pass0Stopwatch.Stop()
+        $stats.timings.pass0HostedDomainMs = [int]$pass0Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 1: Derive canonical_domain from corporate contact emails
         # Finds the most common non-free, non-ATS email domain per company
         # and sets it as canonical_domain for any company with no domain yet.
         # ---------------------------------------------------------------
+        $pass1Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass1Sql = @"
 SELECT co.id, co.display_name,
        LOWER(SUBSTR(ct.email, INSTR(ct.email,'@')+1)) AS email_domain,
@@ -3193,6 +4541,7 @@ WHERE ct.email LIKE '%@%.%'
   AND LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1)) NOT IN ($atsExclusion)
   AND LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1)) NOT LIKE '%.edu'
   AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
+  $targetedCompanyAliasClause
   $(if (-not $ForceRefresh) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
 GROUP BY co.id, LOWER(SUBSTR(ct.email,INSTR(ct.email,'@')+1))
 ORDER BY co.id, domain_count DESC
@@ -3241,12 +4590,15 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass1Stopwatch.Stop()
+        $stats.timings.pass1ContactDomainMs = [int]$pass1Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 2: Derive canonical_domain from board_configs.domain
         # Uses the company's best-confidence config domain where it's not
         # a hosted ATS and no canonical_domain is set yet.
         # ---------------------------------------------------------------
+        $pass2Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass2Sql = @"
 SELECT co.id, co.display_name, bc.domain,
        MAX(CASE bc.confidence_band WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) AS conf_rank
@@ -3255,12 +4607,16 @@ JOIN board_configs bc ON bc.normalized_company_name = co.normalized_name
 WHERE bc.domain IS NOT NULL AND bc.domain != ''
   AND LOWER(bc.domain) NOT IN ($atsExclusion)
   AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
+  $targetedCompanyAliasClause
   $(if (-not $ForceRefresh) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
 GROUP BY co.id
 ORDER BY conf_rank DESC
 LIMIT $Limit;
 "@
-        $pass2Rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $pass2Sql)
+        $pass2Rows = @(
+            (Invoke-BdSqliteRows -Connection $connection -Sql $pass2Sql) |
+                Where-Object { -not (Test-BdSqliteHostedAtsDomain -Value ([string]$_.domain)) }
+        )
         if ($pass2Rows.Count -gt 0) {
             $txn = $connection.BeginTransaction()
             try {
@@ -3293,11 +4649,14 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass2Stopwatch.Stop()
+        $stats.timings.pass2BoardDomainMs = [int]$pass2Stopwatch.ElapsedMilliseconds
 
         # ---------------------------------------------------------------
         # PASS 3: Derive careers_url from board_configs.careers_url or
         # resolved_board_url where the company has no careers_url yet.
         # ---------------------------------------------------------------
+        $pass3Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $pass3Sql = @"
 SELECT co.id, co.display_name,
        COALESCE(NULLIF(bc.careers_url,''), bc.resolved_board_url) AS best_careers_url,
@@ -3306,6 +4665,7 @@ FROM companies co
 JOIN board_configs bc ON bc.normalized_company_name = co.normalized_name
 WHERE (bc.careers_url IS NOT NULL AND bc.careers_url != '' OR bc.resolved_board_url IS NOT NULL AND bc.resolved_board_url != '')
   AND (co.careers_url IS NULL OR co.careers_url = '')
+  $targetedCompanyAliasClause
 GROUP BY co.id
 ORDER BY conf_rank DESC
 LIMIT $Limit;
@@ -3343,8 +4703,645 @@ WHERE id = @id
                 throw
             } finally { $txn.Dispose() }
         }
+        $pass3Stopwatch.Stop()
+        $stats.timings.pass3BoardCareersMs = [int]$pass3Stopwatch.ElapsedMilliseconds
 
-        $stats.totalUpdated = $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied
+        # ---------------------------------------------------------------
+        # PASS 4: Derive canonical_domain from job URLs (internal source mining)
+        # ---------------------------------------------------------------
+        $pass4Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $pass4Sql = @"
+SELECT co.id, co.display_name,
+       LOWER(SUBSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), 1, CASE WHEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') > 0 THEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') - 1 ELSE LENGTH(SUBSTR(j.url, INSTR(j.url, '//') + 2)) END)) AS raw_domain,
+       COUNT(*) AS job_count
+FROM companies co
+JOIN jobs j ON j.account_id = co.id
+WHERE (j.url LIKE 'http://%' OR j.url LIKE 'https://%')
+  AND (co.canonical_domain IS NULL OR co.canonical_domain = '')
+  $targetedCompanyAliasClause
+GROUP BY co.id, LOWER(SUBSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), 1, CASE WHEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') > 0 THEN INSTR(SUBSTR(j.url, INSTR(j.url, '//') + 2), '/') - 1 ELSE LENGTH(SUBSTR(j.url, INSTR(j.url, '//') + 2)) END))
+ORDER BY co.id, job_count DESC
+LIMIT $Limit;
+"@
+        $pass4Rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $pass4Sql)
+        $seenPass4Ids = @{}
+        $jobDomainUpdates = [System.Collections.ArrayList]::new()
+        foreach ($row in $pass4Rows) {
+            $id = [string]$row.id
+            if ($seenPass4Ids.ContainsKey($id)) { continue }
+            $rawDomain = [string]$row.raw_domain
+            if ($rawDomain.StartsWith('www.')) { $rawDomain = $rawDomain.Substring(4) }
+            if (-not $rawDomain -or (Test-BdSqliteHostedAtsDomain -Value $rawDomain) -or $freeExclusion.Contains("'$rawDomain'")) { continue }
+            $seenPass4Ids[$id] = $true
+            [void]$jobDomainUpdates.Add([ordered]@{ id = $id; domain = $rawDomain })
+        }
+
+        if ($jobDomainUpdates.Count -gt 0) {
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($upd in $jobDomainUpdates) {
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE companies
+SET canonical_domain = @domain,
+    enrichment_status = CASE WHEN enrichment_status IS NULL OR enrichment_status = '' THEN 'enriched' ELSE enrichment_status END,
+    enrichment_source = CASE WHEN enrichment_source IS NULL OR enrichment_source = '' THEN 'job_url' ELSE enrichment_source END,
+    enrichment_confidence = CASE WHEN enrichment_confidence IS NULL OR enrichment_confidence = '' THEN 'medium' ELSE enrichment_confidence END,
+    enrichment_evidence = CASE WHEN enrichment_evidence IS NULL OR enrichment_evidence = '' THEN 'Canonical domain derived from job posting URL' ELSE enrichment_evidence || '; Canonical domain derived from job posting URL' END,
+    last_enriched_at = @now,
+    next_enrichment_attempt_at = CASE WHEN next_enrichment_attempt_at IS NULL OR next_enrichment_attempt_at = '' THEN @cooldown ELSE next_enrichment_attempt_at END
+WHERE id = @id
+  AND (canonical_domain IS NULL OR canonical_domain = '');
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@domain';   $p.Value = $upd.domain;   [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now';      $p.Value = $now;             [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown;     [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id';       $p.Value = $upd.id;       [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.jobDomainApplied += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+        }
+        $pass4Stopwatch.Stop()
+        $stats.timings.pass4JobDomainMs = [int]$pass4Stopwatch.ElapsedMilliseconds
+
+        # ---------------------------------------------------------------
+        # PASS 5: Propagate trusted company identity to safe sibling variants.
+        # Reuses verified/high-confidence canonical domains and careers URLs
+        # when another company record starts with the same trusted brand phrase
+        # (e.g. "Modis" -> "Modis Canada"), without broad web probing.
+        # ---------------------------------------------------------------
+        $pass5Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $pass5SourceStamp = Get-BdSqliteSiblingCompanySourceCacheStamp -Connection $connection
+        $sourceRows = @()
+        $sourceIndex = @{}
+        $sourceLeadingKeys = @()
+        $pass5SourceCount = 0
+        if ($script:SiblingCompanySourceIndexCache -and $script:SiblingCompanySourceIndexStamp -eq $pass5SourceStamp) {
+            $sourceIndex = $script:SiblingCompanySourceIndexCache.sourceIndex
+            $sourceLeadingKeys = $script:SiblingCompanySourceIndexCache.sourceLeadingKeys
+            $pass5SourceCount = [int](ConvertTo-BdSqliteNumber $script:SiblingCompanySourceIndexCache.sourceCount)
+            $stats.timings.pass5SourceIndexCacheHit = $true
+            $stats.timings.pass5SourceLoadMs = 0
+            $stats.timings.pass5SourceIndexBuildMs = 0
+        } else {
+            $pass5SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, enrichment_confidence, enrichment_confidence_score, aliases_text
+FROM companies
+WHERE (COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '')
+  AND COALESCE(NULLIF(enrichment_status, ''), '') IN ('manual', 'verified', 'enriched')
+  AND COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('high', 'medium')
+ORDER BY
+  CASE COALESCE(NULLIF(enrichment_status, ''), '')
+    WHEN 'manual' THEN 4
+    WHEN 'verified' THEN 3
+    WHEN 'enriched' THEN 2
+    ELSE 1
+  END DESC,
+  COALESCE(enrichment_confidence_score, 0) DESC,
+  display_name ASC;
+"@)
+            $pass5SourceLoadStopwatch.Stop()
+            $pass5SourceBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceIndex = @{}
+            foreach ($row in @($sourceRows)) {
+            $canonicalDomain = [string]$row.canonical_domain
+            $careersUrl = [string]$row.careers_url
+            if (-not $canonicalDomain -and -not $careersUrl) {
+                continue
+            }
+
+            $matchPhrases = @(Get-BdSqliteCompanyIdentityPhraseCandidates -DisplayName ([string]$row.display_name) -AliasesText ([string]$row.aliases_text) -CanonicalDomain $canonicalDomain)
+            if ($matchPhrases.Count -eq 0) {
+                continue
+            }
+
+            $trustScore = switch ([string]$row.enrichment_status) {
+                'manual' { 96 }
+                'verified' { 92 }
+                default { 82 }
+            }
+            $trustScore += [int](ConvertTo-BdSqliteNumber $row.enrichment_confidence_score)
+            if ($trustScore -gt 100) {
+                $trustScore = 100
+            }
+
+            $descriptor = [ordered]@{
+                id = [string]$row.id
+                displayName = [string]$row.display_name
+                normalizedName = [string]$row.normalized_name
+                canonicalDomain = $canonicalDomain
+                careersUrl = $careersUrl
+                matchPhrases = $matchPhrases
+                trustScore = $trustScore
+            }
+
+            foreach ($phrase in @($matchPhrases)) {
+                $phraseTokens = @(([string]$phrase) -split ' ' | Where-Object { $_ })
+                if ($phraseTokens.Count -eq 0) {
+                    continue
+                }
+                $leadingKey = [string]$phraseTokens[0]
+                if ($leadingKey.Length -lt 4) {
+                    continue
+                }
+                if (-not $sourceIndex.ContainsKey($leadingKey)) {
+                    $sourceIndex[$leadingKey] = New-Object System.Collections.ArrayList
+                }
+                [void]$sourceIndex[$leadingKey].Add($descriptor)
+            }
+        }
+            $sourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $pass5SourceBuildStopwatch.Stop()
+            $pass5SourceCount = @($sourceRows).Count
+            $script:SiblingCompanySourceIndexCache = [ordered]@{
+                sourceIndex = $sourceIndex
+                sourceLeadingKeys = $sourceLeadingKeys
+                sourceCount = $pass5SourceCount
+            }
+            $script:SiblingCompanySourceIndexStamp = $pass5SourceStamp
+            $stats.timings.pass5SourceIndexCacheHit = $false
+            $stats.timings.pass5SourceLoadMs = [int]$pass5SourceLoadStopwatch.ElapsedMilliseconds
+            $stats.timings.pass5SourceIndexBuildMs = [int]$pass5SourceBuildStopwatch.ElapsedMilliseconds
+        }
+        $sourceLeadingKeysSql = if ($sourceLeadingKeys.Count -gt 0) {
+            [string]::Join(',', @($sourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
+        } else {
+            ''
+        }
+        $pass5CandidateLeadingKeyClause = if ($sourceLeadingKeysSql) {
+@"
+  AND LOWER(
+        CASE
+          WHEN INSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), ' ') > 0
+            THEN SUBSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), 1, INSTR(COALESCE(NULLIF(co.normalized_name, ''), co.display_name), ' ') - 1)
+          ELSE COALESCE(NULLIF(co.normalized_name, ''), co.display_name)
+        END
+      ) IN ($sourceLeadingKeysSql)
+"@
+        } else {
+            ''
+        }
+        $pass5CandidateLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $candidateRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT id, display_name, normalized_name, canonical_domain, careers_url, enrichment_status, aliases_text
+FROM companies co
+WHERE (COALESCE(NULLIF(co.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(co.careers_url, ''), '') = '')
+  AND COALESCE(NULLIF(co.enrichment_status, ''), '') NOT IN ('manual', 'verified')
+  $targetedCompanyAliasClause
+  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (co.next_enrichment_attempt_at IS NULL OR co.next_enrichment_attempt_at = '' OR co.next_enrichment_attempt_at <= '$now')" } else { '' })
+  $pass5CandidateLeadingKeyClause
+ORDER BY
+  CASE WHEN COALESCE(NULLIF(co.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(co.careers_url, ''), '') = '' THEN 1 ELSE 2 END,
+  COALESCE(co.target_score, 0) DESC,
+  COALESCE(co.connection_count, 0) DESC,
+  co.display_name ASC
+LIMIT $Limit;
+"@)
+        $pass5CandidateLoadStopwatch.Stop()
+
+        if ($candidateRows.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $pass5MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $pass5UnmatchedCandidateIds = New-Object System.Collections.ArrayList
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($candidateRow in @($candidateRows)) {
+                    $candidateDomain = [string]$candidateRow.canonical_domain
+                    $candidateCareersUrl = [string]$candidateRow.careers_url
+                    if ($candidateDomain -and $candidateCareersUrl) {
+                        continue
+                    }
+
+                    $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateRow -SourceIndex $sourceIndex
+                    if ($null -eq $match) {
+                        [void]$pass5UnmatchedCandidateIds.Add([string]$candidateRow.id)
+                        continue
+                    }
+
+                    $source = Get-BdSqliteRecordValue -Record $match -Name 'source' -Default $null
+                    if ($null -eq $source) {
+                        continue
+                    }
+
+                    $newDomain = if ($candidateDomain) { $candidateDomain } else { [string](Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '') }
+                    $newCareersUrl = if ($candidateCareersUrl) { $candidateCareersUrl } else { [string](Get-BdSqliteRecordValue -Record $source -Name 'careersUrl' -Default '') }
+                    if (-not $newDomain -and -not $newCareersUrl) {
+                        continue
+                    }
+
+                    $existingAliases = @(ConvertFrom-BdSqliteDelimitedList ([string](Get-BdSqliteRecordValue -Record $candidateRow -Name 'aliases_text' -Default '')))
+                    $mergedAliases = @($existingAliases + @(
+                            [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default ''),
+                            [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default ''),
+                            [string](Get-BdSqliteDomainHost -Value ([string](Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '')))
+                        ) | Where-Object { $_ })
+                    $aliasesText = ConvertTo-BdSqliteDelimitedList $mergedAliases
+
+                    $evidence = ("Sibling identity propagated from {0} via brand phrase '{1}'" -f [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default 'related company'), [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default ''))
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE companies
+SET canonical_domain = CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' THEN @domain ELSE canonical_domain END,
+    careers_url = CASE WHEN COALESCE(NULLIF(careers_url, ''), '') = '' THEN @careersUrl ELSE careers_url END,
+    aliases_text = CASE WHEN @aliasesText <> '' THEN @aliasesText ELSE aliases_text END,
+    enrichment_status = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '' AND COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '' THEN 'enriched'
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '' THEN 'enriched'
+      WHEN COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '' THEN 'enriched'
+      ELSE enrichment_status
+    END,
+    enrichment_source = CASE
+      WHEN (COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '') OR (COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> '')
+        THEN 'sibling_propagation'
+      ELSE enrichment_source
+    END,
+    enrichment_confidence = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 'medium'
+      ELSE enrichment_confidence
+    END,
+    enrichment_confidence_score = CASE
+      WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 74
+      ELSE enrichment_confidence_score
+    END,
+    enrichment_notes = CASE
+      WHEN COALESCE(NULLIF(enrichment_notes, ''), '') = '' THEN 'Identity propagated from verified sibling company variant'
+      ELSE enrichment_notes
+    END,
+    enrichment_evidence = CASE
+      WHEN COALESCE(NULLIF(enrichment_evidence, ''), '') = '' THEN @evidence
+      ELSE enrichment_evidence || '; ' || @evidence
+    END,
+    last_enriched_at = @now,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id
+  AND ((COALESCE(NULLIF(canonical_domain, ''), '') = '' AND @domain <> '') OR (COALESCE(NULLIF(careers_url, ''), '') = '' AND @careersUrl <> ''));
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@domain'; $p.Value = [string]$newDomain; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@careersUrl'; $p.Value = [string]$newCareersUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@aliasesText'; $p.Value = [string]$aliasesText; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@evidence'; $p.Value = [string]$evidence; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateRow.id; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.siblingPropagationApplied += $affected
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+            $pass5MatchStopwatch.Stop()
+            $stats.timings.pass5MatchUpdateMs = [int]$pass5MatchStopwatch.ElapsedMilliseconds
+            $stats.timings.pass5UnmatchedCandidateCount = @($pass5UnmatchedCandidateIds).Count
+
+            if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId) -and @($pass5UnmatchedCandidateIds).Count -gt 0) {
+                $pass5CooldownStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $pass5CooldownTxn = $connection.BeginTransaction()
+                try {
+                    foreach ($candidateCompanyId in @($pass5UnmatchedCandidateIds | Select-Object -Unique)) {
+                        if ([string]::IsNullOrWhiteSpace([string]$candidateCompanyId)) {
+                            continue
+                        }
+                        $cmd = $connection.CreateCommand()
+                        $cmd.Transaction = $pass5CooldownTxn
+                        $cmd.CommandText = @"
+UPDATE companies
+SET last_enriched_at = CASE WHEN COALESCE(NULLIF(last_enriched_at, ''), '') = '' THEN @now ELSE last_enriched_at END,
+    next_enrichment_attempt_at = @cooldown
+WHERE id = @id
+  AND COALESCE(NULLIF(enrichment_source, ''), '') <> 'sibling_propagation'
+  AND (next_enrichment_attempt_at IS NULL OR next_enrichment_attempt_at = '' OR next_enrichment_attempt_at <= @now);
+"@
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateCompanyId; [void]$cmd.Parameters.Add($p)
+                        $affected = $cmd.ExecuteNonQuery()
+                        $stats.siblingPropagationCooldownApplied += $affected
+                    }
+                    $pass5CooldownTxn.Commit()
+                } catch {
+                    try { $pass5CooldownTxn.Rollback() } catch {}
+                    throw
+                } finally { $pass5CooldownTxn.Dispose() }
+                $pass5CooldownStopwatch.Stop()
+                $stats.timings.pass5CooldownMs = [int]$pass5CooldownStopwatch.ElapsedMilliseconds
+            } else {
+                $stats.timings.pass5CooldownMs = 0
+            }
+        } else {
+            $stats.timings.pass5MatchUpdateMs = 0
+            $stats.timings.pass5UnmatchedCandidateCount = 0
+            $stats.timings.pass5CooldownMs = 0
+        }
+        $pass5Stopwatch.Stop()
+        $stats.timings.pass5CandidateLoadMs = [int]$pass5CandidateLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass5SourceCount = $pass5SourceCount
+        $stats.timings.pass5CandidateCount = @($candidateRows).Count
+        $stats.timings.pass5SourceLeadingKeyCount = @($sourceLeadingKeys).Count
+        $stats.timings.pass5SiblingPropagationMs = [int]$pass5Stopwatch.ElapsedMilliseconds
+
+        # ---------------------------------------------------------------
+        # PASS 6: Propagate resolved board config identity to sibling variants.
+        # This converts a trusted sibling company match into a config-level
+        # board candidate so coverage improves even before deep web discovery.
+        # ---------------------------------------------------------------
+        $pass6Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $sourceConfigMap = @{}
+        $sourceIndex = @{}
+        $sourceConfigRows = @()
+        $pass6SourceLeadingKeys = @()
+        $pass6SourceCount = 0
+        $pass6SourceStamp = Get-BdSqliteSiblingConfigSourceCacheStamp -Connection $connection
+        if ($script:SiblingConfigSourceIndexCache -and $script:SiblingConfigSourceIndexStamp -eq $pass6SourceStamp) {
+            $sourceConfigMap = $script:SiblingConfigSourceIndexCache.sourceConfigMap
+            $sourceIndex = $script:SiblingConfigSourceIndexCache.sourceIndex
+            $pass6SourceLeadingKeys = $script:SiblingConfigSourceIndexCache.sourceLeadingKeys
+            $pass6SourceCount = [int](ConvertTo-BdSqliteNumber $script:SiblingConfigSourceIndexCache.sourceCount)
+            $stats.timings.pass6SourceIndexCacheHit = $true
+            $stats.timings.pass6SourceLoadMs = 0
+            $stats.timings.pass6SourceIndexBuildMs = 0
+        } else {
+            $pass6SourceLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $sourceConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT bc.id, bc.normalized_company_name, bc.ats_type, bc.board_id, bc.domain, bc.careers_url, bc.resolved_board_url,
+       bc.discovery_status, bc.confidence_band, bc.discovery_method, bc.supported_import, bc.active
+FROM board_configs bc
+WHERE COALESCE(NULLIF(bc.discovery_status, ''), '') IN ('mapped', 'discovered', 'verified')
+  AND COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') IN ('high', 'medium')
+ORDER BY
+  CASE COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved')
+    WHEN 'high' THEN 3
+    WHEN 'medium' THEN 2
+    ELSE 1
+  END DESC,
+  bc.company_name ASC;
+"@)
+            $pass6SourceLoadStopwatch.Stop()
+            $pass6SourceBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            $normalizedCompanyName = [string]$sourceConfigRow.normalized_company_name
+            if (-not $normalizedCompanyName -or $sourceConfigMap.ContainsKey($normalizedCompanyName)) {
+                continue
+            }
+            $sourceConfigMap[$normalizedCompanyName] = $sourceConfigRow
+        }
+            foreach ($sourceConfigRow in @($sourceConfigRows)) {
+            $sourceNormalizedName = [string]$sourceConfigRow.normalized_company_name
+            if (-not $sourceNormalizedName) {
+                continue
+            }
+
+            $sourceDisplayName = [string](Get-BdSqliteRecordValue -Record $sourceConfigRow -Name 'company_name' -Default $sourceNormalizedName)
+            $sourceCareersUrl = [string]$(if ($sourceConfigRow.careers_url) { $sourceConfigRow.careers_url } else { $sourceConfigRow.resolved_board_url })
+            $matchPhrases = @(Get-BdSqliteCompanyIdentityPhraseCandidates -DisplayName $sourceDisplayName -AliasesText '' -CanonicalDomain ([string]$sourceConfigRow.domain))
+            if ($matchPhrases.Count -eq 0) {
+                continue
+            }
+
+            $trustScore = switch ([string]$sourceConfigRow.confidence_band) {
+                'high' { 94 }
+                'medium' { 82 }
+                default { 70 }
+            }
+            if ([string]$sourceConfigRow.discovery_status -eq 'mapped') {
+                $trustScore += 4
+            }
+            if ($trustScore -gt 100) {
+                $trustScore = 100
+            }
+
+            $descriptor = [ordered]@{
+                id = [string]$sourceConfigRow.id
+                displayName = $sourceDisplayName
+                normalizedName = $sourceNormalizedName
+                canonicalDomain = [string]$sourceConfigRow.domain
+                careersUrl = $sourceCareersUrl
+                matchPhrases = $matchPhrases
+                trustScore = $trustScore
+            }
+
+            foreach ($phrase in @($matchPhrases)) {
+                $phraseTokens = @(([string]$phrase) -split ' ' | Where-Object { $_ })
+                if ($phraseTokens.Count -eq 0) {
+                    continue
+                }
+                $leadingKey = [string]$phraseTokens[0]
+                if ($leadingKey.Length -lt 4) {
+                    continue
+                }
+                if (-not $sourceIndex.ContainsKey($leadingKey)) {
+                    $sourceIndex[$leadingKey] = New-Object System.Collections.ArrayList
+                }
+                [void]$sourceIndex[$leadingKey].Add($descriptor)
+            }
+        }
+            $pass6SourceLeadingKeys = @($sourceIndex.Keys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and ([string]$_).Length -ge 4 } | Sort-Object -Unique)
+            $pass6SourceBuildStopwatch.Stop()
+            $pass6SourceCount = @($sourceConfigRows).Count
+            $script:SiblingConfigSourceIndexCache = [ordered]@{
+                sourceConfigMap = $sourceConfigMap
+                sourceIndex = $sourceIndex
+                sourceLeadingKeys = $pass6SourceLeadingKeys
+                sourceCount = $pass6SourceCount
+            }
+            $script:SiblingConfigSourceIndexStamp = $pass6SourceStamp
+            $stats.timings.pass6SourceIndexCacheHit = $false
+            $stats.timings.pass6SourceLoadMs = [int]$pass6SourceLoadStopwatch.ElapsedMilliseconds
+            $stats.timings.pass6SourceIndexBuildMs = [int]$pass6SourceBuildStopwatch.ElapsedMilliseconds
+        }
+        $pass6SourceLeadingKeysSql = if ($pass6SourceLeadingKeys.Count -gt 0) {
+            [string]::Join(',', @($pass6SourceLeadingKeys | ForEach-Object { "'{0}'" -f ([string]$_).Replace("'", "''") }))
+        } else {
+            ''
+        }
+        $pass6CandidateLeadingKeyClause = if ($pass6SourceLeadingKeysSql) {
+@"
+  AND LOWER(
+        CASE
+          WHEN INSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), ' ') > 0
+            THEN SUBSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), 1, INSTR(COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name), ' ') - 1)
+          ELSE COALESCE(NULLIF(co.normalized_name, ''), bc.normalized_company_name)
+        END
+      ) IN ($pass6SourceLeadingKeysSql)
+"@
+        } else {
+            ''
+        }
+        $pass6CandidateLoadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $candidateConfigRows = @(Invoke-BdSqliteRows -Connection $connection -Sql @"
+SELECT bc.id, bc.company_name, bc.normalized_company_name, bc.domain, bc.careers_url, bc.discovery_status, bc.confidence_band,
+       bc.discovery_method, bc.next_resolution_attempt_at,
+       co.id AS account_id, co.display_name, co.normalized_name, co.aliases_text
+FROM board_configs bc
+LEFT JOIN companies co ON co.normalized_name = bc.normalized_company_name
+WHERE (COALESCE(NULLIF(bc.discovery_status, ''), 'missing_inputs') NOT IN ('mapped', 'discovered', 'verified')
+       OR COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))
+  $(if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId)) { "AND (bc.next_resolution_attempt_at IS NULL OR bc.next_resolution_attempt_at = '' OR bc.next_resolution_attempt_at <= '$now')" } else { '' })
+  $(if (-not $ForceRefresh) { "AND COALESCE(NULLIF(bc.discovery_method, ''), '') <> 'sibling_propagation'" } else { '' })
+  $(
+    if (-not [string]::IsNullOrWhiteSpace([string]$AccountId)) {
+        "AND co.id = '$escapedAccountId'"
+    } else {
+        ''
+    }
+  )
+  $pass6CandidateLeadingKeyClause
+ORDER BY COALESCE(co.target_score, 0) DESC, COALESCE(co.connection_count, 0) DESC, bc.company_name ASC
+LIMIT $Limit;
+"@)
+        $pass6CandidateLoadStopwatch.Stop()
+        if ($candidateConfigRows.Count -gt 0 -and $sourceConfigMap.Count -gt 0 -and $sourceIndex.Count -gt 0) {
+            $pass6MatchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $pass6UnmatchedCandidateIds = New-Object System.Collections.ArrayList
+            $pass6CooldownCandidateIds = New-Object System.Collections.ArrayList
+            $txn = $connection.BeginTransaction()
+            try {
+                foreach ($candidateConfigRow in @($candidateConfigRows)) {
+                    $candidateConfigId = [string]$candidateConfigRow.id
+                    $candidateCompany = [ordered]@{
+                        id = [string]$candidateConfigRow.account_id
+                        display_name = [string]$(if ($candidateConfigRow.display_name) { $candidateConfigRow.display_name } else { $candidateConfigRow.company_name })
+                        normalized_name = [string]$(if ($candidateConfigRow.normalized_name) { $candidateConfigRow.normalized_name } else { $candidateConfigRow.normalized_company_name })
+                        aliases_text = [string]$candidateConfigRow.aliases_text
+                    }
+
+                    $match = Find-BdSqliteSiblingPropagationSource -Candidate $candidateCompany -SourceIndex $sourceIndex
+                    if ($null -eq $match) {
+                        [void]$pass6UnmatchedCandidateIds.Add($candidateConfigId)
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                        continue
+                    }
+
+                    $source = Get-BdSqliteRecordValue -Record $match -Name 'source' -Default $null
+                    if ($null -eq $source) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                        continue
+                    }
+
+                    $sourceNormalizedName = [string](Get-BdSqliteRecordValue -Record $source -Name 'normalizedName' -Default '')
+                    if (-not $sourceNormalizedName -or -not $sourceConfigMap.ContainsKey($sourceNormalizedName)) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                        continue
+                    }
+
+                    $sourceConfig = $sourceConfigMap[$sourceNormalizedName]
+                    $sourceDomain = [string]$(if ($sourceConfig.domain) { $sourceConfig.domain } else { Get-BdSqliteRecordValue -Record $source -Name 'canonicalDomain' -Default '' })
+                    $sourceCareersUrl = [string]$(if ($sourceConfig.careers_url) { $sourceConfig.careers_url } else { Get-BdSqliteRecordValue -Record $source -Name 'careersUrl' -Default '' })
+                    $sourceResolvedBoardUrl = [string]$(if ($sourceConfig.resolved_board_url) { $sourceConfig.resolved_board_url } else { $sourceCareersUrl })
+                    if (-not $sourceDomain -and -not $sourceCareersUrl -and -not $sourceResolvedBoardUrl) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                        continue
+                    }
+
+                    $cmd = $connection.CreateCommand()
+                    $cmd.Transaction = $txn
+                    $cmd.CommandText = @"
+UPDATE board_configs
+SET ats_type = CASE WHEN COALESCE(NULLIF(ats_type, ''), '') = '' THEN @atsType ELSE ats_type END,
+    board_id = CASE WHEN COALESCE(NULLIF(board_id, ''), '') = '' THEN @boardId ELSE board_id END,
+    domain = CASE WHEN COALESCE(NULLIF(domain, ''), '') = '' THEN @domain ELSE domain END,
+    careers_url = CASE WHEN COALESCE(NULLIF(careers_url, ''), '') = '' THEN @careersUrl ELSE careers_url END,
+    resolved_board_url = CASE WHEN COALESCE(NULLIF(resolved_board_url, ''), '') = '' THEN @resolvedBoardUrl ELSE resolved_board_url END,
+    discovery_status = 'discovered',
+    discovery_method = 'sibling_propagation',
+    confidence_band = 'medium',
+    confidence_score = 76,
+    evidence_summary = @evidence,
+    review_status = 'pending',
+    supported_import = CASE WHEN COALESCE(supported_import, 0) = 1 THEN supported_import ELSE @supportedImport END,
+    active = CASE WHEN @supportedImport = 1 AND COALESCE(NULLIF(@sourceConfidenceBand, ''), 'medium') = 'high' THEN @sourceActive ELSE 0 END,
+    failure_reason = '',
+    last_checked_at = @now,
+    last_resolution_attempt_at = @now,
+    next_resolution_attempt_at = @cooldown
+WHERE id = @id
+  AND (COALESCE(NULLIF(discovery_status, ''), 'missing_inputs') NOT IN ('mapped', 'discovered', 'verified')
+       OR COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved'));
+"@
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@atsType'; $p.Value = [string]$sourceConfig.ats_type; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@boardId'; $p.Value = [string]$sourceConfig.board_id; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@domain'; $p.Value = $sourceDomain; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@careersUrl'; $p.Value = $sourceCareersUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@resolvedBoardUrl'; $p.Value = $sourceResolvedBoardUrl; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@supportedImport'; $p.Value = [int](ConvertTo-BdSqliteNumber $sourceConfig.supported_import); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@sourceActive'; $p.Value = [int](ConvertTo-BdSqliteNumber $sourceConfig.active); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@sourceConfidenceBand'; $p.Value = [string]$sourceConfig.confidence_band; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@evidence'; $p.Value = ("Sibling board config propagated from {0} via brand phrase '{1}'" -f [string](Get-BdSqliteRecordValue -Record $source -Name 'displayName' -Default 'related company'), [string](Get-BdSqliteRecordValue -Record $match -Name 'matchedPhrase' -Default '')); [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                    $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = $candidateConfigId; [void]$cmd.Parameters.Add($p)
+                    $affected = $cmd.ExecuteNonQuery()
+                    $stats.boardConfigSiblingApplied += $affected
+                    if ($affected -le 0) {
+                        [void]$pass6CooldownCandidateIds.Add($candidateConfigId)
+                    }
+                }
+                $txn.Commit()
+            } catch {
+                try { $txn.Rollback() } catch {}
+                throw
+            } finally { $txn.Dispose() }
+            $pass6MatchStopwatch.Stop()
+            $stats.timings.pass6MatchUpdateMs = [int]$pass6MatchStopwatch.ElapsedMilliseconds
+            $stats.timings.pass6UnmatchedCandidateCount = @($pass6UnmatchedCandidateIds).Count
+            $stats.timings.pass6CooldownCandidateCount = @($pass6CooldownCandidateIds | Select-Object -Unique).Count
+
+            if (-not $ForceRefresh -and [string]::IsNullOrWhiteSpace([string]$AccountId) -and @($pass6CooldownCandidateIds).Count -gt 0) {
+                $pass6CooldownStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $pass6CooldownTxn = $connection.BeginTransaction()
+                try {
+                    foreach ($candidateConfigId in @($pass6CooldownCandidateIds | Select-Object -Unique)) {
+                        if ([string]::IsNullOrWhiteSpace([string]$candidateConfigId)) {
+                            continue
+                        }
+                        $cmd = $connection.CreateCommand()
+                        $cmd.Transaction = $pass6CooldownTxn
+                        $cmd.CommandText = @"
+UPDATE board_configs
+SET last_resolution_attempt_at = @now,
+    next_resolution_attempt_at = @cooldown
+WHERE id = @id
+  AND COALESCE(NULLIF(discovery_method, ''), '') <> 'sibling_propagation'
+  AND (next_resolution_attempt_at IS NULL OR next_resolution_attempt_at = '' OR next_resolution_attempt_at <= @now);
+"@
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@now'; $p.Value = $now; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@cooldown'; $p.Value = $medCooldown; [void]$cmd.Parameters.Add($p)
+                        $p = $cmd.CreateParameter(); $p.ParameterName = '@id'; $p.Value = [string]$candidateConfigId; [void]$cmd.Parameters.Add($p)
+                        $affected = $cmd.ExecuteNonQuery()
+                        $stats.boardConfigSiblingCooldownApplied += $affected
+                    }
+                    $pass6CooldownTxn.Commit()
+                } catch {
+                    try { $pass6CooldownTxn.Rollback() } catch {}
+                    throw
+                } finally { $pass6CooldownTxn.Dispose() }
+                $pass6CooldownStopwatch.Stop()
+                $stats.timings.pass6CooldownMs = [int]$pass6CooldownStopwatch.ElapsedMilliseconds
+            } else {
+                $stats.timings.pass6CooldownMs = 0
+            }
+        } else {
+            $stats.timings.pass6MatchUpdateMs = 0
+            $stats.timings.pass6UnmatchedCandidateCount = 0
+            $stats.timings.pass6CooldownCandidateCount = 0
+            $stats.timings.pass6CooldownMs = 0
+        }
+        $pass6Stopwatch.Stop()
+        $stats.timings.pass6CandidateLoadMs = [int]$pass6CandidateLoadStopwatch.ElapsedMilliseconds
+        $stats.timings.pass6SourceCount = $pass6SourceCount
+        $stats.timings.pass6CandidateCount = @($candidateConfigRows).Count
+        $stats.timings.pass6SourceLeadingKeyCount = @($pass6SourceLeadingKeys).Count
+        $stats.timings.pass6SiblingConfigMs = [int]$pass6Stopwatch.ElapsedMilliseconds
+
+        $stats.totalUpdated = $stats.hostedDomainCleared + $stats.contactEmailDomainApplied + $stats.boardConfigDomainApplied + $stats.boardConfigCareersApplied + $stats.jobDomainApplied + $stats.siblingPropagationApplied + $stats.boardConfigSiblingApplied
         return $stats
     } finally {
         $connection.Dispose()
@@ -3366,6 +5363,21 @@ SELECT
     SUM(CASE WHEN COALESCE(NULLIF(enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') THEN 1 ELSE 0 END) AS unenriched_count
 FROM companies;
 '@ | Select-Object -First 1)
+        $operationalSummary = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
+SELECT
+    COUNT(*) AS total_operational_companies,
+    SUM(CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') <> '' OR COALESCE(NULLIF(careers_url, ''), '') <> '' OR COALESCE(NULLIF(enrichment_status, ''), '') IN ('enriched', 'verified', 'manual') THEN 1 ELSE 0 END) AS enriched_operational_companies
+FROM companies
+WHERE COALESCE(status, '') NOT IN ('client', 'paused')
+  AND (
+      COALESCE(target_score, 0) >= 25
+      OR COALESCE(connection_count, 0) >= 2
+      OR COALESCE(open_role_count, 0) > 0
+      OR COALESCE(hiring_velocity, 0) > 0
+      OR COALESCE(engagement_score, 0) > 0
+      OR COALESCE(alert_priority_score, 0) >= 20
+  );
+'@ | Select-Object -First 1)
 
         $coverageSplit = @(Invoke-BdSqliteRows -Connection $connection -Sql @'
 SELECT
@@ -3384,6 +5396,9 @@ GROUP BY CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') <> '' OR COALESC
         $totalCompanies = [int](ConvertTo-BdSqliteNumber $summary.total_companies)
         $enrichedCount = [int](ConvertTo-BdSqliteNumber $summary.enriched_count)
         $coveragePct = if ($totalCompanies -gt 0) { [double][Math]::Round(($enrichedCount / $totalCompanies) * 100, 1) } else { 0 }
+        $operationalTotal = [int](ConvertTo-BdSqliteNumber $operationalSummary.total_operational_companies)
+        $operationalEnriched = [int](ConvertTo-BdSqliteNumber $operationalSummary.enriched_operational_companies)
+        $operationalCoveragePct = if ($operationalTotal -gt 0) { [double][Math]::Round(($operationalEnriched / $operationalTotal) * 100, 1) } else { 0 }
 
         return [ordered]@{
             summary = [ordered]@{
@@ -3394,6 +5409,9 @@ GROUP BY CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') <> '' OR COALESC
                 enrichedCount = $enrichedCount
                 unenrichedCount = [int](ConvertTo-BdSqliteNumber $summary.unenriched_count)
                 enrichmentCoveragePercent = $coveragePct
+                operationalTotalCompanies = $operationalTotal
+                operationalEnrichedCount = $operationalEnriched
+                operationalEnrichmentCoveragePercent = $operationalCoveragePct
             }
             byConfidence = @(
                 Invoke-BdSqliteRows -Connection $connection -Sql @'
@@ -3520,13 +5538,14 @@ function Find-BdSqliteEnrichmentQueue {
             $parameters.now = (Get-Date).ToString('o')
         }
 
-        $selectColumns = @'
-companies.*,
+        $companyCols = ($script:CompanySummaryColumns -split ',\s*' | ForEach-Object { "companies.$_" }) -join ', '
+        $selectColumns = @"
+$companyCols,
 cfg.config_id AS primary_config_id,
 cfg.discovery_status AS config_discovery_status,
 cfg.review_status AS config_review_status,
 cfg.ats_type AS config_ats_type
-'@
+"@
 
         $fromSql = @'
 companies
@@ -3556,7 +5575,7 @@ LEFT JOIN (
         $parameters.limit = $pageSpec.pageSize
         $parameters.offset = $pageSpec.offset
 
-        $sql = "SELECT $selectColumns FROM $fromSql$whereSql ORDER BY COALESCE(target_score, 0) DESC, COALESCE(connection_count, 0) DESC, COALESCE(open_role_count, 0) DESC, CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND COALESCE(NULLIF(careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(last_enriched_at, '') ASC, display_name ASC LIMIT @limit OFFSET @offset;"
+        $sql = "SELECT $selectColumns FROM $fromSql$whereSql ORDER BY COALESCE(target_score, 0) DESC, COALESCE(alert_priority_score, 0) DESC, COALESCE(relationship_strength_score, 0) DESC, COALESCE(connection_count, 0) DESC, COALESCE(open_role_count, 0) DESC, COALESCE(hiring_velocity, 0) DESC, COALESCE(engagement_score, 0) DESC, CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND COALESCE(NULLIF(careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(last_enriched_at, '') ASC, display_name ASC LIMIT @limit OFFSET @offset;"
         $rows = @(Invoke-BdSqliteRows -Connection $connection -Sql $sql -Parameters $parameters)
 
         $items = @(
@@ -3603,20 +5622,22 @@ function Get-BdSqliteEnrichmentCandidateCompanyIds {
     try {
         $whereClauses = New-Object System.Collections.ArrayList
         $parameters = @{ limit = if ($Limit -gt 0) { $Limit } else { 50 } }
+        $isTargetedAccount = -not [string]::IsNullOrWhiteSpace([string]$AccountId)
         if ($AccountId) {
-            [void]$whereClauses.Add('id = @accountId')
+            [void]$whereClauses.Add('c.id = @accountId')
             $parameters.accountId = $AccountId
         } else {
-            [void]$whereClauses.Add("(COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' OR COALESCE(NULLIF(enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') OR COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))")
+            [void]$whereClauses.Add("(COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' OR COALESCE(NULLIF(c.enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') OR COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') IN ('medium', 'low', 'unresolved'))")
+            [void]$whereClauses.Add("(COALESCE(cfg.has_unresolved_config, CASE WHEN COALESCE(cfg.has_resolved_config, 0) = 0 THEN 1 ELSE 0 END) = 1)")
         }
-        if (-not $ForceRefresh) {
-            [void]$whereClauses.Add("(next_enrichment_attempt_at IS NULL OR next_enrichment_attempt_at = '' OR next_enrichment_attempt_at <= @now)")
+        if (-not $ForceRefresh -and -not $isTargetedAccount) {
+            [void]$whereClauses.Add("(c.next_enrichment_attempt_at IS NULL OR c.next_enrichment_attempt_at = '' OR c.next_enrichment_attempt_at <= @now)")
             $parameters.now = (Get-Date).ToString('o')
         }
 
         $whereSql = if ($whereClauses.Count -gt 0) { ' WHERE ' + ([string]::Join(' AND ', @($whereClauses))) } else { '' }
         return @(
-            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT id FROM companies{0} ORDER BY COALESCE(target_score, 0) DESC, COALESCE(connection_count, 0) DESC, COALESCE(open_role_count, 0) DESC, CASE WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' AND COALESCE(NULLIF(careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(last_enriched_at, '') ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
+            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT c.id FROM companies c LEFT JOIN (SELECT normalized_company_name, MAX(CASE WHEN discovery_status IN ('mapped', 'discovered', 'verified') THEN 1 ELSE 0 END) AS has_resolved_config, MAX(CASE WHEN discovery_status NOT IN ('mapped', 'discovered', 'verified') OR COALESCE(NULLIF(confidence_band, ''), 'unresolved') IN ('medium', 'low', 'unresolved') THEN 1 ELSE 0 END) AS has_unresolved_config FROM board_configs GROUP BY normalized_company_name) cfg ON cfg.normalized_company_name = c.normalized_name{0} ORDER BY COALESCE(cfg.has_unresolved_config, CASE WHEN COALESCE(cfg.has_resolved_config, 0) = 0 THEN 1 ELSE 0 END) DESC, COALESCE(c.target_score, 0) DESC, COALESCE(c.alert_priority_score, 0) DESC, COALESCE(c.relationship_strength_score, 0) DESC, COALESCE(c.connection_count, 0) DESC, COALESCE(c.open_role_count, 0) DESC, COALESCE(c.hiring_velocity, 0) DESC, COALESCE(c.engagement_score, 0) DESC, CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(c.enrichment_confidence, ''), 'unresolved') = 'low' THEN 4 ELSE 5 END, COALESCE(c.last_enriched_at, '') ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
                 ForEach-Object { [string]$_.id }
         )
     } finally {
@@ -3650,7 +5671,7 @@ function Get-BdSqliteDiscoveryCandidateConfigIds {
 
         $whereSql = if ($whereClauses.Count -gt 0) { ' WHERE ' + ([string]::Join(' AND ', @($whereClauses))) } else { '' }
         return @(
-            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT bc.id FROM board_configs bc LEFT JOIN companies c ON c.normalized_name = bc.normalized_company_name{0} ORDER BY COALESCE(c.target_score, 0) DESC, COALESCE(c.connection_count, 0) DESC, COALESCE(c.open_role_count, 0) DESC, CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'low' THEN 4 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'medium' THEN 5 ELSE 6 END, COALESCE(bc.last_resolution_attempt_at, '') ASC, bc.company_name ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
+            (Invoke-BdSqliteRows -Connection $connection -Sql ("SELECT bc.id FROM board_configs bc LEFT JOIN companies c ON c.normalized_name = bc.normalized_company_name{0} ORDER BY COALESCE(c.target_score, 0) DESC, COALESCE(c.hiring_velocity, 0) DESC, COALESCE(c.engagement_score, 0) DESC, CASE WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' AND COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 1 WHEN COALESCE(NULLIF(c.canonical_domain, ''), '') = '' OR COALESCE(NULLIF(c.careers_url, ''), '') = '' THEN 2 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'unresolved' THEN 3 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'low' THEN 4 WHEN COALESCE(NULLIF(bc.confidence_band, ''), 'unresolved') = 'medium' THEN 5 ELSE 6 END, COALESCE(bc.last_resolution_attempt_at, '') ASC, bc.company_name ASC LIMIT @limit;" -f $whereSql) -Parameters $parameters) |
                 ForEach-Object { [string]$_.id }
         )
     } finally {
@@ -3714,10 +5735,33 @@ function Get-BdSqliteDashboardModelInternal {
             newJobsLast24h = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql 'SELECT COUNT(*) FROM jobs WHERE imported_at IS NOT NULL AND imported_at >= @cutoff;' -Parameters @{ cutoff = (Get-Date).AddHours(-24).ToString('o') }))
             staleAccountCount = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql "SELECT COUNT(*) FROM companies WHERE stale_flag = 'STALE';"))
             discoveredBoardCount = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql "SELECT COUNT(*) FROM board_configs WHERE discovery_status IN ('mapped', 'discovered');"))
+            needsResolutionCount = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql @"
+SELECT COUNT(*)
+FROM companies c
+WHERE c.status NOT IN ('client', 'paused')
+  AND (
+    COALESCE(c.target_score, 0) >= 25
+    OR COALESCE(c.connection_count, 0) >= 2
+    OR COALESCE(c.job_count, 0) > 0
+    OR COALESCE(c.alert_priority_score, 0) >= 30
+  )
+  AND (
+    COALESCE(c.canonical_domain, '') = ''
+    OR COALESCE(c.careers_url, '') = ''
+    OR COALESCE(c.enrichment_confidence, 'unresolved') IN ('unresolved', 'low')
+    OR NOT EXISTS (
+      SELECT 1
+      FROM board_configs bc
+      WHERE bc.account_id = c.id
+        AND bc.discovery_status IN ('mapped', 'discovered')
+        AND COALESCE(bc.confidence_score, 0) >= 80
+    )
+  );
+"@))
         }
     }
     $todayQueue = Invoke-BdSqliteTimedStep -Name 'todayQueueMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies WHERE status NOT IN (''paused'', ''client'') AND connection_count >= @minConnections AND job_count >= @minJobs ORDER BY daily_score DESC LIMIT @limit;' -Parameters @{ minConnections = $minConnections; minJobs = $minJobs; limit = $maxCompanies }) | Select-Object -First 10 | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('paused', 'client') AND connection_count >= @minConnections AND job_count >= @minJobs ORDER BY target_score DESC, hiring_velocity DESC, engagement_score DESC LIMIT @limit;" -Parameters @{ minConnections = $minConnections; minJobs = $minJobs; limit = $maxCompanies }) | Select-Object -First 10 | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $newJobsToday = Invoke-BdSqliteTimedStep -Name 'newJobsTodayMs' -TimingBag $TimingBag -Action {
         @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM jobs WHERE imported_at IS NOT NULL AND imported_at >= @cutoff ORDER BY COALESCE(retrieved_at, imported_at) DESC, posted_at DESC LIMIT 12;' -Parameters @{ cutoff = (Get-Date).AddHours(-24).ToString('o') }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
@@ -3726,21 +5770,48 @@ function Get-BdSqliteDashboardModelInternal {
         @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT * FROM board_configs WHERE last_checked_at IS NOT NULL AND discovery_status IN ('mapped', 'discovered') ORDER BY last_checked_at DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteConfigRowToSummary $_ })
     }
     $followUpAccounts = Invoke-BdSqliteTimedStep -Name 'followUpAccountsMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies WHERE status NOT IN (''client'', ''paused'') AND ((next_action_at IS NOT NULL AND next_action_at <= @nextActionCutoff) OR stale_flag = ''STALE'' OR follow_up_score > 0) ORDER BY follow_up_score DESC, daily_score DESC LIMIT 8;' -Parameters @{ nextActionCutoff = (Get-Date).AddDays(2).ToString('o') }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('client', 'paused') AND ((next_action_at IS NOT NULL AND next_action_at <= @nextActionCutoff) OR stale_flag = 'STALE' OR follow_up_score > 0) ORDER BY follow_up_score DESC, target_score DESC, hiring_velocity DESC LIMIT 8;" -Parameters @{ nextActionCutoff = (Get-Date).AddDays(2).ToString('o') }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $networkLeaders = Invoke-BdSqliteTimedStep -Name 'networkLeadersMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT * FROM companies ORDER BY connection_count DESC, daily_score DESC LIMIT 8;') | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies ORDER BY connection_count DESC, target_score DESC, hiring_velocity DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
     $recommendedActions = Invoke-BdSqliteTimedStep -Name 'recommendedActionsMs' -TimingBag $TimingBag -Action {
-        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT id, display_name, recommended_action, daily_score, outreach_status FROM companies ORDER BY daily_score DESC LIMIT 8;') | ForEach-Object {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT id, display_name, recommended_action, target_score, outreach_status FROM companies ORDER BY target_score DESC, hiring_velocity DESC, engagement_score DESC LIMIT 8;') | ForEach-Object {
                 [ordered]@{
                     accountId = [string]$_.id
                     company = [string]$_.display_name
                     text = [string]$_.recommended_action
-                    score = [int](ConvertTo-BdSqliteNumber $_.daily_score)
+                    score = [int](ConvertTo-BdSqliteNumber $_.target_score)
                     outreachStatus = [string]$_.outreach_status
                 }
             })
+    }
+    $needsResolution = Invoke-BdSqliteTimedStep -Name 'needsResolutionMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql @"
+SELECT $($script:CompanySummaryColumns)
+FROM companies c
+WHERE c.status NOT IN ('client', 'paused')
+  AND (
+    COALESCE(c.target_score, 0) >= 25
+    OR COALESCE(c.connection_count, 0) >= 2
+    OR COALESCE(c.job_count, 0) > 0
+    OR COALESCE(c.alert_priority_score, 0) >= 30
+  )
+  AND (
+    COALESCE(c.canonical_domain, '') = ''
+    OR COALESCE(c.careers_url, '') = ''
+    OR COALESCE(c.enrichment_confidence, 'unresolved') IN ('unresolved', 'low')
+    OR NOT EXISTS (
+      SELECT 1
+      FROM board_configs bc
+      WHERE bc.account_id = c.id
+        AND bc.discovery_status IN ('mapped', 'discovered')
+        AND COALESCE(bc.confidence_score, 0) >= 80
+    )
+  )
+ORDER BY target_score DESC, connection_count DESC, alert_priority_score DESC, daily_score DESC
+LIMIT 6;
+"@) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
     }
 
     return [ordered]@{
@@ -3751,13 +5822,268 @@ function Get-BdSqliteDashboardModelInternal {
         followUpAccounts = $followUpAccounts
         networkLeaders = $networkLeaders
         recommendedActions = $recommendedActions
+        needsResolution = $needsResolution
+    }
+}
+
+function Convert-BdSqliteCompanyRowToPlaybookItem {
+    param($Row)
+
+    $summary = Convert-BdSqliteCompanyRowToSummary $Row
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    return [ordered]@{
+        id = [string]$summary.id
+        displayName = [string]$summary.displayName
+        dailyScore = [double](ConvertTo-BdSqliteNumber $summary.dailyScore)
+        targetScore = [double](ConvertTo-BdSqliteNumber $summary.targetScore)
+        hiringVelocity = [double](ConvertTo-BdSqliteNumber $summary.hiringVelocity)
+        engagementScore = [double](ConvertTo-BdSqliteNumber $summary.engagementScore)
+        openRoleCount = [int](ConvertTo-BdSqliteNumber $summary.openRoleCount)
+        topContactName = [string]$summary.topContactName
+        recommendedAction = [string]$summary.recommendedAction
+        outreachStatus = [string]$summary.outreachStatus
+        nextAction = [string]$summary.nextAction
+        nextActionAt = $summary.nextActionAt
+        isOverdue = ($summary.nextActionAt -and [string]$summary.nextActionAt -lt $today)
+        staleFlag = [string]$summary.staleFlag
+        networkStrength = [string]$summary.networkStrength
+        owner = [string]$summary.owner
+    }
+}
+
+function Get-BdSqliteCompanyTopTriggerAlert {
+    param($CompanyRecord)
+
+    return @(
+        @($(Get-BdSqliteRecordValue -Record $CompanyRecord -Name 'triggerAlerts' -Default @())) |
+            Where-Object { $null -ne $_ } |
+            Sort-Object @{ Expression = { [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $_ -Name 'priorityScore' -Default 0)) }; Descending = $true }, @{ Expression = { [string](Get-BdSqliteRecordValue -Record $_ -Name 'title' -Default '') }; Descending = $false } |
+            Select-Object -First 1
+    )
+}
+
+function Convert-BdSqliteCompanyRowToAlertQueueItem {
+    param($Row)
+
+    $summary = Convert-BdSqliteCompanyRowToSummary $Row
+    $record = ConvertFrom-BdSqliteJsonText ([string]$Row.data_json)
+    $topAlert = @(Get-BdSqliteCompanyTopTriggerAlert -CompanyRecord $record | Select-Object -First 1)
+    if (-not $topAlert) {
+        return $null
+    }
+
+    return [ordered]@{
+        accountId = [string]$summary.id
+        displayName = [string]$summary.displayName
+        targetScore = [int](ConvertTo-BdSqliteNumber $summary.targetScore)
+        hiringVelocity = [double](ConvertTo-BdSqliteNumber $summary.hiringVelocity)
+        engagementScore = [double](ConvertTo-BdSqliteNumber $summary.engagementScore)
+        alertPriorityScore = [int](ConvertTo-BdSqliteNumber $summary.alertPriorityScore)
+        outreachStatus = [string]$summary.outreachStatus
+        owner = [string]$summary.owner
+        type = [string](Get-BdSqliteRecordValue -Record $topAlert -Name 'type' -Default '')
+        title = [string](Get-BdSqliteRecordValue -Record $topAlert -Name 'title' -Default '')
+        summary = [string](Get-BdSqliteRecordValue -Record $topAlert -Name 'summary' -Default '')
+        recommendedAction = [string](Get-BdSqliteRecordValue -Record $topAlert -Name 'recommendedAction' -Default '')
+    }
+}
+
+function Convert-BdSqliteCompanyRowToSequenceQueueItem {
+    param($Row)
+
+    $summary = Convert-BdSqliteCompanyRowToSummary $Row
+    $record = ConvertFrom-BdSqliteJsonText ([string]$Row.data_json)
+    $sequenceState = Get-BdSqliteRecordValue -Record $record -Name 'sequenceState' -Default $null
+    if (-not $sequenceState) {
+        $sequenceState = [ordered]@{
+            status = [string]$Row.sequence_status
+            nextStep = [string]$Row.sequence_next_step
+            nextStepAt = $Row.sequence_next_step_at
+            nextStepLabel = ''
+            adaptiveTimingReason = ''
+        }
+    }
+
+    $status = [string](Get-BdSqliteRecordValue -Record $sequenceState -Name 'status' -Default $summary.sequenceStatus)
+    $nextStepAt = Get-BdSqliteRecordValue -Record $sequenceState -Name 'nextStepAt' -Default $summary.sequenceNextStepAt
+    if ($status -ne 'active' -or -not $nextStepAt) {
+        return $null
+    }
+
+    return [ordered]@{
+        accountId = [string]$summary.id
+        displayName = [string]$summary.displayName
+        targetScore = [int](ConvertTo-BdSqliteNumber $summary.targetScore)
+        engagementScore = [double](ConvertTo-BdSqliteNumber $summary.engagementScore)
+        relationshipStrengthScore = [int](ConvertTo-BdSqliteNumber $summary.relationshipStrengthScore)
+        owner = [string]$summary.owner
+        outreachStatus = [string]$summary.outreachStatus
+        status = $status
+        nextStep = [string](Get-BdSqliteRecordValue -Record $sequenceState -Name 'nextStep' -Default $summary.sequenceNextStep)
+        nextStepLabel = [string](Get-BdSqliteRecordValue -Record $sequenceState -Name 'nextStepLabel' -Default '')
+        nextStepAt = $nextStepAt
+        adaptiveTimingReason = [string](Get-BdSqliteRecordValue -Record $sequenceState -Name 'adaptiveTimingReason' -Default '')
+        isOverdue = ([string]$nextStepAt -and [string]$nextStepAt -le (Get-Date).ToString('o'))
+    }
+}
+
+function Convert-BdSqliteCompanyRowToIntroQueueItem {
+    param($Row)
+
+    $summary = Convert-BdSqliteCompanyRowToSummary $Row
+    $record = ConvertFrom-BdSqliteJsonText ([string]$Row.data_json)
+    $connectionGraph = Get-BdSqliteRecordValue -Record $record -Name 'connectionGraph' -Default $null
+    if (-not $connectionGraph) {
+        return $null
+    }
+
+    $warmIntroCandidates = @($(Get-BdSqliteRecordValue -Record $connectionGraph -Name 'warmIntroCandidates' -Default @()))
+    if (@($warmIntroCandidates).Count -eq 0) {
+        return $null
+    }
+
+    $candidate = @($warmIntroCandidates | Select-Object -First 1)
+    $shortestPath = Get-BdSqliteRecordValue -Record $connectionGraph -Name 'shortestPathToDecisionMaker' -Default $null
+    return [ordered]@{
+        accountId = [string]$summary.id
+        displayName = [string]$summary.displayName
+        targetScore = [int](ConvertTo-BdSqliteNumber $summary.targetScore)
+        alertPriorityScore = [int](ConvertTo-BdSqliteNumber $summary.alertPriorityScore)
+        relationshipStrengthScore = [int](ConvertTo-BdSqliteNumber $summary.relationshipStrengthScore)
+        owner = [string]$summary.owner
+        contactName = [string](Get-BdSqliteRecordValue -Record $candidate -Name 'fullName' -Default '')
+        contactTitle = [string](Get-BdSqliteRecordValue -Record $candidate -Name 'title' -Default '')
+        contactWhy = [string](Get-BdSqliteRecordValue -Record $candidate -Name 'why' -Default '')
+        pathLength = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $candidate -Name 'pathLength' -Default (Get-BdSqliteRecordValue -Record $shortestPath -Name 'pathLength' -Default 0)))
+        confidence = [string](Get-BdSqliteRecordValue -Record $shortestPath -Name 'confidence' -Default '')
+        introSummary = [string](Get-BdSqliteRecordValue -Record $shortestPath -Name 'summary' -Default '')
+    }
+}
+
+function Get-BdSqliteDashboardExtendedModelInternal {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Data.SQLite.SQLiteConnection]$Connection,
+        [System.Collections.IDictionary]$TimingBag
+    )
+
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    $playbook = Invoke-BdSqliteTimedStep -Name 'playbookMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('paused', 'client', 'archived') ORDER BY target_score DESC, hiring_velocity DESC, engagement_score DESC LIMIT 5;") | ForEach-Object { Convert-BdSqliteCompanyRowToPlaybookItem $_ })
+    }
+    $overdueFollowUps = Invoke-BdSqliteTimedStep -Name 'overdueFollowUpsMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql 'SELECT id, display_name, next_action, next_action_at, outreach_status, owner FROM companies WHERE next_action_at IS NOT NULL AND next_action_at <> '''' AND next_action_at < @today AND status NOT IN (''paused'', ''archived'') ORDER BY next_action_at ASC LIMIT 10;' -Parameters @{ today = $today }) | ForEach-Object {
+                [ordered]@{
+                    id = [string]$_.id
+                    displayName = [string]$_.display_name
+                    nextAction = [string]$_.next_action
+                    nextActionAt = $_.next_action_at
+                    outreachStatus = [string]$_.outreach_status
+                    owner = [string]$_.owner
+                }
+            })
+    }
+    $staleAccounts = Invoke-BdSqliteTimedStep -Name 'staleAccountsMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE stale_flag = 'STALE' AND status NOT IN ('paused', 'archived') ORDER BY target_score DESC, hiring_velocity DESC LIMIT 10;") | ForEach-Object {
+                $summary = Convert-BdSqliteCompanyRowToSummary $_
+                [ordered]@{
+                    id = [string]$summary.id
+                    displayName = [string]$summary.displayName
+                    dailyScore = [double](ConvertTo-BdSqliteNumber $summary.dailyScore)
+                    targetScore = [double](ConvertTo-BdSqliteNumber $summary.targetScore)
+                    lastContactedAt = $summary.lastContactedAt
+                    openRoleCount = [int](ConvertTo-BdSqliteNumber $summary.openRoleCount)
+                    owner = [string]$summary.owner
+                }
+            })
+    }
+    $activityFeed = Invoke-BdSqliteTimedStep -Name 'activityFeedMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql @'
+SELECT
+    a.*,
+    c.display_name AS company_display_name
+FROM activities a
+LEFT JOIN companies c ON c.id = a.account_id
+ORDER BY a.occurred_at DESC
+LIMIT 10;
+'@) | ForEach-Object {
+                $summary = Convert-BdSqliteActivityRowToSummary $_
+                $summary.companyName = if ($_.company_display_name) { [string]$_.company_display_name } elseif ($_.normalized_company_name) { [string]$_.normalized_company_name } else { '' }
+                $summary
+            })
+    }
+    $enrichmentFunnel = Invoke-BdSqliteTimedStep -Name 'enrichmentFunnelMs' -TimingBag $TimingBag -Action {
+        $total = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql 'SELECT COUNT(*) FROM companies;'))
+        $enriched = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql "SELECT COUNT(*) FROM companies WHERE enrichment_status IN ('enriched', 'verified', 'manual');"))
+        $verified = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql "SELECT COUNT(*) FROM companies WHERE enrichment_status IN ('verified', 'manual');"))
+        $importing = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql 'SELECT COUNT(*) FROM board_configs WHERE supported_import = 1 OR last_import_at IS NOT NULL;'))
+        $unresolved = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $Connection -Sql "SELECT COUNT(*) FROM companies WHERE enrichment_status IN ('unresolved', 'failed');"))
+        $pending = $total - $enriched - $unresolved
+        if ($pending -lt 0) { $pending = 0 }
+        [ordered]@{
+            total = $total
+            pending = $pending
+            enriched = $enriched
+            verified = $verified
+            importing = $importing
+            unresolved = $unresolved
+        }
+    }
+    $alertQueue = Invoke-BdSqliteTimedStep -Name 'alertQueueMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns), data_json FROM companies WHERE status NOT IN ('paused', 'client', 'archived') AND COALESCE(alert_priority_score, 0) > 0 ORDER BY alert_priority_score DESC, target_score DESC, hiring_velocity DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteCompanyRowToAlertQueueItem $_ } | Where-Object { $null -ne $_ })
+    }
+    $sequenceQueue = Invoke-BdSqliteTimedStep -Name 'sequenceQueueMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns), data_json FROM companies WHERE status NOT IN ('paused', 'client', 'archived') AND COALESCE(sequence_status, '') = 'active' AND sequence_next_step_at IS NOT NULL ORDER BY sequence_next_step_at ASC, target_score DESC, relationship_strength_score DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteCompanyRowToSequenceQueueItem $_ } | Where-Object { $null -ne $_ })
+    }
+    $introQueue = Invoke-BdSqliteTimedStep -Name 'introQueueMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns), data_json FROM companies WHERE status NOT IN ('paused', 'client', 'archived') AND COALESCE(relationship_strength_score, 0) > 0 ORDER BY relationship_strength_score DESC, target_score DESC, alert_priority_score DESC LIMIT 8;") | ForEach-Object { Convert-BdSqliteCompanyRowToIntroQueueItem $_ } | Where-Object { $null -ne $_ })
+    }
+    $resolutionQueue = Invoke-BdSqliteTimedStep -Name 'resolutionQueueMs' -TimingBag $TimingBag -Action {
+        @((Invoke-BdSqliteRows -Connection $Connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE status NOT IN ('paused', 'client', 'archived') AND (COALESCE(NULLIF(canonical_domain, ''), '') = '' OR COALESCE(NULLIF(careers_url, ''), '') = '' OR COALESCE(NULLIF(enrichment_status, ''), '') NOT IN ('enriched', 'verified', 'manual') OR COALESCE(NULLIF(enrichment_confidence, ''), 'unresolved') IN ('medium', 'low', 'unresolved')) ORDER BY COALESCE(target_score, 0) DESC, COALESCE(alert_priority_score, 0) DESC, COALESCE(relationship_strength_score, 0) DESC, COALESCE(connection_count, 0) DESC, COALESCE(open_role_count, 0) DESC, COALESCE(hiring_velocity, 0) DESC LIMIT 6;") | ForEach-Object {
+                $summary = Convert-BdSqliteCompanyRowToSummary $_
+                $summary.reviewReason = if (-not $summary.canonicalDomain -and -not $summary.careersUrl) {
+                    'Missing domain and careers URL'
+                } elseif (-not $summary.canonicalDomain) {
+                    'Missing canonical domain'
+                } elseif (-not $summary.careersUrl) {
+                    'Missing careers URL'
+                } elseif ($summary.enrichmentFailureReason) {
+                    [string]$summary.enrichmentFailureReason
+                } else {
+                    'Needs enrichment verification'
+                }
+                $summary
+            })
+    }
+
+    return [ordered]@{
+        playbook = $playbook
+        overdueFollowUps = $overdueFollowUps
+        staleAccounts = $staleAccounts
+        activityFeed = $activityFeed
+        enrichmentFunnel = $enrichmentFunnel
+        alertQueue = $alertQueue
+        sequenceQueue = $sequenceQueue
+        introQueue = $introQueue
+        resolutionQueue = $resolutionQueue
     }
 }
 
 function Get-BdSqliteDashboardModel {
     $connection = Open-BdSqliteConnection
     try {
+        Initialize-BdSqliteSchema -Connection $connection
         return (Get-BdSqliteDashboardModelInternal -Connection $connection)
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Get-BdSqliteDashboardExtendedModel {
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        return (Get-BdSqliteDashboardExtendedModelInternal -Connection $connection)
     } finally {
         $connection.Dispose()
     }
@@ -3954,7 +6280,12 @@ function Get-BdSqliteAccountDetail {
         $accountRecord = ConvertFrom-BdSqliteJsonText $accountRow.data_json
         $configs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM board_configs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY company_name ASC;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteConfigRowToSummary $_ })
         $contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM contacts WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY priority_score DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteContactRowToSummary $_ })
-        $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY posted_at DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
+        $jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY posted_at DESC LIMIT 20;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object {
+                $summary = Convert-BdSqliteJobRowToSummary $_
+                $jobRecord = ConvertFrom-BdSqliteJsonText ([string]$_.data_json)
+                $summary.rawPayload = Get-BdSqliteRecordValue -Record $jobRecord -Name 'rawPayload' -Default $null
+                $summary
+            })
         $activity = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM activities WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY occurred_at DESC LIMIT 12;' -Parameters @{ accountId = $AccountId; normalizedName = $accountRow.normalized_name }) | ForEach-Object { Convert-BdSqliteActivityRowToSummary $_ })
 
         $summary = Convert-BdSqliteCompanyRowToSummary $accountRow
@@ -3969,7 +6300,64 @@ function Get-BdSqliteAccountDetail {
         $summary.departmentConcentration = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'departmentConcentration'))
         $summary.hiringSpikeScore = [double](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'hiringSpikeScore'))
         $summary.scoreBreakdown = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'scoreBreakdown' -Default ([ordered]@{}))
+        $summary.targetScoreExplanation = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'targetScoreExplanation' -Default ([ordered]@{}))
+        $summary.companyGrowthSignalSummary = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'companyGrowthSignalSummary' -Default '')
+        $summary.engagementSummary = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'engagementSummary' -Default '')
         $summary.lastContactedAt = Get-BdSqliteRecordValue -Record $accountRecord -Name 'lastContactedAt'
+        $summary.pipelineState = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'pipelineState' -Default ([ordered]@{
+                    stage = 'not_started'
+                    stageRank = 0
+                    stageSource = 'account'
+                    activityCount = 0
+                    recentActivityCount30d = 0
+                    lastInteractionAt = $null
+                    lastInteractionType = ''
+                    recentSignals = @()
+                }))
+        $summary.connectionGraph = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'connectionGraph' -Default ([ordered]@{
+                    shortestPathToDecisionMaker = [ordered]@{
+                        pathLength = 0
+                        summary = 'No warm intro path mapped yet.'
+                        path = @()
+                        confidence = 'low'
+                    }
+                    warmIntroCandidates = @()
+                    relationshipStrengthScore = 0
+                    pastPlacementCount = 0
+                    decisionMakerCount = 0
+                }))
+        $summary.triggerAlerts = @(
+            @($(ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'triggerAlerts' -Default @()))) |
+                Where-Object { $null -ne $_ }
+        )
+        $summary.sequenceState = ConvertTo-BdSqlitePlainObject (Get-BdSqliteRecordValue -Record $accountRecord -Name 'sequenceState' -Default ([ordered]@{
+                    status = 'idle'
+                    nextStep = 'step_1'
+                    nextStepLabel = 'Email'
+                    nextStepAt = $null
+                    adaptiveDelayDays = 2
+                    adaptiveTimingReason = 'Default cadence because no live engagement has been captured yet.'
+                    stopReason = ''
+                    replyDetected = $false
+                    steps = @()
+                }))
+        $summary.relationshipStrengthScore = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'relationshipStrengthScore' -Default 0))
+        $summary.alertPriorityScore = [int](ConvertTo-BdSqliteNumber (Get-BdSqliteRecordValue -Record $accountRecord -Name 'alertPriorityScore' -Default 0))
+        $needsDerivedDetail = -not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'pipelineState' -Default $null)
+        if (-not $needsDerivedDetail) {
+            $needsDerivedDetail = (-not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'connectionGraph' -Default $null))
+        }
+        if (-not $needsDerivedDetail) {
+            $needsDerivedDetail = (-not (Get-BdSqliteRecordValue -Record $accountRecord -Name 'sequenceState' -Default $null))
+        }
+        if ($needsDerivedDetail) {
+            try {
+                $derivedAccount = Update-CompanyProjection -Company (ConvertTo-BdSqlitePlainObject -InputObject $accountRecord) -Contacts $contacts -Jobs $jobs -Configs $configs -Activities $activity
+                $summary = Select-AccountDetailModel -Company $derivedAccount
+            } catch {
+                # Keep the persisted summary when on-read recompute fails.
+            }
+        }
 
         return [ordered]@{
             account = $summary
@@ -3988,6 +6376,59 @@ function Get-BdSqliteAccountDetail {
     }
 }
 
+function Get-BdSqliteAccountResolutionContext {
+    param([string]$AccountId)
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $connection = Open-BdSqliteConnection
+    try {
+        $accountRow = @(Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM companies WHERE id = @id LIMIT 1;' -Parameters @{ id = $AccountId } | Select-Object -First 1)
+        if (-not $accountRow) {
+            $stopwatch.Stop()
+            return [ordered]@{
+                account = $null
+                configs = @()
+                primaryConfig = $null
+                metrics = [ordered]@{
+                    loadMs = [int]$stopwatch.ElapsedMilliseconds
+                }
+            }
+        }
+
+        $accountRecord = ConvertFrom-BdSqliteJsonText $accountRow.data_json
+        $account = Convert-BdSqliteCompanyRowToSummary $accountRow
+        $account.normalizedName = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'normalizedName' -Default $accountRow.normalized_name)
+        $account.canonicalDomain = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'canonicalDomain')
+        $account.careersUrl = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'careersUrl')
+        $account.enrichmentStatus = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'enrichmentStatus')
+        $account.enrichmentConfidence = [string](Get-BdSqliteRecordValue -Record $accountRecord -Name 'enrichmentConfidence')
+
+        $configRows = @(
+            Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM board_configs WHERE account_id = @accountId OR normalized_company_name = @normalizedName ORDER BY CASE WHEN account_id = @accountId THEN 0 ELSE 1 END, sort_order ASC, company_name ASC;' -Parameters @{
+                accountId = $AccountId
+                normalizedName = $accountRow.normalized_name
+            }
+        )
+        $configs = @($configRows | ForEach-Object { Convert-BdSqliteConfigRowToSummary $_ })
+        $primaryConfig = @($configs | Select-Object -First 1)
+
+        $stopwatch.Stop()
+        return [ordered]@{
+            account = $account
+            configs = $configs
+            primaryConfig = $primaryConfig
+            metrics = [ordered]@{
+                loadMs = [int]$stopwatch.ElapsedMilliseconds
+                configCount = [int]$configs.Count
+            }
+        }
+    } finally {
+        if ($connection) {
+            $connection.Dispose()
+        }
+    }
+}
+
 function Find-BdSqliteSearchResults {
     param([string]$Query)
 
@@ -4003,7 +6444,7 @@ function Find-BdSqliteSearchResults {
     $connection = Open-BdSqliteConnection
     try {
         return [ordered]@{
-            accounts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM companies WHERE search_text LIKE @search ORDER BY daily_score DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
+            accounts = @((Invoke-BdSqliteRows -Connection $connection -Sql "SELECT $($script:CompanySummaryColumns) FROM companies WHERE search_text LIKE @search ORDER BY target_score DESC, hiring_velocity DESC, engagement_score DESC LIMIT 5;" -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteCompanyRowToSummary $_ })
             contacts = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM contacts WHERE search_text LIKE @search ORDER BY priority_score DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteContactRowToSummary $_ })
             jobs = @((Invoke-BdSqliteRows -Connection $connection -Sql 'SELECT * FROM jobs WHERE search_text LIKE @search ORDER BY posted_at DESC LIMIT 5;' -Parameters @{ search = $needle }) | ForEach-Object { Convert-BdSqliteJobRowToSummary $_ })
         }
@@ -4013,10 +6454,13 @@ function Find-BdSqliteSearchResults {
 }
 
 function Convert-BdSqliteBackgroundJobRowToSummary {
-    param($Row)
+    param(
+        $Row,
+        [switch]$IncludeResult
+    )
 
     $result = $null
-    if ($Row.result_json) {
+    if ($IncludeResult -and $Row.result_json) {
         try {
             $result = ConvertFrom-BdSqliteJsonText ([string]$Row.result_json)
         } catch {
@@ -4121,7 +6565,7 @@ function Get-BdSqliteBackgroundJob {
             return $null
         }
 
-        return (Convert-BdSqliteBackgroundJobRowToSummary -Row $row)
+        return (Convert-BdSqliteBackgroundJobRowToSummary -Row $row -IncludeResult)
     } finally {
         $connection.Dispose()
     }
@@ -4148,7 +6592,10 @@ function Get-BdSqliteBackgroundJobPayload {
 }
 
 function Find-BdSqliteBackgroundJobs {
-    param([hashtable]$Query)
+    param(
+        [hashtable]$Query,
+        [switch]$IncludeResult
+    )
 
     $connection = Open-BdSqliteConnection
     try {
@@ -4164,8 +6611,13 @@ function Find-BdSqliteBackgroundJobs {
             $parameters.status = $statusQuery
         }
 
-        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'background_jobs' -SelectColumns '*' -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy 'updated_at DESC, queued_at DESC' -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
-        $result.items = @($result.items | ForEach-Object { Convert-BdSqliteBackgroundJobRowToSummary -Row $_ })
+        $selectColumns = if ($IncludeResult) {
+            '*'
+        } else {
+            'id, job_type, status, summary_text, queued_at, started_at, finished_at, updated_at, progress_message, error_message, records_affected, cancel_requested'
+        }
+        $result = Invoke-BdSqlitePagedSelect -Connection $connection -TableName 'background_jobs' -SelectColumns $selectColumns -WhereClauses @($whereClauses) -Parameters $parameters -OrderBy 'updated_at DESC, queued_at DESC' -Page ([int](ConvertTo-BdSqliteNumber $pageQuery)) -PageSize ([int](ConvertTo-BdSqliteNumber $pageSizeQuery))
+        $result.items = @($result.items | ForEach-Object { Convert-BdSqliteBackgroundJobRowToSummary -Row $_ -IncludeResult:$IncludeResult })
         return $result
     } finally {
         $connection.Dispose()
@@ -4191,6 +6643,40 @@ WHERE id = @id;
 '@ -Parameters @{
             id = $JobId
             progressMessage = $ProgressMessage
+            updatedAt = $updatedAt
+        } | Out-Null
+
+        return (Get-BdSqliteBackgroundJob -JobId $JobId)
+    } finally {
+        $connection.Dispose()
+    }
+}
+
+function Update-BdSqliteBackgroundJobCheckpoint {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JobId,
+        $Payload,
+        [string]$ProgressMessage = '',
+        [int]$RecordsAffected = 0
+    )
+
+    $updatedAt = (Get-Date).ToString('o')
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        Invoke-BdSqliteNonQuery -Connection $connection -Sql @'
+UPDATE background_jobs
+SET payload_json = @payloadJson,
+    progress_message = CASE WHEN @progressMessage = '' THEN progress_message ELSE @progressMessage END,
+    records_affected = CASE WHEN @recordsAffected > 0 THEN @recordsAffected ELSE records_affected END,
+    updated_at = @updatedAt
+WHERE id = @id;
+'@ -Parameters @{
+            id = $JobId
+            payloadJson = (ConvertTo-BdSqliteJsonText $Payload)
+            progressMessage = [string]$ProgressMessage
+            recordsAffected = [int]$RecordsAffected
             updatedAt = $updatedAt
         } | Out-Null
 
@@ -4254,6 +6740,55 @@ WHERE id = @id
     }
 
     return (Get-BdSqliteBackgroundJob -JobId $candidate)
+}
+
+function Requeue-BdSqliteBackgroundJob {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JobId,
+        $Payload = $null,
+        [string]$ProgressMessage = 'Queued to resume'
+    )
+
+    $updatedAt = (Get-Date).ToString('o')
+    $connection = Open-BdSqliteConnection
+    try {
+        Initialize-BdSqliteSchema -Connection $connection
+        $parameters = @{
+            id = $JobId
+            updatedAt = $updatedAt
+            progressMessage = [string]$ProgressMessage
+        }
+        $sql = @'
+UPDATE background_jobs
+SET status = 'queued',
+    updated_at = @updatedAt,
+    progress_message = @progressMessage,
+    error_message = '',
+    finished_at = NULL
+WHERE id = @id
+  AND status = 'running';
+'@
+        if ($null -ne $Payload) {
+            $sql = @'
+UPDATE background_jobs
+SET status = 'queued',
+    updated_at = @updatedAt,
+    progress_message = @progressMessage,
+    error_message = '',
+    finished_at = NULL,
+    payload_json = @payloadJson
+WHERE id = @id
+  AND status = 'running';
+'@
+            $parameters.payloadJson = (ConvertTo-BdSqliteJsonText $Payload)
+        }
+
+        Invoke-BdSqliteNonQuery -Connection $connection -Sql $sql -Parameters $parameters | Out-Null
+        return (Get-BdSqliteBackgroundJob -JobId $JobId)
+    } finally {
+        $connection.Dispose()
+    }
 }
 
 function Complete-BdSqliteBackgroundJob {
@@ -4370,6 +6905,7 @@ Export-ModuleMember -Function @(
     'Get-BdSqliteSegment',
     'Get-BdSqliteScopedStateForAccountIds',
     'Get-BdSqliteScopedStateForConfigIds',
+    'Get-BdSqliteScopedStateForCompanyKeys',
     'Sync-BdSqliteState',
     'Sync-BdSqliteStateSegments',
     'Sync-BdSqliteStateSegmentsPartial',
@@ -4382,14 +6918,28 @@ Export-ModuleMember -Function @(
     'Add-BdSqliteBackgroundJob',
     'Get-BdSqliteBackgroundJob',
     'Get-BdSqliteBackgroundJobPayload',
+    'Get-BdSqliteResolverProbeCacheRecords',
+    'Save-BdSqliteResolverProbeCacheRecords',
+    'Clear-BdSqliteExpiredResolverProbeCache',
+    'Get-BdSqliteResolverSearchCacheRecord',
+    'Save-BdSqliteResolverSearchCacheRecord',
+    'Clear-BdSqliteExpiredResolverSearchCache',
+    'Get-BdSqliteResolverSeedCooldownRecords',
+    'Save-BdSqliteResolverSeedCooldownRecords',
+    'Remove-BdSqliteResolverSeedCooldownRecords',
+    'Clear-BdSqliteExpiredResolverSeedCooldowns',
     'Find-BdSqliteBackgroundJobs',
     'Update-BdSqliteBackgroundJobProgress',
+    'Update-BdSqliteBackgroundJobCheckpoint',
     'Start-BdSqliteBackgroundJob',
+    'Requeue-BdSqliteBackgroundJob',
     'Complete-BdSqliteBackgroundJob',
     'Fail-BdSqliteBackgroundJob',
     'Cancel-BdSqliteBackgroundJob',
     'Get-BdSqliteFilterOptions',
     'Get-BdSqliteFilterSnapshotResult',
+    'Get-BdSqliteTargetScoreBackfillAccountIds',
+    'Get-BdSqliteTargetScoreBackfillCount',
     'Find-BdSqliteAccounts',
     'Find-BdSqliteContacts',
     'Find-BdSqliteJobs',
@@ -4402,7 +6952,9 @@ Export-ModuleMember -Function @(
     'Invoke-BdSqliteLocalEnrichmentPass',
     'Find-BdSqliteActivity',
     'Get-BdSqliteDashboardModel',
+    'Get-BdSqliteDashboardExtendedModel',
     'Get-BdSqliteDashboardSnapshotResult',
+    'Get-BdSqliteAccountResolutionContext',
     'Get-BdSqliteAccountDetail',
     'Find-BdSqliteSearchResults'
 )

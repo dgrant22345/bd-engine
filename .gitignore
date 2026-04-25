@@ -12,10 +12,26 @@ data/import-runs.json
 data/live-sheet-backups/
 data_backup_before_reseed/
 
+# Runtime artifacts
+data/background-worker.pid
+data/diagnostic.txt
+
 # Scratch / logs
 scratch.txt
 server-test.log
 *.log
 
-# Claude Code worktrees
-.claude/worktrees/
+# Claude Code config
+.claude/
+
+# License (customer-specific, not for version control)
+data/license.json
+
+# Credentials (never commit)
+*.credentials.json
+*.service-account.json
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store

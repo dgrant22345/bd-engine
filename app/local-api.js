@@ -1,5 +1,6 @@
 (() => {
   const responseCache = new Map();
+  const inflightRequests = new Map();
 
   function cloneValue(value) {
     if (value === null || value === undefined) return value;
@@ -30,31 +31,50 @@
       return cloneValue(responseCache.get(cacheKey));
     }
 
-    const response = await fetch(path, {
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
-      ...options,
-    });
+    // Deduplicate identical in-flight GET requests
+    if (useCache && inflightRequests.has(cacheKey)) {
+      const payload = await inflightRequests.get(cacheKey);
+      return cloneValue(payload);
+    }
 
-    if (!response.ok) {
-      let message = `Request failed: ${response.status}`;
-      try {
-        const payload = await response.json();
-        message = payload.error || payload.details || message;
-      } catch (_error) {
-        // Ignore non-JSON error bodies.
+    const fetchPromise = (async () => {
+      const response = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        ...options,
+      });
+
+      if (!response.ok) {
+        let message = `Request failed: ${response.status}`;
+        try {
+          const payload = await response.json();
+          message = payload.error || payload.details || message;
+        } catch (_error) {
+          // Ignore non-JSON error bodies.
+        }
+        throw new Error(message);
       }
-      throw new Error(message);
+
+      return response.status === 204 ? null : await response.json();
+    })();
+
+    if (useCache) {
+      inflightRequests.set(cacheKey, fetchPromise);
     }
 
-    const payload = response.status === 204 ? null : await response.json();
-    if (method === 'GET' && useCache) {
-      responseCache.set(cacheKey, payload);
-    } else if (method !== 'GET') {
-      invalidateCache();
+    try {
+      const payload = await fetchPromise;
+      if (method === 'GET' && useCache) {
+        responseCache.set(cacheKey, payload);
+      } else if (method !== 'GET') {
+        invalidateCache();
+      }
+      return cloneValue(payload);
+    } finally {
+      if (useCache) {
+        inflightRequests.delete(cacheKey);
+      }
     }
-
-    return cloneValue(payload);
   }
 
   async function loadBootstrap(appState, force = false, options = {}) {

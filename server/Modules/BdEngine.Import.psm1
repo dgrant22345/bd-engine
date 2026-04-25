@@ -543,8 +543,12 @@ function Import-BdConnectionsCsv {
     $state.contacts = @($contacts)
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Refreshing derived data' -Processed $totalRows -Total $totalRows -StartedAt $startedAt -Message 'Recomputing target accounts from contacts'
     $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback
+    $preConfigKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($cfg in @($state.boardConfigs)) { $k = Get-CanonicalCompanyKey ([string]$cfg.companyName); if ($k) { [void]$preConfigKeys.Add($k) } }
     $state = Sync-BoardConfigsFromCompanies -State $state -ProgressCallback $ProgressCallback
-    $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback
+    $postConfigTouched = @($state.boardConfigs | ForEach-Object { Get-CanonicalCompanyKey ([string]$_.companyName) } | Where-Object { $_ -and -not $preConfigKeys.Contains($_) } | Select-Object -Unique)
+    $configTouchedKeys = if ($postConfigTouched.Count -gt 0) { $postConfigTouched } else { $null }
+    $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback -TouchedCompanyKeys $configTouchedKeys
 
     $importRun = [ordered]@{
         id = New-RandomId -Prefix 'run'
@@ -857,6 +861,7 @@ function Import-BdWorkbook {
         $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback
         $state = Sync-BoardConfigsFromCompanies -State $state -ProgressCallback $ProgressCallback
 
+        $restoredCompanyKeys = New-Object System.Collections.ArrayList
         foreach ($company in @($state.companies)) {
             $existing = $existingCompanies[$company.normalizedName]
             if (-not $existing) {
@@ -868,9 +873,11 @@ function Import-BdWorkbook {
                     $company[$field] = $existing[$field]
                 }
             }
+            [void]$restoredCompanyKeys.Add([string]$company.normalizedName)
         }
 
-        $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback
+        $restoredTouched = if ($restoredCompanyKeys.Count -gt 0) { @($restoredCompanyKeys) } else { $null }
+        $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback -TouchedCompanyKeys $restoredTouched
 
         $importRun = [ordered]@{
             id = New-RandomId -Prefix 'run'
