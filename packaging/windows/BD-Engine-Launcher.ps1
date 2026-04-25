@@ -100,7 +100,7 @@ try {
     }
 
     $env:BD_ENGINE_DATA_ROOT = $DataRoot
-    $baseUrl = "http://localhost:$Port"
+    $baseUrl = "http://127.0.0.1:$Port"
     $appUrl = "$baseUrl/"
     Write-LauncherLog "Launch requested. installRoot=$installRoot dataRoot=$DataRoot port=$Port"
 
