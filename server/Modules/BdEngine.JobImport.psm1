@@ -499,7 +499,14 @@ function Get-BoardConfigTemplateMap {
 }
 
 function Get-ResolverKnownMappingPath {
-    return (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data\resolver-known-mappings.json')
+    $configuredRoot = [string]$env:BD_ENGINE_DATA_ROOT
+    $dataRoot = if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+        [System.IO.Path]::GetFullPath($configuredRoot)
+    } else {
+        Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data'
+    }
+
+    return (Join-Path $dataRoot 'resolver-known-mappings.json')
 }
 
 function Get-ResolverKnownMappingOverrides {

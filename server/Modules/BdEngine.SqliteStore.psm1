@@ -28,6 +28,11 @@ function Get-BdSqliteProjectRoot {
 }
 
 function Get-BdSqliteDataRoot {
+    $configuredRoot = [string]$env:BD_ENGINE_DATA_ROOT
+    if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+        return ([System.IO.Path]::GetFullPath($configuredRoot))
+    }
+
     return (Join-Path (Get-BdSqliteProjectRoot) 'data')
 }
 
