@@ -228,6 +228,10 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/accounts') {
+    if (req.method === 'POST') {
+      const item = store.addAccount(tenantId, await readJson(req));
+      return sendJson(res, 201, item);
+    }
     return sendJson(res, 200, store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
   }
 
@@ -261,6 +265,10 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/contacts') {
+    if (req.method === 'POST') {
+      const item = store.addContact(tenantId, await readJson(req));
+      return sendJson(res, 201, item);
+    }
     return sendJson(res, 200, store.findContacts(tenantId, Object.fromEntries(url.searchParams)));
   }
 
@@ -293,6 +301,11 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/settings' && req.method === 'POST') {
     return sendJson(res, 200, store.patchSettings(tenantId, await readJson(req)));
+  }
+
+  if (pathname === '/api/setup/complete' && req.method === 'POST') {
+    store.completeSetup(tenantId);
+    return sendJson(res, 200, { ok: true, setupComplete: true });
   }
 
   if (pathname === '/api/activity') {
@@ -341,6 +354,15 @@ self.addEventListener('activate', (event) => {
     }));
   }
 
+  // ── LinkedIn CSV import (real) ─────────────────────────────────────────
+  if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
+    const csvText = await readBody(req);
+    const result = store.importLinkedInCSV(tenantId, csvText);
+    if (result.error) return sendJson(res, 400, result);
+    return sendJson(res, 200, result);
+  }
+
+  // Stub remaining import/enrichment/discovery endpoints
   if (pathname.startsWith('/api/import/') || pathname.startsWith('/api/enrichment/') || pathname.startsWith('/api/discovery/') || pathname.startsWith('/api/google-sheets/')) {
     return sendJson(res, 202, store.createCompletedJob('cloud-stub-job'));
   }
@@ -590,4 +612,12 @@ async function readJson(req) {
 
 function isTruthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value || ''));
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }

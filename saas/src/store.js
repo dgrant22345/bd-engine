@@ -567,6 +567,13 @@ export function createStore() {
       return { ok: true, settings: { ...profile.settings } };
     },
 
+    completeSetup(tenantId) {
+      assertTenant(tenantId);
+      const profile = getTenantProfile(tenantId);
+      profile.settings.setupComplete = true;
+      return { ok: true };
+    },
+
     getActivity(tenantId, query) {
       assertTenant(tenantId);
       return paginate(activitiesForTenant(tenantId), query);
@@ -709,6 +716,219 @@ export function createStore() {
         accounts: filterText(accountsForTenant(tenantId), q, ['displayName', 'domain', 'industry']).slice(0, 8),
         contacts: filterText(contactsForTenant(tenantId), q, ['fullName', 'companyName', 'title', 'email']).slice(0, 8),
         jobs: filterText(jobsForTenant(tenantId), q, ['title', 'companyName', 'location']).slice(0, 8),
+      };
+    },
+
+    // ── Account creation ──────────────────────────────────────────────────
+
+    addAccount(tenantId, payload) {
+      assertTenant(tenantId);
+      const id = `acct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const item = account({
+        id,
+        tenantId,
+        displayName: payload.displayName || payload.companyName || 'New Account',
+        domain: payload.domain || '',
+        industry: payload.industry || '',
+        location: payload.location || '',
+        status: payload.status || 'new',
+        outreachStatus: payload.outreachStatus || 'not_started',
+        targetScore: payload.targetScore || 0,
+        dailyScore: 0,
+        priorityTier: payload.priorityTier || 'C',
+        owner: payload.owner || '',
+        connectionCount: payload.connectionCount || 0,
+        seniorContactCount: payload.seniorContactCount || 0,
+        talentContactCount: payload.talentContactCount || 0,
+        buyerTitleCount: payload.buyerTitleCount || 0,
+        jobCount: 0,
+        openRoleCount: 0,
+        newRoleCount7d: 0,
+        jobsLast30Days: 0,
+        hiringVelocity: 0,
+        engagementScore: 0,
+        relationshipStrengthScore: 0,
+        alertPriorityScore: 0,
+        nextAction: '',
+        notes: payload.notes || '',
+        createdAt: now(),
+        updatedAt: now(),
+      });
+      // Override the default tenantId from account() factory
+      item.tenantId = tenantId;
+      accounts.push(item);
+      return item;
+    },
+
+    // ── Contact creation ──────────────────────────────────────────────────
+
+    addContact(tenantId, payload) {
+      assertTenant(tenantId);
+      const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const item = contact({
+        id,
+        tenantId,
+        accountId: payload.accountId || '',
+        fullName: payload.fullName || `${payload.firstName || ''} ${payload.lastName || ''}`.trim(),
+        firstName: payload.firstName || '',
+        lastName: payload.lastName || '',
+        email: payload.email || '',
+        linkedinUrl: payload.linkedinUrl || payload.url || '',
+        companyName: payload.companyName || '',
+        title: payload.title || payload.position || '',
+        connectedOn: payload.connectedOn || '',
+        outreachStatus: 'not_started',
+        priorityScore: payload.priorityScore || 0,
+        seniority: payload.seniority || '',
+        isTalentLeader: payload.isTalentLeader || false,
+        notes: payload.notes || '',
+        source: payload.source || 'manual',
+        createdAt: now(),
+        updatedAt: now(),
+      });
+      // Override the default tenantId from contact() factory
+      item.tenantId = tenantId;
+      contacts.push(item);
+      return item;
+    },
+
+    // ── LinkedIn CSV import ───────────────────────────────────────────────
+
+    importLinkedInCSV(tenantId, csvText) {
+      assertTenant(tenantId);
+      const rows = parseCSV(csvText);
+      if (!rows.length) return { error: 'No data found in CSV.' };
+
+      // Group contacts by company
+      const companyMap = new Map();
+      const importedContacts = [];
+
+      for (const row of rows) {
+        const firstName = (row['First Name'] || row['first name'] || '').trim();
+        const lastName = (row['Last Name'] || row['last name'] || '').trim();
+        const fullName = `${firstName} ${lastName}`.trim();
+        if (!fullName) continue;
+
+        const email = (row['Email Address'] || row['email address'] || row['Email'] || row['email'] || '').trim();
+        const company = (row['Company'] || row['company'] || '').trim();
+        const position = (row['Position'] || row['position'] || row['Title'] || row['title'] || '').trim();
+        const connectedOn = (row['Connected On'] || row['connected on'] || '').trim();
+        const linkedinUrl = (row['URL'] || row['url'] || row['Profile URL'] || row['profile url'] || '').trim();
+
+        if (!company) continue; // Skip contacts without a company
+
+        if (!companyMap.has(normalizeKey(company))) {
+          companyMap.set(normalizeKey(company), {
+            displayName: company,
+            contacts: [],
+            domain: email ? email.split('@')[1] || '' : '',
+          });
+        }
+
+        const companyEntry = companyMap.get(normalizeKey(company));
+        // If this contact has an email domain, use it for the company
+        if (email && !companyEntry.domain) {
+          const domain = email.split('@')[1] || '';
+          if (domain && !domain.match(/gmail|yahoo|hotmail|outlook|icloud|aol|mail/i)) {
+            companyEntry.domain = domain;
+          }
+        }
+
+        companyEntry.contacts.push({
+          firstName,
+          lastName,
+          fullName,
+          email,
+          company,
+          position,
+          connectedOn,
+          linkedinUrl,
+        });
+      }
+
+      // Create accounts and contacts
+      let accountsCreated = 0;
+      let accountsUpdated = 0;
+      let contactsCreated = 0;
+
+      for (const [normName, companyData] of companyMap) {
+        // Check if account already exists for this tenant
+        let existingAccount = accounts.find(
+          (a) => a.tenantId === tenantId && normalizeKey(a.displayName) === normName
+        );
+
+        if (!existingAccount) {
+          existingAccount = this.addAccount(tenantId, {
+            displayName: companyData.displayName,
+            domain: companyData.domain,
+            connectionCount: companyData.contacts.length,
+          });
+          accountsCreated++;
+        } else {
+          existingAccount.connectionCount = (existingAccount.connectionCount || 0) + companyData.contacts.length;
+          existingAccount.updatedAt = now();
+          accountsUpdated++;
+        }
+
+        // Create contacts
+        for (const c of companyData.contacts) {
+          // Skip if contact already exists
+          const existing = contacts.find(
+            (ct) => ct.tenantId === tenantId && normalizeKey(ct.fullName) === normalizeKey(c.fullName) && normalizeKey(ct.companyName) === normName
+          );
+          if (existing) continue;
+
+          const seniority = classifySeniority(c.position);
+          const isTalent = isTalentTitle(c.position);
+          const priorityScore = computeContactPriority(seniority, isTalent, c.email);
+
+          this.addContact(tenantId, {
+            accountId: existingAccount.id,
+            firstName: c.firstName,
+            lastName: c.lastName,
+            fullName: c.fullName,
+            email: c.email,
+            linkedinUrl: c.linkedinUrl,
+            companyName: c.company,
+            title: c.position,
+            connectedOn: c.connectedOn,
+            priorityScore,
+            seniority,
+            isTalentLeader: isTalent,
+            source: 'linkedin_csv',
+          });
+          contactsCreated++;
+        }
+
+        // Update account scores
+        const acctContacts = contacts.filter((ct) => ct.tenantId === tenantId && ct.accountId === existingAccount.id);
+        existingAccount.connectionCount = acctContacts.length;
+        existingAccount.seniorContactCount = acctContacts.filter((ct) => ['executive', 'director', 'vp'].includes(ct.seniority)).length;
+        existingAccount.talentContactCount = acctContacts.filter((ct) => ct.isTalentLeader).length;
+        existingAccount.contactCount = acctContacts.length;
+        // Simple target score based on connections
+        existingAccount.targetScore = Math.min(100, Math.round(
+          (existingAccount.connectionCount * 8) +
+          (existingAccount.seniorContactCount * 15) +
+          (existingAccount.talentContactCount * 20)
+        ));
+        existingAccount.dailyScore = existingAccount.targetScore;
+      }
+
+      // Mark setup as complete after import
+      const profile = getTenantProfile(tenantId);
+      if (profile) profile.settings.setupComplete = true;
+
+      return {
+        ok: true,
+        summary: {
+          rowsParsed: rows.length,
+          accountsCreated,
+          accountsUpdated,
+          contactsCreated,
+          totalAccounts: accountsForTenant(tenantId).length,
+          totalContacts: contactsForTenant(tenantId).length,
+        },
       };
     },
   };
@@ -971,4 +1191,84 @@ function pastDate(days) {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString();
+}
+
+// ── CSV parser ───────────────────────────────────────────────────────────────
+
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.length < 2) return [];
+
+  // LinkedIn CSVs sometimes have BOM or notes at the top — find the header row
+  let headerIndex = 0;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    if (lines[i].toLowerCase().includes('first name') || lines[i].toLowerCase().includes('company')) {
+      headerIndex = i;
+      break;
+    }
+  }
+
+  const headers = splitCSVLine(lines[headerIndex]);
+  const rows = [];
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const values = splitCSVLine(line);
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j].trim()] = (values[j] || '').trim();
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function splitCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+// ── Contact classification ───────────────────────────────────────────────────
+
+function classifySeniority(title) {
+  const t = (title || '').toLowerCase();
+  if (/\b(ceo|cto|cfo|coo|cpo|chro|chief|founder|president|partner)\b/.test(t)) return 'executive';
+  if (/\b(vp|vice president|svp|evp)\b/.test(t)) return 'vp';
+  if (/\b(director)\b/.test(t)) return 'director';
+  if (/\b(manager|head of|lead)\b/.test(t)) return 'manager';
+  if (/\b(senior|sr|principal)\b/.test(t)) return 'senior';
+  return 'individual';
+}
+
+function isTalentTitle(title) {
+  const t = (title || '').toLowerCase();
+  return /\b(talent|recruit|people|hr|human resources|staffing|workforce)\b/.test(t);
+}
+
+function computeContactPriority(seniority, isTalent, email) {
+  let score = 30;
+  const seniorityBonus = { executive: 40, vp: 35, director: 30, manager: 20, senior: 15, individual: 5 };
+  score += seniorityBonus[seniority] || 5;
+  if (isTalent) score += 20;
+  if (email) score += 5;
+  return Math.min(100, score);
 }
