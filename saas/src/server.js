@@ -4,8 +4,9 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
-import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, getMembership, safeUser, createTenant } from './users.js';
+import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, getMembership, safeUser, createTenant, loadFromDb as loadUsersFromDb } from './users.js';
 import { getPlan, getTrialDaysRemaining, getUsageSummary, PLANS } from './billing.js';
+import { initDb, closeDb } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -29,30 +30,56 @@ const mimeTypes = {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
-createServer(async (req, res) => {
-  const startedAt = performance.now();
-  // CORS for dev
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
+async function startServer() {
+  // Initialize database (if DATABASE_URL is set)
+  const dbConnected = await initDb();
+  if (dbConnected) {
+    await loadUsersFromDb();
+    await store.loadFromDb();
   }
-  try {
-    await route(req, res);
-  } catch (error) {
-    sendJson(res, error.status || 500, {
-      error: error.message || 'Unexpected server error',
+
+  const server = createServer(async (req, res) => {
+    const startedAt = performance.now();
+    // CORS for dev
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    try {
+      await route(req, res);
+    } catch (error) {
+      sendJson(res, error.status || 500, {
+        error: error.message || 'Unexpected server error',
+      });
+    } finally {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log(`BD Engine Cloud running at http://${host}:${port}`);
+    console.log(`  Demo login: demo@bdengine.io / demo1234`);
+  });
+
+  // Graceful shutdown
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, async () => {
+      console.log(`\n  Received ${signal}, shutting down...`);
+      server.close();
+      await closeDb();
+      process.exit(0);
     });
-  } finally {
-    const elapsedMs = Math.round(performance.now() - startedAt);
-    console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
   }
-}).listen(port, host, () => {
-  console.log(`BD Engine Cloud running at http://${host}:${port}`);
-  console.log(`  Demo login: demo@bdengine.io / demo1234`);
+}
+
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
 // ── Routing ─────────────────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
 /**
  * BD Engine Cloud — User & tenant management store.
  *
- * Manages user accounts, tenants, and memberships in memory.
- * Separated from the main data store so auth can operate independently.
+ * Manages user accounts, tenants, and memberships in memory,
+ * with write-through persistence to PostgreSQL when available.
  */
 
 import { randomUUID } from 'node:crypto';
 import { hashPassword, verifyPassword } from './auth.js';
+import { dbSaveUser, dbSaveTenant, dbSaveMembership, dbLoadAllUsers, dbLoadAllTenants, dbLoadAllMemberships } from './db.js';
 
 const now = () => new Date().toISOString();
 
@@ -21,32 +22,63 @@ const memberships = []; // { tenantId, userId, role }
 const DEMO_TENANT_ID = 'tenant-demo';
 const DEMO_USER_ID = 'user-demo';
 
-tenants.set(DEMO_TENANT_ID, {
-  id: DEMO_TENANT_ID,
-  slug: 'demo',
-  name: 'BD Engine Cloud Demo',
-  plan: 'trial',
-  status: 'trialing',
-  createdAt: now(),
-  updatedAt: now(),
-});
+function seedDemoData() {
+  if (tenants.has(DEMO_TENANT_ID)) return; // Already loaded from DB
 
-users.set(DEMO_USER_ID, {
-  id: DEMO_USER_ID,
-  email: 'demo@bdengine.io',
-  name: 'Demo User',
-  passwordHash: hashPassword('demo1234'),
-  status: 'active',
-  createdAt: now(),
-  updatedAt: now(),
-});
+  tenants.set(DEMO_TENANT_ID, {
+    id: DEMO_TENANT_ID,
+    slug: 'demo',
+    name: 'BD Engine Cloud Demo',
+    plan: 'trial',
+    status: 'trialing',
+    persona: 'bd',
+    createdAt: now(),
+    updatedAt: now(),
+  });
 
-memberships.push({
-  tenantId: DEMO_TENANT_ID,
-  userId: DEMO_USER_ID,
-  role: 'owner',
-  createdAt: now(),
-});
+  users.set(DEMO_USER_ID, {
+    id: DEMO_USER_ID,
+    email: 'demo@bdengine.io',
+    name: 'Demo User',
+    passwordHash: hashPassword('demo1234'),
+    status: 'active',
+    createdAt: now(),
+    updatedAt: now(),
+  });
+
+  memberships.push({
+    tenantId: DEMO_TENANT_ID,
+    userId: DEMO_USER_ID,
+    role: 'owner',
+    createdAt: now(),
+  });
+}
+
+// ── Load from database on startup ───────────────────────────────────────────
+
+export async function loadFromDb() {
+  const dbUsers = await dbLoadAllUsers();
+  const dbTenants = await dbLoadAllTenants();
+  const dbMemberships = await dbLoadAllMemberships();
+
+  for (const u of dbUsers) {
+    users.set(u.id, u);
+  }
+  for (const t of dbTenants) {
+    tenants.set(t.id, t);
+  }
+  for (const m of dbMemberships) {
+    // Avoid duplicate memberships
+    if (!memberships.some(x => x.tenantId === m.tenantId && x.userId === m.userId)) {
+      memberships.push(m);
+    }
+  }
+
+  console.log(`  DB: Loaded ${dbUsers.length} users, ${dbTenants.length} tenants, ${dbMemberships.length} memberships`);
+}
+
+// Always seed demo data (will be skipped if already loaded from DB)
+seedDemoData();
 
 // ── User CRUD ───────────────────────────────────────────────────────────────
 
@@ -78,6 +110,8 @@ export function createUser({ email, name, password }) {
     updatedAt: now(),
   };
   users.set(id, user);
+  // Persist to DB (fire-and-forget)
+  dbSaveUser(user).catch(() => {});
   return { user };
 }
 
@@ -92,7 +126,7 @@ export function authenticateUser(email, password) {
 
 // ── Tenant CRUD ─────────────────────────────────────────────────────────────
 
-export function createTenant({ name, slug, plan = 'trial', ownerUserId }) {
+export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd' }) {
   const id = `tenant-${randomUUID().slice(0, 8)}`;
   const normalizedSlug = String(slug || name || '')
     .trim()
@@ -114,19 +148,24 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId }) {
     name: String(name || '').trim() || 'My Workspace',
     plan,
     status: plan === 'trial' ? 'trialing' : 'active',
+    persona: persona || 'bd',
     createdAt: now(),
     updatedAt: now(),
   };
   tenants.set(id, tenant);
+  // Persist to DB
+  dbSaveTenant(tenant).catch(() => {});
 
   // Add owner membership
   if (ownerUserId) {
-    memberships.push({
+    const membership = {
       tenantId: id,
       userId: ownerUserId,
       role: 'owner',
       createdAt: now(),
-    });
+    };
+    memberships.push(membership);
+    dbSaveMembership(membership).catch(() => {});
   }
 
   return { tenant };
@@ -155,6 +194,7 @@ export function addMember(tenantId, userId, role = 'member') {
   if (existing) return existing;
   const membership = { tenantId, userId, role, createdAt: now() };
   memberships.push(membership);
+  dbSaveMembership(membership).catch(() => {});
   return membership;
 }
 

@@ -1,3 +1,5 @@
+import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
+
 const now = () => new Date().toISOString();
 
 const seedTenant = {
@@ -306,8 +308,71 @@ const followups = [
 
 const backgroundJobs = new Map();
 
+// ── Debounced persistence ────────────────────────────────────────────────────
+
+const pendingSaves = new Map();
+
+function persistTenant(tenantId) {
+  if (!isDbEnabled()) return;
+  // Debounce: wait 500ms to batch rapid writes
+  if (pendingSaves.has(tenantId)) clearTimeout(pendingSaves.get(tenantId));
+  pendingSaves.set(tenantId, setTimeout(() => {
+    pendingSaves.delete(tenantId);
+    const profile = tenantProfiles.get(tenantId);
+    const data = {
+      accounts: accounts.filter(a => a.tenantId === tenantId),
+      contacts: contacts.filter(c => c.tenantId === tenantId),
+      jobs: jobs.filter(j => j.tenantId === tenantId),
+      configs: boardConfigs.filter(c => c.tenantId === tenantId),
+      activities: activities.filter(a => a.tenantId === tenantId),
+      settings: profile ? { ...profile.settings, persona: profile.persona } : {},
+    };
+    dbSaveTenantData(tenantId, data).catch(err => console.error('Persist error:', err.message));
+  }, 500));
+}
+
 export function createStore() {
   return {
+    // Load all tenant data from DB on startup
+    async loadFromDb() {
+      const allData = await dbLoadAllTenantData();
+      for (const [tenantId, data] of allData) {
+        // Ensure profile exists
+        if (!tenantProfiles.has(tenantId)) {
+          tenantProfiles.set(tenantId, {
+            workspace: { name: tenantId },
+            settings: { ...data.settings },
+            persona: data.settings?.persona || 'bd',
+          });
+        } else {
+          const profile = tenantProfiles.get(tenantId);
+          if (data.settings) Object.assign(profile.settings, data.settings);
+          if (data.settings?.persona) profile.persona = data.settings.persona;
+        }
+
+        // Load accounts (avoid duplicates)
+        for (const a of (data.accounts || [])) {
+          if (!accounts.some(x => x.id === a.id)) accounts.push(a);
+        }
+        // Load contacts
+        for (const c of (data.contacts || [])) {
+          if (!contacts.some(x => x.id === c.id)) contacts.push(c);
+        }
+        // Load jobs
+        for (const j of (data.jobs || [])) {
+          if (!jobs.some(x => x.id === j.id)) jobs.push(j);
+        }
+        // Load configs
+        for (const c of (data.configs || [])) {
+          if (!boardConfigs.some(x => x.id === c.id)) boardConfigs.push(c);
+        }
+        // Load activities
+        for (const a of (data.activities || [])) {
+          if (!activities.some(x => x.id === a.id)) activities.push(a);
+        }
+      }
+      console.log(`  DB: Loaded tenant data for ${allData.size} tenants`);
+    },
     ensureTenant(tenant, user = {}) {
       return ensureTenantProfile(tenant?.id || tenant, tenant, user);
     },
@@ -315,6 +380,7 @@ export function createStore() {
     setPersona(tenantId, persona) {
       const profile = getTenantProfile(tenantId);
       if (profile) profile.persona = persona || 'bd';
+      persistTenant(tenantId);
     },
 
     getPersona(tenantId) {
@@ -496,6 +562,7 @@ export function createStore() {
       if (!item || item.tenantId !== tenantId) return null;
       Object.assign(item, pickPatch(patch, ['status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt', 'owner']));
       item.updatedAt = now();
+      persistTenant(tenantId);
       return item;
     },
 
@@ -510,6 +577,7 @@ export function createStore() {
       if (!item) return null;
       Object.assign(item, pickPatch(patch, ['outreachStatus', 'notes', 'email', 'title', 'linkedinUrl']));
       item.updatedAt = now();
+      persistTenant(tenantId);
       return item;
     },
 
@@ -541,6 +609,7 @@ export function createStore() {
         ...payload,
       });
       boardConfigs.unshift(config);
+      persistTenant(tenantId);
       return config;
     },
 
@@ -551,6 +620,7 @@ export function createStore() {
       Object.assign(config, normalizeConfigPatch(pickPatch(patch, ['companyName', 'atsType', 'ats', 'boardId', 'domain', 'careersUrl', 'source', 'active', 'notes'])));
       if (config.companyName) config.normalizedCompanyName = normalizeKey(config.companyName);
       config.updatedAt = now();
+      persistTenant(tenantId);
       return config;
     },
 
@@ -561,6 +631,7 @@ export function createStore() {
       config.reviewStatus = payload.action === 'reject' ? 'rejected' : 'approved';
       config.active = payload.action !== 'reject';
       config.updatedAt = now();
+      persistTenant(tenantId);
       return config;
     },
 
@@ -575,6 +646,7 @@ export function createStore() {
         'geographyFocus',
         'gtaPriority',
       ]));
+      persistTenant(tenantId);
       return { ok: true, settings: { ...profile.settings } };
     },
 
@@ -582,6 +654,7 @@ export function createStore() {
       assertTenant(tenantId);
       const profile = getTenantProfile(tenantId);
       profile.settings.setupComplete = true;
+      persistTenant(tenantId);
       return { ok: true };
     },
 
@@ -613,6 +686,7 @@ export function createStore() {
         itemAccount.lastContactedAt = activity.occurredAt;
         if (activity.pipelineStage) itemAccount.outreachStatus = activity.pipelineStage;
       }
+      persistTenant(tenantId);
       return activity;
     },
 
@@ -732,7 +806,7 @@ export function createStore() {
 
     // ── Account creation ──────────────────────────────────────────────────
 
-    addAccount(tenantId, payload) {
+    addAccount(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
       const id = `acct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const item = account({
@@ -768,12 +842,13 @@ export function createStore() {
       // Override the default tenantId from account() factory
       item.tenantId = tenantId;
       accounts.push(item);
+      if (!_skipPersist) persistTenant(tenantId);
       return item;
     },
 
     // ── Contact creation ──────────────────────────────────────────────────
 
-    addContact(tenantId, payload) {
+    addContact(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
       const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const item = contact({
@@ -800,6 +875,7 @@ export function createStore() {
       // Override the default tenantId from contact() factory
       item.tenantId = tenantId;
       contacts.push(item);
+      if (!_skipPersist) persistTenant(tenantId);
       return item;
     },
 
@@ -807,6 +883,7 @@ export function createStore() {
 
     importLinkedInCSV(tenantId, csvText) {
       assertTenant(tenantId);
+      // Persistence is triggered once at the end of import
       const rows = parseCSV(csvText);
       if (!rows.length) return { error: 'No data found in CSV.' };
 
@@ -929,6 +1006,9 @@ export function createStore() {
       // Mark setup as complete after import
       const profile = getTenantProfile(tenantId);
       if (profile) profile.settings.setupComplete = true;
+
+      // Persist all imported data
+      persistTenant(tenantId);
 
       return {
         ok: true,
