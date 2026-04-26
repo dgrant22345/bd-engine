@@ -175,7 +175,6 @@
               </p>
               <div class="hero-cta">
                 <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
-                <button class="btn btn-ghost btn-lg" id="hero-demo">Try demo account</button>
               </div>
               <p class="hero-note">No credit card required · 14-day free trial · Cancel anytime</p>
             </div>
@@ -309,7 +308,6 @@
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
       root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
       root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
-      root.querySelector('#hero-demo')?.addEventListener('click', () => doLogin('demo@bdengine.io', 'demo1234'));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
     }
 
@@ -343,10 +341,6 @@
               <p>Don't have an account? <button class="link-btn" id="goto-signup">Sign up free</button></p>
               <button class="link-btn" id="goto-landing">← Back to home</button>
             </div>
-            <div class="auth-demo">
-              <button class="btn btn-ghost btn-sm" id="demo-login">Try demo account</button>
-              <p class="auth-demo-hint">demo@bdengine.io / demo1234</p>
-            </div>
           </div>
         </div>`;
 
@@ -358,7 +352,6 @@
       });
       root.querySelector('#goto-signup')?.addEventListener('click', () => { state.view = 'signup'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
-      root.querySelector('#demo-login')?.addEventListener('click', () => doLogin('demo@bdengine.io', 'demo1234'));
     }
 
     // ── Signup page ───────────────────────────────────────────────────────

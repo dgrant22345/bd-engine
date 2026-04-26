@@ -17,42 +17,7 @@ const users = new Map();
 const tenants = new Map();
 const memberships = []; // { tenantId, userId, role }
 
-// ── Seed demo tenant + user ─────────────────────────────────────────────────
 
-const DEMO_TENANT_ID = 'tenant-demo';
-const DEMO_USER_ID = 'user-demo';
-
-function seedDemoData() {
-  if (tenants.has(DEMO_TENANT_ID)) return; // Already loaded from DB
-
-  tenants.set(DEMO_TENANT_ID, {
-    id: DEMO_TENANT_ID,
-    slug: 'demo',
-    name: 'BD Engine Cloud Demo',
-    plan: 'trial',
-    status: 'trialing',
-    persona: 'bd',
-    createdAt: now(),
-    updatedAt: now(),
-  });
-
-  users.set(DEMO_USER_ID, {
-    id: DEMO_USER_ID,
-    email: 'demo@bdengine.io',
-    name: 'Demo User',
-    passwordHash: hashPassword('demo1234'),
-    status: 'active',
-    createdAt: now(),
-    updatedAt: now(),
-  });
-
-  memberships.push({
-    tenantId: DEMO_TENANT_ID,
-    userId: DEMO_USER_ID,
-    role: 'owner',
-    createdAt: now(),
-  });
-}
 
 // ── Load from database on startup ───────────────────────────────────────────
 
@@ -77,8 +42,7 @@ export async function loadFromDb() {
   console.log(`  DB: Loaded ${dbUsers.length} users, ${dbTenants.length} tenants, ${dbMemberships.length} memberships`);
 }
 
-// Always seed demo data (will be skipped if already loaded from DB)
-seedDemoData();
+
 
 // ── User CRUD ───────────────────────────────────────────────────────────────
 
@@ -173,6 +137,14 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
 
 export function findTenantById(tenantId) {
   return tenants.get(tenantId) || null;
+}
+
+export function updateTenant(tenantId, updates) {
+  const tenant = tenants.get(tenantId);
+  if (!tenant) return null;
+  Object.assign(tenant, updates, { updatedAt: new Date().toISOString() });
+  dbSaveTenant(tenant).catch(() => {});
+  return tenant;
 }
 
 export function findTenantsForUser(userId) {
