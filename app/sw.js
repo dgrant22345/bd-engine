@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260425-v0-polish-setup-bg-2';
+const ASSET_VERSION = '20260425-v0-polish-setup-bg-3';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

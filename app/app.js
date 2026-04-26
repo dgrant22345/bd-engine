@@ -4376,7 +4376,7 @@ async function renderAdminView() {
             <div class="action-card">
               <p class="eyebrow">Full pipeline</p>
               <h4>Run BD Engine</h4>
-              <p class="small muted">Runs connections import, config sync, job fetch, scoring, and Google Sheet export in one pass.</p>
+              <p class="small muted">Runs the legacy Google Sheets pipeline in one pass. Requires a Spreadsheet ID in the Google Sheets card.</p>
               <button class="primary-button" data-action="run-full-engine">Run Full Engine</button>
             </div>
             <div class="action-card">
@@ -5561,6 +5561,13 @@ async function runFullBdEngine() {
   if (button) { button.disabled = true; button.textContent = 'Running full pipeline...'; }
   try {
     const spreadsheetId = getSpreadsheetId();
+    if (!spreadsheetId) {
+      const message = 'Run Full Engine is the legacy Google Sheets pipeline. Enter a Spreadsheet ID in the Google Sheets card before running it.';
+      showToast(message, 'warning', 8000);
+      window.bdLocalApi.setAlert(message, appAlert);
+      document.getElementById('google-sheet-id')?.focus();
+      return;
+    }
     const connectionsCsvPath = getConnectionsCsvPath();
     const accepted = await api('/api/google-sheets/run-engine', {
       method: 'POST',

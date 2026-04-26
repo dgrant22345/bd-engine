@@ -2053,7 +2053,7 @@ function Handle-ApiRequest {
         $payload = Read-JsonBody -Request $Request
         $spreadsheetId = if ($payload.spreadsheetId) { [string]$payload.spreadsheetId } elseif ($env:GOOGLE_SHEETS_SPREADSHEET_ID) { [string]$env:GOOGLE_SHEETS_SPREADSHEET_ID } else { '' }
         if (-not $spreadsheetId) {
-            return (New-JsonResult ([ordered]@{ error = 'spreadsheetId is required' }) 400)
+            return (New-JsonResult ([ordered]@{ error = 'Run Full Engine requires a Google Sheets Spreadsheet ID. Enter one in Admin > Google Sheets before running the legacy sheet pipeline.' }) 400)
         }
         return (New-JsonResult (Test-GoogleSheetsAccess -SpreadsheetId $spreadsheetId) 200)
     }
