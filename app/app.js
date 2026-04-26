@@ -5663,7 +5663,7 @@ async function runConnectionsCsvImport(dryRun) {
     const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
     const uploadSummary = formatCsvUploadSummary(file, csvContent);
 
-    const run = await api('/api/import/connections-csv', {
+    const run = await api('/api/import/linkedin-csv', {
       method: 'POST',
       body: JSON.stringify(requestPayload),
     });

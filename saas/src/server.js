@@ -331,6 +331,10 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/setup/complete' && req.method === 'POST') {
+    const payload = await readJson(req);
+    if (payload.csvContent) {
+      store.importLinkedInCSV(tenantId, payload.csvContent);
+    }
     store.completeSetup(tenantId);
     return sendJson(res, 200, { ok: true, setupComplete: true });
   }
@@ -383,7 +387,15 @@ self.addEventListener('activate', (event) => {
 
   // ── LinkedIn CSV import (real) ─────────────────────────────────────────
   if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
-    const csvText = await readBody(req);
+    const bodyStr = await readBody(req);
+    let csvText = bodyStr;
+    try {
+      const payload = JSON.parse(bodyStr);
+      if (payload.csvContent) csvText = payload.csvContent;
+    } catch {
+      // It might have been sent as raw text, which is fine
+    }
+    
     const result = store.importLinkedInCSV(tenantId, csvText);
     if (result.error) return sendJson(res, 400, result);
     return sendJson(res, 200, result);
