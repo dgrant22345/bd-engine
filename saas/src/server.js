@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
 import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, getMembership, safeUser, createTenant, loadFromDb as loadUsersFromDb } from './users.js';
-import { getPlan, getTrialDaysRemaining, getUsageSummary, PLANS } from './billing.js';
+import { getPlan, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession } from './billing.js';
 import { initDb, closeDb } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -150,6 +150,21 @@ self.addEventListener('activate', (event) => {
     return serveStaticOrSPA(pathname, req, res);
   }
 
+  // Stripe Webhook (needs raw body, no auth)
+  if (pathname === '/api/billing/webhook' && req.method === 'POST') {
+    const signature = req.headers['stripe-signature'];
+    const payload = await readBody(req);
+    try {
+      const event = handleWebhookEvent(payload, signature);
+      // Process event (e.g. customer.subscription.created, etc)
+      // Implementation pending real stripe keys
+      console.log('Received Stripe Event:', event.type);
+      return sendJson(res, 200, { received: true });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
   // ── All /api/ routes below require authentication ─────────────────────────
 
   const sessionData = extractSession(req);
@@ -207,6 +222,19 @@ self.addEventListener('activate', (event) => {
     });
   }
 
+  if (pathname === '/api/billing/checkout' && req.method === 'POST') {
+    const body = await readJson(req);
+    const planId = body.planId;
+    try {
+      const successUrl = `${url.origin}/app/#/billing?success=true`;
+      const cancelUrl = `${url.origin}/app/#/billing?canceled=true`;
+      const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl);
+      return sendJson(res, 200, { url: sessionUrl });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
   // ── Existing app API routes (tenant-scoped) ───────────────────────────────
 
   if (pathname === '/api/session') {
@@ -239,6 +267,12 @@ self.addEventListener('activate', (event) => {
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
       enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
       configs: store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      billing: {
+        plan: getPlan(tenant.plan),
+        trialDaysRemaining: getTrialDaysRemaining(tenant),
+        usage: getUsageSummary(tenantId, tenant.plan),
+        tenant: { plan: tenant.plan, status: tenant.status },
+      },
     });
   }
 

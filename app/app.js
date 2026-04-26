@@ -1862,6 +1862,31 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'billing-checkout') {
+      const planId = document.getElementById('billing-plan-select')?.value;
+      if (!planId) return;
+      action.disabled = true;
+      action.textContent = 'Redirecting...';
+      try {
+        const result = await api('/api/billing/checkout', {
+          method: 'POST',
+          body: JSON.stringify({ planId }),
+        });
+        if (result.url) {
+          window.location.href = result.url;
+        } else {
+          showToast(result.error || 'Failed to initialize checkout', 'error');
+          action.disabled = false;
+          action.textContent = 'Subscribe via Stripe';
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        action.disabled = false;
+        action.textContent = 'Subscribe via Stripe';
+      }
+      return;
+    }
+
     if (actionName === 'cancel-background-job') {
       await cancelBackgroundJob(action.dataset.id);
       return;
@@ -4495,6 +4520,25 @@ async function renderAdminView() {
                 <div class="button-row">
                   <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
                   <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+
+        ${renderCollapsibleStart('billing-subscription', 'Billing & Subscription', 'Manage your plan and checkout.')}
+          <div class="settings-grid">
+            <div class="action-card">
+              <p class="eyebrow">Current Plan: ${escapeHtml(batch.billing?.plan?.name || 'Trial')}</p>
+              <h4>Upgrade your workspace</h4>
+              <p class="small muted">You are currently on the ${escapeHtml(batch.billing?.plan?.displayName || 'Trial')} plan. Select a new plan to upgrade via Stripe.</p>
+              <div class="inline-field-stack">
+                <select id="billing-plan-select">
+                  <option value="jobseeker">Job Seeker ($5/mo)</option>
+                  <option value="sales">Sales Professional ($10/mo)</option>
+                </select>
+                <div class="button-row">
+                  <button class="primary-button" type="button" data-action="billing-checkout">Subscribe via Stripe</button>
                 </div>
               </div>
             </div>
