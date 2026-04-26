@@ -2006,7 +2006,12 @@ function Handle-ApiRequest {
         $csvPath = [string]$payload.csvPath
         $isTempFile = $false
         if ($payload.csvContent -and [string]$payload.csvContent -ne '') {
-            $tempFile = Join-Path $env:TEMP ("bd-csv-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            $dataRoot = if ($env:BD_ENGINE_DATA_ROOT) { [string]$env:BD_ENGINE_DATA_ROOT } else { Join-Path $env:LOCALAPPDATA 'BD Engine\Data' }
+            $uploadRoot = Join-Path $dataRoot 'uploads'
+            if (-not (Test-Path -LiteralPath $uploadRoot)) {
+                New-Item -ItemType Directory -Path $uploadRoot -Force | Out-Null
+            }
+            $tempFile = Join-Path $uploadRoot ("connections-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
             [System.IO.File]::WriteAllText($tempFile, [string]$payload.csvContent, [System.Text.Encoding]::UTF8)
             $csvPath = $tempFile
             $isTempFile = $true
@@ -2014,6 +2019,9 @@ function Handle-ApiRequest {
 
         if (-not $csvPath) {
             return (New-JsonResult ([ordered]@{ error = 'csvPath or csvContent is required' }) 400)
+        }
+        if (-not (Test-Path -LiteralPath $csvPath)) {
+            return (New-JsonResult ([ordered]@{ error = "CSV file not found: $csvPath" }) 400)
         }
         if (Test-Truthy $payload.dryRun) {
             $result = Import-BdConnectionsCsv `

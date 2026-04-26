@@ -245,7 +245,7 @@ function Ensure-BackgroundWorkerRunning {
         '-ExecutionPolicy',
         'Bypass',
         '-File',
-        $workerScript
+        ('"{0}"' -f $workerScript)
     ) -WindowStyle Hidden -WorkingDirectory (Get-AppProjectRootPath) -PassThru
 
     Set-Content -LiteralPath (Get-BackgroundWorkerPidPath) -Value ([string]$process.Id)

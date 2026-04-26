@@ -5598,23 +5598,13 @@ async function runConnectionsCsvImport(dryRun) {
     const fileInput = document.getElementById('connections-csv-file');
     const file = fileInput?.files?.[0];
 
-    let requestBody;
-    if (file) {
-      const csvContent = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsText(file);
-      });
-      requestBody = JSON.stringify({ csvContent, dryRun, useEmptyState: dryRun });
-    } else {
-      const csvPath = getConnectionsCsvPath();
-      if (!csvPath) {
-        showToast('Please select a CSV file using the Browse button.', 'warning');
-        return;
-      }
-      requestBody = JSON.stringify({ csvPath, dryRun, useEmptyState: dryRun });
+    if (!file) {
+      showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+      return;
     }
+
+    const csvContent = await readTextFile(file);
+    const requestBody = JSON.stringify({ csvContent, fileName: file.name, dryRun, useEmptyState: dryRun });
 
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
