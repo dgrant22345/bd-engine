@@ -933,11 +933,20 @@ function Invoke-BackgroundConnectionsCsvImportJob {
     param($Payload, [string]$JobId)
 
     $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
-    $result = Import-BdConnectionsCsv -CsvPath ([string]$Payload.csvPath) -SourceLabel 'linkedin-connections-csv' -SkipPersistence -ProgressCallback $progressCallback
-
-    # Clean up temp file created from uploaded CSV content
-    if ($Payload.isTempFile -and (Test-Path -LiteralPath ([string]$Payload.csvPath))) {
-        Remove-Item -LiteralPath ([string]$Payload.csvPath) -Force -ErrorAction SilentlyContinue
+    $sourceLabel = [string](Get-ObjectValue -Object $Payload -Name 'sourceLabel' -Default 'linkedin-connections-csv')
+    $mergeExisting = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'mergeExisting' -Default $false))
+    try {
+        $result = Import-BdConnectionsCsv `
+            -CsvPath ([string]$Payload.csvPath) `
+            -SourceLabel $sourceLabel `
+            -MergeExisting:$mergeExisting `
+            -SkipPersistence `
+            -ProgressCallback $progressCallback
+    } finally {
+        # Clean up temp file created from uploaded CSV content.
+        if ($Payload.isTempFile -and (Test-Path -LiteralPath ([string]$Payload.csvPath))) {
+            Remove-Item -LiteralPath ([string]$Payload.csvPath) -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $persistence = Save-BackgroundJobState -State $result.state -Segments @('Contacts', 'Companies', 'BoardConfigs', 'ImportRuns') -JobId $JobId -OperationName 'connections-csv-import'
@@ -1994,12 +2003,13 @@ function Invoke-BackgroundJobHandler {
         if ($result -isnot [System.Collections.IDictionary]) {
             $result = [ordered]@{ value = $result }
         }
-        $result.durationMs = $durationMs
+        [void](Set-ObjectValue -Object $result -Name 'durationMs' -Value $durationMs)
 
-        if ($result.timings) {
+        $timings = Get-ObjectValue -Object $result -Name 'timings' -Default $null
+        if ($timings) {
             $phaseParts = New-Object System.Collections.ArrayList
-            foreach ($name in @($result.timings.Keys)) {
-                [void]$phaseParts.Add(('{0}={1}ms' -f $name, [int]$result.timings[$name]))
+            foreach ($name in @($timings.Keys)) {
+                [void]$phaseParts.Add(('{0}={1}ms' -f $name, [int]$timings[$name]))
             }
             if ($phaseParts.Count -gt 0) {
                 Write-BackgroundJobLog ("JOB timings id={0} type={1} {2}" -f $Job.id, $Job.type, ([string]::Join(' ', @($phaseParts))))

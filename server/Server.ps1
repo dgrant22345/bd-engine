@@ -1041,35 +1041,34 @@ function Handle-ApiRequest {
             }) | Out-Null
         }
 
-        $importResult = $null
+        $acceptedImport = $null
         $csvContent = [string](Get-ObjectValue -Object $payload -Name 'csvContent' -Default '')
-        $tempFile = ''
-        try {
-            if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
-                $tempFile = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
-                [System.IO.File]::WriteAllText($tempFile, $csvContent, [System.Text.Encoding]::UTF8)
-                $importResult = Import-BdConnectionsCsv -CsvPath $tempFile -SourceLabel 'setup-linkedin-connections-csv' -MergeExisting -SkipPersistence
-                $state = $importResult.state
-            }
 
-            Set-ObjectValue -Object $state -Name 'workspace' -Value $workspace | Out-Null
-            Set-ObjectValue -Object $state -Name 'settings' -Value $settings | Out-Null
-            $segments = @('Workspace', 'Settings')
-            if ($importResult) {
-                $segments += @('Contacts', 'Companies', 'BoardConfigs', 'ImportRuns')
-            }
-            Sync-AppStateSegments -State $state -Segments $segments | Out-Null
-        } finally {
-            if ($tempFile -and (Test-Path -LiteralPath $tempFile)) {
-                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
-            }
+        Set-ObjectValue -Object $state -Name 'workspace' -Value $workspace | Out-Null
+        Set-ObjectValue -Object $state -Name 'settings' -Value $settings | Out-Null
+        Sync-AppStateSegments -State $state -Segments @('Workspace', 'Settings') | Out-Null
+
+        if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
+            $tempFile = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            [System.IO.File]::WriteAllText($tempFile, $csvContent, [System.Text.Encoding]::UTF8)
+            $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
+                csvPath = $tempFile
+                isTempFile = $true
+                mergeExisting = $true
+                sourceLabel = 'setup-linkedin-connections-csv'
+            }) -Summary 'Import LinkedIn connections from setup' -ProgressMessage 'Queued LinkedIn connections import'
+            Write-ServerLog ("JOB enqueue id={0} type={1} source={2}" -f $job.id, $job.type, 'setup')
+            $acceptedImport = Get-BackgroundJobAcceptedResult -Job $job
         }
 
         return (New-JsonResult ([ordered]@{
             status = Get-SetupStatus
-            importRun = if ($importResult) { $importResult.importRun } else { $null }
-            stats = if ($importResult) { $importResult.importRun.stats } else { [ordered]@{ contacts = 0; companies = 0; imported = 0; updated = 0; skipped = 0; failed = 0 } }
-            preview = if ($importResult) { @($importResult.preview) } else { @() }
+            importQueued = [bool]$acceptedImport
+            jobId = if ($acceptedImport) { $acceptedImport.jobId } else { $null }
+            job = if ($acceptedImport) { $acceptedImport.job } else { $null }
+            importRun = $null
+            stats = [ordered]@{ contacts = 0; companies = 0; imported = 0; updated = 0; skipped = 0; failed = 0 }
+            preview = @()
         }) 200)
     }
     if ($path -eq '/api/background-jobs' -and $method -eq 'GET') {

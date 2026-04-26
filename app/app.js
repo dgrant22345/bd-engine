@@ -52,6 +52,8 @@ const appState = {
   setupCsvFileName: '',
   setupPreview: null,
   setupResult: null,
+  setupImportJobId: '',
+  setupProgressMessage: '',
   setupDraft: {
     workspaceName: '',
     userName: '',
@@ -2706,11 +2708,12 @@ function renderSetupStepContent(stepKey) {
           <button class="secondary-button" type="button" data-action="setup-browse-csv">Choose CSV</button>
         </div>
         ${renderSetupPreview()}
+        ${appState.setupBusy ? renderSetupProgress('Starting setup', appState.setupProgressMessage || 'Saving your setup and preparing the import...') : ''}
         <div class="button-row">
           <button class="secondary-button" type="button" data-action="setup-back">Back</button>
           <button class="secondary-button" type="button" data-action="setup-preview-csv" ${hasCsv && !appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>
           <button class="ghost-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Skip import</button>
-          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy ? 'disabled' : ''}>${appState.setupBusy ? 'Finishing...' : 'Finish setup'}</button>
+          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy ? 'disabled' : ''}>${appState.setupBusy ? 'Starting...' : 'Finish setup'}</button>
         </div>
       </div>
     `;
@@ -2718,6 +2721,15 @@ function renderSetupStepContent(stepKey) {
 
   const result = appState.setupResult || {};
   const stats = result.stats || {};
+  if (appState.setupBusy && appState.setupImportJobId) {
+    return `
+      <div class="setup-success">
+        ${renderSetupProgress('Importing LinkedIn connections', appState.setupProgressMessage || 'This can take a few minutes for a large LinkedIn export.')}
+        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving accounts, and avoiding duplicates.</p>
+      </div>
+    `;
+  }
+
   return `
     <div class="setup-success">
       <div class="setup-success-mark" aria-hidden="true">OK</div>
@@ -2731,6 +2743,18 @@ function renderSetupStepContent(stepKey) {
       </div>
       <div class="button-row center">
         <button class="primary-button" type="button" data-action="setup-open-dashboard">Open dashboard</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSetupProgress(title, message) {
+  return `
+    <div class="setup-progress" role="status" aria-live="polite">
+      <div class="setup-progress-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(message || 'Working...')}</p>
       </div>
     </div>
   `;
@@ -2851,6 +2875,9 @@ async function completeSetupWizard() {
   }
 
   appState.setupBusy = true;
+  appState.setupProgressMessage = appState.setupCsvContent
+    ? 'Saving setup and queuing your LinkedIn connections import...'
+    : 'Saving setup...';
   try {
     const result = await api('/api/setup/complete', {
       method: 'POST',
@@ -2867,10 +2894,58 @@ async function completeSetupWizard() {
     appState.setupStatus = result.status;
     appState.setupStep = getSetupSteps().length;
     invalidateAppData();
-    showToast('Setup complete.', 'success');
+
+    if (result.jobId) {
+      appState.setupImportJobId = result.jobId;
+      appState.setupProgressMessage = 'Import queued. Starting the background worker...';
+      await renderSetupWizard();
+      const job = await watchSetupImportJob(result.jobId);
+      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
+      appState.setupResult = {
+        ...result,
+        stats: {
+          ...stats,
+          imported: stats.imported || 0,
+          updated: stats.updated || 0,
+          skipped: stats.skipped || 0,
+          failed: stats.failed || 0,
+        },
+      };
+      appState.setupProgressMessage = 'Import complete.';
+      showToast('Setup complete. LinkedIn connections imported.', 'success');
+    } else {
+      appState.setupProgressMessage = '';
+      showToast('Setup complete.', 'success');
+    }
+  } catch (error) {
+    showToast(`Setup failed: ${error.message || error}`, 'error', 8000);
+    throw error;
   } finally {
     appState.setupBusy = false;
+    appState.setupImportJobId = '';
     await renderSetupWizard();
+  }
+}
+
+async function watchSetupImportJob(jobId) {
+  while (true) {
+    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    const message = job.progressMessage || humanize(job.status || 'running');
+    appState.setupProgressMessage = message;
+    await renderSetupWizard();
+
+    if (job.status === 'completed') {
+      invalidateAppData();
+      return job;
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.errorMessage || 'LinkedIn connections import failed.');
+    }
+    if (job.status === 'cancelled') {
+      throw new Error('LinkedIn connections import was cancelled.');
+    }
+
+    await sleep(1500);
   }
 }
 
