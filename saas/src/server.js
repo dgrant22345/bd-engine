@@ -298,7 +298,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/setup/status') {
-    return sendJson(res, 200, store.getSetupStatus(tenantId));
+    return sendJson(res, 200, await store.getSetupStatus(tenantId));
   }
 
   if (pathname === '/api/runtime/status') {
@@ -306,7 +306,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/bootstrap') {
-    return sendJson(res, 200, store.getBootstrap(tenantId, {
+    return sendJson(res, 200, await store.getBootstrap(tenantId, {
       includeFilters: isTruthy(url.searchParams.get('includeFilters')),
       session,
     }));
@@ -339,19 +339,19 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/dashboard') {
-    return sendJson(res, 200, store.getDashboard(tenantId));
+    return sendJson(res, 200, await store.getDashboard(tenantId));
   }
 
   if (pathname === '/api/dashboard/extended') {
-    return sendJson(res, 200, store.getDashboardExtended(tenantId));
+    return sendJson(res, 200, await store.getDashboardExtended(tenantId));
   }
 
   if (pathname === '/api/accounts') {
     if (req.method === 'POST') {
-      const item = store.addAccount(tenantId, await readJson(req));
+      const item = await store.addAccount(tenantId, await readJson(req));
       return sendJson(res, 201, item);
     }
-    return sendJson(res, 200, store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
+    return sendJson(res, 200, await store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
   }
 
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
@@ -372,12 +372,12 @@ self.addEventListener('activate', (event) => {
   const accountMatch = pathname.match(/^\/api\/accounts\/([^/]+)$/);
   if (accountMatch) {
     if (req.method === 'GET') {
-      const detail = store.getAccountDetail(tenantId, accountMatch[1]);
+      const detail = await store.getAccountDetail(tenantId, accountMatch[1]);
       if (!detail) return sendJson(res, 404, { error: 'Account not found' });
       return sendJson(res, 200, detail);
     }
     if (req.method === 'PATCH') {
-      const account = store.patchAccount(tenantId, accountMatch[1], await readJson(req));
+      const account = await store.patchAccount(tenantId, accountMatch[1], await readJson(req));
       if (!account) return sendJson(res, 404, { error: 'Account not found' });
       return sendJson(res, 200, account);
     }
@@ -385,15 +385,15 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/contacts') {
     if (req.method === 'POST') {
-      const item = store.addContact(tenantId, await readJson(req));
+      const item = await store.addContact(tenantId, await readJson(req));
       return sendJson(res, 201, item);
     }
-    return sendJson(res, 200, store.findContacts(tenantId, Object.fromEntries(url.searchParams)));
+    return sendJson(res, 200, await store.findContacts(tenantId, Object.fromEntries(url.searchParams)));
   }
 
   const contactMatch = pathname.match(/^\/api\/contacts\/([^/]+)$/);
   if (contactMatch && req.method === 'PATCH') {
-    const contact = store.patchContact(tenantId, contactMatch[1], await readJson(req));
+    const contact = await store.patchContact(tenantId, contactMatch[1], await readJson(req));
     if (!contact) return sendJson(res, 404, { error: 'Contact not found' });
     return sendJson(res, 200, contact);
   }
@@ -500,7 +500,7 @@ self.addEventListener('activate', (event) => {
     }
 
     const plan = getPlan(tenant.plan);
-    const result = store.importLinkedInCSV(tenantId, csvText, {
+    const result = await store.importLinkedInCSV(tenantId, csvText, {
       dryRun: Boolean(payload.dryRun),
       plan,
     });

@@ -267,6 +267,27 @@ export async function dbSaveTenantData(tenantId, data) {
   }
 }
 
+export async function dbLoadTenantData(tenantId) {
+  if (!dbReady) return null;
+  try {
+    const result = await pool.query('SELECT * FROM tenant_data WHERE tenant_id = $1', [tenantId]);
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      accounts: r.accounts || [],
+      contacts: r.contacts || [],
+      jobs: r.jobs || [],
+      configs: r.configs || [],
+      activities: r.activities || [],
+      settings: r.settings || {},
+      updated_at: r.updated_at,
+    };
+  } catch (err) {
+    console.error('DB: Failed to load tenant data:', err.message);
+    return null;
+  }
+}
+
 export async function dbLoadAllTenantData() {
   if (!dbReady) return new Map();
   try {

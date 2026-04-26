@@ -284,60 +284,36 @@ function persistTenant(tenantId) {
   }, 500));
 }
 
+const loadedTenants = new Set();
+async function ensureDataLoaded(tenantId) {
+  if (!isDbEnabled()) return;
+  if (loadedTenants.has(tenantId)) return;
+  const { dbLoadTenantData } = await import('./db.js');
+  const data = await dbLoadTenantData(tenantId);
+  if (data) {
+    const tenantAccts = data.accounts || [];
+    tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
+    accountsByTenant.set(tenantId, tenantAccts);
+    const tenantConts = data.contacts || [];
+    tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+    contactsByTenant.set(tenantId, tenantConts);
+    jobsByTenant.set(tenantId, data.jobs || []);
+    configsByTenant.set(tenantId, data.configs || []);
+    activitiesByTenant.set(tenantId, data.activities || []);
+    tasksByTenant.set(tenantId, data.tasks || []);
+    for (const a of tenantAccts) if (!accounts.some(x => x.id === a.id)) accounts.push(a);
+    for (const c of tenantConts) if (!contacts.some(x => x.id === c.id)) contacts.push(c);
+  }
+  loadedTenants.add(tenantId);
+}
+
 export function createStore() {
   return {
-    // Load all tenant data from DB on startup
+    // Load basic tenant profiles only on startup
     async loadFromDb() {
-      const allData = await dbLoadAllTenantData();
-      for (const [tenantId, data] of allData) {
-        // Ensure profile exists
-        if (!tenantProfiles.has(tenantId)) {
-          tenantProfiles.set(tenantId, {
-            workspace: { name: tenantId },
-            settings: { ...data.settings },
-            persona: data.settings?.persona || 'bd',
-          });
-        }
-        
-        const tenantAccts = data.accounts || [];
-        tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
-        accountsByTenant.set(tenantId, tenantAccts);
-        
-        const tenantConts = data.contacts || [];
-        tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-        contactsByTenant.set(tenantId, tenantConts);
-        
-        jobsByTenant.set(tenantId, data.jobs || []);
-        configsByTenant.set(tenantId, data.configs || []);
-        activitiesByTenant.set(tenantId, data.activities || []);
-        tasksByTenant.set(tenantId, data.tasks || []);
-
-        // Load into global arrays (avoid duplicates)
-        for (const a of tenantAccts) {
-          if (!accounts.some(x => x.id === a.id)) accounts.push(a);
-        }
-        // Load contacts
-        for (const c of tenantConts) {
-          if (!contacts.some(x => x.id === c.id)) contacts.push(c);
-        }
-        // Load jobs
-        for (const j of (data.jobs || [])) {
-          if (!jobs.some(x => x.id === j.id)) jobs.push(j);
-        }
-        // Load configs
-        for (const c of (data.configs || [])) {
-          if (!boardConfigs.some(x => x.id === c.id)) boardConfigs.push(c);
-        }
-        // Load activities
-        for (const a of (data.activities || [])) {
-          if (!activities.some(x => x.id === a.id)) activities.push(a);
-        }
-        // Load tasks
-        for (const t of (data.tasks || [])) {
-          if (!tasks.some(x => x.id === t.id)) tasks.push(t);
-        }
-      }
-      console.log(`  DB: Loaded tenant data for ${allData.size} tenants`);
+      // Basic users/profiles are loaded separately by the server.
+      // We no longer pre-load all tenant_data (lazy load now).
+      console.log('  Store: Lazy loading enabled for tenant data');
     },
     ensureTenant(tenant, user = {}) {
       return ensureTenantProfile(tenant?.id || tenant, tenant, user);
@@ -365,8 +341,9 @@ export function createStore() {
       };
     },
 
-    getSetupStatus(tenantId) {
+    async getSetupStatus(tenantId) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
       return {
         requiresSetup: !profile.settings.setupComplete,
@@ -393,8 +370,9 @@ export function createStore() {
       };
     },
 
-    getBootstrap(tenantId, { includeFilters = false, session = null } = {}) {
+    async getBootstrap(tenantId, { includeFilters = false, session = null } = {}) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
       return {
         workspace: { ...profile.workspace },
@@ -411,8 +389,9 @@ export function createStore() {
       };
     },
 
-    getDashboard(tenantId) {
+    async getDashboard(tenantId) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
       const newJobsToday = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1).slice(0, 100);
@@ -445,8 +424,9 @@ export function createStore() {
       };
     },
 
-    getDashboardExtended(tenantId) {
+    async getDashboardExtended(tenantId) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const tenantAccounts = accountsForTenant(tenantId);
       return {
         playbook: tenantAccounts.slice(0, 5),
@@ -488,13 +468,15 @@ export function createStore() {
       };
     },
 
-    findAccounts(tenantId, query) {
+    async findAccounts(tenantId, query) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       return paginate(filterText(accountsForTenant(tenantId), query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']), query);
     },
 
-    getAccountDetail(tenantId, accountId) {
+    async getAccountDetail(tenantId, accountId) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const item = accountById(accountId);
       if (!item || item.tenantId !== tenantId) return null;
       const accountContacts = contacts.filter((contactItem) => contactItem.tenantId === tenantId && contactItem.accountId === accountId);
@@ -526,8 +508,9 @@ export function createStore() {
       };
     },
 
-    patchAccount(tenantId, accountId, patch) {
+    async patchAccount(tenantId, accountId, patch) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const item = accountById(accountId);
       if (!item || item.tenantId !== tenantId) return null;
       Object.assign(item, pickPatch(patch, ['status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt', 'owner']));
@@ -536,13 +519,15 @@ export function createStore() {
       return item;
     },
 
-    findContacts(tenantId, query) {
+    async findContacts(tenantId, query) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
     },
 
-    patchContact(tenantId, contactId, patch) {
+    async patchContact(tenantId, contactId, patch) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const item = contacts.find((contactItem) => contactItem.tenantId === tenantId && contactItem.id === contactId);
       if (!item) return null;
       Object.assign(item, pickPatch(patch, ['outreachStatus', 'notes', 'email', 'title', 'linkedinUrl']));
@@ -957,8 +942,9 @@ export function createStore() {
 
     // ── Account creation ──────────────────────────────────────────────────
 
-    addAccount(tenantId, payload, _skipPersist = false) {
+    async addAccount(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const id = `acct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const item = account({
         id,
@@ -986,8 +972,9 @@ export function createStore() {
 
     // ── Contact creation ──────────────────────────────────────────────────
 
-    addContact(tenantId, payload, _skipPersist = false) {
+    async addContact(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const item = contact({
         id,
@@ -1024,8 +1011,9 @@ export function createStore() {
 
     // ── LinkedIn CSV import ───────────────────────────────────────────────
 
-    importLinkedInCSV(tenantId, csvText, options = {}) {
+    async importLinkedInCSV(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
       const dryRun = Boolean(options.dryRun);
       const plan = options.plan || { limits: {} };
       const rows = parseCSV(csvText || '');
@@ -1139,7 +1127,7 @@ export function createStore() {
             continue;
           }
           if (!dryRun) {
-            existingAccount = this.addAccount(tenantId, {
+            existingAccount = await this.addAccount(tenantId, {
               displayName: companyData.displayName,
               domain: companyData.domain,
               connectionCount: companyData.contacts.length,
@@ -1185,7 +1173,7 @@ export function createStore() {
           if (isTalent) newTalentCount++;
 
           if (!dryRun) {
-            const contact = this.addContact(tenantId, {
+            const contact = await this.addContact(tenantId, {
               accountId: existingAccount.id,
               firstName: c.firstName,
               lastName: c.lastName,
