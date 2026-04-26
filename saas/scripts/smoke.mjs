@@ -85,6 +85,8 @@ await check('job seeker persona persists into the app bootstrap', async () => {
   const signupBody = await response.json();
   assert(signupBody.persona === 'jobseeker', 'signup did not return jobseeker persona');
   assert(signupBody.tenant?.persona === 'jobseeker', 'tenant did not persist jobseeker persona');
+  const setup = await getJson('/api/setup/status', signupCookie);
+  assert(setup.persona === 'jobseeker', '/api/setup/status did not return jobseeker persona');
   const me = await getJson('/api/auth/me', signupCookie);
   assert(me.persona === 'jobseeker', '/api/auth/me did not return jobseeker persona');
   const bootstrap = await getJson('/api/bootstrap?includeFilters=true', signupCookie);

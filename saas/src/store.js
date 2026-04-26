@@ -407,6 +407,7 @@ export function createStore() {
         setupComplete: Boolean(profile.settings.setupComplete),
         licensingEnabled: false,
         workspaceName: profile.workspace.name,
+        persona: this.getPersona(tenantId),
         user: profile.settings.user,
       };
     },

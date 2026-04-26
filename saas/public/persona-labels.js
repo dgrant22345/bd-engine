@@ -134,13 +134,14 @@
     const response = await originalFetch.apply(this, args);
     const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
 
-    if (url.includes('/api/bootstrap') || url.includes('/api/auth/me')) {
+    if (url.includes('/api/bootstrap') || url.includes('/api/auth/me') || url.includes('/api/setup/status') || url.includes('/api/admin/bootstrap')) {
       try {
         const clone = response.clone();
         const data = await clone.json();
-        if (data.persona) {
-          currentPersona = data.persona;
-          window.__bdPersona = data.persona;
+        const persona = data.persona || data.tenant?.persona || data.bootstrap?.persona || data.settings?.persona;
+        if (persona) {
+          currentPersona = persona;
+          window.__bdPersona = persona;
           // Re-apply labels when persona is detected
           requestAnimationFrame(() => applyLabels());
         }

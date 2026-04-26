@@ -777,7 +777,7 @@ function getAppIndexHtml() {
     .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
     .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?navigator\.serviceWorker\.register\('\/sw\.js'\)[\s\S]*?\}\s*<\/script>/, '')
-    .replace('</body>', '<script src="/persona-labels.js"></script>\n</body>');
+    .replace(/<script src="\/app\/local-api\.js/g, '<script src="/persona-labels.js"></script>\n  <script src="/app/local-api.js');
 }
 
 function tryStaticFile(baseDir, pathname) {

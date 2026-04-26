@@ -73,6 +73,7 @@ const appState = {
   alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
   bulkLastClickIdx: null,
   duplicateCache: null,
+  persona: 'bd',
   setupStatus: null,
   setupStep: 1,
   setupBusy: false,
@@ -2323,6 +2324,7 @@ function bindEvents() {
 
 async function loadBootstrap(force, options = {}) {
   appState.bootstrap = await window.bdLocalApi.loadBootstrap(appState, force, options);
+  if (appState.bootstrap?.persona) appState.persona = normalizeAppPersona(appState.bootstrap.persona);
   workspaceName.textContent = appState.bootstrap?.workspace?.name || 'BD Engine Workspace';
   window.bdLocalApi.setAlert('', appAlert);
   return appState.bootstrap;
@@ -2337,11 +2339,20 @@ async function loadSetupStatus(force = false) {
     return appState.setupStatus;
   }
   appState.setupStatus = await api('/api/setup/status', { skipCache: true });
+  if (appState.setupStatus?.persona) appState.persona = normalizeAppPersona(appState.setupStatus.persona);
   if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
     const existingName = appState.setupStatus.workspace.name;
     appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
   }
   return appState.setupStatus;
+}
+
+function normalizeAppPersona(value) {
+  return value === 'jobseeker' ? 'jobseeker' : 'bd';
+}
+
+function isJobSeekerPersona() {
+  return normalizeAppPersona(appState.persona || appState.bootstrap?.persona || appState.setupStatus?.persona) === 'jobseeker';
 }
 
 function getFormValues(form) {
@@ -2911,7 +2922,14 @@ async function renderSetupWizard() {
   const steps = getSetupSteps();
   const current = getCurrentSetupStep();
   const draft = appState.setupDraft;
-  const setupTitle = current.key === 'launch' ? 'Setup complete' : 'First-run setup';
+  const jobSeeker = isJobSeekerPersona();
+  const setupTitle = current.key === 'launch'
+    ? 'Setup complete'
+    : jobSeeker ? 'Job search setup' : 'First-run setup';
+  const setupEyebrow = jobSeeker ? 'Job search workspace' : 'BD Engine local setup';
+  const setupIntro = jobSeeker
+    ? 'Create your search workspace, bring in your LinkedIn connections, and start mapping target companies from your own network.'
+    : 'Create your workspace, bring in your LinkedIn connections, and start from your own data.';
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -2921,9 +2939,9 @@ async function renderSetupWizard() {
       <div class="setup-card">
         <div class="setup-header">
           <div>
-            <p class="eyebrow">BD Engine local setup</p>
+            <p class="eyebrow">${escapeHtml(setupEyebrow)}</p>
             <h2 id="setup-title">${escapeHtml(setupTitle)}</h2>
-            <p class="muted">Create your workspace, bring in your LinkedIn connections, and start from your own data.</p>
+            <p class="muted">${escapeHtml(setupIntro)}</p>
           </div>
           <ol class="setup-steps" aria-label="Setup progress">
             ${steps.map((step, index) => `
@@ -2944,14 +2962,17 @@ async function renderSetupWizard() {
 
 function renderSetupStepContent(stepKey) {
   const draft = appState.setupDraft;
+  const jobSeeker = isJobSeekerPersona();
   if (stepKey === 'profile') {
     const defaultName = draft.userName || appState.user?.name || '';
     const defaultEmail = draft.userEmail || appState.user?.email || '';
+    const workspaceLabel = jobSeeker ? 'Search workspace name' : 'Workspace or company name';
+    const workspacePlaceholder = jobSeeker ? 'My Job Search 2026' : 'Your company or team';
     return `
       <form id="setup-profile-form" class="setup-form">
         <div class="setup-grid">
-          <label>Workspace or company name
-            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="Your company or team" />
+          <label>${escapeHtml(workspaceLabel)}
+            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="${escapeAttr(workspacePlaceholder)}" />
           </label>
           <label>Your name
             <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(defaultName)}" placeholder="Full name" />
@@ -2968,12 +2989,16 @@ function renderSetupStepContent(stepKey) {
   }
 
   if (stepKey === 'team') {
+    const rosterLabel = jobSeeker ? 'Optional collaborators or coaches' : 'Optional team or owner roster';
+    const rosterHelp = jobSeeker
+      ? 'Leave this blank if you are running the search yourself. You can add collaborators later.'
+      : 'Leave this blank if you are the only owner. You can add or edit owners later.';
     return `
       <form id="setup-team-form" class="setup-form">
-        <label>Optional team or owner roster
+        <label>${escapeHtml(rosterLabel)}
           <textarea id="setup-owners-text" name="ownersText" rows="7" placeholder="One person per line, for example: Name, email@example.com">${escapeHtml(draft.ownersText)}</textarea>
         </label>
-        <p class="muted small">Leave this blank if you are the only owner. You can add or edit owners later.</p>
+        <p class="muted small">${escapeHtml(rosterHelp)}</p>
         <div class="button-row">
           <button class="secondary-button" type="button" data-action="setup-back">Back</button>
           <button class="primary-button" type="submit">Continue</button>
@@ -2999,11 +3024,15 @@ function renderSetupStepContent(stepKey) {
 
   if (stepKey === 'import') {
     const hasCsv = Boolean(appState.setupCsvContent);
+    const importTitle = jobSeeker ? 'Import LinkedIn Connections.csv' : 'Import LinkedIn Connections.csv';
+    const importCopyHtml = jobSeeker
+      ? 'Upload your LinkedIn <code>Connections.csv</code> to map people you know to target companies and open roles.'
+      : 'From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.';
     return `
       <div class="setup-form">
         <div class="setup-import-copy">
-          <h3>Import LinkedIn Connections.csv</h3>
-          <p class="muted">From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.</p>
+          <h3>${escapeHtml(importTitle)}</h3>
+          <p class="muted">${importCopyHtml}</p>
         </div>
         <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
@@ -3029,16 +3058,20 @@ function renderSetupStepContent(stepKey) {
     return `
       <div class="setup-success">
         ${renderSetupProgress('Importing LinkedIn connections', appState.setupProgressMessage || 'This can take a few minutes for a large LinkedIn export.')}
-        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving accounts, and avoiding duplicates.</p>
+        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving ${jobSeeker ? 'companies' : 'accounts'}, and avoiding duplicates.</p>
       </div>
     `;
   }
 
+  const successTitle = jobSeeker ? 'Your job search workspace is ready' : 'Your workspace is ready';
+  const successCopy = jobSeeker
+    ? 'BD Engine will now open your job search dashboard using your own network and target-company data.'
+    : 'BD Engine will now open your dashboard using the local data stored on this computer.';
   return `
     <div class="setup-success">
       <div class="setup-success-mark" aria-hidden="true">OK</div>
-      <h3>Your workspace is ready</h3>
-      <p class="muted">BD Engine will now open your dashboard using the local data stored on this computer.</p>
+      <h3>${escapeHtml(successTitle)}</h3>
+      <p class="muted">${escapeHtml(successCopy)}</p>
       <div class="setup-summary-grid">
         <div><strong>${formatNumber(stats.imported || 0)}</strong><span>Imported</span></div>
         <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updated</span></div>
