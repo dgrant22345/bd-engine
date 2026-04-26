@@ -1043,6 +1043,7 @@ function Handle-ApiRequest {
 
         $acceptedImport = $null
         $csvContent = [string](Get-ObjectValue -Object $payload -Name 'csvContent' -Default '')
+        $csvFileName = [string](Get-ObjectValue -Object $payload -Name 'csvFileName' -Default '')
         $setupCsvPath = ''
 
         Set-ObjectValue -Object $state -Name 'workspace' -Value $workspace | Out-Null
@@ -1057,6 +1058,8 @@ function Handle-ApiRequest {
                 isTempFile = $true
                 mergeExisting = $true
                 sourceLabel = 'setup-linkedin-connections-csv'
+                sourceFileName = $csvFileName
+                sourceByteLength = [System.Text.Encoding]::UTF8.GetByteCount($csvContent)
             }) -Summary 'Import LinkedIn connections from setup' -ProgressMessage 'Queued LinkedIn connections import'
             Write-ServerLog ("JOB enqueue id={0} type={1} source={2}" -f $job.id, $job.type, 'setup')
             $acceptedImport = Get-BackgroundJobAcceptedResult -Job $job
@@ -2005,16 +2008,22 @@ function Handle-ApiRequest {
         # Support file upload (csvContent) or server-side path (csvPath)
         $csvPath = [string]$payload.csvPath
         $isTempFile = $false
+        $sourceFileName = [string](Get-ObjectValue -Object $payload -Name 'fileName' -Default '')
+        $sourceByteLength = 0
         if ($payload.csvContent -and [string]$payload.csvContent -ne '') {
+            $csvText = [string]$payload.csvContent
+            $sourceByteLength = [System.Text.Encoding]::UTF8.GetByteCount($csvText)
             $dataRoot = if ($env:BD_ENGINE_DATA_ROOT) { [string]$env:BD_ENGINE_DATA_ROOT } else { Join-Path $env:LOCALAPPDATA 'BD Engine\Data' }
             $uploadRoot = Join-Path $dataRoot 'uploads'
             if (-not (Test-Path -LiteralPath $uploadRoot)) {
                 New-Item -ItemType Directory -Path $uploadRoot -Force | Out-Null
             }
             $tempFile = Join-Path $uploadRoot ("connections-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
-            [System.IO.File]::WriteAllText($tempFile, [string]$payload.csvContent, [System.Text.Encoding]::UTF8)
+            [System.IO.File]::WriteAllText($tempFile, $csvText, [System.Text.Encoding]::UTF8)
             $csvPath = $tempFile
             $isTempFile = $true
+        } elseif ($csvPath -and (Test-Path -LiteralPath $csvPath)) {
+            $sourceByteLength = [int64](Get-Item -LiteralPath $csvPath).Length
         }
 
         if (-not $csvPath) {
@@ -2039,6 +2048,8 @@ function Handle-ApiRequest {
             isTempFile = $isTempFile
             mergeExisting = $true
             sourceLabel = 'linkedin-connections-csv'
+            sourceFileName = $sourceFileName
+            sourceByteLength = $sourceByteLength
         }) -Summary 'Import LinkedIn connections CSV' -ProgressMessage 'Queued connections import'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)

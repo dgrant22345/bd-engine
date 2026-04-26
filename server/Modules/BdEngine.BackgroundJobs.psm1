@@ -935,7 +935,11 @@ function Invoke-BackgroundConnectionsCsvImportJob {
     $progressCallback = if ($JobId) { New-BackgroundJobProgressCallback -JobId $JobId } else { $null }
     $sourceLabel = [string](Get-ObjectValue -Object $Payload -Name 'sourceLabel' -Default 'linkedin-connections-csv')
     $mergeExisting = [bool](Test-Truthy (Get-ObjectValue -Object $Payload -Name 'mergeExisting' -Default $false))
+    $sourceFileName = [string](Get-ObjectValue -Object $Payload -Name 'sourceFileName' -Default '')
+    $sourceByteLength = [int64](Get-ObjectValue -Object $Payload -Name 'sourceByteLength' -Default 0)
     try {
+        $progressLabel = if ($sourceFileName) { "Importing LinkedIn connections CSV ($sourceFileName)" } else { 'Importing LinkedIn connections CSV' }
+        if ($JobId) { Update-AppBackgroundJobProgress -JobId $JobId -ProgressMessage $progressLabel | Out-Null }
         $result = Import-BdConnectionsCsv `
             -CsvPath ([string]$Payload.csvPath) `
             -SourceLabel $sourceLabel `
@@ -959,6 +963,10 @@ function Invoke-BackgroundConnectionsCsvImportJob {
     return [ordered]@{
         importRun = $result.importRun
         stats = $result.importRun.stats
+        source = [ordered]@{
+            fileName = $sourceFileName
+            byteLength = $sourceByteLength
+        }
         persistence = $persistence
     }
 }

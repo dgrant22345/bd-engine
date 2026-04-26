@@ -67,6 +67,8 @@ BD Engine accepts LinkedIn fields such as:
 
 Missing email, company, title, or connected date fields are allowed. Re-importing the same file updates existing contacts instead of creating duplicates.
 
+Large LinkedIn exports can take several minutes. BD Engine queues the import in the background; contacts and accounts appear after the background job finishes. You can watch progress in Admin > Background jobs.
+
 An empty template is included with the installed app at:
 
 `data-template\sample-linkedin-connections.csv`

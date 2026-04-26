@@ -4506,7 +4506,7 @@ function Sort-Companies {
             $lo = 0
             $hi = $unchanged.Count
             while ($lo -lt $hi) {
-                $mid = [int](($lo + $hi) / 2)
+                $mid = [int][Math]::Floor(($lo + $hi) / 2)
                 $midKey = Get-CompanySortKey -Company $unchanged[$mid]
                 if ((Compare-CompanySortKeys -KeyA $companyKey -KeyB $midKey) -le 0) {
                     $hi = $mid

@@ -22,6 +22,17 @@
     responseCache.clear();
   }
 
+  function getNetworkErrorMessage(path, error) {
+    const rawMessage = error && error.message ? String(error.message) : String(error || '');
+    const looksLikeFetchFailure = /failed to fetch|networkerror|load failed|cancelled|aborted/i.test(rawMessage);
+    if (!looksLikeFetchFailure) {
+      return rawMessage || 'Request failed before BD Engine could respond.';
+    }
+
+    const target = String(path || '').startsWith('/api/') ? 'BD Engine local server' : 'BD Engine';
+    return `${target} did not respond. Refresh the browser tab, or launch BD Engine again from the desktop shortcut if the server is not running.`;
+  }
+
   async function remoteApi(path, options = {}) {
     const method = getMethod(options);
     const useCache = method === 'GET' && !options.skipCache;
@@ -38,11 +49,16 @@
     }
 
     const fetchPromise = (async () => {
-      const response = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        ...options,
-      });
+      let response;
+      try {
+        response = await fetch(path, {
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          ...options,
+        });
+      } catch (error) {
+        throw new Error(getNetworkErrorMessage(path, error));
+      }
 
       if (!response.ok) {
         let message = `Request failed: ${response.status}`;

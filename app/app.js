@@ -3074,6 +3074,28 @@ async function readTextFile(file) {
   });
 }
 
+function formatFileSize(bytes = 0) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return '0 KB';
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024)).toLocaleString()} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function estimateCsvDataRows(csvContent = '') {
+  const lines = String(csvContent || '').split(/\r\n|\r|\n/).filter((line) => line.trim());
+  const headerIndex = lines.findIndex((line) => /first\s*name/i.test(line) && /(last\s*name|company|position|email|url)/i.test(line));
+  if (headerIndex >= 0) {
+    return Math.max(0, lines.length - headerIndex - 1);
+  }
+  return Math.max(0, lines.length - 1);
+}
+
+function formatCsvUploadSummary(file, csvContent = '') {
+  const rows = estimateCsvDataRows(csvContent);
+  const sizeLabel = formatFileSize(file?.size || csvContent.length || 0);
+  return `${formatNumber(rows)} data row${rows === 1 ? '' : 's'}, ${sizeLabel}`;
+}
+
 async function handleSetupCsvFile(file) {
   if (!file) return;
   persistSetupDraftFromDom();
@@ -5613,7 +5635,7 @@ async function runConnectionsCsvImport(dryRun) {
   const action = dryRun ? 'dry-run-connections-csv' : 'import-connections-csv';
   const button = document.querySelector(`[data-action="${action}"]`);
   const originalLabel = dryRun ? 'Dry run CSV' : 'Import CSV';
-  if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Importing...'; }
+  if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Queueing...'; }
 
   try {
     const fileInput = document.getElementById('connections-csv-file');
@@ -5626,13 +5648,16 @@ async function runConnectionsCsvImport(dryRun) {
 
     const csvContent = await readTextFile(file);
     const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
+    const uploadSummary = formatCsvUploadSummary(file, csvContent);
 
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
       body: JSON.stringify(requestPayload),
     });
     if (!dryRun) {
-      showToast('Connections import queued.', 'success');
+      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
+      showToast(queuedMessage, 'success', 9000);
+      window.bdLocalApi.setAlert(queuedMessage, appAlert);
       const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
       const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
       const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
@@ -5640,7 +5665,7 @@ async function runConnectionsCsvImport(dryRun) {
       return;
     }
     const stats = run?.stats || {};
-    const message = `Dry run succeeded: ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
     window.bdLocalApi.setAlert(message, appAlert);
   } catch (error) {
     const message = `Connections import failed: ${error.message || error}`;
