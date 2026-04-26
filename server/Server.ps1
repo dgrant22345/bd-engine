@@ -1049,7 +1049,7 @@ function Handle-ApiRequest {
             $setupCsvPath = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
             [System.IO.File]::WriteAllText($setupCsvPath, $csvContent, [System.Text.Encoding]::UTF8)
             try {
-                $validation = Import-BdConnectionsCsv -CsvPath $setupCsvPath -DryRun -MergeExisting
+                $validation = Get-BdConnectionsCsvPreview -CsvPath $setupCsvPath -MergeExisting -SourceLabel 'setup-linkedin-connections-csv'
                 $validationStats = $validation.importRun.stats
                 $actionableRows = [int](Get-ObjectValue -Object $validationStats -Name 'imported' -Default 0) + [int](Get-ObjectValue -Object $validationStats -Name 'updated' -Default 0)
                 if ($actionableRows -le 0) {
@@ -2007,9 +2007,8 @@ function Handle-ApiRequest {
         }
 
         try {
-            $result = Import-BdConnectionsCsv `
+            $result = Get-BdConnectionsCsvPreview `
                 -CsvPath $csvPath `
-                -DryRun `
                 -MergeExisting `
                 -UseEmptyState:(Test-Truthy (Get-ObjectValue -Object $payload -Name 'useEmptyState' -Default $false))
             return (New-JsonResult ([ordered]@{
@@ -2048,9 +2047,8 @@ function Handle-ApiRequest {
             return (New-JsonResult ([ordered]@{ error = "CSV file not found: $csvPath" }) 400)
         }
         if (Test-Truthy $payload.dryRun) {
-            $result = Import-BdConnectionsCsv `
+            $result = Get-BdConnectionsCsvPreview `
                 -CsvPath $csvPath `
-                -DryRun:(Test-Truthy $payload.dryRun) `
                 -MergeExisting `
                 -UseEmptyState:(Test-Truthy $payload.useEmptyState)
             if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
@@ -2060,7 +2058,7 @@ function Handle-ApiRequest {
         }
 
         try {
-            $validation = Import-BdConnectionsCsv -CsvPath $csvPath -DryRun -MergeExisting
+            $validation = Get-BdConnectionsCsvPreview -CsvPath $csvPath -MergeExisting -SourceLabel 'linkedin-connections-csv'
             $validationStats = $validation.importRun.stats
             $actionableRows = [int](Get-ObjectValue -Object $validationStats -Name 'imported' -Default 0) + [int](Get-ObjectValue -Object $validationStats -Name 'updated' -Default 0)
             if ($actionableRows -le 0) {

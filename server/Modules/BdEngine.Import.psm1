@@ -854,6 +854,104 @@ function New-BdConnectionsCsvImportPlan {
     }
 }
 
+function Get-BdConnectionsCsvPreview {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CsvPath,
+        [string]$SourceLabel = 'linkedin-connections-csv',
+        [switch]$UseEmptyState,
+        [switch]$MergeExisting
+    )
+
+    if (-not (Test-Path -LiteralPath $CsvPath)) {
+        throw "CSV file not found: $CsvPath"
+    }
+
+    $state = if ($UseEmptyState) {
+        [ordered]@{
+            workspace = [ordered]@{ id = 'workspace-default'; name = 'Dry Run Workspace' }
+            companies = @()
+            contacts = @()
+        }
+    } else {
+        Get-AppStateView -Segments @('Workspace', 'Companies', 'Contacts')
+    }
+
+    if ($null -eq $state.contacts) { $state.contacts = @() }
+    if ($null -eq $state.companies) { $state.companies = @() }
+
+    $plan = New-BdConnectionsCsvImportPlan -CsvPath $CsvPath -State $state
+    $incomingContacts = @($plan.contacts)
+    $mergedContacts = New-Object System.Collections.ArrayList
+    if ($MergeExisting) {
+        foreach ($contact in @($state.contacts)) {
+            $contactId = [string](Get-ObjectValue -Object $contact -Name 'id' -Default '')
+            if (-not $contactId -or -not $plan.touchedIds.Contains($contactId)) {
+                [void]$mergedContacts.Add($contact)
+            }
+        }
+    }
+    foreach ($contact in $incomingContacts) {
+        [void]$mergedContacts.Add($contact)
+    }
+
+    $companyKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    if ($MergeExisting) {
+        foreach ($company in @($state.companies)) {
+            $companyKey = Get-CanonicalCompanyKey ([string](Get-FirstResolvedText -Candidates @(
+                (Get-ObjectValue -Object $company -Name 'normalizedName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'normalizedCompanyName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'displayName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'companyName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'name' -Default '')
+            )))
+            if ($companyKey) { [void]$companyKeys.Add($companyKey) }
+        }
+    }
+    foreach ($contact in @($mergedContacts)) {
+        $companyKey = Get-CanonicalCompanyKey ([string](Get-FirstResolvedText -Candidates @(
+            (Get-ObjectValue -Object $contact -Name 'normalizedCompanyName' -Default ''),
+            (Get-ObjectValue -Object $contact -Name 'companyName' -Default '')
+        )))
+        if ($companyKey) { [void]$companyKeys.Add($companyKey) }
+    }
+
+    $startedAt = (Get-Date).ToString('o')
+    $importRun = [ordered]@{
+        id = New-RandomId -Prefix 'run'
+        workspaceId = [string](Get-ObjectValue -Object $state.workspace -Name 'id' -Default 'workspace-default')
+        type = 'connections-csv-import'
+        status = 'dry_run'
+        startedAt = $startedAt
+        finishedAt = (Get-Date).ToString('o')
+        summary = "Dry-run parsed LinkedIn connections CSV from $CsvPath"
+        stats = [ordered]@{
+            contacts = @($mergedContacts).Count
+            companies = $companyKeys.Count
+            rows = [int]$plan.stats.rows
+            imported = [int]$plan.stats.imported
+            updated = [int]$plan.stats.updated
+            skipped = [int]$plan.stats.skipped
+            failed = [int]$plan.stats.failed
+            source = $SourceLabel
+        }
+        metadata = [ordered]@{
+            dedupeKeys = @('linkedinUrl', 'email', 'name+company')
+            mergeExisting = [bool]$MergeExisting
+            previewCount = @($plan.preview).Count
+            headerDetected = [bool]$plan.metadata.headerDetected
+            skippedLeadingLines = [int]$plan.metadata.skippedLeadingLines
+            headerLine = [string]$plan.metadata.headerLine
+        }
+        errors = @()
+    }
+
+    return [ordered]@{
+        importRun = $importRun
+        preview = @($plan.preview)
+    }
+}
+
 function Import-BdConnectionsCsv {
     param(
         [Parameter(Mandatory = $true)]

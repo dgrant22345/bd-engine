@@ -5178,19 +5178,8 @@ function renderBackgroundJobItem(job) {
   `;
 }
 
-function getConnectionsImportActionableCount(stats = {}) {
-  return Number(stats.imported || 0) + Number(stats.updated || 0);
-}
-
 function formatConnectionsImportStats(stats = {}) {
   return `${formatNumber(stats.imported || 0)} imported, ${formatNumber(stats.updated || 0)} updated, ${formatNumber(stats.skipped || 0)} skipped, ${formatNumber(stats.failed || 0)} failed`;
-}
-
-function getNoConnectionsRowsMessage(stats = {}) {
-  const rowCount = Number(stats.rows || 0);
-  return rowCount
-    ? `No importable LinkedIn connections were found in ${formatNumber(rowCount)} rows. Make sure this is the unzipped Connections.csv file from LinkedIn, not the ZIP or a blank template.`
-    : 'No rows were found. Make sure this is the unzipped Connections.csv file from LinkedIn, not the ZIP or a blank template.';
 }
 
 function renderTimelineItem(item) {
@@ -5637,22 +5626,6 @@ async function runConnectionsCsvImport(dryRun) {
 
     const csvContent = await readTextFile(file);
     const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
-
-    if (!dryRun) {
-      showToast('Checking LinkedIn CSV before import...', 'info');
-      const preview = await api('/api/import/connections-csv/preview', {
-        method: 'POST',
-        body: JSON.stringify({ csvContent, fileName: file.name, useEmptyState: false }),
-      });
-      const previewStats = preview?.stats || {};
-      if (getConnectionsImportActionableCount(previewStats) <= 0) {
-        const message = getNoConnectionsRowsMessage(previewStats);
-        showToast(message, 'warning', 9000);
-        window.bdLocalApi.setAlert(message, appAlert);
-        return;
-      }
-      window.bdLocalApi.setAlert(`Ready to import ${formatConnectionsImportStats(previewStats)}.`, appAlert);
-    }
 
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
