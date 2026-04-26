@@ -2604,10 +2604,17 @@ function hydrateAdminRuntimePanels(runtime) {
     </div>
   `;
 
-  const jobs = (summary.activeJobs && summary.activeJobs.length ? summary.activeJobs : summary.recentJobs) || [];
-  jobsTarget.innerHTML = jobs.length
-    ? jobs.map((job) => renderBackgroundJobItem(job)).join('')
-    : '<div class="empty-state compact">No background jobs are running right now.</div>';
+  const activeJobs = Array.isArray(summary.activeJobs) ? summary.activeJobs : [];
+  const activeIds = new Set(activeJobs.map((job) => job.id).filter(Boolean));
+  const recentJobs = (Array.isArray(summary.recentJobs) ? summary.recentJobs : []).filter((job) => !activeIds.has(job.id));
+  jobsTarget.innerHTML = `
+    ${activeJobs.length
+      ? activeJobs.map((job) => renderBackgroundJobItem(job)).join('')
+      : '<div class="empty-state compact">No jobs are active right now.</div>'}
+    ${recentJobs.length
+      ? `<div class="inline-header"><strong>Recent jobs</strong><span class="small muted">Completed and failed work</span></div>${recentJobs.map((job) => renderBackgroundJobItem(job)).join('')}`
+      : ''}
+  `;
 }
 
 function scheduleRuntimePoll() {
@@ -3123,6 +3130,7 @@ async function completeSetupWizard() {
         owners: parseSetupOwners(draft.ownersText),
         licenseKey: draft.licenseKey,
         csvContent: appState.setupCsvContent,
+        csvFileName: appState.setupCsvFileName,
       }),
     });
     appState.setupResult = result;
@@ -3153,6 +3161,7 @@ async function completeSetupWizard() {
       showToast('Setup complete.', 'success');
     }
   } catch (error) {
+    appState.setupProgressMessage = error.message || String(error || 'Setup failed.');
     showToast(`Setup failed: ${error.message || error}`, 'error', 8000);
     throw error;
   } finally {
@@ -5144,6 +5153,7 @@ function renderBackgroundJobItem(job) {
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
   const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+  const hasRecordsAffected = job.recordsAffected !== undefined && job.recordsAffected !== null && job.recordsAffected !== '';
 
   return `
     <article class="timeline-item job-card job-card--${escapeAttr(job.status || 'queued')}">
@@ -5160,12 +5170,27 @@ function renderBackgroundJobItem(job) {
       ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
-        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${job.recordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
+        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
         ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       ${job.errorMessage ? `<p class="small muted">${escapeHtml(job.errorMessage)}</p>` : ''}
     </article>
   `;
+}
+
+function getConnectionsImportActionableCount(stats = {}) {
+  return Number(stats.imported || 0) + Number(stats.updated || 0);
+}
+
+function formatConnectionsImportStats(stats = {}) {
+  return `${formatNumber(stats.imported || 0)} imported, ${formatNumber(stats.updated || 0)} updated, ${formatNumber(stats.skipped || 0)} skipped, ${formatNumber(stats.failed || 0)} failed`;
+}
+
+function getNoConnectionsRowsMessage(stats = {}) {
+  const rowCount = Number(stats.rows || 0);
+  return rowCount
+    ? `No importable LinkedIn connections were found in ${formatNumber(rowCount)} rows. Make sure this is the unzipped Connections.csv file from LinkedIn, not the ZIP or a blank template.`
+    : 'No rows were found. Make sure this is the unzipped Connections.csv file from LinkedIn, not the ZIP or a blank template.';
 }
 
 function renderTimelineItem(item) {
@@ -5611,22 +5636,42 @@ async function runConnectionsCsvImport(dryRun) {
     }
 
     const csvContent = await readTextFile(file);
-    const requestBody = JSON.stringify({ csvContent, fileName: file.name, dryRun, useEmptyState: dryRun });
+    const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
+
+    if (!dryRun) {
+      showToast('Checking LinkedIn CSV before import...', 'info');
+      const preview = await api('/api/import/connections-csv/preview', {
+        method: 'POST',
+        body: JSON.stringify({ csvContent, fileName: file.name, useEmptyState: false }),
+      });
+      const previewStats = preview?.stats || {};
+      if (getConnectionsImportActionableCount(previewStats) <= 0) {
+        const message = getNoConnectionsRowsMessage(previewStats);
+        showToast(message, 'warning', 9000);
+        window.bdLocalApi.setAlert(message, appAlert);
+        return;
+      }
+      window.bdLocalApi.setAlert(`Ready to import ${formatConnectionsImportStats(previewStats)}.`, appAlert);
+    }
 
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
-      body: requestBody,
+      body: JSON.stringify(requestPayload),
     });
     if (!dryRun) {
       showToast('Connections import queued.', 'success');
       const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
       const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
-      const message = `Imported ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
       window.bdLocalApi.setAlert(message, appAlert);
       return;
     }
     const stats = run?.stats || {};
-    const message = `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded: ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+    window.bdLocalApi.setAlert(message, appAlert);
+  } catch (error) {
+    const message = `Connections import failed: ${error.message || error}`;
+    showToast(message, 'error', 9000);
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {
     if (button) { button.disabled = false; button.textContent = originalLabel; }

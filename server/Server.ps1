@@ -1043,16 +1043,40 @@ function Handle-ApiRequest {
 
         $acceptedImport = $null
         $csvContent = [string](Get-ObjectValue -Object $payload -Name 'csvContent' -Default '')
+        $setupCsvPath = ''
+
+        if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
+            $setupCsvPath = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
+            [System.IO.File]::WriteAllText($setupCsvPath, $csvContent, [System.Text.Encoding]::UTF8)
+            try {
+                $validation = Import-BdConnectionsCsv -CsvPath $setupCsvPath -DryRun -MergeExisting
+                $validationStats = $validation.importRun.stats
+                $actionableRows = [int](Get-ObjectValue -Object $validationStats -Name 'imported' -Default 0) + [int](Get-ObjectValue -Object $validationStats -Name 'updated' -Default 0)
+                if ($actionableRows -le 0) {
+                    if (Test-Path -LiteralPath $setupCsvPath) {
+                        Remove-Item -LiteralPath $setupCsvPath -Force -ErrorAction SilentlyContinue
+                    }
+                    return (New-JsonResult ([ordered]@{
+                        error = 'No LinkedIn connection rows were found. Choose the unzipped Connections.csv export from LinkedIn with headers like First Name, Last Name, URL, Email Address, Company, Position, and Connected On.'
+                        stats = $validationStats
+                        preview = @($validation.preview)
+                    }) 400)
+                }
+            } catch {
+                if (Test-Path -LiteralPath $setupCsvPath) {
+                    Remove-Item -LiteralPath $setupCsvPath -Force -ErrorAction SilentlyContinue
+                }
+                return (New-JsonResult ([ordered]@{ error = "LinkedIn Connections.csv could not be read: $($_.Exception.Message)" }) 400)
+            }
+        }
 
         Set-ObjectValue -Object $state -Name 'workspace' -Value $workspace | Out-Null
         Set-ObjectValue -Object $state -Name 'settings' -Value $settings | Out-Null
         Sync-AppStateSegments -State $state -Segments @('Workspace', 'Settings') | Out-Null
 
         if (-not [string]::IsNullOrWhiteSpace($csvContent)) {
-            $tempFile = Join-Path $env:TEMP ("bd-setup-linkedin-" + [System.Guid]::NewGuid().ToString('N') + ".csv")
-            [System.IO.File]::WriteAllText($tempFile, $csvContent, [System.Text.Encoding]::UTF8)
             $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
-                csvPath = $tempFile
+                csvPath = $setupCsvPath
                 isTempFile = $true
                 mergeExisting = $true
                 sourceLabel = 'setup-linkedin-connections-csv'
@@ -2027,6 +2051,7 @@ function Handle-ApiRequest {
             $result = Import-BdConnectionsCsv `
                 -CsvPath $csvPath `
                 -DryRun:(Test-Truthy $payload.dryRun) `
+                -MergeExisting `
                 -UseEmptyState:(Test-Truthy $payload.useEmptyState)
             if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
                 Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
@@ -2034,9 +2059,32 @@ function Handle-ApiRequest {
             return (New-JsonResult $result.importRun 201)
         }
 
+        try {
+            $validation = Import-BdConnectionsCsv -CsvPath $csvPath -DryRun -MergeExisting
+            $validationStats = $validation.importRun.stats
+            $actionableRows = [int](Get-ObjectValue -Object $validationStats -Name 'imported' -Default 0) + [int](Get-ObjectValue -Object $validationStats -Name 'updated' -Default 0)
+            if ($actionableRows -le 0) {
+                if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
+                    Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+                }
+                return (New-JsonResult ([ordered]@{
+                    error = 'No LinkedIn connection rows were found. Choose the unzipped Connections.csv export from LinkedIn with headers like First Name, Last Name, URL, Email Address, Company, Position, and Connected On.'
+                    stats = $validationStats
+                    preview = @($validation.preview)
+                }) 400)
+            }
+        } catch {
+            if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
+                Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+            }
+            return (New-JsonResult ([ordered]@{ error = "LinkedIn Connections.csv could not be read: $($_.Exception.Message)" }) 400)
+        }
+
         $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
             csvPath    = $csvPath
             isTempFile = $isTempFile
+            mergeExisting = $true
+            sourceLabel = 'linkedin-connections-csv'
         }) -Summary 'Import LinkedIn connections CSV' -ProgressMessage 'Queued connections import'
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)

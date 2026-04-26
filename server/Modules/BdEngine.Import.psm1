@@ -591,6 +591,50 @@ function Add-LinkedInIncomingKeys {
     }
 }
 
+function Test-LinkedInCsvHeaderLine {
+    param([string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $false
+    }
+
+    $columns = @($Line -split ',' | ForEach-Object {
+        Normalize-TextKey (($_ -replace '^\s*"', '') -replace '"\s*$', '')
+    })
+    $hasName = ($columns -contains 'first name') -or ($columns -contains 'last name') -or ($columns -contains 'full name') -or ($columns -contains 'name')
+    $hasContactSignal = ($columns -contains 'url') -or ($columns -contains 'profile url') -or ($columns -contains 'linkedin url') -or ($columns -contains 'email address') -or ($columns -contains 'email')
+    $hasCompanySignal = ($columns -contains 'company') -or ($columns -contains 'company name') -or ($columns -contains 'organization') -or ($columns -contains 'position') -or ($columns -contains 'title') -or ($columns -contains 'job title')
+
+    return ($hasName -and ($hasContactSignal -or $hasCompanySignal))
+}
+
+function Get-LinkedInCsvDataContent {
+    param([string]$CsvContent)
+
+    $cleanContent = if ($null -eq $CsvContent) { '' } else { [string]$CsvContent }
+    $cleanContent = $cleanContent -replace '^\uFEFF', ''
+    $cleanContent = $cleanContent -replace '^(?:[ \t]*\r?\n)+', ''
+    $lines = @($cleanContent -split '\r?\n')
+    $headerIndex = 0
+    $headerDetected = $false
+
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if (Test-LinkedInCsvHeaderLine -Line $lines[$index]) {
+            $headerIndex = $index
+            $headerDetected = $true
+            break
+        }
+    }
+
+    $dataLines = if ($lines.Count -gt 0) { @($lines[$headerIndex..($lines.Count - 1)]) } else { @() }
+    return [ordered]@{
+        content = [string]::Join([Environment]::NewLine, $dataLines)
+        headerDetected = $headerDetected
+        skippedLeadingLines = $headerIndex
+        headerLine = if ($lines.Count -gt 0) { [string]$lines[$headerIndex] } else { '' }
+    }
+}
+
 function New-BdConnectionsCsvImportPlan {
     param(
         [Parameter(Mandatory = $true)]
@@ -600,14 +644,14 @@ function New-BdConnectionsCsvImportPlan {
         [int]$PreviewLimit = 25
     )
 
-    $csvContent = [System.IO.File]::ReadAllText($CsvPath)
-    $csvContent = $csvContent -replace '^\uFEFF', ''
-    $csvContent = $csvContent -replace '^(?:[ \t]*\r?\n)+', ''
+    $csvInfo = Get-LinkedInCsvDataContent -CsvContent ([System.IO.File]::ReadAllText($CsvPath))
+    $csvContent = [string]$csvInfo.content
     $rows = if ([string]::IsNullOrWhiteSpace($csvContent)) {
         @()
     } else {
         @(($csvContent -split '\r?\n') | ConvertFrom-Csv)
     }
+    $rows = @($rows)
     $contacts = New-Object System.Collections.ArrayList
     $preview = New-Object System.Collections.ArrayList
     $existingIndex = @{
@@ -802,6 +846,11 @@ function New-BdConnectionsCsvImportPlan {
         preview = @($preview)
         stats = $stats
         totalRows = @($rows).Count
+        metadata = [ordered]@{
+            headerDetected = [bool]$csvInfo.headerDetected
+            skippedLeadingLines = [int]$csvInfo.skippedLeadingLines
+            headerLine = [string]$csvInfo.headerLine
+        }
     }
 }
 
@@ -875,6 +924,7 @@ function Import-BdConnectionsCsv {
     foreach ($cfg in @($state.boardConfigs)) { $k = Get-CanonicalCompanyKey ([string]$cfg.companyName); if ($k) { [void]$preConfigKeys.Add($k) } }
     $state = Sync-BoardConfigsFromCompanies -State $state -ProgressCallback $ProgressCallback
     $postConfigTouched = @($state.boardConfigs | ForEach-Object { Get-CanonicalCompanyKey ([string]$_.companyName) } | Where-Object { $_ -and -not $preConfigKeys.Contains($_) } | Select-Object -Unique)
+    $postConfigTouched = @($postConfigTouched)
     $configTouchedKeys = if ($postConfigTouched.Count -gt 0) { $postConfigTouched } else { $null }
     $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback -TouchedCompanyKeys $configTouchedKeys
 
@@ -900,6 +950,9 @@ function Import-BdConnectionsCsv {
             dedupeKeys = @('linkedinUrl', 'email', 'name+company')
             mergeExisting = [bool]$MergeExisting
             previewCount = @($plan.preview).Count
+            headerDetected = [bool]$plan.metadata.headerDetected
+            skippedLeadingLines = [int]$plan.metadata.skippedLeadingLines
+            headerLine = [string]$plan.metadata.headerLine
         }
         errors = @()
     }

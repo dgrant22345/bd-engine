@@ -158,4 +158,5 @@ If a button appears to do nothing:
 - Refresh the browser tab.
 - Check Admin > Runtime status.
 - Check Admin > Background jobs.
+- If a LinkedIn import says no rows were found, upload the unzipped `Connections.csv` file from the LinkedIn export. Do not upload the ZIP file, a blank template, or a renamed file without LinkedIn connection rows.
 - For `Run Full Engine`, enter a Google Sheets Spreadsheet ID first, or use the local LinkedIn import workflow instead.
