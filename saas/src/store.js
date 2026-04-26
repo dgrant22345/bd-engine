@@ -300,8 +300,13 @@ export function createStore() {
         }
         
         const tenantAccts = data.accounts || [];
+        tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
         accountsByTenant.set(tenantId, tenantAccts);
-        contactsByTenant.set(tenantId, data.contacts || []);
+        
+        const tenantConts = data.contacts || [];
+        tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        contactsByTenant.set(tenantId, tenantConts);
+        
         jobsByTenant.set(tenantId, data.jobs || []);
         configsByTenant.set(tenantId, data.configs || []);
         activitiesByTenant.set(tenantId, data.activities || []);
@@ -312,7 +317,7 @@ export function createStore() {
           if (!accounts.some(x => x.id === a.id)) accounts.push(a);
         }
         // Load contacts
-        for (const c of (data.contacts || [])) {
+        for (const c of tenantConts) {
           if (!contacts.some(x => x.id === c.id)) contacts.push(c);
         }
         // Load jobs
@@ -970,8 +975,12 @@ export function createStore() {
       });
       item.tenantId = tenantId;
       accounts.push(item);
-      getTenantArray(accountsByTenant, tenantId).push(item);
-      if (!_skipPersist) persistTenant(tenantId);
+      const tenantAccts = getTenantArray(accountsByTenant, tenantId);
+      tenantAccts.push(item);
+      if (!_skipPersist) {
+        tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
+        persistTenant(tenantId);
+      }
       return item;
     },
 
@@ -1004,8 +1013,12 @@ export function createStore() {
       // Override the default tenantId from contact() factory
       item.tenantId = tenantId;
       contacts.push(item);
-      getTenantArray(contactsByTenant, tenantId).push(item);
-      if (!_skipPersist) persistTenant(tenantId);
+      const tenantContacts = getTenantArray(contactsByTenant, tenantId);
+      tenantContacts.push(item);
+      if (!_skipPersist) {
+        tenantContacts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        persistTenant(tenantId);
+      }
       return item;
     },
 
@@ -1222,7 +1235,13 @@ export function createStore() {
       if (profile && !dryRun) profile.settings.setupComplete = true;
 
       // Persist all imported data
-      if (!dryRun) persistTenant(tenantId);
+      if (!dryRun) {
+        const tenantAccts = getTenantArray(accountsByTenant, tenantId);
+        tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
+        const tenantContacts = getTenantArray(contactsByTenant, tenantId);
+        tenantContacts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        persistTenant(tenantId);
+      }
 
       const stats = {
         rowsParsed: rows.length,
@@ -1420,13 +1439,11 @@ function pickPatch(input, fields) {
 }
 
 function accountsForTenant(tenantId) {
-  return (accountsByTenant.get(tenantId) || [])
-    .sort((a, b) => b.targetScore - a.targetScore);
+  return accountsByTenant.get(tenantId) || [];
 }
 
 function contactsForTenant(tenantId) {
-  return (contactsByTenant.get(tenantId) || [])
-    .sort((a, b) => b.priorityScore - a.priorityScore);
+  return contactsByTenant.get(tenantId) || [];
 }
 
 function jobsForTenant(tenantId) {
