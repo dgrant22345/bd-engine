@@ -6,6 +6,7 @@ ENV BD_CLOUD_PORT=8787
 
 COPY saas/package.json ./
 COPY saas/src ./src
+COPY saas/public ./public
 COPY saas/schema.sql ./
 COPY app ./app
 

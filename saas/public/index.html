@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="BD Engine Cloud — Revenue intelligence platform for staffing and recruiting teams. Track accounts, hiring signals, and outreach in one place.">
+  <meta name="application-name" content="BD Engine Cloud">
+  <meta name="theme-color" content="#0a0e1a">
+  <title>BD Engine Cloud | Revenue Intelligence Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/cloud.css">
+</head>
+<body>
+  <div id="cloud-root"></div>
+
+  <script>
+  (() => {
+    const root = document.getElementById('cloud-root');
+
+    // ── State ─────────────────────────────────────────────────────────────
+    let state = {
+      view: 'loading', // loading | landing | login | signup | app
+      user: null,
+      tenant: null,
+      tenants: [],
+      plan: null,
+      trialDaysRemaining: null,
+      error: '',
+      busy: false,
+    };
+
+    // ── API helper ────────────────────────────────────────────────────────
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        ...options,
+      });
+      const data = res.status === 204 ? null : await res.json();
+      if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
+      return data;
+    }
+
+    // ── Check auth status on load ─────────────────────────────────────────
+    async function checkAuth() {
+      cleanupServiceWorkers();
+      try {
+        const data = await api('/api/auth/me');
+        if (data.authenticated) {
+          state.user = data.user;
+          state.tenant = data.tenant;
+          state.tenants = data.tenants || [];
+          state.plan = data.plan;
+          state.trialDaysRemaining = data.trialDaysRemaining;
+          state.view = 'app';
+        } else {
+          state.view = 'landing';
+        }
+      } catch {
+        state.view = 'landing';
+      }
+      render();
+    }
+
+    async function cleanupServiceWorkers() {
+      if (!('serviceWorker' in navigator)) return;
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.unregister()));
+      } catch {
+        // Service worker cleanup is best-effort only.
+      }
+    }
+
+    // ── Auth actions ──────────────────────────────────────────────────────
+    async function doLogin(email, password) {
+      state.busy = true;
+      state.error = '';
+      render();
+      try {
+        const data = await api('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        });
+        state.user = data.user;
+        state.tenant = data.tenant;
+        state.tenants = data.tenants || [];
+        state.view = 'app';
+        state.error = '';
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function doSignup(email, password, name, workspaceName) {
+      state.busy = true;
+      state.error = '';
+      render();
+      try {
+        const data = await api('/api/auth/signup', {
+          method: 'POST',
+          body: JSON.stringify({ email, password, name, workspaceName }),
+        });
+        state.user = data.user;
+        state.tenant = data.tenant;
+        state.view = 'app';
+        state.error = '';
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function doLogout() {
+      try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+      state.user = null;
+      state.tenant = null;
+      state.view = 'landing';
+      state.error = '';
+      render();
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────
+    function render() {
+      switch (state.view) {
+        case 'loading': return renderLoading();
+        case 'landing': return renderLanding();
+        case 'login': return renderLogin();
+        case 'signup': return renderSignup();
+        case 'app': return renderApp();
+      }
+    }
+
+    function renderLoading() {
+      root.innerHTML = `
+        <div class="cloud-loading">
+          <div class="cloud-spinner"></div>
+          <p>Loading BD Engine Cloud...</p>
+        </div>`;
+    }
+
+    // ── Landing page ──────────────────────────────────────────────────────
+    function renderLanding() {
+      root.innerHTML = `
+        <div class="landing">
+          <nav class="landing-nav">
+            <div class="landing-nav-brand">
+              <div class="brand-icon">
+                <svg width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
+            </div>
+            <div class="landing-nav-actions">
+              <button class="nav-link" id="nav-login">Log in</button>
+              <button class="btn btn-primary btn-glow" id="nav-signup">Start free trial</button>
+            </div>
+          </nav>
+
+          <section class="hero">
+            <div class="hero-content">
+              <div class="hero-badge">✨ Now in cloud beta</div>
+              <h1 class="hero-title">
+                Revenue intelligence<br>
+                <span class="hero-gradient">for modern BD teams</span>
+              </h1>
+              <p class="hero-subtitle">
+                Track accounts, hiring signals, and outreach sequences — all in one platform built for staffing and recruiting firms.
+              </p>
+              <div class="hero-cta">
+                <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
+                <button class="btn btn-ghost btn-lg" id="hero-demo">Try demo account</button>
+              </div>
+              <p class="hero-note">No credit card required · 14-day free trial · Cancel anytime</p>
+            </div>
+            <div class="hero-visual">
+              <div class="hero-card hero-card-1">
+                <div class="hero-card-header">
+                  <span class="hero-card-dot green"></span>
+                  <span>Pipeline Snapshot</span>
+                </div>
+                <div class="hero-card-body">
+                  <div class="hero-stat"><span class="hero-stat-value">47</span><span class="hero-stat-label">Active accounts</span></div>
+                  <div class="hero-stat"><span class="hero-stat-value">186</span><span class="hero-stat-label">Open roles tracked</span></div>
+                  <div class="hero-stat"><span class="hero-stat-value">23</span><span class="hero-stat-label">Follow-ups due</span></div>
+                </div>
+              </div>
+              <div class="hero-card hero-card-2">
+                <div class="hero-card-header">
+                  <span class="hero-card-dot blue"></span>
+                  <span>Hiring Signal</span>
+                </div>
+                <div class="hero-card-body">
+                  <p class="hero-signal-text"><strong>Northstar Robotics</strong> posted 6 new roles in the last 7 days</p>
+                  <div class="hero-signal-bar"><div class="hero-signal-fill" style="width:84%"></div></div>
+                  <p class="hero-signal-score">Target score: 91</p>
+                </div>
+              </div>
+              <div class="hero-card hero-card-3">
+                <div class="hero-card-header">
+                  <span class="hero-card-dot purple"></span>
+                  <span>Outreach Draft</span>
+                </div>
+                <div class="hero-card-body">
+                  <p class="hero-draft-to">To: Priya Shah, Director of Talent</p>
+                  <p class="hero-draft-preview">Hi Priya, I noticed Northstar is hiring across controls and embedded...</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="features" id="features">
+            <h2 class="section-title">Everything you need to close more business</h2>
+            <div class="features-grid">
+              <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3>Pipeline Intelligence</h3>
+                <p>See your entire pipeline at a glance. Target scores, hiring velocity, and relationship coverage — automatically ranked.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3>Hiring Signals</h3>
+                <p>Track ATS activity across Greenhouse, Lever, Ashby, and 20+ platforms. Know when accounts are hiring before the competition.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">✉️</div>
+                <h3>Smart Outreach</h3>
+                <p>Generate personalized email and LinkedIn drafts based on live hiring data. Log outreach and schedule follow-ups in one click.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">👥</div>
+                <h3>Contact Intelligence</h3>
+                <p>Import your LinkedIn connections and map relationship coverage across every target account. Prioritize by seniority and relevance.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <h3>ATS Discovery</h3>
+                <p>Automatically discover and resolve ATS job boards for your target companies. No manual configuration required.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">📈</div>
+                <h3>Team Analytics</h3>
+                <p>Track outreach velocity, pipeline coverage, and team performance. Leaderboards, deal velocity, and data quality scores.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="pricing" id="pricing">
+            <h2 class="section-title">Simple, transparent pricing</h2>
+            <div class="pricing-grid">
+              <div class="pricing-card">
+                <div class="pricing-badge">Free trial</div>
+                <h3>Trial</h3>
+                <div class="pricing-price"><span class="price-amount">$0</span><span class="price-period">/14 days</span></div>
+                <ul class="pricing-features">
+                  <li>25 accounts</li>
+                  <li>100 contacts</li>
+                  <li>3 job boards</li>
+                  <li>Basic outreach drafts</li>
+                  <li>CSV import</li>
+                </ul>
+                <button class="btn btn-primary btn-block" data-signup>Start free trial</button>
+              </div>
+              <div class="pricing-card pricing-card--popular">
+                <div class="pricing-badge popular">Most popular</div>
+                <h3>Starter</h3>
+                <div class="pricing-price"><span class="price-amount">$49</span><span class="price-period">/month</span></div>
+                <ul class="pricing-features">
+                  <li>200 accounts</li>
+                  <li>2,000 contacts</li>
+                  <li>20 job boards</li>
+                  <li>Enrichment + ATS discovery</li>
+                  <li>CSV export</li>
+                  <li>3 team members</li>
+                </ul>
+                <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
+              </div>
+              <div class="pricing-card">
+                <div class="pricing-badge">Scale</div>
+                <h3>Professional</h3>
+                <div class="pricing-price"><span class="price-amount">$149</span><span class="price-period">/month</span></div>
+                <ul class="pricing-features">
+                  <li>2,000 accounts</li>
+                  <li>25,000 contacts</li>
+                  <li>Unlimited job boards</li>
+                  <li>Automation rules</li>
+                  <li>API access</li>
+                  <li>10 team members</li>
+                  <li>Advanced analytics</li>
+                </ul>
+                <button class="btn btn-primary btn-block" data-signup>Get started</button>
+              </div>
+            </div>
+          </section>
+
+          <footer class="landing-footer">
+            <div class="landing-footer-brand">
+              <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
+            </div>
+            <p class="landing-footer-copy">&copy; ${new Date().getFullYear()} BD Engine. Built for staffing and recruiting teams.</p>
+          </footer>
+        </div>`;
+
+      // Wire events
+      root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
+      root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
+      root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
+      root.querySelector('#hero-demo')?.addEventListener('click', () => doLogin('demo@bdengine.io', 'demo1234'));
+      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
+    }
+
+    // ── Login page ────────────────────────────────────────────────────────
+    function renderLogin() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <div class="auth-card">
+            <div class="auth-header">
+              <div class="brand-icon-sm">
+                <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg2)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg2" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <h2>Welcome back</h2>
+              <p>Log in to your BD Engine Cloud account</p>
+            </div>
+            ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
+            <form id="login-form" class="auth-form">
+              <div class="form-group">
+                <label for="login-email">Email</label>
+                <input type="email" id="login-email" placeholder="you@company.com" required autofocus>
+              </div>
+              <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" placeholder="••••••••" required minlength="6">
+              </div>
+              <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
+                ${state.busy ? '<span class="btn-spinner"></span> Logging in...' : 'Log in'}
+              </button>
+            </form>
+            <div class="auth-footer">
+              <p>Don't have an account? <button class="link-btn" id="goto-signup">Sign up free</button></p>
+              <button class="link-btn" id="goto-landing">← Back to home</button>
+            </div>
+            <div class="auth-demo">
+              <button class="btn btn-ghost btn-sm" id="demo-login">Try demo account</button>
+              <p class="auth-demo-hint">demo@bdengine.io / demo1234</p>
+            </div>
+          </div>
+        </div>`;
+
+      root.querySelector('#login-form')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = root.querySelector('#login-email').value;
+        const password = root.querySelector('#login-password').value;
+        doLogin(email, password);
+      });
+      root.querySelector('#goto-signup')?.addEventListener('click', () => { state.view = 'signup'; state.error = ''; render(); });
+      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+      root.querySelector('#demo-login')?.addEventListener('click', () => doLogin('demo@bdengine.io', 'demo1234'));
+    }
+
+    // ── Signup page ───────────────────────────────────────────────────────
+    function renderSignup() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <div class="auth-card">
+            <div class="auth-header">
+              <div class="brand-icon-sm">
+                <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg3)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg3" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <h2>Create your account</h2>
+              <p>Start your 14-day free trial — no credit card required</p>
+            </div>
+            ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
+            <form id="signup-form" class="auth-form">
+              <div class="form-group">
+                <label for="signup-name">Full name</label>
+                <input type="text" id="signup-name" placeholder="Jane Smith" required autofocus>
+              </div>
+              <div class="form-group">
+                <label for="signup-email">Work email</label>
+                <input type="email" id="signup-email" placeholder="jane@company.com" required>
+              </div>
+              <div class="form-group">
+                <label for="signup-password">Password</label>
+                <input type="password" id="signup-password" placeholder="Min. 6 characters" required minlength="6">
+              </div>
+              <div class="form-group">
+                <label for="signup-workspace">Workspace name</label>
+                <input type="text" id="signup-workspace" placeholder="My Company">
+              </div>
+              <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
+                ${state.busy ? '<span class="btn-spinner"></span> Creating account...' : 'Create account'}
+              </button>
+            </form>
+            <div class="auth-footer">
+              <p>Already have an account? <button class="link-btn" id="goto-login">Log in</button></p>
+              <button class="link-btn" id="goto-landing">← Back to home</button>
+            </div>
+          </div>
+        </div>`;
+
+      root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = root.querySelector('#signup-name').value;
+        const email = root.querySelector('#signup-email').value;
+        const password = root.querySelector('#signup-password').value;
+        const workspace = root.querySelector('#signup-workspace').value;
+        doSignup(email, password, name, workspace);
+      });
+      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+    }
+
+    // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
+    function renderApp() {
+      const planBadge = state.plan ? state.plan.displayName : 'Trial';
+      const trialNotice = state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
+        ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
+
+      root.innerHTML = `
+        <div class="cloud-shell">
+          <div class="cloud-topbar">
+            <div class="cloud-topbar-left">
+              <div class="brand-icon-xs">
+                <svg width="22" height="22" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg4)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg4" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <span class="cloud-app-name">BD Engine <span class="brand-cloud">Cloud</span></span>
+              <span class="cloud-plan-badge">${escapeHtml(planBadge)}</span>
+              ${trialNotice}
+            </div>
+            <div class="cloud-topbar-right">
+              <span class="cloud-workspace">${escapeHtml(state.tenant?.name || 'Workspace')}</span>
+              <div class="cloud-user-menu" id="cloud-user-menu">
+                <button class="cloud-avatar" id="cloud-avatar-btn">
+                  ${(state.user?.name || 'U').charAt(0).toUpperCase()}
+                </button>
+                <div class="cloud-user-dropdown hidden" id="cloud-user-dropdown">
+                  <div class="cloud-user-info">
+                    <strong>${escapeHtml(state.user?.name || '')}</strong>
+                    <span>${escapeHtml(state.user?.email || '')}</span>
+                  </div>
+                  <hr>
+                  <button class="cloud-menu-item" id="cloud-billing-btn">💳 Billing & Plan</button>
+                  <button class="cloud-menu-item" id="cloud-logout-btn">🚪 Log out</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="cloud-app-container">
+            <iframe class="cloud-app-frame" title="BD Engine workspace" src="/app/#/dashboard"></iframe>
+          </div>
+        </div>`;
+
+      // Wire user menu
+      const avatarBtn = root.querySelector('#cloud-avatar-btn');
+      const dropdown = root.querySelector('#cloud-user-dropdown');
+      avatarBtn?.addEventListener('click', () => dropdown?.classList.toggle('hidden'));
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('#cloud-user-menu')) dropdown?.classList.add('hidden');
+      });
+      root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
+      root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
+        alert('Billing page coming soon. Current plan: ' + planBadge);
+      });
+    }
+
+    // ── Utility ───────────────────────────────────────────────────────────
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = String(str || '');
+      return div.innerHTML;
+    }
+
+    // ── Init ──────────────────────────────────────────────────────────────
+    render();
+    checkAuth();
+  })();
+  </script>
+</body>
+</html>

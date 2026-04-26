@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/store.js && node --check ../app/app.js && node --check ../app/local-api.js && node --check ../app/sw.js"
+    "check": "node --check src/server.js && node --check src/store.js && node --check src/auth.js && node --check src/users.js && node --check src/billing.js && node --check scripts/smoke.mjs && node --check ../app/app.js && node --check ../app/local-api.js && node --check ../app/sw.js",
+    "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
     "node": ">=22"

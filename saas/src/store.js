@@ -40,6 +40,10 @@ const settings = {
   },
 };
 
+const tenantProfiles = new Map([
+  [seedTenant.id, { workspace, settings }],
+]);
+
 const boardConfigs = [
   {
     id: 'cfg-northstar',
@@ -304,6 +308,10 @@ const backgroundJobs = new Map();
 
 export function createStore() {
   return {
+    ensureTenant(tenant, user = {}) {
+      return ensureTenantProfile(tenant?.id || tenant, tenant, user);
+    },
+
     getSession() {
       return {
         tenant: { ...seedTenant },
@@ -314,12 +322,13 @@ export function createStore() {
 
     getSetupStatus(tenantId) {
       assertTenant(tenantId);
+      const profile = getTenantProfile(tenantId);
       return {
-        requiresSetup: false,
-        setupComplete: true,
+        requiresSetup: !profile.settings.setupComplete,
+        setupComplete: Boolean(profile.settings.setupComplete),
         licensingEnabled: false,
-        workspaceName: workspace.name,
-        user: settings.user,
+        workspaceName: profile.workspace.name,
+        user: profile.settings.user,
       };
     },
 
@@ -338,19 +347,20 @@ export function createStore() {
       };
     },
 
-    getBootstrap(tenantId, { includeFilters = false } = {}) {
+    getBootstrap(tenantId, { includeFilters = false, session = null } = {}) {
       assertTenant(tenantId);
+      const profile = getTenantProfile(tenantId);
       return {
-        workspace: { ...workspace },
-        settings: { ...settings },
+        workspace: { ...profile.workspace },
+        settings: { ...profile.settings },
         defaults: {
           workbookPath: '',
           spreadsheetId: '',
           connectionsCsvPath: '',
         },
-        ownerRoster: settings.ownerRoster,
-        session: this.getSession(),
-        ...(includeFilters ? { filters: buildFilters() } : {}),
+        ownerRoster: profile.settings.ownerRoster,
+        session: session || this.getSession(),
+        ...(includeFilters ? { filters: buildFilters(tenantId) } : {}),
       };
     },
 
@@ -545,7 +555,8 @@ export function createStore() {
 
     patchSettings(tenantId, patch) {
       assertTenant(tenantId);
-      Object.assign(settings, pickPatch(patch, [
+      const profile = getTenantProfile(tenantId);
+      Object.assign(profile.settings, pickPatch(patch, [
         'minCompanyConnections',
         'minJobsPosted',
         'contactPriorityThreshold',
@@ -553,7 +564,7 @@ export function createStore() {
         'geographyFocus',
         'gtaPriority',
       ]));
-      return { ok: true, settings: { ...settings } };
+      return { ok: true, settings: { ...profile.settings } };
     },
 
     getActivity(tenantId, query) {
@@ -809,15 +820,17 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
   };
 }
 
-function buildFilters() {
+function buildFilters(tenantId) {
+  const tenantAccounts = accountsForTenant(tenantId);
+  const tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
   return {
-    atsTypes: unique(boardConfigs.map((item) => item.ats)),
-    industries: unique(accounts.map((item) => item.industry).filter(Boolean)),
-    statuses: unique(accounts.map((item) => item.status)),
-    outreachStatuses: unique(accounts.map((item) => item.outreachStatus)),
-    configDiscoveryStatuses: unique(boardConfigs.map((item) => item.discoveryStatus)),
-    configConfidenceBands: unique(boardConfigs.map((item) => item.confidenceBand)),
-    configReviewStatuses: unique(boardConfigs.map((item) => item.reviewStatus)),
+    atsTypes: unique(tenantConfigs.map((item) => item.ats)),
+    industries: unique(tenantAccounts.map((item) => item.industry).filter(Boolean)),
+    statuses: unique(tenantAccounts.map((item) => item.status)),
+    outreachStatuses: unique(tenantAccounts.map((item) => item.outreachStatus)),
+    configDiscoveryStatuses: unique(tenantConfigs.map((item) => item.discoveryStatus)),
+    configConfidenceBands: unique(tenantConfigs.map((item) => item.confidenceBand)),
+    configReviewStatuses: unique(tenantConfigs.map((item) => item.reviewStatus)),
   };
 }
 
@@ -882,11 +895,44 @@ function selectContact(accountContacts, contactName) {
 }
 
 function assertTenant(tenantId) {
-  if (tenantId !== seedTenant.id) {
+  if (!getTenantProfile(tenantId)) {
     const error = new Error('Tenant not found');
     error.status = 404;
     throw error;
   }
+}
+
+function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
+  if (!tenantId) return null;
+  if (tenantProfiles.has(tenantId)) return tenantProfiles.get(tenantId);
+  const ownerName = user.name || user.email || 'Owner';
+  const ownerEmail = user.email || '';
+  const profile = {
+    workspace: {
+      id: `workspace-${tenantId}`,
+      tenantId,
+      name: tenant.name || 'BD Engine Workspace',
+      companyName: tenant.name || 'BD Engine Workspace',
+      updatedAt: now(),
+    },
+    settings: {
+      ...settings,
+      setupComplete: false,
+      ownerRoster: [
+        { id: `owner-${tenantId}`, name: ownerName, displayName: ownerName, email: ownerEmail, role: 'Owner' },
+      ],
+      user: {
+        name: ownerName,
+        email: ownerEmail,
+      },
+    },
+  };
+  tenantProfiles.set(tenantId, profile);
+  return profile;
+}
+
+function getTenantProfile(tenantId) {
+  return tenantProfiles.get(tenantId) || null;
 }
 
 function unique(values) {

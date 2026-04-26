@@ -14,12 +14,14 @@ BD Engine Cloud helps staffing and recruiting business development teams:
 
 ## Architecture Direction
 
-The first prototype is deliberately dependency-light, but it now serves the same v0 frontend used by the local app:
+The first prototype is deliberately dependency-light, but it now wraps the same v0 frontend used by the local app in a cloud shell:
 
-- `saas/src/server.js` hosts the API and static app shell.
+- `saas/public/` hosts the cloud landing, login, signup, and authenticated top bar.
+- `saas/src/server.js` hosts the API, auth/session checks, billing stubs, and static assets.
+- `saas/src/auth.js`, `saas/src/users.js`, and `saas/src/billing.js` define the temporary auth, tenant, membership, and plan boundaries.
 - `saas/src/store.js` exposes the tenant-aware data access boundary and compatibility payloads for the existing frontend.
 - `saas/schema.sql` defines the intended hosted Postgres model.
-- `app/` remains the shared frontend until the hosted app needs a build system.
+- `app/` remains the shared frontend, mounted at `/app/`, until the hosted app needs a build system.
 
 The local Windows app remains unchanged and can keep shipping as a private/local edition.
 
@@ -31,8 +33,8 @@ The local Windows app remains unchanged and can keep shipping as a private/local
    - Keep one tenant while validating hosting, imports, and worker runtime.
 
 2. Auth and organizations
-   - Add sign-up/login.
-   - Add tenants, memberships, roles, invites, and session enforcement.
+   - Replace development sign-up/login with production auth.
+   - Persist tenants, memberships, roles, invites, and sessions.
    - Add tenant isolation tests before allowing multiple paying customers.
 
 3. Background jobs
