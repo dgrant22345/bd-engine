@@ -421,6 +421,16 @@ self.addEventListener('activate', (event) => {
     }
   }
 
+  if (pathname.startsWith('/api/tasks')) {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, store.findTasks(tenantId, Object.fromEntries(url.searchParams)));
+    }
+    const match = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
+    if (match && req.method === 'POST') {
+      return sendJson(res, 200, store.completeTask(tenantId, match[1]));
+    }
+  }
+
   if (pathname === '/api/search') {
     return sendJson(res, 200, store.search(tenantId, Object.fromEntries(url.searchParams)));
   }

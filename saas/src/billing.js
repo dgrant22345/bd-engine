@@ -164,6 +164,10 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     },
     success_url: successUrl,
     cancel_url: cancelUrl,
+    metadata: {
+      tenantId: tenantId,
+      planId: planId,
+    },
   });
 
   return session.url;

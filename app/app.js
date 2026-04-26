@@ -1977,6 +1977,18 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'complete-task') {
+      const taskId = action.dataset.id;
+      await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
+      const item = document.getElementById(`task-${taskId}`);
+      if (item) {
+        item.classList.add('task-completed');
+        setTimeout(() => item.remove(), 600);
+      }
+      showToast('Task marked as complete');
+      return;
+    }
+
     if (actionName === 'apply-generated-outreach-variant') {
       applyGeneratedOutreachVariant(Number(action.dataset.index), action);
       return;
@@ -3314,6 +3326,8 @@ async function renderDashboardView() {
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
   const dashboard = await api('/api/dashboard');
+  const tasks = await api('/api/tasks');
+  const taskList = Array.isArray(tasks.items) ? tasks.items : [];
   if (!dashboard.todayQueue) dashboard.todayQueue = [];
   if (!dashboard.followUpAccounts) dashboard.followUpAccounts = [];
   if (!dashboard.newJobsToday) dashboard.newJobsToday = [];
@@ -3392,6 +3406,30 @@ async function renderDashboardView() {
           ${renderMetricTile('Engagement', topCompany ? formatNumber(topCompany.engagementScore || 0) : '0')}
         </div>
       </div>
+
+      ${taskList.length ? `
+      <div class="tasks-panel dashboard-panel">
+        <div class="panel-header">
+          <div>
+            <h3>Pending Tasks & Reminders</h3>
+            <p class="muted small">Your automated follow-up queue.</p>
+          </div>
+          <span class="badge badge--warning">${taskList.length} tasks</span>
+        </div>
+        <div class="task-list">
+          ${taskList.map(task => `
+            <div class="task-item" id="task-${task.id}">
+              <div class="task-info">
+                <div class="task-summary">${escapeHtml(task.summary)}</div>
+                <div class="task-meta">Due ${formatDate(task.dueDate)}</div>
+              </div>
+              <button class="ghost-button ghost-button--xs" data-action="complete-task" data-id="${task.id}">Mark Done</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
+
       ${topCompany ? `
         <div class="spotlight-card">
           <div class="panel-header">

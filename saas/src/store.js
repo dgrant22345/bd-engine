@@ -279,6 +279,8 @@ const jobs = [
   }),
 ];
 
+const tasks = [];
+
 const activities = [
   {
     id: 'act-seed',
@@ -325,6 +327,7 @@ function persistTenant(tenantId) {
       jobs: jobs.filter(j => j.tenantId === tenantId),
       configs: boardConfigs.filter(c => c.tenantId === tenantId),
       activities: activities.filter(a => a.tenantId === tenantId),
+      tasks: tasks.filter(t => t.tenantId === tenantId),
       settings: profile ? { ...profile.settings, persona: profile.persona } : {},
     };
     dbSaveTenantData(tenantId, data).catch(err => console.error('Persist error:', err.message));
@@ -369,6 +372,10 @@ export function createStore() {
         // Load activities
         for (const a of (data.activities || [])) {
           if (!activities.some(x => x.id === a.id)) activities.push(a);
+        }
+        // Load tasks
+        for (const t of (data.tasks || [])) {
+          if (!tasks.some(x => x.id === t.id)) tasks.push(t);
         }
       }
       console.log(`  DB: Loaded tenant data for ${allData.size} tenants`);
@@ -690,8 +697,47 @@ export function createStore() {
         itemAccount.lastContactedAt = activity.occurredAt;
         if (activity.pipelineStage) itemAccount.outreachStatus = activity.pipelineStage;
       }
+
+      // Auto-create follow-up task if requested
+      if (payload.followUpDays) {
+        const days = parseInt(payload.followUpDays, 10);
+        if (!isNaN(days) && days > 0) {
+          const task = {
+            id: `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            tenantId,
+            accountId: payload.accountId,
+            type: 'follow_up',
+            status: 'pending',
+            summary: `Follow up on outreach sent today to ${payload.contactName || 'contact'}.`,
+            dueDate: new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString(),
+            createdAt: now(),
+          };
+          tasks.push(task);
+        }
+      }
+
       persistTenant(tenantId);
       return activity;
+    },
+
+    findActivities(tenantId, query) {
+      assertTenant(tenantId);
+      return paginate(activitiesForTenant(tenantId), query);
+    },
+
+    findTasks(tenantId, query) {
+      assertTenant(tenantId);
+      return paginate(tasksForTenant(tenantId).filter(t => t.status === 'pending'), query);
+    },
+
+    completeTask(tenantId, taskId) {
+      assertTenant(tenantId);
+      const task = tasks.find((t) => t.id === taskId && t.tenantId === tenantId);
+      if (task) {
+        task.status = 'completed';
+        persistTenant(tenantId);
+      }
+      return task;
     },
 
     createOutreachDraft(tenantId, accountId, payload = {}) {
@@ -1485,8 +1531,14 @@ function jobsForTenant(tenantId) {
 
 function activitiesForTenant(tenantId) {
   return activities
-    .filter((item) => item.tenantId === tenantId)
-    .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+    .filter((a) => a.tenantId === tenantId)
+    .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+}
+
+function tasksForTenant(tenantId) {
+  return tasks
+    .filter((t) => t.tenantId === tenantId)
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 }
 
 function accountById(accountId) {
