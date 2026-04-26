@@ -1511,7 +1511,15 @@ init();
 async function init() {
   bindEvents();
   window.bdLocalApi.setAlert('', appAlert);
-  renderLoadingState('Dashboard', 'Loading your operating view...');
+  renderLoadingState('Dashboard', 'Building your operating view...');
+  
+  // Set a timer to show a "long setup" warning if things are taking a while
+  const longLoadTimer = setTimeout(() => {
+    if (appState.activeView === 'dashboard' && !appState.bootstrap) {
+      renderLoadingState('Dashboard', 'First-time setup is taking longer than expected. We are still processing your data...');
+    }
+  }, 5000);
+
   try {
     const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
@@ -1522,8 +1530,10 @@ async function init() {
     }
     if (routeNeedsBootstrapFilters(initialRoot)) {
       await loadBootstrap(true, { includeFilters: true });
+      clearTimeout(longLoadTimer);
       await renderRoute();
     } else {
+      clearTimeout(longLoadTimer);
       await renderRoute();
       loadBootstrap(false).catch((error) => {
         console.warn('Bootstrap hydration failed in background.', error);
@@ -2758,12 +2768,23 @@ async function watchBackgroundJob(jobId, options = {}) {
 
 function renderLoadingState(title, subtitle) {
   setViewTitle(title);
+  const isFirstSetup = appState.setupStatus?.requiresSetup || appState.setupBusy;
   appRoot.innerHTML = `
     <section class="hero-card loading-shell">
       <div class="loading-copy">
-        <p class="eyebrow">Loading view</p>
+        <p class="eyebrow">Operating view</p>
         <h3>${escapeHtml(title)}</h3>
         <p class="subtitle small">${escapeHtml(subtitle || 'Fetching the latest hiring and account signals...')}</p>
+        
+        ${isFirstSetup ? `
+          <div class="setup-warning-box">
+            <div class="small"><strong>First-time setup in progress.</strong> This may take up to 2-3 minutes while we process your LinkedIn network and build your hiring radar.</div>
+            <div class="progress-container">
+              <div class="progress-bar-fill" id="setup-progress-bar" style="width: 15%"></div>
+            </div>
+            <div class="progress-label small muted" id="setup-progress-text">Initializing workspace...</div>
+          </div>
+        ` : ''}
       </div>
       <div class="loading-grid">
         <span class="skeleton skeleton-pill"></span>
@@ -2779,6 +2800,25 @@ function renderLoadingState(title, subtitle) {
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
     </section>
   `;
+  
+  if (isFirstSetup) {
+    // Simulate some progress movement if it's stuck on the loader
+    let progress = 15;
+    const interval = setInterval(() => {
+      const bar = document.getElementById('setup-progress-bar');
+      const text = document.getElementById('setup-progress-text');
+      if (!bar) {
+        clearInterval(interval);
+        return;
+      }
+      progress = Math.min(95, progress + Math.random() * 2);
+      bar.style.width = `${progress}%`;
+      if (progress > 80) text.textContent = 'Finalizing hiring signals...';
+      else if (progress > 60) text.textContent = 'Resolving company ATS boards...';
+      else if (progress > 40) text.textContent = 'Analyzing job activity...';
+      else if (progress > 25) text.textContent = 'Parsing LinkedIn connections...';
+    }, 3000);
+  }
 }
 
 function countAppliedFilters(query) {
