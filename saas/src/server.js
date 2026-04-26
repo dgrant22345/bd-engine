@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
-import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, getMembership, safeUser, createTenant, updateTenant, loadFromDb as loadUsersFromDb } from './users.js';
+import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, isStripeConfigured, getStripeConfigStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady } from './db.js';
 
@@ -189,13 +189,24 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 401, { error: 'Session expired. Please log in again.' });
   }
 
-  const tenantId = sessionData.tenantId;
-  const tenant = findTenantById(tenantId);
-  if (!tenant) {
-    return sendJson(res, 404, { error: 'Workspace not found.' });
+  let tenantId = sessionData.tenantId;
+  let tenant = findTenantById(tenantId);
+  let membership = tenant ? getMembership(tenantId, user.id) : null;
+
+  if (!tenant || !membership) {
+    const repair = ensureTenantForUser(user);
+    if (repair.error || !repair.tenant) {
+      return sendJson(res, 404, { error: 'Workspace not found.' });
+    }
+    tenant = repair.tenant;
+    tenantId = tenant.id;
+    membership = getMembership(tenantId, user.id);
+    store.ensureTenant(tenant, user);
+    await persistUserWorkspace(user, tenant);
+    const { cookie } = createSession(user.id, tenantId);
+    setSessionCookie(res, cookie);
   }
 
-  const membership = getMembership(tenantId, user.id);
   if (!membership) {
     return sendJson(res, 403, { error: 'You are not a member of this workspace.' });
   }
@@ -591,12 +602,10 @@ async function handleSignup(req, res) {
   // Create default workspace
   const userPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
   const workspaceDisplayName = workspaceName || `${userResult.user.name}'s Workspace`;
-  const tenantResult = createTenant({
-    name: workspaceDisplayName,
-    slug: `${workspaceDisplayName}-${userResult.user.id.slice(-4)}`,
-    plan: 'trial',
-    ownerUserId: userResult.user.id,
+  const tenantResult = ensureTenantForUser(userResult.user, {
+    workspaceName: workspaceDisplayName,
     persona: userPersona,
+    plan: 'trial',
   });
 
   if (tenantResult.error) {
@@ -607,12 +616,14 @@ async function handleSignup(req, res) {
   // Ensure the store also knows the persona
   store.ensureTenant(tenantResult.tenant, userResult.user);
   store.setPersona(tenantId, userPersona);
+  await persistUserWorkspace(userResult.user, tenantResult.tenant);
   const { cookie } = createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
 
   return sendJson(res, 201, {
     user: safeUser(userResult.user),
     tenant: tenantResult.tenant || null,
+    tenants: tenantResult.tenants || [tenantResult.tenant],
     persona: userPersona,
   });
 }
@@ -629,14 +640,22 @@ async function handleLogin(req, res) {
     return sendJson(res, 401, { error: result.error });
   }
 
-  // Find user's tenants
-  const userTenants = findTenantsForUser(result.user.id);
-  const primaryTenant = userTenants[0];
+  let userTenants = findTenantsForUser(result.user.id);
+  let primaryTenant = userTenants[0];
+  let workspaceRecovered = false;
 
   if (!primaryTenant) {
-    return sendJson(res, 500, { error: 'No workspace found for this account.' });
+    const repair = ensureTenantForUser(result.user);
+    if (repair.error || !repair.tenant) {
+      return sendJson(res, 500, { error: 'No workspace found for this account.' });
+    }
+    primaryTenant = repair.tenant;
+    userTenants = repair.tenants || [primaryTenant];
+    workspaceRecovered = true;
   }
 
+  store.ensureTenant(primaryTenant, result.user);
+  await persistUserWorkspace(result.user, primaryTenant);
   const { cookie } = createSession(result.user.id, primaryTenant.id);
   setSessionCookie(res, cookie);
 
@@ -644,6 +663,7 @@ async function handleLogin(req, res) {
     user: safeUser(result.user),
     tenant: primaryTenant,
     tenants: userTenants,
+    workspaceRecovered,
   });
 }
 
@@ -668,9 +688,23 @@ function handleMe(req, res) {
     return sendJson(res, 200, { authenticated: false });
   }
 
-  const tenant = findTenantById(sessionData.tenantId);
-  const userTenants = findTenantsForUser(user.id);
-  const membership = tenant ? getMembership(tenant.id, user.id) : null;
+  let tenant = findTenantById(sessionData.tenantId);
+  let userTenants = findTenantsForUser(user.id);
+  let membership = tenant ? getMembership(tenant.id, user.id) : null;
+
+  if (!tenant || !membership) {
+    const repair = ensureTenantForUser(user);
+    if (repair.tenant) {
+      tenant = repair.tenant;
+      userTenants = repair.tenants || [tenant];
+      membership = getMembership(tenant.id, user.id);
+      store.ensureTenant(tenant, user);
+      persistUserWorkspace(user, tenant).catch(() => {});
+      const { cookie } = createSession(user.id, tenant.id);
+      setSessionCookie(res, cookie);
+    }
+  }
+
   const plan = tenant ? getPlan(tenant.plan) : null;
   const trialDaysRemaining = tenant ? getTrialDaysRemaining(tenant) : null;
 

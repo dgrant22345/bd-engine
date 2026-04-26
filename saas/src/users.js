@@ -92,19 +92,7 @@ export function authenticateUser(email, password) {
 
 export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd' }) {
   const id = `tenant-${randomUUID().slice(0, 8)}`;
-  const normalizedSlug = String(slug || name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || id;
-
-  // Check slug uniqueness
-  for (const t of tenants.values()) {
-    if (t.slug === normalizedSlug) {
-      return { error: 'A workspace with this name already exists.' };
-    }
-  }
+  const normalizedSlug = makeUniqueTenantSlug(slug || name || id, id);
 
   const tenant = {
     id,
@@ -119,22 +107,61 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     updatedAt: now(),
   };
   tenants.set(id, tenant);
-  // Persist to DB
-  dbSaveTenant(tenant).catch(() => {});
 
   // Add owner membership
+  let membership = null;
   if (ownerUserId) {
-    const membership = {
+    membership = {
       tenantId: id,
       userId: ownerUserId,
       role: 'owner',
       createdAt: now(),
     };
     memberships.push(membership);
-    dbSaveMembership(membership).catch(() => {});
   }
 
+  persistTenantWithMembership(tenant, membership).catch(() => {});
+
   return { tenant };
+}
+
+export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial' } = {}) {
+  if (!user?.id) return { error: 'User not found.' };
+
+  const userTenants = findTenantsForUser(user.id);
+  if (userTenants.length) {
+    return { tenant: userTenants[0], tenants: userTenants, recovered: false };
+  }
+
+  const unclaimedTenant = findUnclaimedTenantForUser(user);
+  if (unclaimedTenant) {
+    const membership = addMember(unclaimedTenant.id, user.id, 'owner');
+    const attachedTenants = findTenantsForUser(user.id);
+    return {
+      tenant: attachedTenants[0] || { ...unclaimedTenant, role: membership.role },
+      tenants: attachedTenants,
+      recovered: true,
+      attachedExisting: true,
+    };
+  }
+
+  const displayName = String(workspaceName || `${user.name || user.email?.split('@')[0] || 'My'}'s Workspace`).trim() || 'My Workspace';
+  const result = createTenant({
+    name: displayName,
+    slug: `${displayName}-${user.id}`,
+    plan,
+    ownerUserId: user.id,
+    persona,
+  });
+  if (result.error) return result;
+
+  const createdTenants = findTenantsForUser(user.id);
+  return {
+    tenant: createdTenants[0] || { ...result.tenant, role: 'owner' },
+    tenants: createdTenants,
+    recovered: true,
+    attachedExisting: false,
+  };
 }
 
 export function findTenantById(tenantId) {
@@ -197,4 +224,73 @@ export function getUserCount() {
 
 export function getTenantCount() {
   return tenants.size;
+}
+
+export async function persistUserWorkspace(user, tenant) {
+  if (!user || !tenant) return;
+  const membership = getMembership(tenant.id, user.id);
+  await dbSaveUser(user);
+  await persistTenantWithMembership(tenant, membership);
+}
+
+async function persistTenantWithMembership(tenant, membership = null) {
+  if (!tenant) return;
+  await dbSaveTenant(tenant);
+  if (membership) await dbSaveMembership(membership);
+}
+
+function makeUniqueTenantSlug(input, fallback) {
+  const base = normalizeTenantSlug(input, fallback);
+  if (!tenantSlugExists(base)) return base;
+
+  const idSuffix = normalizeTenantSlug(fallback, randomUUID().slice(0, 8));
+  let candidate = `${base}-${idSuffix}`;
+  if (!tenantSlugExists(candidate)) return candidate;
+
+  for (let i = 2; i < 1000; i += 1) {
+    candidate = `${base}-${i}`;
+    if (!tenantSlugExists(candidate)) return candidate;
+  }
+
+  return `${base}-${randomUUID().slice(0, 8)}`;
+}
+
+function normalizeTenantSlug(input, fallback = 'workspace') {
+  return String(input || fallback || 'workspace')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || String(fallback || 'workspace');
+}
+
+function tenantSlugExists(slug) {
+  for (const tenant of tenants.values()) {
+    if (tenant.slug === slug) return true;
+  }
+  return false;
+}
+
+function findUnclaimedTenantForUser(user) {
+  const userSuffix = String(user.id || '').slice(-4).toLowerCase();
+  const userCreatedAt = Date.parse(user.createdAt || '') || 0;
+  const candidates = [];
+
+  for (const tenant of tenants.values()) {
+    if (memberships.some((membership) => membership.tenantId === tenant.id)) continue;
+    const slug = String(tenant.slug || '').toLowerCase();
+    const createdAt = Date.parse(tenant.createdAt || '') || 0;
+    const hasUserSuffix = userSuffix && slug.endsWith(`-${userSuffix}`);
+    const wasCreatedNearUser = userCreatedAt && createdAt && Math.abs(createdAt - userCreatedAt) < 10 * 60 * 1000;
+    if (hasUserSuffix || wasCreatedNearUser) {
+      candidates.push({
+        tenant,
+        score: (hasUserSuffix ? 10 : 0) + (wasCreatedNearUser ? 5 : 0),
+        distance: Math.abs(createdAt - userCreatedAt),
+      });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score || a.distance - b.distance);
+  return candidates[0]?.tenant || null;
 }
