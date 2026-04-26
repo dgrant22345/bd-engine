@@ -1,10 +1,11 @@
-const CACHE_NAME = 'bd-engine-v1';
+const ASSET_VERSION = '20260425-v0-polish-setup-bg-7';
+const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
   '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/local-api.js',
+  `/styles.css?v=${ASSET_VERSION}`,
+  `/app.js?v=${ASSET_VERSION}`,
+  `/local-api.js?v=${ASSET_VERSION}`,
   '/manifest.json',
 ];
 
@@ -26,7 +27,7 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: network-first for API, cache-first for shell
+// Fetch: network-first for API and shell, cache fallback for offline use
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
@@ -43,25 +44,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets: cache-first, fallback to network
+  // Static assets: prefer fresh local files so UI/code changes are visible immediately.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) {
-        // Return cached, but also update cache in background
-        fetch(event.request).then((response) => {
-          if (response && response.ok) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response));
-          }
-        }).catch(() => {});
-        return cached;
+    fetch(event.request).then((response) => {
+      if (response && response.ok) {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
       }
-      return fetch(event.request).then((response) => {
-        if (response && response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      });
-    })
+      return response;
+    }).catch(() =>
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return caches.match(url.pathname).then((pathCached) => {
+          if (pathCached) return pathCached;
+          return new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+        });
+      })
+    )
   );
 });

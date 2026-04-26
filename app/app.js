@@ -1,3 +1,28 @@
+const defaultAdminCollapsed = {
+  'enrichment-coverage': true,
+  'enrichment-queue': true,
+  'resolver-coverage': true,
+  'runtime-status': true,
+  'background-jobs': true,
+  'pipeline-ops': true,
+  'scoring-settings': true,
+  'automation-rules': true,
+  'alert-thresholds': true,
+  'ats-config-form': true,
+  'ats-config-records': true,
+};
+
+function readJsonSetting(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
+
 const appState = {
   bootstrap: null,
   localData: null,
@@ -15,9 +40,12 @@ const appState = {
   runtimeStatus: null,
   runtimePollTimer: null,
   savedFilters: JSON.parse(localStorage.getItem('bd_saved_filters') || '[]'),
-  adminCollapsed: {},
+  adminCollapsed: savedAdminCollapsed && typeof savedAdminCollapsed === 'object'
+    ? { ...defaultAdminCollapsed, ...savedAdminCollapsed }
+    : { ...defaultAdminCollapsed },
   showAdvancedFilters: false,
   outreachModalOpen: false,
+  pendingOutreachContact: null,
   statusPillsExpanded: false,
   previousScores: {},
   theme: localStorage.getItem('bd_theme') || 'system',
@@ -45,6 +73,22 @@ const appState = {
   alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
   bulkLastClickIdx: null,
   duplicateCache: null,
+  setupStatus: null,
+  setupStep: 1,
+  setupBusy: false,
+  setupCsvContent: '',
+  setupCsvFileName: '',
+  setupPreview: null,
+  setupResult: null,
+  setupImportJobId: '',
+  setupProgressMessage: '',
+  setupDraft: {
+    workspaceName: '',
+    userName: '',
+    userEmail: '',
+    ownersText: '',
+    licenseKey: '',
+  },
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -62,6 +106,39 @@ const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
+
+const defaultQueries = {
+  accounts: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
+  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
+  enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
+};
+
+function resetViewFilters(view) {
+  if (view === 'accounts') {
+    appState.accountQuery = { ...defaultQueries.accounts };
+    appState.showAdvancedFilters = false;
+    return renderAccountsView();
+  }
+  if (view === 'contacts') {
+    appState.contactQuery = { ...defaultQueries.contacts };
+    return renderContactsView();
+  }
+  if (view === 'jobs') {
+    appState.jobQuery = { ...defaultQueries.jobs };
+    return renderJobsView();
+  }
+  if (view === 'configs') {
+    appState.configQuery = { ...defaultQueries.configs };
+    return renderAdminView();
+  }
+  if (view === 'enrichment') {
+    appState.enrichmentQuery = { ...defaultQueries.enrichment };
+    return refreshEnrichmentPanel();
+  }
+  return Promise.resolve();
+}
 
 /* ── Theme system ── */
 function applyTheme(mode) {
@@ -1435,7 +1512,13 @@ async function init() {
   window.bdLocalApi.setAlert('', appAlert);
   renderLoadingState('Dashboard', 'Loading your operating view...');
   try {
+    const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
+    if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
+      location.hash = '#/setup';
+      await renderRoute();
+      return;
+    }
     if (routeNeedsBootstrapFilters(initialRoot)) {
       await loadBootstrap(true, { includeFilters: true });
       await renderRoute();
@@ -1465,8 +1548,7 @@ function bindEvents() {
       if (appState.mobileNavOpen) { closeMobileNav(); return; }
       const backdrop = document.getElementById('outreach-modal-backdrop');
       if (backdrop && !backdrop.classList.contains('hidden')) {
-        backdrop.classList.add('hidden');
-        appState.outreachModalOpen = false;
+        setOutreachModalOpen(false);
       }
       return;
     }
@@ -1564,14 +1646,8 @@ function bindEvents() {
   document.addEventListener('click', async (event) => {
     // Open outreach modal
     if (event.target.id === 'open-outreach-modal') {
-      const backdrop = document.getElementById('outreach-modal-backdrop');
-      if (backdrop) {
-        backdrop.classList.remove('hidden');
-        appState.outreachModalOpen = true;
-        syncOutreachComposerState();
-        const closeBtn = backdrop.querySelector('.modal-close');
-        if (closeBtn) closeBtn.focus();
-      }
+      setOutreachModalOpen(true);
+      syncOutreachComposerState();
       return;
     }
     // Advanced filter toggle
@@ -1584,8 +1660,7 @@ function bindEvents() {
     }
     // Outreach modal close
     if (event.target.closest('.modal-close') || (event.target.classList.contains('modal-backdrop') && !event.target.closest('.modal-panel'))) {
-      const backdrop = document.getElementById('outreach-modal-backdrop');
-      if (backdrop) { backdrop.classList.add('hidden'); appState.outreachModalOpen = false; }
+      setOutreachModalOpen(false);
       return;
     }
     // Status pills expand
@@ -1604,6 +1679,38 @@ function bindEvents() {
     }
 
     const actionName = action.dataset.action;
+    if (actionName === 'setup-browse-csv') {
+      document.getElementById('setup-csv-file')?.click();
+      return;
+    }
+    if (actionName === 'setup-back') {
+      persistSetupDraftFromDom();
+      appState.setupStep = Math.max(1, appState.setupStep - 1);
+      await renderSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-skip-import') {
+      appState.setupCsvContent = '';
+      appState.setupCsvFileName = '';
+      appState.setupPreview = null;
+      await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-preview-csv') {
+      await previewSetupCsv();
+      return;
+    }
+    if (actionName === 'setup-complete') {
+      await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-open-dashboard') {
+      invalidateAppData();
+      await loadBootstrap(true, { includeFilters: true });
+      location.hash = '#/dashboard';
+      await renderRoute();
+      return;
+    }
     if (actionName === 'paginate') {
       const view = action.dataset.view;
       const page = Number(action.dataset.page);
@@ -1622,6 +1729,19 @@ function bindEvents() {
     if (actionName === 'save-current-filter') {
       const name = prompt('Name for this filter set:');
       if (name) { saveFilter(name.trim()); await renderAccountsView(); }
+      return;
+    }
+    if (actionName === 'reset-filters') {
+      await resetViewFilters(action.dataset.view);
+      showToast('Filters reset.', 'info');
+      return;
+    }
+    if (actionName === 'apply-account-preset') {
+      await applyAccountPreset(action.dataset.preset, { navigate: action.dataset.navigate === 'accounts' });
+      return;
+    }
+    if (actionName === 'open-admin-section') {
+      openAdminSection(action.dataset.sectionId);
       return;
     }
     if (actionName === 'load-saved-filter') {
@@ -1678,13 +1798,22 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'open-contact-outreach' || actionName === 'select-contact-outreach') {
+      openOutreachForContact({
+        accountId: action.dataset.accountId || appState.accountDetail?.account?.id || '',
+        contactId: action.dataset.contactId || '',
+        contactName: action.dataset.contactName || '',
+      });
+      return;
+    }
+
     if (actionName === 'reseed-workbook') {
       await reseedWorkbook(action.dataset.path || '');
       return;
     }
 
     if (actionName === 'run-live-import') {
-      await runLiveImport();
+      await runLiveImport(action);
       return;
     }
 
@@ -1694,7 +1823,7 @@ function bindEvents() {
     }
 
     if (actionName === 'run-discovery') {
-      await runDiscovery();
+      await runDiscovery(action);
       return;
     }
 
@@ -1709,7 +1838,7 @@ function bindEvents() {
     }
 
     if (actionName === 'run-target-score-rollout') {
-      await runTargetScoreRollout();
+      await runTargetScoreRollout(action);
       return;
     }
 
@@ -1786,6 +1915,11 @@ function bindEvents() {
 
     if (actionName === 'open-generated-linkedin') {
       await openGeneratedLinkedIn(action);
+      return;
+    }
+
+    if (actionName === 'log-generated-outreach') {
+      await logGeneratedOutreach(action);
       return;
     }
 
@@ -1872,6 +2006,25 @@ function bindEvents() {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     event.preventDefault();
+
+    if (form.id === 'setup-profile-form') {
+      persistSetupDraftFromDom();
+      const { workspaceName: workspace, userName: name, userEmail: email } = appState.setupDraft;
+      if (!workspace.trim() || !name.trim() || !email.trim()) {
+        showToast('Workspace, name, and email are required.', 'warning');
+        return;
+      }
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
+
+    if (form.id === 'setup-team-form' || form.id === 'setup-license-form') {
+      persistSetupDraftFromDom();
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
 
     if (form.id === 'accounts-filter-form') {
       appState.accountQuery = { ...appState.accountQuery, page: 1, ...getFormValues(form) };
@@ -2126,6 +2279,18 @@ async function api(path, options = {}) {
   return window.bdLocalApi.api(appState, path, options);
 }
 
+async function loadSetupStatus(force = false) {
+  if (appState.setupStatus && !force) {
+    return appState.setupStatus;
+  }
+  appState.setupStatus = await api('/api/setup/status', { skipCache: true });
+  if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
+    const existingName = appState.setupStatus.workspace.name;
+    appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
+  }
+  return appState.setupStatus;
+}
+
 function getFormValues(form) {
   const data = new FormData(form);
   const output = {};
@@ -2220,11 +2385,172 @@ function applySavedFilter(name) {
   }
 }
 
+const accountPresets = [
+  {
+    id: 'hot-hiring',
+    label: 'Hot hiring',
+    description: 'Active roles and target score 70+',
+    query: { hiring: 'true', minTargetScore: '70', sortBy: '' },
+  },
+  {
+    id: 'fresh-roles',
+    label: 'Recent roles',
+    description: 'Hiring movement in the last 30 days',
+    query: { hiring: 'true', recencyDays: '30', sortBy: 'new_roles' },
+  },
+  {
+    id: 'warm-network',
+    label: 'Warm network',
+    description: 'Accounts with mapped relationships first',
+    query: { minContacts: '1', sortBy: 'connections' },
+  },
+  {
+    id: 'follow-up',
+    label: 'Follow-up lane',
+    description: 'Work the accounts most due for action',
+    query: { sortBy: 'follow_up' },
+  },
+  {
+    id: 'strategic',
+    label: 'Strategic targets',
+    description: 'Highest-priority named accounts',
+    query: { priority: 'strategic', sortBy: '' },
+  },
+];
+
+const accountFilterLabels = {
+  q: 'Search',
+  hiring: 'Hiring',
+  ats: 'ATS',
+  recencyDays: 'Recency',
+  minContacts: 'Contacts',
+  minTargetScore: 'Score',
+  priority: 'Priority',
+  status: 'Status',
+  owner: 'Owner',
+  outreachStatus: 'Outreach',
+  industry: 'Industry',
+  geography: 'Geography',
+  sortBy: 'Sort',
+};
+
+function getAccountPreset(id) {
+  return accountPresets.find((preset) => preset.id === id);
+}
+
+function normalizedFilterEntries(query) {
+  return Object.entries(query || {})
+    .filter(([key, value]) => key !== 'page' && key !== 'pageSize' && value !== '' && value !== null && value !== undefined)
+    .map(([key, value]) => [key, String(value)]);
+}
+
+function isAccountPresetActive(preset) {
+  const activeEntries = normalizedFilterEntries(appState.accountQuery);
+  const presetEntries = normalizedFilterEntries(preset.query);
+  return activeEntries.length === presetEntries.length
+    && presetEntries.every(([key, value]) => String(appState.accountQuery[key] || '') === value);
+}
+
+async function applyAccountPreset(presetId, options = {}) {
+  const preset = getAccountPreset(presetId);
+  if (!preset) return;
+  const alreadyOnAccounts = getRouteRoot() === 'accounts';
+  appState.accountQuery = {
+    ...defaultQueries.accounts,
+    pageSize: appState.accountQuery.pageSize || defaultQueries.accounts.pageSize,
+    ...preset.query,
+    page: 1,
+  };
+  appState.showAdvancedFilters = false;
+  showToast(`${preset.label} lane applied.`, 'info');
+  if (options.navigate || !alreadyOnAccounts) {
+    location.hash = '#/accounts';
+    if (alreadyOnAccounts) await renderAccountsView();
+    return;
+  }
+  await renderAccountsView();
+}
+
 function renderSavedFilters() {
   if (!appState.savedFilters.length) return '';
   return `<div class="saved-filters-bar">${appState.savedFilters.map(f =>
     `<span class="saved-filter-chip"><button class="ghost-button ghost-button--xs" data-action="load-saved-filter" data-name="${escapeAttr(f.name)}">${escapeHtml(f.name)}</button><button class="saved-filter-delete" data-action="delete-saved-filter" data-name="${escapeAttr(f.name)}" aria-label="Delete filter ${escapeAttr(f.name)}">&times;</button></span>`
   ).join('')}</div>`;
+}
+
+function renderActiveFilterStrip(query, labels = accountFilterLabels) {
+  const entries = normalizedFilterEntries(query);
+  if (!entries.length) {
+    return '<div class="active-filter-strip active-filter-strip--empty"><span>All accounts visible</span></div>';
+  }
+  return `
+    <div class="active-filter-strip">
+      <span>${formatNumber(entries.length)} active filter${entries.length === 1 ? '' : 's'}</span>
+      ${entries.map(([key, value]) => `<span class="filter-chip"><strong>${escapeHtml(labels[key] || humanize(key))}</strong>${escapeHtml(humanize(value))}</span>`).join('')}
+      <button class="ghost-button ghost-button--xs" type="button" data-action="reset-filters" data-view="accounts">Clear</button>
+    </div>
+  `;
+}
+
+function renderAccountPresetStrip() {
+  return `
+    <section class="account-preset-strip" aria-label="Account working lanes">
+      <div class="preset-strip-copy">
+        <p class="eyebrow">Working lanes</p>
+        <strong>Jump to the queue that matches the moment.</strong>
+      </div>
+      <div class="preset-button-row">
+        ${accountPresets.map((preset) => `
+          <button class="preset-button${isAccountPresetActive(preset) ? ' active' : ''}" type="button" data-action="apply-account-preset" data-preset="${escapeAttr(preset.id)}">
+            <span>${escapeHtml(preset.label)}</span>
+            <small>${escapeHtml(preset.description)}</small>
+          </button>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }) {
+  const freshJobs = dashboard.summary?.newJobsLast24h || 0;
+  const followUps = (extended.overdueFollowUps?.length || 0) + (extended.staleAccounts?.length || 0);
+  const boardsFound = dashboard.summary?.discoveredBoardCount || 0;
+  return `
+    <section class="workflow-strip" aria-label="Daily BD workflow">
+      <article class="workflow-card workflow-card--primary">
+        <span class="workflow-card__step">1</span>
+        <div class="workflow-card__copy">
+          <strong>${topCompany ? escapeHtml(topCompany.displayName) : 'Find the lead account'}</strong>
+          <span>${topCompany ? `${formatNumber(getTargetScore(topCompany))}/100 target score` : 'No top account yet'}</span>
+        </div>
+        ${topCompany ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${topCompany.id}">Open</button>` : '<a class="primary-button ghost-button--xs" href="#/admin">Seed</a>'}
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">2</span>
+        <div class="workflow-card__copy">
+          <strong>Recent role triggers</strong>
+          <span>${formatNumber(freshJobs)} jobs in 24h</span>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="fresh-roles" data-navigate="accounts">Open lane</button>
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">3</span>
+        <div class="workflow-card__copy">
+          <strong>Follow-up lane</strong>
+          <span>${formatNumber(followUps)} accounts need attention</span>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="follow-up" data-navigate="accounts">Open lane</button>
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">4</span>
+        <div class="workflow-card__copy">
+          <strong>Coverage backlog</strong>
+          <span>${formatNumber(resolutionPressure)} identity gaps</span>
+        </div>
+        <a class="ghost-button ghost-button--xs" href="#/admin">${boardsFound ? 'Review' : 'Discover'}</a>
+      </article>
+    </section>
+  `;
 }
 
 function sleep(ms) {
@@ -2281,13 +2607,21 @@ function hydrateAdminRuntimePanels(runtime) {
         <div class="status-item"><span class="small muted">Running jobs</span><strong>${formatNumber(summary.runningJobs || 0)}</strong><span class="small muted">Currently executing</span></div>
         <div class="status-item"><span class="small muted">Queued jobs</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong><span class="small muted">${summary.queuedJobs ? 'Waiting for worker time' : 'Queue clear'}</span></div>
       </div>
+      ${renderIngestionHealthPanel(summary)}
     </div>
   `;
 
-  const jobs = (summary.activeJobs && summary.activeJobs.length ? summary.activeJobs : summary.recentJobs) || [];
-  jobsTarget.innerHTML = jobs.length
-    ? jobs.map((job) => renderBackgroundJobItem(job)).join('')
-    : '<div class="empty-state compact">No background jobs are running right now.</div>';
+  const activeJobs = Array.isArray(summary.activeJobs) ? summary.activeJobs : [];
+  const activeIds = new Set(activeJobs.map((job) => job.id).filter(Boolean));
+  const recentJobs = (Array.isArray(summary.recentJobs) ? summary.recentJobs : []).filter((job) => !activeIds.has(job.id));
+  jobsTarget.innerHTML = `
+    ${activeJobs.length
+      ? activeJobs.map((job) => renderBackgroundJobItem(job)).join('')
+      : '<div class="empty-state compact">No jobs are active right now.</div>'}
+    ${recentJobs.length
+      ? `<div class="inline-header"><strong>Recent jobs</strong><span class="small muted">Completed and failed work</span></div>${recentJobs.map((job) => renderBackgroundJobItem(job)).join('')}`
+      : ''}
+  `;
 }
 
 function scheduleRuntimePoll() {
@@ -2393,6 +2727,30 @@ async function renderRoute() {
   clearRuntimePoll();
   closeMobileNav();
 
+  if (!appState.setupStatus) {
+    await loadSetupStatus(false);
+  }
+
+  if (root === 'setup') {
+    if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
+      location.hash = '#/dashboard';
+      await renderDashboardView();
+      return;
+    }
+    activateNav('');
+    renderBreadcrumbs(null);
+    await renderSetupWizard();
+    return;
+  }
+
+  if (appState.setupStatus?.requiresSetup) {
+    location.hash = '#/setup';
+    activateNav('');
+    renderBreadcrumbs(null);
+    await renderSetupWizard();
+    return;
+  }
+
   if (root === 'accounts' && parts[1]) {
     activateNav('accounts');
     renderBreadcrumbs([
@@ -2437,6 +2795,433 @@ async function renderRoute() {
   renderBreadcrumbs(null);
   await renderDashboardView();
 }
+
+function getSetupSteps() {
+  const steps = [
+    { key: 'profile', label: 'Profile' },
+    { key: 'team', label: 'Team' },
+  ];
+  if (appState.setupStatus?.licensingEnabled) {
+    steps.push({ key: 'license', label: 'License' });
+  }
+  steps.push({ key: 'import', label: 'Import' });
+  steps.push({ key: 'launch', label: 'Launch' });
+  return steps;
+}
+
+function getCurrentSetupStep() {
+  const steps = getSetupSteps();
+  const index = Math.min(Math.max(appState.setupStep, 1), steps.length) - 1;
+  return steps[index] || steps[0];
+}
+
+function persistSetupDraftFromDom() {
+  const workspaceInput = document.getElementById('setup-workspace-name');
+  const userNameInput = document.getElementById('setup-user-name');
+  const userEmailInput = document.getElementById('setup-user-email');
+  const ownersInput = document.getElementById('setup-owners-text');
+  const licenseInput = document.getElementById('setup-license-key');
+  if (workspaceInput) appState.setupDraft.workspaceName = workspaceInput.value.trim();
+  if (userNameInput) appState.setupDraft.userName = userNameInput.value.trim();
+  if (userEmailInput) appState.setupDraft.userEmail = userEmailInput.value.trim();
+  if (ownersInput) appState.setupDraft.ownersText = ownersInput.value;
+  if (licenseInput) appState.setupDraft.licenseKey = licenseInput.value.trim();
+}
+
+function parseSetupOwners(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let displayName = line;
+      let email = '';
+      const emailMatch = line.match(/<([^>]+)>/);
+      if (emailMatch) {
+        email = emailMatch[1].trim();
+        displayName = line.replace(/<[^>]+>/g, '').trim();
+      } else if (line.includes(',')) {
+        const parts = line.split(',');
+        displayName = parts[0].trim();
+        email = parts.slice(1).join(',').trim();
+      }
+      return { displayName, email };
+    });
+}
+
+async function renderSetupWizard() {
+  await loadSetupStatus(false);
+  if (appState.setupResult) {
+    appState.setupStep = getSetupSteps().length;
+  }
+
+  const steps = getSetupSteps();
+  const current = getCurrentSetupStep();
+  const draft = appState.setupDraft;
+  const setupTitle = current.key === 'launch' ? 'Setup complete' : 'First-run setup';
+  setViewTitle(setupTitle);
+  workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
+  window.bdLocalApi.setAlert('', appAlert);
+
+  appRoot.innerHTML = `
+    <section class="setup-shell" aria-labelledby="setup-title">
+      <div class="setup-card">
+        <div class="setup-header">
+          <div>
+            <p class="eyebrow">BD Engine local setup</p>
+            <h2 id="setup-title">${escapeHtml(setupTitle)}</h2>
+            <p class="muted">Create your workspace, bring in your LinkedIn connections, and start from your own data.</p>
+          </div>
+          <ol class="setup-steps" aria-label="Setup progress">
+            ${steps.map((step, index) => `
+              <li class="setup-step ${index + 1 === appState.setupStep ? 'active' : ''} ${index + 1 < appState.setupStep ? 'complete' : ''}">
+                <span>${index + 1}</span>
+                <strong>${escapeHtml(step.label)}</strong>
+              </li>
+            `).join('')}
+          </ol>
+        </div>
+        ${renderSetupStepContent(current.key)}
+      </div>
+    </section>
+  `;
+
+  wireSetupDropZone();
+}
+
+function renderSetupStepContent(stepKey) {
+  const draft = appState.setupDraft;
+  if (stepKey === 'profile') {
+    return `
+      <form id="setup-profile-form" class="setup-form">
+        <div class="setup-grid">
+          <label>Workspace or company name
+            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="Your company or team" />
+          </label>
+          <label>Your name
+            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(draft.userName)}" placeholder="Full name" />
+          </label>
+          <label>Your email
+            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(draft.userEmail)}" placeholder="you@example.com" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'team') {
+    return `
+      <form id="setup-team-form" class="setup-form">
+        <label>Optional team or owner roster
+          <textarea id="setup-owners-text" name="ownersText" rows="7" placeholder="One person per line, for example: Name, email@example.com">${escapeHtml(draft.ownersText)}</textarea>
+        </label>
+        <p class="muted small">Leave this blank if you are the only owner. You can add or edit owners later.</p>
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'license') {
+    return `
+      <form id="setup-license-form" class="setup-form">
+        <label>License key
+          <input id="setup-license-key" name="licenseKey" autocomplete="off" value="${escapeHtml(draft.licenseKey)}" placeholder="Paste your license key" />
+        </label>
+        <p class="muted small">This step appears only when licensing is enabled for this build.</p>
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="primary-button" type="submit">Continue</button>
+        </div>
+      </form>
+    `;
+  }
+
+  if (stepKey === 'import') {
+    const hasCsv = Boolean(appState.setupCsvContent);
+    return `
+      <div class="setup-form">
+        <div class="setup-import-copy">
+          <h3>Import LinkedIn Connections.csv</h3>
+          <p class="muted">From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.</p>
+        </div>
+        <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
+        <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
+          <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
+          <span>${hasCsv ? 'Ready to preview or import.' : 'or choose the file from your computer'}</span>
+          <button class="secondary-button" type="button" data-action="setup-browse-csv">Choose CSV</button>
+        </div>
+        ${renderSetupPreview()}
+        ${appState.setupBusy ? renderSetupProgress('Starting setup', appState.setupProgressMessage || 'Saving your setup and preparing the import...') : ''}
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="secondary-button" type="button" data-action="setup-preview-csv" ${hasCsv && !appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>
+          <button class="ghost-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Skip import</button>
+          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy ? 'disabled' : ''}>${appState.setupBusy ? 'Starting...' : 'Finish setup'}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const result = appState.setupResult || {};
+  const stats = result.stats || {};
+  if (appState.setupBusy && appState.setupImportJobId) {
+    return `
+      <div class="setup-success">
+        ${renderSetupProgress('Importing LinkedIn connections', appState.setupProgressMessage || 'This can take a few minutes for a large LinkedIn export.')}
+        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving accounts, and avoiding duplicates.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="setup-success">
+      <div class="setup-success-mark" aria-hidden="true">OK</div>
+      <h3>Your workspace is ready</h3>
+      <p class="muted">BD Engine will now open your dashboard using the local data stored on this computer.</p>
+      <div class="setup-summary-grid">
+        <div><strong>${formatNumber(stats.imported || 0)}</strong><span>Imported</span></div>
+        <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updated</span></div>
+        <div><strong>${formatNumber(stats.skipped || 0)}</strong><span>Skipped</span></div>
+        <div><strong>${formatNumber(stats.failed || 0)}</strong><span>Failed</span></div>
+      </div>
+      <div class="button-row center">
+        <button class="primary-button" type="button" data-action="setup-open-dashboard">Open dashboard</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSetupProgress(title, message) {
+  return `
+    <div class="setup-progress" role="status" aria-live="polite">
+      <div class="setup-progress-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(message || 'Working...')}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderSetupPreview() {
+  const preview = appState.setupPreview;
+  if (!preview) {
+    return `<p class="muted small">Preview checks the file before anything is saved.</p>`;
+  }
+
+  const stats = preview.stats || {};
+  const rows = Array.isArray(preview.preview) ? preview.preview : [];
+  return `
+    <div class="setup-preview">
+      <div class="setup-summary-grid">
+        <div><strong>${formatNumber(stats.imported || 0)}</strong><span>New</span></div>
+        <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updates</span></div>
+        <div><strong>${formatNumber(stats.skipped || 0)}</strong><span>Skipped</span></div>
+        <div><strong>${formatNumber(stats.failed || 0)}</strong><span>Failed</span></div>
+      </div>
+      <div class="table-scroll">
+        <table class="table setup-preview-table">
+          <thead><tr><th>Action</th><th>Name</th><th>Company</th><th>Title</th><th>Email</th><th>Connected</th></tr></thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td><span class="status-pill">${escapeHtml(row.action || '')}</span></td>
+                <td>${escapeHtml(row.fullName || '')}</td>
+                <td>${escapeHtml(row.companyName || '')}</td>
+                <td>${escapeHtml(row.title || '')}</td>
+                <td>${escapeHtml(row.email || '')}</td>
+                <td>${escapeHtml(row.connectedOn || '')}</td>
+              </tr>
+              ${row.message ? `<tr class="setup-preview-message"><td></td><td colspan="5">${escapeHtml(row.message)}</td></tr>` : ''}
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function wireSetupDropZone() {
+  const zone = document.getElementById('setup-drop-zone');
+  if (!zone) return;
+  zone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      document.getElementById('setup-csv-file')?.click();
+    }
+  });
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    zone.classList.add('dragover');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.classList.remove('dragover');
+    void handleSetupCsvFile(event.dataTransfer?.files?.[0]);
+  });
+}
+
+async function readTextFile(file) {
+  if (!file) return '';
+  if (typeof file.text === 'function') {
+    return await file.text();
+  }
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => resolve(event.target.result || '');
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsText(file);
+  });
+}
+
+function formatFileSize(bytes = 0) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return '0 KB';
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024)).toLocaleString()} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function estimateCsvDataRows(csvContent = '') {
+  const lines = String(csvContent || '').split(/\r\n|\r|\n/).filter((line) => line.trim());
+  const headerIndex = lines.findIndex((line) => /first\s*name/i.test(line) && /(last\s*name|company|position|email|url)/i.test(line));
+  if (headerIndex >= 0) {
+    return Math.max(0, lines.length - headerIndex - 1);
+  }
+  return Math.max(0, lines.length - 1);
+}
+
+function formatCsvUploadSummary(file, csvContent = '') {
+  const rows = estimateCsvDataRows(csvContent);
+  const sizeLabel = formatFileSize(file?.size || csvContent.length || 0);
+  return `${formatNumber(rows)} data row${rows === 1 ? '' : 's'}, ${sizeLabel}`;
+}
+
+async function handleSetupCsvFile(file) {
+  if (!file) return;
+  persistSetupDraftFromDom();
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    showToast('Please choose the Connections.csv file from LinkedIn.', 'warning');
+  }
+  appState.setupCsvContent = await readTextFile(file);
+  appState.setupCsvFileName = file.name;
+  appState.setupPreview = null;
+  await renderSetupWizard();
+}
+
+async function previewSetupCsv() {
+  persistSetupDraftFromDom();
+  if (!appState.setupCsvContent) {
+    showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+    return;
+  }
+
+  appState.setupBusy = true;
+  try {
+    appState.setupPreview = await api('/api/import/connections-csv/preview', {
+      method: 'POST',
+      body: JSON.stringify({ csvContent: appState.setupCsvContent, useEmptyState: false }),
+    });
+    showToast('CSV preview is ready.', 'success');
+  } finally {
+    appState.setupBusy = false;
+    await renderSetupWizard();
+  }
+}
+
+async function completeSetupWizard() {
+  persistSetupDraftFromDom();
+  const draft = appState.setupDraft;
+  if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
+    appState.setupStep = 1;
+    await renderSetupWizard();
+    showToast('Workspace, name, and email are required.', 'warning');
+    return;
+  }
+
+  appState.setupBusy = true;
+  appState.setupProgressMessage = appState.setupCsvContent
+    ? 'Saving setup and queuing your LinkedIn connections import...'
+    : 'Saving setup...';
+  try {
+    const result = await api('/api/setup/complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceName: draft.workspaceName,
+        userName: draft.userName,
+        userEmail: draft.userEmail,
+        owners: parseSetupOwners(draft.ownersText),
+        licenseKey: draft.licenseKey,
+        csvContent: appState.setupCsvContent,
+        csvFileName: appState.setupCsvFileName,
+      }),
+    });
+    appState.setupResult = result;
+    appState.setupStatus = result.status;
+    appState.setupStep = getSetupSteps().length;
+    invalidateAppData();
+
+    if (result.jobId) {
+      appState.setupImportJobId = result.jobId;
+      appState.setupProgressMessage = 'Import queued. Starting the background worker...';
+      await renderSetupWizard();
+      const job = await watchSetupImportJob(result.jobId);
+      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
+      appState.setupResult = {
+        ...result,
+        stats: {
+          ...stats,
+          imported: stats.imported || 0,
+          updated: stats.updated || 0,
+          skipped: stats.skipped || 0,
+          failed: stats.failed || 0,
+        },
+      };
+      appState.setupProgressMessage = 'Import complete.';
+      showToast('Setup complete. LinkedIn connections imported.', 'success');
+    } else {
+      appState.setupProgressMessage = '';
+      showToast('Setup complete.', 'success');
+    }
+  } catch (error) {
+    appState.setupProgressMessage = error.message || String(error || 'Setup failed.');
+    showToast(`Setup failed: ${error.message || error}`, 'error', 8000);
+    throw error;
+  } finally {
+    appState.setupBusy = false;
+    appState.setupImportJobId = '';
+    await renderSetupWizard();
+  }
+}
+
+async function watchSetupImportJob(jobId) {
+  while (true) {
+    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    const message = job.progressMessage || humanize(job.status || 'running');
+    appState.setupProgressMessage = message;
+    await renderSetupWizard();
+
+    if (job.status === 'completed') {
+      invalidateAppData();
+      return job;
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.errorMessage || 'LinkedIn connections import failed.');
+    }
+    if (job.status === 'cancelled') {
+      throw new Error('LinkedIn connections import was cancelled.');
+    }
+
+    await sleep(1500);
+  }
+}
+
 async function renderDashboardView() {
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
@@ -2547,6 +3332,8 @@ async function renderDashboardView() {
       ${renderTrustCard('Coverage snapshot', `${formatNumber(dashboard.summary.accountCount || 0)} tracked accounts`, 'Contacts, configs, and imported jobs stay visible in one model.', `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards found`, 'success')}
       ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
     </section>`)}
+
+    ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('metrics', `<section class="metrics-grid">
       ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
@@ -2827,6 +3614,8 @@ async function renderAccountsView() {
       </div>
     </section>
 
+    ${renderAccountPresetStrip()}
+
     <section class="detail-grid detail-grid--workspace">
       <div class="table-card">
         <div class="panel-header">
@@ -2852,6 +3641,7 @@ async function renderAccountsView() {
           <div class="field field--action">
             <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
             <button class="primary-button" type="submit">Apply</button>
+            <button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset</button>
             <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
           </div>
           ${renderSavedFilters()}
@@ -2867,6 +3657,7 @@ async function renderAccountsView() {
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           </div>
         </form>
+        ${renderActiveFilterStrip(appState.accountQuery)}
         ${appState.kanbanMode
           ? (result.items.length ? renderKanbanBoard(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
           : (result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>')}
@@ -3034,7 +3825,7 @@ async function renderAccountDetail(accountId) {
         <div class="outreach-controls outreach-controls--stacked">
           <select id="outreach-contact-select" class="inline-select">
             ${detail.contacts.length
-              ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.fullName)}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
+              ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.id || c.fullName || '')}" data-name="${escapeAttr(c.fullName || '')}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}" data-email="${escapeAttr(c.email || '')}" data-linkedin-url="${escapeAttr(c.linkedinUrl || '')}" data-company="${escapeAttr(c.companyName || detail.account.displayName || '')}" data-notes="${escapeAttr(c.notes || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
               : '<option value="">No contacts</option>'}
           </select>
           <select id="outreach-template-select" class="inline-select">
@@ -3065,8 +3856,8 @@ async function renderAccountDetail(accountId) {
       <div class="action-zone-col">
         <div class="table-card">
           <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
-          ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>' +
-            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td></tr>').join('') +
+          ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th><th>Action</th></tr></thead><tbody>' +
+            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td><td><button class="ghost-button ghost-button--xs" type="button" data-action="select-contact-outreach" data-account-id="' + escapeAttr(detail.account.id) + '" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName || '') + '">Outreach</button></td></tr>').join('') +
             '</tbody></table></div>' : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDC64</div>No contacts imported yet.<div class="empty-state-suggestion">Import a <strong>LinkedIn Connections CSV</strong> from the Admin view to populate contacts.</div></div>'}
         </div>
       </div>
@@ -3205,6 +3996,7 @@ async function renderAccountDetail(accountId) {
       </div>
     </section>
   `;
+  applyPendingOutreachContact(detail.account.id);
   syncOutreachComposerState();
   // Wire notes
   document.getElementById('add-note-btn')?.addEventListener('click', () => {
@@ -3254,7 +4046,7 @@ async function renderContactsView() {
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
       </form>
       ${result.items.length ? renderContactsTable(result.items) : '<div class="empty-state">No contacts match the current filters.</div>'}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
@@ -3294,7 +4086,7 @@ async function renderJobsView() {
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('New jobs', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>New this sync</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Existing</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : '<div class="empty-state">No jobs match the current filter set.</div>'}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
@@ -3304,7 +4096,7 @@ async function renderJobsView() {
 
 function renderCollapsibleStart(sectionId, title, subtitle) {
   const collapsed = appState.adminCollapsed[sectionId];
-  return `<div class="form-card">
+  return `<div class="form-card admin-section" id="admin-section-${escapeAttr(sectionId)}">
     <div class="collapsible-header${collapsed ? ' collapsed' : ''}" data-collapse-id="${escapeAttr(sectionId)}">
       <div class="panel-header" style="margin:0;flex:1"><div><h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="muted small">${subtitle}</p>` : ''}</div></div>
       <span class="chevron">\u25BC</span>
@@ -3316,24 +4108,99 @@ function renderCollapsibleEnd() {
   return `</div></div>`;
 }
 
+function persistAdminCollapsed() {
+  localStorage.setItem('bd_admin_collapsed', JSON.stringify(appState.adminCollapsed));
+}
+
+function setCollapsibleState(header, isCollapsed) {
+  const id = header.dataset.collapseId;
+  const body = header.nextElementSibling;
+  header.classList.toggle('collapsed', isCollapsed);
+  body?.classList.toggle('collapsed', isCollapsed);
+  header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+  appState.adminCollapsed[id] = isCollapsed;
+  persistAdminCollapsed();
+}
+
 function wireCollapsibleSections() {
   document.querySelectorAll('.collapsible-header[data-collapse-id]').forEach((header) => {
     header.setAttribute('role', 'button');
     header.setAttribute('tabindex', '0');
     header.setAttribute('aria-expanded', header.classList.contains('collapsed') ? 'false' : 'true');
     const toggleCollapse = () => {
-      const id = header.dataset.collapseId;
-      const body = header.nextElementSibling;
-      const isCollapsed = header.classList.toggle('collapsed');
-      body.classList.toggle('collapsed', isCollapsed);
-      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-      appState.adminCollapsed[id] = isCollapsed;
+      setCollapsibleState(header, !header.classList.contains('collapsed'));
     };
     header.addEventListener('click', toggleCollapse);
     header.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCollapse(); }
     });
   });
+}
+
+function openAdminSection(sectionId) {
+  const section = document.getElementById(`admin-section-${sectionId}`);
+  const header = section?.querySelector('.collapsible-header[data-collapse-id]');
+  if (header) {
+    setCollapsibleState(header, false);
+    window.requestAnimationFrame(() => {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+}
+
+function renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive }) {
+  const unresolvedCount = summary.unresolvedCount || 0;
+  const activeConfigs = summary.activeCount || 0;
+  const enrichmentCount = enrichmentQueue?.total || 0;
+  return `
+    <section class="admin-command-strip" aria-label="Admin command strip">
+      <article class="command-card command-card--warning">
+        <span class="command-card__step">1</span>
+        <div class="command-card__copy">
+          <strong>Review queue</strong>
+          <span>${formatNumber(reviewQueueCount)} config items</span>
+          <small>${formatNumber(enrichmentCount)} enrichment candidates</small>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="review-queues">Open</button>
+      </article>
+      <article class="command-card command-card--accent">
+        <span class="command-card__step">2</span>
+        <div class="command-card__copy">
+          <strong>Discover boards</strong>
+          <span>${formatNumber(unresolvedCount)} unresolved</span>
+          <small>Unresolved configs only</small>
+        </div>
+        <button class="secondary-button ghost-button--xs" type="button" data-action="run-discovery">Run</button>
+      </article>
+      <article class="command-card command-card--success">
+        <span class="command-card__step">3</span>
+        <div class="command-card__copy">
+          <strong>Import live jobs</strong>
+          <span>${formatNumber(activeConfigs)} active boards</span>
+          <small>${formatNumber(runtime.queuedJobs || 0)} jobs queued</small>
+        </div>
+        <button class="secondary-button ghost-button--xs" type="button" data-action="run-live-import">Import</button>
+      </article>
+      <article class="command-card ${rolloutActive ? 'command-card--accent' : (rolloutRemainingCount > 0 ? 'command-card--warning' : 'command-card--success')}">
+        <span class="command-card__step">4</span>
+        <div class="command-card__copy">
+          <strong>Score rollout</strong>
+          <span>${rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`}</span>
+          <small>Target intelligence fields</small>
+        </div>
+        <button class="primary-button ghost-button--xs" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutActive ? 'Monitor' : (rolloutRemainingCount > 0 ? 'Run' : 'Done')}</button>
+      </article>
+      <article class="command-card">
+        <span class="command-card__step">Ops</span>
+        <div class="command-card__copy">
+          <strong>Pipeline panel</strong>
+          <span>Advanced controls</span>
+          <small>Discovery, enrichment, sheets</small>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="pipeline-ops">Open</button>
+      </article>
+    </section>
+  `;
 }
 
 async function renderAdminView() {
@@ -3460,6 +4327,8 @@ async function renderAdminView() {
       ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
     </section>
 
+    ${renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive })}
+
     <section class="admin-grid">
       <div class="two-column">
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
@@ -3546,7 +4415,7 @@ async function renderAdminView() {
             <div class="action-card">
               <p class="eyebrow">Full pipeline</p>
               <h4>Run BD Engine</h4>
-              <p class="small muted">Runs connections import, config sync, job fetch, scoring, and Google Sheet export in one pass.</p>
+              <p class="small muted">Runs the legacy Google Sheets pipeline in one pass. Requires a Spreadsheet ID in the Google Sheets card.</p>
               <button class="primary-button" data-action="run-full-engine">Run Full Engine</button>
             </div>
             <div class="action-card">
@@ -3677,7 +4546,7 @@ async function renderAdminView() {
             ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
-            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
           </form>
           ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
           ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
@@ -3794,7 +4663,7 @@ function renderAccountsTable(items) {
 
 function renderContactsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Company</th><th>Title</th><th>Score</th><th>Connected</th><th>Status</th><th>Quick update</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Company</th><th>Title</th><th>Score</th><th>Connected</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
           <td><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${item.linkedinUrl ? `<a class="row-link" href="${escapeAttr(item.linkedinUrl)}" target="_blank" rel="noreferrer">LinkedIn</a>` : 'No URL'}</div></td>
@@ -3803,7 +4672,12 @@ function renderContactsTable(items) {
           <td>${formatNumber(item.priorityScore)}</td>
           <td>${formatDate(item.connectedOn)}</td>
           <td>${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}</td>
-          <td><form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form></td>
+          <td>
+            <div class="button-row button-row--wrap">
+              <button class="ghost-button ghost-button--xs" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId || '')}" data-contact-id="${escapeAttr(item.id || '')}" data-contact-name="${escapeAttr(item.fullName || '')}" ${item.accountId ? '' : 'disabled'}>Outreach</button>
+            </div>
+            <form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
+          </td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -3885,11 +4759,12 @@ function renderEnrichmentFilters() {
         <option value="75" ${selected(q.minTargetScore, '75')}>Target score >= 75</option>
         <option value="90" ${selected(q.minTargetScore, '90')}>Target score >= 90</option>
       </select>
-      <button class="ghost-button" data-action="apply-enrichment-filter">Apply</button>
+      <button class="ghost-button" type="button" data-action="apply-enrichment-filter">Apply</button>
+      <button class="ghost-button" type="button" data-action="reset-filters" data-view="enrichment">Reset</button>
       <span class="small muted">Quick:</span>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="100">Top 100</button>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="250">Top 250</button>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="">All</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="100">Top 100</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="250">Top 250</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="">All</button>
     </div>
   `;
 }
@@ -4219,12 +5094,101 @@ function parseJobProgress(msg) {
   return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
 }
 
+function getRuntimeJobs(runtime) {
+  const seen = new Set();
+  return [...(runtime?.activeJobs || []), ...(runtime?.recentJobs || [])].filter((job) => {
+    if (!job || !job.id || seen.has(job.id)) return false;
+    seen.add(job.id);
+    return true;
+  });
+}
+
+function getRuntimeJobDuration(job) {
+  if (!job) return '';
+  const started = Date.parse(job.startedAt || job.queuedAt || '');
+  if (!Number.isFinite(started)) return '';
+  const finished = Date.parse(job.finishedAt || '');
+  const end = Number.isFinite(finished) ? finished : Date.now();
+  const ms = Math.max(0, end - started);
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return '<1m';
+  if (minutes < 90) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}h ${rest}m`;
+}
+
+function getJobPhaseLabel(job) {
+  const message = job?.progressMessage || '';
+  if (!message || message === 'Completed') return humanize(job?.status || 'idle');
+  return message.split(' - ')[0] || message;
+}
+
+function renderIngestionHealthPanel(runtime) {
+  const jobs = getRuntimeJobs(runtime);
+  const liveImports = jobs.filter((job) => job.type === 'live-job-import');
+  const activeImport = liveImports.find((job) => ['queued', 'running'].includes(job.status));
+  const lastImport = liveImports.find((job) => job.status === 'completed') || liveImports[0];
+  const lastFailed = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
+  const progress = activeImport ? parseJobProgress(activeImport.progressMessage) : null;
+  const activeLabel = activeImport
+    ? (progress ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : humanize(activeImport.status))
+    : 'Idle';
+  const activeMeta = activeImport
+    ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
+    : 'No live import is currently active';
+  const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
+  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} records` : 'No records yet';
+  const lastMeta = lastImport
+    ? `${lastDuration || humanize(lastImport.status)} · ${lastRecords}`
+    : 'No completed imports found';
+  const failureMeta = lastFailed
+    ? `${humanize(lastFailed.status)} · ${formatDate(lastFailed.finishedAt || lastFailed.updatedAt || lastFailed.queuedAt)}`
+    : 'No recent live import failures';
+
+  return `
+    <div class="ingestion-health">
+      <div class="ingestion-health__head">
+        <div>
+          <p class="eyebrow">Ingestion health</p>
+          <strong>${activeImport ? 'Live import in progress' : 'Live import ready'}</strong>
+        </div>
+        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill('Ready', 'success')}
+      </div>
+      <div class="ingestion-health__grid">
+        <div class="ingestion-health__metric">
+          <span class="small muted">Active import</span>
+          <strong>${escapeHtml(activeLabel)}</strong>
+          <span class="small muted">${escapeHtml(activeMeta)}</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Last import</span>
+          <strong>${escapeHtml(lastDuration || humanize(lastImport?.status || 'none'))}</strong>
+          <span class="small muted">${escapeHtml(lastMeta)}</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Queue load</span>
+          <strong>${formatNumber((runtime?.runningJobs || 0) + (runtime?.queuedJobs || 0))}</strong>
+          <span class="small muted">${formatNumber(runtime?.runningJobs || 0)} running · ${formatNumber(runtime?.queuedJobs || 0)} queued</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Recent failures</span>
+          <strong>${lastFailed ? 'Review' : 'Clear'}</strong>
+          <span class="small muted">${escapeHtml(failureMeta)}</span>
+        </div>
+      </div>
+      ${progress ? `<div class="spark-bar job-progress-bar ingestion-health__bar"><span style="width:${progress.pct}%"></span></div>` : ''}
+    </div>
+  `;
+}
+
 function renderBackgroundJobItem(job) {
   const tone = job.status === 'completed'
     ? 'success'
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
   const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+  const hasRecordsAffected = job.recordsAffected !== undefined && job.recordsAffected !== null && job.recordsAffected !== '';
 
   return `
     <article class="timeline-item job-card job-card--${escapeAttr(job.status || 'queued')}">
@@ -4241,12 +5205,16 @@ function renderBackgroundJobItem(job) {
       ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
-        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${job.recordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
+        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
         ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       ${job.errorMessage ? `<p class="small muted">${escapeHtml(job.errorMessage)}</p>` : ''}
     </article>
   `;
+}
+
+function formatConnectionsImportStats(stats = {}) {
+  return `${formatNumber(stats.imported || 0)} imported, ${formatNumber(stats.updated || 0)} updated, ${formatNumber(stats.skipped || 0)} skipped, ${formatNumber(stats.failed || 0)} failed`;
 }
 
 function renderTimelineItem(item) {
@@ -4407,8 +5375,8 @@ async function reseedWorkbook(path) {
   });
 }
 
-async function runLiveImport() {
-  await withButtonState('[data-action="run-live-import"]', 'Running import...', async () => {
+async function runLiveImport(buttonEl) {
+  await withButtonState(buttonEl || '[data-action="run-live-import"]', 'Running import...', async () => {
     const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
     showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
@@ -4421,8 +5389,8 @@ async function runLiveImport() {
   });
 }
 
-async function runDiscovery() {
-  await withButtonState('[data-action="run-discovery"]', 'Discovering...', async () => {
+async function runDiscovery(buttonEl) {
+  await withButtonState(buttonEl || '[data-action="run-discovery"]', 'Discovering...', async () => {
     const limit = Number(document.getElementById('discovery-limit')?.value || 75);
     const onlyMissing = (document.getElementById('discovery-only-missing')?.value || 'true') === 'true';
     const forceRefresh = (document.getElementById('discovery-force-refresh')?.value || 'false') === 'true';
@@ -4488,8 +5456,8 @@ async function runEnrichment() {
   }
 }
 
-async function runTargetScoreRollout() {
-  const button = document.querySelector('[data-action="run-target-score-rollout"]');
+async function runTargetScoreRollout(buttonEl) {
+  const button = buttonEl || document.querySelector('[data-action="run-target-score-rollout"]');
   if (button) { button.disabled = true; button.textContent = 'Queueing rollout...'; }
   try {
     const limit = Number(document.getElementById('target-score-rollout-limit')?.value || appState.targetScoreRollout?.defaultLimit || 150);
@@ -4642,6 +5610,13 @@ async function runFullBdEngine() {
   if (button) { button.disabled = true; button.textContent = 'Running full pipeline...'; }
   try {
     const spreadsheetId = getSpreadsheetId();
+    if (!spreadsheetId) {
+      const message = 'Run Full Engine is the legacy Google Sheets pipeline. Enter a Spreadsheet ID in the Google Sheets card before running it.';
+      showToast(message, 'warning', 8000);
+      window.bdLocalApi.setAlert(message, appAlert);
+      document.getElementById('google-sheet-id')?.focus();
+      return;
+    }
     const connectionsCsvPath = getConnectionsCsvPath();
     const accepted = await api('/api/google-sheets/run-engine', {
       method: 'POST',
@@ -4673,44 +5648,41 @@ async function runConnectionsCsvImport(dryRun) {
   const action = dryRun ? 'dry-run-connections-csv' : 'import-connections-csv';
   const button = document.querySelector(`[data-action="${action}"]`);
   const originalLabel = dryRun ? 'Dry run CSV' : 'Import CSV';
-  if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Importing...'; }
+  if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Queueing...'; }
 
   try {
     const fileInput = document.getElementById('connections-csv-file');
     const file = fileInput?.files?.[0];
 
-    let requestBody;
-    if (file) {
-      const csvContent = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsText(file);
-      });
-      requestBody = JSON.stringify({ csvContent, dryRun, useEmptyState: dryRun });
-    } else {
-      const csvPath = getConnectionsCsvPath();
-      if (!csvPath) {
-        showToast('Please select a CSV file using the Browse button.', 'warning');
-        return;
-      }
-      requestBody = JSON.stringify({ csvPath, dryRun, useEmptyState: dryRun });
+    if (!file) {
+      showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+      return;
     }
+
+    const csvContent = await readTextFile(file);
+    const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
+    const uploadSummary = formatCsvUploadSummary(file, csvContent);
 
     const run = await api('/api/import/connections-csv', {
       method: 'POST',
-      body: requestBody,
+      body: JSON.stringify(requestPayload),
     });
     if (!dryRun) {
-      showToast('Connections import queued.', 'success');
+      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
+      showToast(queuedMessage, 'success', 9000);
+      window.bdLocalApi.setAlert(queuedMessage, appAlert);
       const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
       const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
-      const message = `Imported ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
       window.bdLocalApi.setAlert(message, appAlert);
       return;
     }
     const stats = run?.stats || {};
-    const message = `Dry run succeeded: ${formatNumber(stats.contacts || 0)} contacts across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+    window.bdLocalApi.setAlert(message, appAlert);
+  } catch (error) {
+    const message = `Connections import failed: ${error.message || error}`;
+    showToast(message, 'error', 9000);
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {
     if (button) { button.disabled = false; button.textContent = originalLabel; }
@@ -4748,6 +5720,10 @@ async function cancelBackgroundJob(jobId) {
 }
 
 document.addEventListener('change', (event) => {
+  if (event.target.id === 'setup-csv-file') {
+    void handleSetupCsvFile(event.target.files?.[0]);
+    return;
+  }
   if (event.target.id === 'bulk-select-all') {
     const checked = event.target.checked;
     document.querySelectorAll('.bulk-checkbox').forEach(cb => { cb.checked = checked; });
@@ -4755,6 +5731,7 @@ document.addEventListener('change', (event) => {
     return;
   }
   if (event.target.id === 'outreach-template-select' || event.target.id === 'outreach-contact-select') {
+    clearGeneratedOutreachDraft('Generate a fresh note for the selected contact and angle.');
     syncOutreachComposerState();
     return;
   }
@@ -4771,13 +5748,7 @@ document.addEventListener('click', (event) => {
       return;
     }
     const name = contactRow.dataset.contactName;
-    const sel = document.getElementById('outreach-contact-select');
-    if (sel) {
-      sel.value = name;
-      document.querySelectorAll('.contact-row-selectable').forEach(r => r.classList.remove('selected'));
-      contactRow.classList.add('selected');
-      syncOutreachComposerState();
-    }
+    selectOutreachContact({ contactId: contactRow.dataset.contactId || '', contactName: name });
   }
 });
 
@@ -4831,7 +5802,7 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
     // Get selected contact from dropdown
     const contactSelect = document.getElementById('outreach-contact-select');
     const selectedOption = contactSelect?.selectedOptions?.[0];
-    const contactName = selectedOption?.value || '';
+    const contactName = selectedOption?.dataset?.name || selectedOption?.value || '';
     const contactTitle = selectedOption?.dataset?.title || '';
 
     const result = await api(`/api/accounts/${accountId}/generate-outreach`, {
@@ -4935,6 +5906,206 @@ function getSuggestedOutreachTemplate(detail) {
   return 'cold';
 }
 
+function getSelectedOutreachContact() {
+  const contactSelect = document.getElementById('outreach-contact-select');
+  const selectedOption = contactSelect?.selectedOptions?.[0];
+  if (!selectedOption) {
+    return { id: '', name: '', title: '', email: '', linkedinUrl: '', companyName: '', notes: '' };
+  }
+
+  return {
+    id: selectedOption.dataset.contactId || '',
+    name: selectedOption.dataset.name || selectedOption.value || '',
+    title: selectedOption.dataset.title || '',
+    email: selectedOption.dataset.email || '',
+    linkedinUrl: selectedOption.dataset.linkedinUrl || '',
+    companyName: selectedOption.dataset.company || appState.accountDetail?.account?.displayName || '',
+    notes: selectedOption.dataset.notes || '',
+  };
+}
+
+function selectOutreachContact({ contactId = '', contactName = '' } = {}) {
+  const contactSelect = document.getElementById('outreach-contact-select');
+  if (!contactSelect) return false;
+
+  const normalizedName = String(contactName || '').trim().toLowerCase();
+  const option = Array.from(contactSelect.options).find((item) => {
+    const optionId = item.dataset.contactId || '';
+    const optionName = String(item.dataset.name || item.value || '').trim().toLowerCase();
+    return (contactId && optionId === contactId) || (normalizedName && optionName === normalizedName);
+  });
+  if (!option) return false;
+
+  const previousValue = contactSelect.value;
+  contactSelect.value = option.value;
+  if (previousValue !== option.value) {
+    clearGeneratedOutreachDraft('Generate a fresh note for the selected contact.');
+  }
+  document.querySelectorAll('.contact-row-selectable').forEach((row) => {
+    row.classList.toggle('selected', Boolean(
+      (contactId && row.dataset.contactId === contactId) ||
+      (normalizedName && String(row.dataset.contactName || '').trim().toLowerCase() === normalizedName)
+    ));
+  });
+  syncOutreachComposerState();
+  return true;
+}
+
+function clearGeneratedOutreachDraft(message = '') {
+  if (!appState.generatedOutreach) return;
+  appState.generatedOutreach = null;
+  const body = document.getElementById('outreach-prompt-body');
+  if (body) {
+    body.className = 'empty-state empty-state--compact';
+    body.textContent = message || 'Generate a fresh outreach draft for this contact.';
+  }
+}
+
+function setOutreachModalOpen(isOpen) {
+  appState.outreachModalOpen = Boolean(isOpen);
+  const backdrop = document.getElementById('outreach-modal-backdrop');
+  if (backdrop) {
+    backdrop.classList.toggle('hidden', !appState.outreachModalOpen);
+    if (appState.outreachModalOpen) {
+      window.requestAnimationFrame(() => {
+        backdrop.querySelector('#outreach-contact-select, button, a, input, select, textarea')?.focus();
+      });
+    }
+  }
+}
+
+function applyPendingOutreachContact(accountId) {
+  const pending = appState.pendingOutreachContact;
+  if (!pending || String(pending.accountId || '') !== String(accountId || '')) return;
+  selectOutreachContact({ contactId: pending.contactId, contactName: pending.contactName });
+  setOutreachModalOpen(true);
+  appState.pendingOutreachContact = null;
+}
+
+function openOutreachForContact({ accountId = '', contactId = '', contactName = '' } = {}) {
+  if (!accountId) {
+    showToast('This contact is not attached to an account yet.', 'warning');
+    return;
+  }
+
+  appState.pendingOutreachContact = { accountId, contactId, contactName };
+  appState.outreachModalOpen = true;
+  if (appState.accountDetail?.account?.id === accountId && getRouteRoot() === 'accounts') {
+    applyPendingOutreachContact(accountId);
+    return;
+  }
+  location.hash = `#/accounts/${accountId}`;
+}
+
+function getFutureDateInput(days = 7) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function buildOutreachLogNotes(outreach, contact, followUpAt) {
+  const lines = [
+    `Channels: email + LinkedIn`,
+    contact.email ? `Email: ${contact.email}` : '',
+    contact.linkedinUrl ? `LinkedIn: ${contact.linkedinUrl}` : '',
+    outreach.subjectLine ? `Subject: ${outreach.subjectLine}` : '',
+    outreach.messageBody ? `Email draft:\n${outreach.messageBody}` : '',
+    outreach.linkedinMessage ? `LinkedIn draft:\n${outreach.linkedinMessage}` : '',
+    `Follow-up reminder: ${followUpAt}`,
+  ];
+  return lines.filter(Boolean).join('\n\n');
+}
+
+async function logGeneratedOutreach(buttonEl) {
+  const outreach = appState.generatedOutreach;
+  const detail = appState.accountDetail;
+  if (!outreach || !detail?.account) {
+    showToast('Generate an outreach draft first.', 'warning');
+    return;
+  }
+
+  const account = detail.account;
+  const contact = getSelectedOutreachContact();
+  const contactLabel = contact.name || 'selected contact';
+  const followUpAt = getFutureDateInput(7);
+  const today = getFutureDateInput(0);
+  const summary = `Sent email + LinkedIn outreach to ${contactLabel}`;
+  const notes = buildOutreachLogNotes(outreach, contact, followUpAt);
+  const originalText = buttonEl?.textContent || '';
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Logging...';
+  }
+
+  try {
+    await api('/api/activity', {
+      method: 'POST',
+      body: JSON.stringify({
+        accountId: account.id,
+        contactId: contact.id,
+        normalizedCompanyName: account.normalizedName,
+        type: 'outreach',
+        summary,
+        notes,
+        pipelineStage: 'contacted',
+        metadata: {
+          channels: ['email', 'linkedin'],
+          subjectLine: outreach.subjectLine || '',
+          contactName: contact.name || '',
+          contactEmail: contact.email || '',
+          linkedinUrl: contact.linkedinUrl || '',
+          followUpAt,
+        },
+      }),
+    });
+
+    const accountPatch = {
+      outreachStatus: 'contacted',
+      nextAction: `Follow up with ${contactLabel}`,
+      nextActionAt: followUpAt,
+    };
+    if (!['client', 'in_conversation'].includes(String(account.status || '').toLowerCase())) {
+      accountPatch.status = 'contacted';
+    }
+    await api(`/api/accounts/${account.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(accountPatch),
+    });
+
+    if (contact.id) {
+      const contactNote = `Outreach sent ${today}: email + LinkedIn. Follow up ${followUpAt}.`;
+      const mergedNotes = [contact.notes, contactNote].filter(Boolean).join('\n');
+      await api(`/api/contacts/${contact.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ outreachStatus: 'contacted', notes: mergedNotes }),
+      });
+    }
+
+    appState.outreachSequences.push({
+      id: Date.now(),
+      accountId: account.id,
+      channel: 'follow_up',
+      note: `Follow up with ${contactLabel} after email + LinkedIn outreach`,
+      dueAt: new Date(`${followUpAt}T09:00:00`).toISOString(),
+      done: false,
+    });
+    localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+    logActivity('outreach_logged', { accountId: account.id, summary });
+    invalidateAppData();
+    showToast(`Outreach logged. Follow-up set for ${formatDate(followUpAt)}.`, 'success', 7000);
+    await renderAccountDetail(account.id);
+  } catch (error) {
+    showToast(`Could not log outreach: ${error.message || error}`, 'error', 7000);
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalText;
+    }
+  }
+}
+
 function syncOutreachComposerState() {
   const templateSelect = document.getElementById('outreach-template-select');
   const contactSelect = document.getElementById('outreach-contact-select');
@@ -4942,7 +6113,7 @@ function syncOutreachComposerState() {
   const bundleButton = document.getElementById('generate-outreach-bundle-button');
   if (!button || !templateSelect) return;
   const meta = getOutreachTemplateMeta(templateSelect.value || 'cold');
-  const selectedContact = contactSelect?.selectedOptions?.[0]?.value || '';
+  const selectedContact = contactSelect?.selectedOptions?.[0]?.dataset?.name || contactSelect?.selectedOptions?.[0]?.value || '';
   button.textContent = selectedContact ? `${meta.buttonLabel} for ${selectedContact}` : meta.buttonLabel;
   if (bundleButton) {
     bundleButton.textContent = selectedContact ? `Generate 3 angles for ${selectedContact}` : 'Generate 3 angles';
@@ -5042,6 +6213,10 @@ function renderGeneratedOutreachVariants(outreach) {
 function renderGeneratedOutreach(outreach) {
   const gmailSubject = encodeURIComponent(outreach.subjectLine || '');
   const gmailBody = encodeURIComponent(outreach.messageBody || '');
+  const selectedContact = getSelectedOutreachContact();
+  const mailToAddress = selectedContact.email ? encodeURIComponent(selectedContact.email) : '';
+  const gmailTo = selectedContact.email ? `&to=${encodeURIComponent(selectedContact.email)}` : '';
+  const mailtoHref = `mailto:${mailToAddress}?subject=${gmailSubject}&body=${gmailBody}`;
   const pills = [
     outreach.templateLabel ? renderStatusPill(outreach.templateLabel, 'neutral') : '',
     outreach.personaLabel ? renderStatusPill(outreach.personaLabel, 'warm') : '',
@@ -5058,6 +6233,10 @@ function renderGeneratedOutreach(outreach) {
         ${outreach.angleSummary ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Approach</span><p>${escapeHtml(outreach.angleSummary)}</p></div>` : ''}
         ${outreach.sequenceGuidance ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Sequence context</span><p>${escapeHtml(outreach.sequenceGuidance)}</p></div>` : ''}
         ${outreach.companySnippet ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Company context</span><p>${escapeHtml(outreach.companySnippet)}</p></div>` : ''}
+        <div class="button-row outreach-piece-actions">
+          <button class="primary-button" data-action="log-generated-outreach" type="button">Log sent + follow-up</button>
+          <span class="small muted">Use after sending the email draft and LinkedIn message.</span>
+        </div>
       </div>
       <div class="outreach-piece-grid">
         <article class="outreach-piece outreach-piece--primary">
@@ -5069,8 +6248,8 @@ function renderGeneratedOutreach(outreach) {
           <div class="outreach-piece-body">${escapeHtml(outreach.messageBody)}</div>
           <div class="button-row outreach-piece-actions">
             <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy email</button>
-            <a class="primary-button" href="mailto:?subject=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Open in mail</a>
-            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+            <a class="primary-button" href="${mailtoHref}" target="_blank" rel="noreferrer">Open in mail</a>
+            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm${gmailTo}&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
           </div>
         </article>
         ${renderOutreachPiece('LinkedIn DM', outreach.linkedinMessage, '<button class="primary-button" data-action="open-generated-linkedin" type="button">Copy & open LinkedIn</button><button class="secondary-button" data-action="copy-generated-outreach" data-kind="linkedin" type="button">Copy DM</button>')}
@@ -5129,9 +6308,10 @@ async function copyGeneratedSubject(index, buttonEl) {
 async function openGeneratedLinkedIn(buttonEl) {
   const outreach = appState.generatedOutreach;
   if (!outreach?.linkedinMessage) return;
+  const selectedContact = getSelectedOutreachContact();
   const originalText = buttonEl.textContent;
   await navigator.clipboard.writeText(outreach.linkedinMessage);
-  window.open('https://www.linkedin.com/messaging/compose', '_blank', 'noopener');
+  window.open(selectedContact.linkedinUrl || 'https://www.linkedin.com/messaging/compose', '_blank', 'noopener');
   buttonEl.textContent = 'Copied & opened';
   setTimeout(() => { buttonEl.textContent = originalText; }, 1800);
 }
@@ -5180,7 +6360,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
   try {
     const contactSelect = document.getElementById('outreach-contact-select');
     const selectedOption = contactSelect?.selectedOptions?.[0];
-    const contactName = selectedOption?.value || '';
+    const contactName = selectedOption?.dataset?.name || selectedOption?.value || '';
     const contactTitle = selectedOption?.dataset?.title || '';
 
     const result = await api(`/api/accounts/${accountId}/generate-outreach`, {

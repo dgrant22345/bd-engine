@@ -908,9 +908,10 @@ function New-GeneratedBoardConfig {
         $template.discoveryStatus = 'mapped'
         $template.confidenceScore = if (Test-ObjectHasKey -Object $template -Name 'confidenceScore' | Where-Object { $_ }) { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 100 }
         $template.confidenceBand = 'high'
-        $template.supportedImport = [bool](Test-ImportCapableAtsType -AtsType ([string]$template.atsType))
-        $template.active = [bool]($template.supportedImport -and $template.active)
-        $template.reviewStatus = if ($template.reviewStatus) { $template.reviewStatus } else { 'auto' }
+        $template.supportedImport = [bool](Test-ImportCapableAtsType -AtsType ([string](Get-ObjectValue -Object $template -Name 'atsType' -Default '')))
+        $template.active = [bool]($template.supportedImport -and (Test-Truthy (Get-ObjectValue -Object $template -Name 'active' -Default $true)))
+        $templateReviewStatus = [string](Get-ObjectValue -Object $template -Name 'reviewStatus' -Default '')
+        $template.reviewStatus = if ($templateReviewStatus) { $templateReviewStatus } else { 'auto' }
     } elseif ($templateDiscoveryStatus -eq 'verified') {
         $template.discoveryStatus = 'discovered'
     } elseif ($templateDiscoveryStatus -eq 'unresolved') {
@@ -918,28 +919,37 @@ function New-GeneratedBoardConfig {
     }
 
     $id = New-DeterministicId -Prefix 'cfgauto' -Seed $normalizedName
+    $templateAtsType = [string](Get-ObjectValue -Object $template -Name 'atsType' -Default '')
+    $templateBoardId = [string](Get-ObjectValue -Object $template -Name 'boardId' -Default '')
+    $templateDomain = [string](Get-ObjectValue -Object $template -Name 'domain' -Default '')
+    $templateCareersUrl = [string](Get-ObjectValue -Object $template -Name 'careersUrl' -Default '')
+    $templateResolvedBoardUrl = [string](Get-ObjectValue -Object $template -Name 'resolvedBoardUrl' -Default '')
+    $templateDiscoveryStatus = [string](Get-ObjectValue -Object $template -Name 'discoveryStatus' -Default 'missing_inputs')
+    $templateDiscoveryMethod = [string](Get-ObjectValue -Object $template -Name 'discoveryMethod' -Default '')
+    $templateConfidenceScore = [double]$(if (Test-ObjectHasKey -Object $template -Name 'confidenceScore') { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 0 })
+    $templateConfidenceBand = [string]$(if (Get-ObjectValue -Object $template -Name 'confidenceBand') { Get-ObjectValue -Object $template -Name 'confidenceBand' } else { Get-ResolverConfidenceBand -Score $templateConfidenceScore })
     return [ordered]@{
         id = $id
-        workspaceId = $State.workspace.id
-        accountId = $Company.id
+        workspaceId = [string](Get-ObjectValue -Object $State.workspace -Name 'id' -Default 'workspace-default')
+        accountId = [string](Get-ObjectValue -Object $Company -Name 'id' -Default '')
         companyName = $companyName
         normalizedCompanyName = $normalizedName
-        atsType = [string]$template.atsType
-        boardId = [string]$template.boardId
-        domain = [string]$template.domain
-        careersUrl = [string]$template.careersUrl
-        resolvedBoardUrl = [string]$(if ($template.resolvedBoardUrl) { $template.resolvedBoardUrl } else { '' })
-        source = [string]$template.source
-        notes = [string]$template.notes
-        active = if ($null -ne $template.active) { [bool]$template.active } else { $true }
-        supportedImport = [bool]$(if (Test-ObjectHasKey -Object $template -Name 'supportedImport') { Get-ObjectValue -Object $template -Name 'supportedImport' } else { Test-ImportCapableAtsType -AtsType ([string]$template.atsType) })
-        lastCheckedAt = if ($template.discoveryStatus -in @('mapped', 'discovered')) { (Get-Date).ToString('o') } else { $null }
+        atsType = $templateAtsType
+        boardId = $templateBoardId
+        domain = $templateDomain
+        careersUrl = $templateCareersUrl
+        resolvedBoardUrl = $templateResolvedBoardUrl
+        source = [string](Get-ObjectValue -Object $template -Name 'source' -Default '')
+        notes = [string](Get-ObjectValue -Object $template -Name 'notes' -Default '')
+        active = if (Test-ObjectHasKey -Object $template -Name 'active') { [bool](Test-Truthy (Get-ObjectValue -Object $template -Name 'active' -Default $true)) } else { $true }
+        supportedImport = [bool]$(if (Test-ObjectHasKey -Object $template -Name 'supportedImport') { Get-ObjectValue -Object $template -Name 'supportedImport' } else { Test-ImportCapableAtsType -AtsType $templateAtsType })
+        lastCheckedAt = if ($templateDiscoveryStatus -in @('mapped', 'discovered')) { (Get-Date).ToString('o') } else { $null }
         lastResolutionAttemptAt = $null
         nextResolutionAttemptAt = $null
-        discoveryStatus = [string]$template.discoveryStatus
-        discoveryMethod = [string]$template.discoveryMethod
-        confidenceScore = [double]$(if (Test-ObjectHasKey -Object $template -Name 'confidenceScore') { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 0 })
-        confidenceBand = [string]$(if (Get-ObjectValue -Object $template -Name 'confidenceBand') { Get-ObjectValue -Object $template -Name 'confidenceBand' } else { Get-ResolverConfidenceBand -Score ([double]$(if (Test-ObjectHasKey -Object $template -Name 'confidenceScore') { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 0 })) })
+        discoveryStatus = $templateDiscoveryStatus
+        discoveryMethod = $templateDiscoveryMethod
+        confidenceScore = $templateConfidenceScore
+        confidenceBand = $templateConfidenceBand
         evidenceSummary = [string]$(if (Get-ObjectValue -Object $template -Name 'evidenceSummary') { Get-ObjectValue -Object $template -Name 'evidenceSummary' } else { '' })
         reviewStatus = [string]$(if (Get-ObjectValue -Object $template -Name 'reviewStatus') { Get-ObjectValue -Object $template -Name 'reviewStatus' } else { 'pending' })
         failureReason = [string]$(if (Get-ObjectValue -Object $template -Name 'failureReason') { Get-ObjectValue -Object $template -Name 'failureReason' } else { '' })
@@ -5225,23 +5235,25 @@ function Get-DiscoveryResultForConfig {
             }
         }
         if ($knownTemplate) {
-            Write-PipelineDiag -Stage 'discovery_known_map' -Company $companyName -Message 'Matched known template map' -Data @{ atsType = [string]$knownTemplate.atsType; boardId = [string]$knownTemplate.boardId }
-            $knownAtsType = [string]$knownTemplate.atsType
-            $knownBoardId = [string]$knownTemplate.boardId
+            $knownAtsType = [string](Get-ObjectValue -Object $knownTemplate -Name 'atsType' -Default '')
+            $knownBoardId = [string](Get-ObjectValue -Object $knownTemplate -Name 'boardId' -Default '')
+            $knownDomain = [string](Get-ObjectValue -Object $knownTemplate -Name 'domain' -Default '')
+            $knownCareersUrl = [string](Get-ObjectValue -Object $knownTemplate -Name 'careersUrl' -Default '')
+            Write-PipelineDiag -Stage 'discovery_known_map' -Company $companyName -Message 'Matched known template map' -Data @{ atsType = $knownAtsType; boardId = $knownBoardId }
             $supportedImport = [bool]$(if (Test-ObjectHasKey -Object $knownTemplate -Name 'supportedImport') { Get-ObjectValue -Object $knownTemplate -Name 'supportedImport' } else { Test-ImportCapableAtsType -AtsType $knownAtsType })
-            $resolvedBoardUrl = [string]$(if (Get-ObjectValue -Object $knownTemplate -Name 'resolvedBoardUrl') { Get-ObjectValue -Object $knownTemplate -Name 'resolvedBoardUrl' } else { Get-ResolvedBoardUrl -AtsType $knownAtsType -BoardId $knownBoardId -FallbackUrl ([string]$(if ($knownTemplate.careersUrl) { $knownTemplate.careersUrl } else { $careersUrl })) })
+            $resolvedBoardUrl = [string]$(if (Get-ObjectValue -Object $knownTemplate -Name 'resolvedBoardUrl') { Get-ObjectValue -Object $knownTemplate -Name 'resolvedBoardUrl' } else { Get-ResolvedBoardUrl -AtsType $knownAtsType -BoardId $knownBoardId -FallbackUrl ([string]$(if ($knownCareersUrl) { $knownCareersUrl } else { $careersUrl })) })
             return [ordered]@{
                 atsType = $knownAtsType
                 boardId = $knownBoardId
-                domain = [string]$(if ($knownTemplate.domain) { $knownTemplate.domain } else { $resolvedDomain })
-                careersUrl = [string]$(if ($knownTemplate.careersUrl) { $knownTemplate.careersUrl } else { $resolvedCareersUrl })
+                domain = [string]$(if ($knownDomain) { $knownDomain } else { $resolvedDomain })
+                careersUrl = [string]$(if ($knownCareersUrl) { $knownCareersUrl } else { $resolvedCareersUrl })
                 resolvedBoardUrl = $resolvedBoardUrl
-                source = [string]$knownTemplate.source
+                source = [string](Get-ObjectValue -Object $knownTemplate -Name 'source' -Default '')
                 notes = 'Matched from known mapping'
-                active = [bool]($supportedImport -and $(if (Test-ObjectHasKey -Object $knownTemplate -Name 'active') { $knownTemplate.active } else { $true }))
+                active = [bool]($supportedImport -and $(if (Test-ObjectHasKey -Object $knownTemplate -Name 'active') { Test-Truthy (Get-ObjectValue -Object $knownTemplate -Name 'active' -Default $true) } else { $true }))
                 supportedImport = $supportedImport
                 discoveryStatus = 'mapped'
-                discoveryMethod = [string]$(if ($knownTemplate.discoveryMethod) { $knownTemplate.discoveryMethod } else { 'known_map' })
+                discoveryMethod = [string]$(if (Get-ObjectValue -Object $knownTemplate -Name 'discoveryMethod') { Get-ObjectValue -Object $knownTemplate -Name 'discoveryMethod' } else { 'known_map' })
                 confidenceScore = 100
                 confidenceBand = 'high'
                 evidenceSummary = 'Explicit known mapping'
@@ -5264,8 +5276,8 @@ function Get-DiscoveryResultForConfig {
                 $verifiedAtsType = [string]$(if ($verified) { Get-ObjectValue -Object $verified -Name 'atsType' } else { '' })
                 if ($verified -and $verifiedAtsType) {
                     $bestCandidate = $verified
-                    $bestCandidate.domain = if ($resolvedDomain) { $resolvedDomain } else { $verified.domain }
-                    $bestCandidate.careersUrl = if ($resolvedCareersUrl) { $resolvedCareersUrl } else { $verified.careersUrl }
+                    $bestCandidate.domain = if ($resolvedDomain) { $resolvedDomain } else { Get-ObjectValue -Object $verified -Name 'domain' -Default '' }
+                    $bestCandidate.careersUrl = if ($resolvedCareersUrl) { $resolvedCareersUrl } else { Get-ObjectValue -Object $verified -Name 'careersUrl' -Default '' }
                     $bestCandidate.evidenceSummary = 'Careers URL matched a hosted ATS board and the public endpoint responded'
                 } elseif ($verified -and (Test-ObjectHasKey -Object $verified -Name 'httpSummary')) {
                     foreach ($attempt in @((Get-ObjectValue -Object $verified -Name 'httpSummary'))) { [void]$httpSummary.Add($attempt) }
@@ -5692,14 +5704,18 @@ function Sync-BoardConfigsFromCompanies {
     $existingByCompany = @{}
     $companyKeySet = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($company in @($State.companies)) {
-        $companyKey = Get-CanonicalCompanyKey $(if ($company.normalizedName) { $company.normalizedName } else { $company.displayName })
+        $normalizedName = [string](Get-ObjectValue -Object $company -Name 'normalizedName' -Default '')
+        $displayName = [string](Get-ObjectValue -Object $company -Name 'displayName' -Default '')
+        $companyKey = Get-CanonicalCompanyKey $(if ($normalizedName) { $normalizedName } else { $displayName })
         if ($companyKey) {
             [void]$companyKeySet.Add($companyKey)
         }
     }
 
     foreach ($config in @($State.boardConfigs)) {
-        $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        $normalizedCompanyName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
+        $companyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $key = Get-CanonicalCompanyKey $(if ($normalizedCompanyName) { $normalizedCompanyName } else { $companyName })
         if (-not $key) {
             continue
         }
@@ -5721,14 +5737,14 @@ function Sync-BoardConfigsFromCompanies {
             continue
         }
 
-        $key = $generated.normalizedCompanyName
+        $key = [string](Get-ObjectValue -Object $generated -Name 'normalizedCompanyName' -Default '')
         $existingItems = if ($existingByCompany.ContainsKey($key)) { @($existingByCompany[$key].ToArray()) } else { @() }
         $manualItems = @($existingItems | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'source' -Default '')).ToLowerInvariant() -eq 'manual' -or ([string](Get-ObjectValue -Object $_ -Name 'discoveryMethod' -Default '')).ToLowerInvariant() -eq 'manual' })
 
         if ($manualItems.Count -gt 0) {
             foreach ($item in $existingItems) {
-                [void](Set-ObjectValue -Object $item -Name 'accountId' -Value $company.id)
-                [void](Set-ObjectValue -Object $item -Name 'companyName' -Value $company.displayName)
+                [void](Set-ObjectValue -Object $item -Name 'accountId' -Value (Get-ObjectValue -Object $company -Name 'id' -Default ''))
+                [void](Set-ObjectValue -Object $item -Name 'companyName' -Value (Get-ObjectValue -Object $company -Name 'displayName' -Default ''))
                 [void](Set-ObjectValue -Object $item -Name 'normalizedCompanyName' -Value $key)
                 $itemDomain = [string](Get-ObjectValue -Object $item -Name 'domain')
                 $itemLastCheckedAt = [string](Get-ObjectValue -Object $item -Name 'lastCheckedAt')
@@ -5771,7 +5787,9 @@ function Sync-BoardConfigsFromCompanies {
     }
 
     foreach ($config in @($State.boardConfigs)) {
-        $key = Get-CanonicalCompanyKey $(if ($config.normalizedCompanyName) { $config.normalizedCompanyName } else { $config.companyName })
+        $normalizedCompanyName = [string](Get-ObjectValue -Object $config -Name 'normalizedCompanyName' -Default '')
+        $companyName = [string](Get-ObjectValue -Object $config -Name 'companyName' -Default '')
+        $key = Get-CanonicalCompanyKey $(if ($normalizedCompanyName) { $normalizedCompanyName } else { $companyName })
         if ($key -and $companyKeySet.Contains($key)) {
             continue
         }

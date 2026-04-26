@@ -433,6 +433,525 @@ function Test-PlaceholderJobRow {
     return $false
 }
 
+function Get-LinkedInCsvValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Row,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Names
+    )
+
+    foreach ($property in @($Row.PSObject.Properties)) {
+        $propertyKey = Normalize-TextKey $property.Name
+        foreach ($name in $Names) {
+            if ($propertyKey -eq (Normalize-TextKey $name)) {
+                return [string]$property.Value
+            }
+        }
+    }
+
+    return ''
+}
+
+function Normalize-LinkedInImportText {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return (($Value -replace '\s+', ' ').Trim())
+}
+
+function Normalize-LinkedInEmail {
+    param([string]$Value)
+
+    $email = (Normalize-LinkedInImportText $Value).ToLowerInvariant()
+    if ($email -and $email -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
+        return $email
+    }
+
+    return ''
+}
+
+function Normalize-LinkedInUrlKey {
+    param([string]$Value)
+
+    $url = (Normalize-LinkedInImportText $Value)
+    if (-not $url) {
+        return ''
+    }
+
+    if ($url -match '^linkedin\.com/') {
+        $url = 'https://www.' + $url
+    } elseif ($url -match '^www\.linkedin\.com/') {
+        $url = 'https://' + $url
+    }
+
+    return ($url.TrimEnd('/') -replace '^http://', 'https://').ToLowerInvariant()
+}
+
+function Get-LinkedInContactDedupeKeys {
+    param($Contact)
+
+    $linkedinUrl = [string](Get-ObjectValue -Object $Contact -Name 'linkedinUrl' -Default '')
+    $email = [string](Get-ObjectValue -Object $Contact -Name 'email' -Default '')
+    $fullName = [string](Get-ObjectValue -Object $Contact -Name 'fullName' -Default '')
+    $companyName = [string](Get-ObjectValue -Object $Contact -Name 'companyName' -Default '')
+    if (-not $companyName) {
+        $companyName = [string](Get-ObjectValue -Object $Contact -Name 'normalizedCompanyName' -Default '')
+    }
+
+    $nameCompany = ''
+    $nameKey = Normalize-TextKey $fullName
+    $companyKey = Get-CanonicalCompanyKey $companyName
+    if ($nameKey -and $companyKey) {
+        $nameCompany = '{0}|{1}' -f $nameKey, $companyKey
+    }
+
+    return [ordered]@{
+        linkedinUrl = Normalize-LinkedInUrlKey $linkedinUrl
+        email = Normalize-LinkedInEmail $email
+        nameCompany = $nameCompany
+    }
+}
+
+function Add-LinkedInContactToIndex {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Index,
+        [Parameter(Mandatory = $true)]
+        $Contact
+    )
+
+    $keys = Get-LinkedInContactDedupeKeys -Contact $Contact
+    if ($keys.linkedinUrl -and -not $Index.linkedinUrl.ContainsKey($keys.linkedinUrl)) {
+        $Index.linkedinUrl[$keys.linkedinUrl] = $Contact
+    }
+    if ($keys.email -and -not $Index.email.ContainsKey($keys.email)) {
+        $Index.email[$keys.email] = $Contact
+    }
+    if ($keys.nameCompany -and -not $Index.nameCompany.ContainsKey($keys.nameCompany)) {
+        $Index.nameCompany[$keys.nameCompany] = $Contact
+    }
+}
+
+function Find-LinkedInExistingContact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Index,
+        [Parameter(Mandatory = $true)]
+        $Keys
+    )
+
+    if ($Keys.linkedinUrl -and $Index.linkedinUrl.ContainsKey($Keys.linkedinUrl)) {
+        return $Index.linkedinUrl[$Keys.linkedinUrl]
+    }
+    if ($Keys.email -and $Index.email.ContainsKey($Keys.email)) {
+        return $Index.email[$Keys.email]
+    }
+    if ($Keys.nameCompany -and $Index.nameCompany.ContainsKey($Keys.nameCompany)) {
+        return $Index.nameCompany[$Keys.nameCompany]
+    }
+
+    return $null
+}
+
+function Test-LinkedInIncomingDuplicate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Seen,
+        [Parameter(Mandatory = $true)]
+        $Keys
+    )
+
+    foreach ($keyName in 'linkedinUrl', 'email', 'nameCompany') {
+        $key = [string]$Keys[$keyName]
+        if ($key -and $Seen[$keyName].Contains($key)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Add-LinkedInIncomingKeys {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Seen,
+        [Parameter(Mandatory = $true)]
+        $Keys
+    )
+
+    foreach ($keyName in 'linkedinUrl', 'email', 'nameCompany') {
+        $key = [string]$Keys[$keyName]
+        if ($key) {
+            [void]$Seen[$keyName].Add($key)
+        }
+    }
+}
+
+function Test-LinkedInCsvHeaderLine {
+    param([string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $false
+    }
+
+    $columns = @($Line -split ',' | ForEach-Object {
+        Normalize-TextKey (($_ -replace '^\s*"', '') -replace '"\s*$', '')
+    })
+    $hasName = ($columns -contains 'first name') -or ($columns -contains 'last name') -or ($columns -contains 'full name') -or ($columns -contains 'name')
+    $hasContactSignal = ($columns -contains 'url') -or ($columns -contains 'profile url') -or ($columns -contains 'linkedin url') -or ($columns -contains 'email address') -or ($columns -contains 'email')
+    $hasCompanySignal = ($columns -contains 'company') -or ($columns -contains 'company name') -or ($columns -contains 'organization') -or ($columns -contains 'position') -or ($columns -contains 'title') -or ($columns -contains 'job title')
+
+    return ($hasName -and ($hasContactSignal -or $hasCompanySignal))
+}
+
+function Get-LinkedInCsvDataContent {
+    param([string]$CsvContent)
+
+    $cleanContent = if ($null -eq $CsvContent) { '' } else { [string]$CsvContent }
+    $cleanContent = $cleanContent -replace '^\uFEFF', ''
+    $cleanContent = $cleanContent -replace '^(?:[ \t]*\r?\n)+', ''
+    $lines = @($cleanContent -split '\r?\n')
+    $headerIndex = 0
+    $headerDetected = $false
+
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if (Test-LinkedInCsvHeaderLine -Line $lines[$index]) {
+            $headerIndex = $index
+            $headerDetected = $true
+            break
+        }
+    }
+
+    $dataLines = if ($lines.Count -gt 0) { @($lines[$headerIndex..($lines.Count - 1)]) } else { @() }
+    return [ordered]@{
+        content = [string]::Join([Environment]::NewLine, $dataLines)
+        headerDetected = $headerDetected
+        skippedLeadingLines = $headerIndex
+        headerLine = if ($lines.Count -gt 0) { [string]$lines[$headerIndex] } else { '' }
+    }
+}
+
+function New-BdConnectionsCsvImportPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CsvPath,
+        [Parameter(Mandatory = $true)]
+        $State,
+        [int]$PreviewLimit = 25
+    )
+
+    $csvInfo = Get-LinkedInCsvDataContent -CsvContent ([System.IO.File]::ReadAllText($CsvPath))
+    $csvContent = [string]$csvInfo.content
+    $rows = if ([string]::IsNullOrWhiteSpace($csvContent)) {
+        @()
+    } else {
+        @(($csvContent -split '\r?\n') | ConvertFrom-Csv)
+    }
+    $rows = @($rows)
+    $contacts = New-Object System.Collections.ArrayList
+    $preview = New-Object System.Collections.ArrayList
+    $existingIndex = @{
+        linkedinUrl = @{}
+        email = @{}
+        nameCompany = @{}
+    }
+    $seen = @{
+        linkedinUrl = New-Object 'System.Collections.Generic.HashSet[string]'
+        email = New-Object 'System.Collections.Generic.HashSet[string]'
+        nameCompany = New-Object 'System.Collections.Generic.HashSet[string]'
+    }
+    $touchedIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $stats = [ordered]@{
+        rows = @($rows).Count
+        imported = 0
+        updated = 0
+        skipped = 0
+        failed = 0
+    }
+
+    foreach ($existingContact in @($State.contacts)) {
+        Add-LinkedInContactToIndex -Index $existingIndex -Contact $existingContact
+    }
+
+    for ($index = 0; $index -lt $rows.Count; $index++) {
+        $row = $rows[$index]
+        $rowNumber = $index + 2
+
+        try {
+            $firstName = Normalize-LinkedInImportText (Get-LinkedInCsvValue -Row $row -Names @('First Name', 'FirstName', 'First'))
+            $lastName = Normalize-LinkedInImportText (Get-LinkedInCsvValue -Row $row -Names @('Last Name', 'LastName', 'Last'))
+            $fullName = Normalize-LinkedInImportText (Get-LinkedInCsvValue -Row $row -Names @('Full Name', 'Name'))
+            if (-not $fullName) {
+                $fullName = (('{0} {1}' -f $firstName, $lastName) -replace '\s+', ' ').Trim()
+            }
+
+            $companyName = Get-CanonicalCompanyDisplayName (Get-FirstResolvedText -Candidates @(
+                (Get-LinkedInCsvValue -Row $row -Names @('Clean Company')),
+                (Get-LinkedInCsvValue -Row $row -Names @('Company', 'Company Name', 'Organization'))
+            ))
+            $normalizedCompanyName = Get-CanonicalCompanyKey $companyName
+            $title = Normalize-LinkedInImportText (Get-FirstResolvedText -Candidates @(
+                (Get-LinkedInCsvValue -Row $row -Names @('Position')),
+                (Get-LinkedInCsvValue -Row $row -Names @('Title', 'Job Title'))
+            ))
+            $email = Normalize-LinkedInEmail (Get-LinkedInCsvValue -Row $row -Names @('Email Address', 'Email', 'EmailAddress'))
+            $linkedinUrl = Normalize-LinkedInImportText (Get-FirstResolvedText -Candidates @(
+                (Get-LinkedInCsvValue -Row $row -Names @('URL', 'Profile URL', 'LinkedIn URL', 'LinkedIn'))
+            ))
+            $connectedOnRaw = Normalize-LinkedInImportText (Get-LinkedInCsvValue -Row $row -Names @('Connected On', 'ConnectedOn', 'Connected Date'))
+            $connectedOn = Get-FirstResolvedDateString -Candidates @($connectedOnRaw)
+
+            $keys = [ordered]@{
+                linkedinUrl = Normalize-LinkedInUrlKey $linkedinUrl
+                email = $email
+                nameCompany = if ((Normalize-TextKey $fullName) -and $normalizedCompanyName) { '{0}|{1}' -f (Normalize-TextKey $fullName), $normalizedCompanyName } else { '' }
+            }
+
+            if (-not $fullName -and -not $companyName -and -not $email -and -not $linkedinUrl) {
+                $stats.skipped++
+                if ($preview.Count -lt $PreviewLimit) {
+                    [void]$preview.Add([ordered]@{
+                        rowNumber = $rowNumber
+                        action = 'skipped'
+                        fullName = ''
+                        companyName = ''
+                        title = ''
+                        email = ''
+                        linkedinUrl = ''
+                        connectedOn = ''
+                        message = 'Row did not include a name, company, email, or LinkedIn URL.'
+                    })
+                }
+                continue
+            }
+
+            if (Test-LinkedInIncomingDuplicate -Seen $seen -Keys $keys) {
+                $stats.skipped++
+                if ($preview.Count -lt $PreviewLimit) {
+                    [void]$preview.Add([ordered]@{
+                        rowNumber = $rowNumber
+                        action = 'skipped'
+                        fullName = $fullName
+                        companyName = $companyName
+                        title = $title
+                        email = $email
+                        linkedinUrl = $linkedinUrl
+                        connectedOn = $connectedOn
+                        message = 'Duplicate row in this CSV.'
+                    })
+                }
+                continue
+            }
+
+            Add-LinkedInIncomingKeys -Seen $seen -Keys $keys
+            $existing = Find-LinkedInExistingContact -Index $existingIndex -Keys $keys
+            $action = if ($existing) { 'updated' } else { 'imported' }
+            $contactId = if ($existing) { [string](Get-ObjectValue -Object $existing -Name 'id' -Default '') } else { '' }
+            if (-not $contactId) {
+                $seed = '{0}|{1}|{2}|{3}|{4}' -f $normalizedCompanyName, $fullName, $title, $keys.linkedinUrl, $email
+                $contactId = New-DeterministicId -Prefix 'con' -Seed $seed
+            }
+
+            if ($existing) {
+                if (-not $firstName) { $firstName = [string](Get-ObjectValue -Object $existing -Name 'firstName' -Default '') }
+                if (-not $lastName) { $lastName = [string](Get-ObjectValue -Object $existing -Name 'lastName' -Default '') }
+                if (-not $fullName) { $fullName = [string](Get-ObjectValue -Object $existing -Name 'fullName' -Default '') }
+                if (-not $companyName) { $companyName = [string](Get-ObjectValue -Object $existing -Name 'companyName' -Default '') }
+                if (-not $normalizedCompanyName) { $normalizedCompanyName = [string](Get-ObjectValue -Object $existing -Name 'normalizedCompanyName' -Default '') }
+                if (-not $title) { $title = [string](Get-ObjectValue -Object $existing -Name 'title' -Default '') }
+                if (-not $linkedinUrl) { $linkedinUrl = [string](Get-ObjectValue -Object $existing -Name 'linkedinUrl' -Default '') }
+                if (-not $email) { $email = [string](Get-ObjectValue -Object $existing -Name 'email' -Default '') }
+                if (-not $connectedOn) { $connectedOn = [string](Get-ObjectValue -Object $existing -Name 'connectedOn' -Default '') }
+            }
+
+            $yearsConnectedRaw = Get-LinkedInCsvValue -Row $row -Names @('Years Connected')
+            $companyContacts = Get-LinkedInCsvValue -Row $row -Names @('Company Contacts')
+            $priorityScore = Get-LinkedInCsvValue -Row $row -Names @('Priority Score')
+            $yearsConnected = Get-FirstResolvedNumber -Candidates @($yearsConnectedRaw)
+            if ($yearsConnected -le 0 -and $connectedOn) {
+                $yearsConnected = Get-YearsConnectedFromDate -ConnectedOn $connectedOn
+            }
+            $titleFlags = Get-TitleFlags -Title $title
+
+            $contact = [ordered]@{
+                id = $contactId
+                workspaceId = [string](Get-ObjectValue -Object $State.workspace -Name 'id' -Default 'workspace-default')
+                accountId = if ($existing) { Get-ObjectValue -Object $existing -Name 'accountId' -Default $null } else { $null }
+                normalizedCompanyName = $normalizedCompanyName
+                companyName = $companyName
+                fullName = $fullName
+                firstName = $firstName
+                lastName = $lastName
+                title = $title
+                linkedinUrl = $linkedinUrl
+                email = $email
+                connectedOn = $connectedOn
+                yearsConnected = $yearsConnected
+                buyerFlag = $titleFlags.buyer
+                seniorFlag = $titleFlags.senior
+                talentFlag = $titleFlags.talent
+                techFlag = $titleFlags.tech
+                financeFlag = $titleFlags.finance
+                companyOverlapCount = Get-FirstResolvedNumber -Candidates @($companyContacts)
+                priorityScore = Get-FirstResolvedNumber -Candidates @($priorityScore)
+                relevanceScore = Get-FirstResolvedNumber -Candidates @($priorityScore)
+                outreachStatus = if ($existing -and (Get-ObjectValue -Object $existing -Name 'outreachStatus' -Default '')) { Get-ObjectValue -Object $existing -Name 'outreachStatus' -Default '' } else { 'not_started' }
+                notes = if ($existing -and (Get-ObjectValue -Object $existing -Name 'notes' -Default '')) { Get-ObjectValue -Object $existing -Name 'notes' -Default '' } else { '' }
+                createdAt = if ($existing -and (Get-ObjectValue -Object $existing -Name 'createdAt' -Default '')) { Get-ObjectValue -Object $existing -Name 'createdAt' -Default '' } else { (Get-Date).ToString('o') }
+                updatedAt = (Get-Date).ToString('o')
+            }
+
+            [void]$contacts.Add($contact)
+            [void]$touchedIds.Add($contactId)
+            if ($action -eq 'updated') { $stats.updated++ } else { $stats.imported++ }
+            if ($preview.Count -lt $PreviewLimit) {
+                $message = if ($connectedOnRaw -and -not $connectedOn) { 'Connected date could not be parsed and was left blank.' } else { '' }
+                [void]$preview.Add([ordered]@{
+                    rowNumber = $rowNumber
+                    action = $action
+                    fullName = $fullName
+                    companyName = $companyName
+                    title = $title
+                    email = $email
+                    linkedinUrl = $linkedinUrl
+                    connectedOn = $connectedOn
+                    message = $message
+                })
+            }
+        } catch {
+            $stats.failed++
+            if ($preview.Count -lt $PreviewLimit) {
+                [void]$preview.Add([ordered]@{
+                    rowNumber = $rowNumber
+                    action = 'failed'
+                    fullName = ''
+                    companyName = ''
+                    title = ''
+                    email = ''
+                    linkedinUrl = ''
+                    connectedOn = ''
+                    message = $_.Exception.Message
+                })
+            }
+        }
+    }
+
+    return [ordered]@{
+        contacts = @($contacts)
+        touchedIds = @($touchedIds)
+        preview = @($preview)
+        stats = $stats
+        totalRows = @($rows).Count
+        metadata = [ordered]@{
+            headerDetected = [bool]$csvInfo.headerDetected
+            skippedLeadingLines = [int]$csvInfo.skippedLeadingLines
+            headerLine = [string]$csvInfo.headerLine
+        }
+    }
+}
+
+function Get-BdConnectionsCsvPreview {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CsvPath,
+        [string]$SourceLabel = 'linkedin-connections-csv',
+        [switch]$UseEmptyState,
+        [switch]$MergeExisting
+    )
+
+    if (-not (Test-Path -LiteralPath $CsvPath)) {
+        throw "CSV file not found: $CsvPath"
+    }
+
+    $state = if ($UseEmptyState) {
+        [ordered]@{
+            workspace = [ordered]@{ id = 'workspace-default'; name = 'Dry Run Workspace' }
+            companies = @()
+            contacts = @()
+        }
+    } else {
+        Get-AppStateView -Segments @('Workspace', 'Companies', 'Contacts')
+    }
+
+    if ($null -eq $state.contacts) { $state.contacts = @() }
+    if ($null -eq $state.companies) { $state.companies = @() }
+
+    $plan = New-BdConnectionsCsvImportPlan -CsvPath $CsvPath -State $state
+    $incomingContacts = @($plan.contacts)
+    $mergedContacts = New-Object System.Collections.ArrayList
+    if ($MergeExisting) {
+        foreach ($contact in @($state.contacts)) {
+            $contactId = [string](Get-ObjectValue -Object $contact -Name 'id' -Default '')
+            if (-not $contactId -or -not $plan.touchedIds.Contains($contactId)) {
+                [void]$mergedContacts.Add($contact)
+            }
+        }
+    }
+    foreach ($contact in $incomingContacts) {
+        [void]$mergedContacts.Add($contact)
+    }
+
+    $companyKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    if ($MergeExisting) {
+        foreach ($company in @($state.companies)) {
+            $companyKey = Get-CanonicalCompanyKey ([string](Get-FirstResolvedText -Candidates @(
+                (Get-ObjectValue -Object $company -Name 'normalizedName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'normalizedCompanyName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'displayName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'companyName' -Default ''),
+                (Get-ObjectValue -Object $company -Name 'name' -Default '')
+            )))
+            if ($companyKey) { [void]$companyKeys.Add($companyKey) }
+        }
+    }
+    foreach ($contact in @($mergedContacts)) {
+        $companyKey = Get-CanonicalCompanyKey ([string](Get-FirstResolvedText -Candidates @(
+            (Get-ObjectValue -Object $contact -Name 'normalizedCompanyName' -Default ''),
+            (Get-ObjectValue -Object $contact -Name 'companyName' -Default '')
+        )))
+        if ($companyKey) { [void]$companyKeys.Add($companyKey) }
+    }
+
+    $startedAt = (Get-Date).ToString('o')
+    $importRun = [ordered]@{
+        id = New-RandomId -Prefix 'run'
+        workspaceId = [string](Get-ObjectValue -Object $state.workspace -Name 'id' -Default 'workspace-default')
+        type = 'connections-csv-import'
+        status = 'dry_run'
+        startedAt = $startedAt
+        finishedAt = (Get-Date).ToString('o')
+        summary = "Dry-run parsed LinkedIn connections CSV from $CsvPath"
+        stats = [ordered]@{
+            contacts = @($mergedContacts).Count
+            companies = $companyKeys.Count
+            rows = [int]$plan.stats.rows
+            imported = [int]$plan.stats.imported
+            updated = [int]$plan.stats.updated
+            skipped = [int]$plan.stats.skipped
+            failed = [int]$plan.stats.failed
+            source = $SourceLabel
+        }
+        metadata = [ordered]@{
+            dedupeKeys = @('linkedinUrl', 'email', 'name+company')
+            mergeExisting = [bool]$MergeExisting
+            previewCount = @($plan.preview).Count
+            headerDetected = [bool]$plan.metadata.headerDetected
+            skippedLeadingLines = [int]$plan.metadata.skippedLeadingLines
+            headerLine = [string]$plan.metadata.headerLine
+        }
+        errors = @()
+    }
+
+    return [ordered]@{
+        importRun = $importRun
+        preview = @($plan.preview)
+    }
+}
+
 function Import-BdConnectionsCsv {
     param(
         [Parameter(Mandatory = $true)]
@@ -440,6 +959,7 @@ function Import-BdConnectionsCsv {
         [string]$SourceLabel = 'linkedin-connections-csv',
         [switch]$DryRun,
         [switch]$UseEmptyState,
+        [switch]$MergeExisting,
         [switch]$SkipPersistence,
         [scriptblock]$ProgressCallback
     )
@@ -461,6 +981,9 @@ function Import-BdConnectionsCsv {
         }
     } else {
         $state = Get-AppState
+        if ($DryRun) {
+            $state = ConvertTo-PlainObject -InputObject $state
+        }
         foreach ($collectionName in 'companies', 'contacts', 'jobs', 'boardConfigs', 'activities', 'importRuns') {
             if ($null -eq $state[$collectionName]) {
                 $state[$collectionName] = @()
@@ -468,91 +991,44 @@ function Import-BdConnectionsCsv {
         }
     }
 
-    $existingContacts = @{}
-    foreach ($contact in @($state.contacts)) {
-        $existingContacts[$contact.id] = $contact
-    }
-
     $startedAt = (Get-Date).ToString('o')
-    $rows = @(Import-Csv -LiteralPath $CsvPath)
-    $contacts = New-Object System.Collections.ArrayList
-    $totalRows = @($rows).Count
+    $plan = New-BdConnectionsCsvImportPlan -CsvPath $CsvPath -State $state
+    $totalRows = [int]$plan.totalRows
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Parsing connections CSV' -Processed 0 -Total $totalRows -StartedAt $startedAt -Message 'Normalizing LinkedIn contacts'
 
-    for ($index = 0; $index -lt $rows.Count; $index++) {
-        $row = $rows[$index]
-        $cleanCompany = if ($row.PSObject.Properties.Name -contains 'Clean Company') { $row.'Clean Company' } else { '' }
-        $companyContacts = if ($row.PSObject.Properties.Name -contains 'Company Contacts') { $row.'Company Contacts' } else { '' }
-        $priorityScore = if ($row.PSObject.Properties.Name -contains 'Priority Score') { $row.'Priority Score' } else { '' }
-        $yearsConnectedRaw = if ($row.PSObject.Properties.Name -contains 'Years Connected') { $row.'Years Connected' } else { '' }
-        $companyName = Get-CanonicalCompanyDisplayName (Get-FirstResolvedText -Candidates @($cleanCompany, $row.Company))
-        $normalizedCompanyName = Get-CanonicalCompanyKey $companyName
-        $fullName = ('{0} {1}' -f $row.'First Name', $row.'Last Name').Trim()
-        if (-not $fullName -and -not $normalizedCompanyName) {
-            continue
-        }
-
-        $title = [string]$(if ($row.PSObject.Properties.Name -contains 'Position') { $row.Position } elseif ($row.PSObject.Properties.Name -contains 'Title') { $row.Title } else { '' })
-        $titleFlags = Get-TitleFlags -Title $title
-        $connectedOn = Get-FirstResolvedDateString -Candidates @($row.'Connected On')
-        $yearsConnected = Get-FirstResolvedNumber -Candidates @($yearsConnectedRaw)
-        if ($yearsConnected -le 0 -and $connectedOn) {
-            $yearsConnected = Get-YearsConnectedFromDate -ConnectedOn $connectedOn
-        }
-
-        $linkedinUrl = [string]$(if ($row.PSObject.Properties.Name -contains 'URL') { $row.URL } elseif ($row.PSObject.Properties.Name -contains 'Profile URL') { $row.'Profile URL' } else { '' })
-        $seed = '{0}|{1}|{2}|{3}' -f $normalizedCompanyName, $fullName, $title, $linkedinUrl
-        $id = New-DeterministicId -Prefix 'con' -Seed $seed
-        $existing = $existingContacts[$id]
-
-        $contact = [ordered]@{
-            id = $id
-            workspaceId = $state.workspace.id
-            accountId = $null
-            normalizedCompanyName = $normalizedCompanyName
-            companyName = $companyName
-            fullName = $fullName
-            firstName = [string]$row.'First Name'
-            lastName = [string]$row.'Last Name'
-            title = $title
-            linkedinUrl = $linkedinUrl
-            email = [string]$(if ($row.PSObject.Properties.Name -contains 'Email Address') { $row.'Email Address' } else { '' })
-            connectedOn = $connectedOn
-            yearsConnected = $yearsConnected
-            buyerFlag = $titleFlags.buyer
-            seniorFlag = $titleFlags.senior
-            talentFlag = $titleFlags.talent
-            techFlag = $titleFlags.tech
-            financeFlag = $titleFlags.finance
-            companyOverlapCount = Get-FirstResolvedNumber -Candidates @($companyContacts)
-            priorityScore = Get-FirstResolvedNumber -Candidates @($priorityScore)
-            relevanceScore = Get-FirstResolvedNumber -Candidates @($priorityScore)
-            outreachStatus = if ($existing -and $existing.outreachStatus) { $existing.outreachStatus } else { 'not_started' }
-            notes = if ($existing -and $existing.notes) { $existing.notes } else { '' }
-            createdAt = if ($existing -and $existing.createdAt) { $existing.createdAt } else { (Get-Date).ToString('o') }
-            updatedAt = (Get-Date).ToString('o')
-        }
-        [void]$contacts.Add($contact)
-
-        $processed = $index + 1
-        if ($ProgressCallback -and ($processed -eq 1 -or $processed -eq $totalRows -or ($processed % 100) -eq 0)) {
-            Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Parsing connections CSV' -Processed $processed -Total $totalRows -StartedAt $startedAt -Message 'Normalizing LinkedIn contacts'
-        }
+    if ($ProgressCallback) {
+        Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Parsing connections CSV' -Processed $totalRows -Total $totalRows -StartedAt $startedAt -Message 'Normalizing LinkedIn contacts'
     }
 
-    $state.contacts = @($contacts)
+    if ($MergeExisting) {
+        $mergedContacts = New-Object System.Collections.ArrayList
+        foreach ($contact in @($state.contacts)) {
+            $contactId = [string](Get-ObjectValue -Object $contact -Name 'id' -Default '')
+            if (-not $contactId -or -not $plan.touchedIds.Contains($contactId)) {
+                [void]$mergedContacts.Add($contact)
+            }
+        }
+        foreach ($contact in @($plan.contacts)) {
+            [void]$mergedContacts.Add($contact)
+        }
+        $state.contacts = @($mergedContacts)
+    } else {
+        $state.contacts = @($plan.contacts)
+    }
+
     Publish-EngineProgress -ProgressCallback $ProgressCallback -Phase 'Refreshing derived data' -Processed $totalRows -Total $totalRows -StartedAt $startedAt -Message 'Recomputing target accounts from contacts'
     $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback
     $preConfigKeys = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($cfg in @($state.boardConfigs)) { $k = Get-CanonicalCompanyKey ([string]$cfg.companyName); if ($k) { [void]$preConfigKeys.Add($k) } }
     $state = Sync-BoardConfigsFromCompanies -State $state -ProgressCallback $ProgressCallback
     $postConfigTouched = @($state.boardConfigs | ForEach-Object { Get-CanonicalCompanyKey ([string]$_.companyName) } | Where-Object { $_ -and -not $preConfigKeys.Contains($_) } | Select-Object -Unique)
+    $postConfigTouched = @($postConfigTouched)
     $configTouchedKeys = if ($postConfigTouched.Count -gt 0) { $postConfigTouched } else { $null }
     $state = Update-DerivedData -State $state -ProgressCallback $ProgressCallback -TouchedCompanyKeys $configTouchedKeys
 
     $importRun = [ordered]@{
         id = New-RandomId -Prefix 'run'
-        workspaceId = $state.workspace.id
+        workspaceId = [string](Get-ObjectValue -Object $state.workspace -Name 'id' -Default 'workspace-default')
         type = 'connections-csv-import'
         status = if ($DryRun) { 'dry_run' } else { 'completed' }
         startedAt = $startedAt
@@ -561,7 +1037,20 @@ function Import-BdConnectionsCsv {
         stats = [ordered]@{
             contacts = @($state.contacts).Count
             companies = @($state.companies).Count
+            rows = [int]$plan.stats.rows
+            imported = [int]$plan.stats.imported
+            updated = [int]$plan.stats.updated
+            skipped = [int]$plan.stats.skipped
+            failed = [int]$plan.stats.failed
             source = $SourceLabel
+        }
+        metadata = [ordered]@{
+            dedupeKeys = @('linkedinUrl', 'email', 'name+company')
+            mergeExisting = [bool]$MergeExisting
+            previewCount = @($plan.preview).Count
+            headerDetected = [bool]$plan.metadata.headerDetected
+            skippedLeadingLines = [int]$plan.metadata.skippedLeadingLines
+            headerLine = [string]$plan.metadata.headerLine
         }
         errors = @()
     }
@@ -576,6 +1065,7 @@ function Import-BdConnectionsCsv {
     return [ordered]@{
         state = $state
         importRun = $importRun
+        preview = @($plan.preview)
     }
 }
 

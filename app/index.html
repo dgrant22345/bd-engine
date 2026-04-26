@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f1728">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260425-v0-polish-setup-bg-7">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -23,11 +23,11 @@
         <p class="brand-copy">Commercial BD intelligence, live hiring coverage, and ATS import orchestration in one place.</p>
       </div>
       <nav class="nav" aria-label="Primary">
-        <a href="#/dashboard" data-route="dashboard">Dashboard <span class="nav-shortcut">G D</span></a>
-        <a href="#/accounts" data-route="accounts">Accounts <span class="nav-shortcut">G A</span></a>
-        <a href="#/contacts" data-route="contacts">Contacts <span class="nav-shortcut">G C</span></a>
-        <a href="#/jobs" data-route="jobs">Jobs <span class="nav-shortcut">G J</span></a>
-        <a href="#/admin" data-route="admin">Admin <span class="nav-shortcut">G X</span></a>
+        <a href="#/dashboard" data-route="dashboard"><span class="nav-label">Dashboard</span><span class="nav-shortcut">G D</span></a>
+        <a href="#/accounts" data-route="accounts"><span class="nav-label">Accounts</span><span class="nav-shortcut">G A</span></a>
+        <a href="#/contacts" data-route="contacts"><span class="nav-label">Contacts</span><span class="nav-shortcut">G C</span></a>
+        <a href="#/jobs" data-route="jobs"><span class="nav-label">Jobs</span><span class="nav-shortcut">G J</span></a>
+        <a href="#/admin" data-route="admin"><span class="nav-label">Admin</span><span class="nav-shortcut">G X</span></a>
       </nav>
       <div class="sidebar-footnote">
         <span class="dot"></span>
@@ -66,11 +66,11 @@
   <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="/local-api.js"></script>
-  <script src="/app.js"></script>
+  <script src="/local-api.js?v=20260425-v0-polish-setup-bg-7"></script>
+  <script src="/app.js?v=20260425-v0-polish-setup-bg-7"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').then((registration) => registration.update()).catch(() => {});
     }
   </script>
 </body>

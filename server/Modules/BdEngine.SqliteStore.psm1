@@ -57,8 +57,12 @@ function Get-BdSqliteDatabaseFileStamp {
             continue
         }
 
-        $item = Get-Item -LiteralPath $path
-        [void]$stampParts.Add(('{0}:{1}:{2}' -f $path, $item.LastWriteTimeUtc.Ticks, $item.Length))
+        $item = @(Get-Item -LiteralPath $path -ErrorAction SilentlyContinue) | Select-Object -First 1
+        if ($item -and $item.PSObject.Properties['LastWriteTimeUtc']) {
+            [void]$stampParts.Add(('{0}:{1}:{2}' -f $path, $item.LastWriteTimeUtc.Ticks, $item.Length))
+        } else {
+            [void]$stampParts.Add(('{0}:unavailable:0' -f $path))
+        }
     }
 
     return [string]::Join('|', @($stampParts))
@@ -244,7 +248,17 @@ function Get-BdSqliteRecordValue {
     }
 
     if ($Record -is [System.Collections.IDictionary]) {
-        if ($Record.Contains($Name)) {
+        $hasKey = $false
+        if ($Record.PSObject.Methods.Name -contains 'ContainsKey') {
+            $hasKey = $Record.ContainsKey($Name)
+        } else {
+            try {
+                $hasKey = $Record.Contains($Name)
+            } catch {
+                $hasKey = $false
+            }
+        }
+        if ($hasKey) {
             return $Record[$Name]
         }
         return $Default

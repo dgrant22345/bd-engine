@@ -8,21 +8,52 @@ $script:FilterOptionsCacheSignature = ''
 $script:RoleSeniorityScoreCache = @{}
 $script:DecisionMakerFitScoreCache = @{}
 
-# ─── Fixed owner roster ───
+# Legacy fallback owner roster for existing development workspaces.
 $script:OwnerRoster = @(
     [ordered]@{ ownerId = 'derek-grant';  displayName = 'Derek Grant' }
     [ordered]@{ ownerId = 'alex-chong';   displayName = 'Alex Chong' }
     [ordered]@{ ownerId = 'danny-chung';  displayName = 'Danny Chung' }
 )
 
+function Get-ConfiguredOwnerRoster {
+    try {
+        $settings = Get-AppSegment -Segment 'Settings'
+        $configured = @(Get-ObjectValue -Object $settings -Name 'ownerRoster' -Default @())
+        $owners = New-Object System.Collections.ArrayList
+        foreach ($owner in @($configured)) {
+            $displayName = [string](Get-ObjectValue -Object $owner -Name 'displayName' -Default '')
+            $ownerId = [string](Get-ObjectValue -Object $owner -Name 'ownerId' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($displayName) -and -not [string]::IsNullOrWhiteSpace($ownerId)) {
+                [void]$owners.Add([ordered]@{
+                    ownerId = $ownerId
+                    displayName = $displayName
+                    email = [string](Get-ObjectValue -Object $owner -Name 'email' -Default '')
+                })
+            }
+        }
+        if ($owners.Count -gt 0) {
+            return @($owners)
+        }
+    } catch {
+        return @()
+    }
+
+    return @()
+}
+
 function Get-OwnerRoster {
+    $configured = @(Get-ConfiguredOwnerRoster)
+    if ($configured.Count -gt 0) {
+        return @($configured)
+    }
+
     return @($script:OwnerRoster)
 }
 
 function Resolve-OwnerDisplayName {
     param([string]$OwnerIdOrName)
     if (-not $OwnerIdOrName) { return '' }
-    $match = $script:OwnerRoster | Where-Object {
+    $match = Get-OwnerRoster | Where-Object {
         $_.ownerId -eq $OwnerIdOrName -or $_.displayName -eq $OwnerIdOrName
     } | Select-Object -First 1
     if ($match) { return [string]$match.displayName }
@@ -32,7 +63,7 @@ function Resolve-OwnerDisplayName {
 function Resolve-OwnerId {
     param([string]$OwnerIdOrName)
     if (-not $OwnerIdOrName) { return '' }
-    $match = $script:OwnerRoster | Where-Object {
+    $match = Get-OwnerRoster | Where-Object {
         $_.ownerId -eq $OwnerIdOrName -or $_.displayName -eq $OwnerIdOrName
     } | Select-Object -First 1
     if ($match) { return [string]$match.ownerId }
@@ -485,7 +516,14 @@ function Test-ObjectHasKey {
     }
 
     if ($Object -is [System.Collections.IDictionary]) {
-        return $Object.Contains($Name)
+        if ($Object.PSObject.Methods.Name -contains 'ContainsKey') {
+            return $Object.ContainsKey($Name)
+        }
+        try {
+            return $Object.Contains($Name)
+        } catch {
+            return $false
+        }
     }
 
     return [bool]$Object.PSObject.Properties[$Name]
@@ -4475,7 +4513,7 @@ function Sort-Companies {
             $lo = 0
             $hi = $unchanged.Count
             while ($lo -lt $hi) {
-                $mid = [int](($lo + $hi) / 2)
+                $mid = [int][Math]::Floor(($lo + $hi) / 2)
                 $midKey = Get-CompanySortKey -Company $unchanged[$mid]
                 if ((Compare-CompanySortKeys -KeyA $companyKey -KeyB $midKey) -le 0) {
                     $hi = $mid
@@ -4629,14 +4667,15 @@ function Update-DerivedData {
             continue
         }
 
+        $workspaceId = [string](Get-ObjectValue -Object $State.workspace -Name 'id' -Default 'workspace-default')
         $company = if ($existing) {
             $existing
         } else {
-            New-CompanyProjection -WorkspaceId $State.workspace.id -NormalizedName $companyKey -DisplayName $displayName
+            New-CompanyProjection -WorkspaceId $workspaceId -NormalizedName $companyKey -DisplayName $displayName
         }
-        $company.workspaceId = $State.workspace.id
-        $company.normalizedName = $companyKey
-        $company.displayName = $displayName
+        [void](Set-ObjectValue -Object $company -Name 'workspaceId' -Value $workspaceId)
+        [void](Set-ObjectValue -Object $company -Name 'normalizedName' -Value $companyKey)
+        [void](Set-ObjectValue -Object $company -Name 'displayName' -Value $displayName)
         $company = Update-CompanyProjection `
             -Company $company `
             -Contacts $contacts `
@@ -4675,7 +4714,8 @@ function Update-DerivedData {
     $projectionStopwatch.Stop()
 
     $sortStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $State.companies = Sort-Companies -Companies @($derivedCompanies) -ChangedKeys $touchedKeySet
+    $sortedCompanies = @(Sort-Companies -Companies @($derivedCompanies.ToArray()) -ChangedKeys $touchedKeySet)
+    [void](Set-ObjectValue -Object $State -Name 'companies' -Value $sortedCompanies)
     $sortStopwatch.Stop()
     if ($TimingBag) {
         $TimingBag['groupingMs'] = [int]$groupingStopwatch.Elapsed.TotalMilliseconds
@@ -5516,7 +5556,7 @@ function Set-AccountFields {
         }
 
         foreach ($key in @('canonicalDomain', 'careersUrl', 'domain', 'enrichmentStatus', 'enrichmentSource', 'enrichmentConfidence', 'enrichmentConfidenceScore', 'linkedinCompanySlug', 'aliases', 'tags')) {
-            if ($account -is [System.Collections.IDictionary] -and -not $account.Contains($key)) {
+            if ($account -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $account -Name $key)) {
                 $account[$key] = $null
             }
         }
@@ -5654,14 +5694,14 @@ function Add-Activity {
 
     # Ensure optional keys exist before access (strict-mode safe)
     foreach ($optKey in 'contactId', 'type', 'summary', 'notes', 'pipelineStage', 'metadata') {
-        if ($Payload -is [System.Collections.IDictionary] -and -not $Payload.Contains($optKey)) {
+        if ($Payload -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $Payload -Name $optKey)) {
             $Payload[$optKey] = $null
         }
     }
 
     $activity = [ordered]@{
         id = New-RandomId -Prefix 'act'
-        workspaceId = $State.workspace.id
+        workspaceId = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $State -Name 'workspace' -Default $null) -Name 'id' -Default 'workspace-default')
         accountId = [string]$Payload.accountId
         contactId = if ($Payload.contactId) { [string]$Payload.contactId } else { '' }
         normalizedCompanyName = $normalizedCompanyName
@@ -5689,7 +5729,7 @@ function Add-Activity {
     if ($relatedAccount) {
         # Ensure keys exist before writing (strict-mode safe)
         foreach ($k in 'lastContactedAt', 'outreachStatus') {
-            if ($relatedAccount -is [System.Collections.IDictionary] -and -not $relatedAccount.Contains($k)) {
+            if ($relatedAccount -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $relatedAccount -Name $k)) {
                 $relatedAccount[$k] = $null
             }
         }
@@ -5698,7 +5738,7 @@ function Add-Activity {
             $relatedAccount['outreachStatus'] = $activity.pipelineStage
         }
         $relatedActivities = @($State.activities | Where-Object {
-                ([string](Get-ObjectValue -Object $_ -Name 'accountId' -Default '')) -eq [string]$relatedAccount.id -or
+                ([string](Get-ObjectValue -Object $_ -Name 'accountId' -Default '')) -eq [string](Get-ObjectValue -Object $relatedAccount -Name 'id' -Default '') -or
                 ([string](Get-ObjectValue -Object $_ -Name 'normalizedCompanyName' -Default '')) -eq [string]$normalizedCompanyName
             })
         $relatedAccount = Update-CompanyProjection -Company $relatedAccount -Activities $relatedActivities
