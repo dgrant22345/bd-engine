@@ -97,14 +97,14 @@
       }
     }
 
-    async function doSignup(email, password, name, workspaceName) {
+    async function doSignup(email, password, name, workspaceName, persona) {
       state.busy = true;
       state.error = '';
       render();
       try {
         const data = await api('/api/auth/signup', {
           method: 'POST',
-          body: JSON.stringify({ email, password, name, workspaceName }),
+          body: JSON.stringify({ email, password, name, workspaceName, persona: persona || 'bd' }),
         });
         state.user = data.user;
         state.tenant = data.tenant;
@@ -378,11 +378,26 @@
             ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">
+                <label>I'm using BD Engine for</label>
+                <div class="persona-toggle" id="persona-toggle">
+                  <button type="button" class="persona-option active" data-persona="bd">
+                    <span class="persona-icon">💼</span>
+                    <span class="persona-label">Sales / BD</span>
+                    <span class="persona-desc">Win new clients &amp; grow revenue</span>
+                  </button>
+                  <button type="button" class="persona-option" data-persona="jobseeker">
+                    <span class="persona-icon">🎯</span>
+                    <span class="persona-label">Job Search</span>
+                    <span class="persona-desc">Track companies &amp; land roles</span>
+                  </button>
+                </div>
+              </div>
+              <div class="form-group">
                 <label for="signup-name">Full name</label>
                 <input type="text" id="signup-name" placeholder="Jane Smith" required autofocus>
               </div>
               <div class="form-group">
-                <label for="signup-email">Work email</label>
+                <label for="signup-email">Email</label>
                 <input type="email" id="signup-email" placeholder="jane@company.com" required>
               </div>
               <div class="form-group">
@@ -390,7 +405,7 @@
                 <input type="password" id="signup-password" placeholder="Min. 6 characters" required minlength="6">
               </div>
               <div class="form-group">
-                <label for="signup-workspace">Workspace name</label>
+                <label for="signup-workspace" id="workspace-label">Workspace name</label>
                 <input type="text" id="signup-workspace" placeholder="My Company">
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
@@ -404,13 +419,33 @@
           </div>
         </div>`;
 
+      // Persona toggle
+      let selectedPersona = 'bd';
+      root.querySelectorAll('.persona-option').forEach(btn => {
+        btn.addEventListener('click', () => {
+          root.querySelectorAll('.persona-option').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedPersona = btn.dataset.persona;
+          // Update workspace label based on persona
+          const wsLabel = root.querySelector('#workspace-label');
+          const wsInput = root.querySelector('#signup-workspace');
+          if (selectedPersona === 'jobseeker') {
+            wsLabel.textContent = 'Your name for this search';
+            wsInput.placeholder = 'My Job Search 2026';
+          } else {
+            wsLabel.textContent = 'Workspace name';
+            wsInput.placeholder = 'My Company';
+          }
+        });
+      });
+
       root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
         const name = root.querySelector('#signup-name').value;
         const email = root.querySelector('#signup-email').value;
         const password = root.querySelector('#signup-password').value;
         const workspace = root.querySelector('#signup-workspace').value;
-        doSignup(email, password, name, workspace);
+        doSignup(email, password, name, workspace, selectedPersona);
       });
       root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });

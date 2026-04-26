@@ -396,7 +396,7 @@ self.addEventListener('activate', (event) => {
 // ── Auth handlers ───────────────────────────────────────────────────────────
 
 async function handleSignup(req, res) {
-  const { email, password, name, workspaceName } = await readJson(req);
+  const { email, password, name, workspaceName, persona } = await readJson(req);
 
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
@@ -412,12 +412,14 @@ async function handleSignup(req, res) {
   }
 
   // Create default workspace
+  const userPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
   const workspaceDisplayName = workspaceName || `${userResult.user.name}'s Workspace`;
   const tenantResult = createTenant({
     name: workspaceDisplayName,
     slug: `${workspaceDisplayName}-${userResult.user.id.slice(-4)}`,
     plan: 'trial',
     ownerUserId: userResult.user.id,
+    persona: userPersona,
   });
 
   if (tenantResult.error) {
@@ -425,12 +427,16 @@ async function handleSignup(req, res) {
   }
 
   const tenantId = tenantResult.tenant.id;
+  // Ensure the store also knows the persona
+  store.ensureTenant(tenantResult.tenant, userResult.user);
+  store.setPersona(tenantId, userPersona);
   const { cookie } = createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
 
   return sendJson(res, 201, {
     user: safeUser(userResult.user),
     tenant: tenantResult.tenant || null,
+    persona: userPersona,
   });
 }
 
@@ -499,6 +505,7 @@ function handleMe(req, res) {
     membership: membership ? { role: membership.role } : null,
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
     trialDaysRemaining,
+    persona: tenant ? store.getPersona(tenant.id) : 'bd',
   });
 }
 

@@ -312,6 +312,16 @@ export function createStore() {
       return ensureTenantProfile(tenant?.id || tenant, tenant, user);
     },
 
+    setPersona(tenantId, persona) {
+      const profile = getTenantProfile(tenantId);
+      if (profile) profile.persona = persona || 'bd';
+    },
+
+    getPersona(tenantId) {
+      const profile = getTenantProfile(tenantId);
+      return profile?.persona || 'bd';
+    },
+
     getSession() {
       return {
         tenant: { ...seedTenant },
@@ -353,6 +363,7 @@ export function createStore() {
       return {
         workspace: { ...profile.workspace },
         settings: { ...profile.settings },
+        persona: profile.persona || 'bd',
         defaults: {
           workbookPath: '',
           spreadsheetId: '',
