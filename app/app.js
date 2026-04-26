@@ -1,3 +1,28 @@
+const defaultAdminCollapsed = {
+  'enrichment-coverage': true,
+  'enrichment-queue': true,
+  'resolver-coverage': true,
+  'runtime-status': true,
+  'background-jobs': true,
+  'pipeline-ops': true,
+  'scoring-settings': true,
+  'automation-rules': true,
+  'alert-thresholds': true,
+  'ats-config-form': true,
+  'ats-config-records': true,
+};
+
+function readJsonSetting(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
+
 const appState = {
   bootstrap: null,
   localData: null,
@@ -15,7 +40,9 @@ const appState = {
   runtimeStatus: null,
   runtimePollTimer: null,
   savedFilters: JSON.parse(localStorage.getItem('bd_saved_filters') || '[]'),
-  adminCollapsed: {},
+  adminCollapsed: savedAdminCollapsed && typeof savedAdminCollapsed === 'object'
+    ? { ...defaultAdminCollapsed, ...savedAdminCollapsed }
+    : { ...defaultAdminCollapsed },
   showAdvancedFilters: false,
   outreachModalOpen: false,
   statusPillsExpanded: false,
@@ -78,6 +105,39 @@ const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
+
+const defaultQueries = {
+  accounts: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
+  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
+  enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
+};
+
+function resetViewFilters(view) {
+  if (view === 'accounts') {
+    appState.accountQuery = { ...defaultQueries.accounts };
+    appState.showAdvancedFilters = false;
+    return renderAccountsView();
+  }
+  if (view === 'contacts') {
+    appState.contactQuery = { ...defaultQueries.contacts };
+    return renderContactsView();
+  }
+  if (view === 'jobs') {
+    appState.jobQuery = { ...defaultQueries.jobs };
+    return renderJobsView();
+  }
+  if (view === 'configs') {
+    appState.configQuery = { ...defaultQueries.configs };
+    return renderAdminView();
+  }
+  if (view === 'enrichment') {
+    appState.enrichmentQuery = { ...defaultQueries.enrichment };
+    return refreshEnrichmentPanel();
+  }
+  return Promise.resolve();
+}
 
 /* ── Theme system ── */
 function applyTheme(mode) {
@@ -1678,6 +1738,19 @@ function bindEvents() {
       if (name) { saveFilter(name.trim()); await renderAccountsView(); }
       return;
     }
+    if (actionName === 'reset-filters') {
+      await resetViewFilters(action.dataset.view);
+      showToast('Filters reset.', 'info');
+      return;
+    }
+    if (actionName === 'apply-account-preset') {
+      await applyAccountPreset(action.dataset.preset, { navigate: action.dataset.navigate === 'accounts' });
+      return;
+    }
+    if (actionName === 'open-admin-section') {
+      openAdminSection(action.dataset.sectionId);
+      return;
+    }
     if (actionName === 'load-saved-filter') {
       applySavedFilter(action.dataset.name);
       await renderAccountsView();
@@ -1738,7 +1811,7 @@ function bindEvents() {
     }
 
     if (actionName === 'run-live-import') {
-      await runLiveImport();
+      await runLiveImport(action);
       return;
     }
 
@@ -1748,7 +1821,7 @@ function bindEvents() {
     }
 
     if (actionName === 'run-discovery') {
-      await runDiscovery();
+      await runDiscovery(action);
       return;
     }
 
@@ -1763,7 +1836,7 @@ function bindEvents() {
     }
 
     if (actionName === 'run-target-score-rollout') {
-      await runTargetScoreRollout();
+      await runTargetScoreRollout(action);
       return;
     }
 
@@ -2305,11 +2378,172 @@ function applySavedFilter(name) {
   }
 }
 
+const accountPresets = [
+  {
+    id: 'hot-hiring',
+    label: 'Hot hiring',
+    description: 'Active roles and target score 70+',
+    query: { hiring: 'true', minTargetScore: '70', sortBy: '' },
+  },
+  {
+    id: 'fresh-roles',
+    label: 'Recent roles',
+    description: 'Hiring movement in the last 30 days',
+    query: { hiring: 'true', recencyDays: '30', sortBy: 'new_roles' },
+  },
+  {
+    id: 'warm-network',
+    label: 'Warm network',
+    description: 'Accounts with mapped relationships first',
+    query: { minContacts: '1', sortBy: 'connections' },
+  },
+  {
+    id: 'follow-up',
+    label: 'Follow-up lane',
+    description: 'Work the accounts most due for action',
+    query: { sortBy: 'follow_up' },
+  },
+  {
+    id: 'strategic',
+    label: 'Strategic targets',
+    description: 'Highest-priority named accounts',
+    query: { priority: 'strategic', sortBy: '' },
+  },
+];
+
+const accountFilterLabels = {
+  q: 'Search',
+  hiring: 'Hiring',
+  ats: 'ATS',
+  recencyDays: 'Recency',
+  minContacts: 'Contacts',
+  minTargetScore: 'Score',
+  priority: 'Priority',
+  status: 'Status',
+  owner: 'Owner',
+  outreachStatus: 'Outreach',
+  industry: 'Industry',
+  geography: 'Geography',
+  sortBy: 'Sort',
+};
+
+function getAccountPreset(id) {
+  return accountPresets.find((preset) => preset.id === id);
+}
+
+function normalizedFilterEntries(query) {
+  return Object.entries(query || {})
+    .filter(([key, value]) => key !== 'page' && key !== 'pageSize' && value !== '' && value !== null && value !== undefined)
+    .map(([key, value]) => [key, String(value)]);
+}
+
+function isAccountPresetActive(preset) {
+  const activeEntries = normalizedFilterEntries(appState.accountQuery);
+  const presetEntries = normalizedFilterEntries(preset.query);
+  return activeEntries.length === presetEntries.length
+    && presetEntries.every(([key, value]) => String(appState.accountQuery[key] || '') === value);
+}
+
+async function applyAccountPreset(presetId, options = {}) {
+  const preset = getAccountPreset(presetId);
+  if (!preset) return;
+  const alreadyOnAccounts = getRouteRoot() === 'accounts';
+  appState.accountQuery = {
+    ...defaultQueries.accounts,
+    pageSize: appState.accountQuery.pageSize || defaultQueries.accounts.pageSize,
+    ...preset.query,
+    page: 1,
+  };
+  appState.showAdvancedFilters = false;
+  showToast(`${preset.label} lane applied.`, 'info');
+  if (options.navigate || !alreadyOnAccounts) {
+    location.hash = '#/accounts';
+    if (alreadyOnAccounts) await renderAccountsView();
+    return;
+  }
+  await renderAccountsView();
+}
+
 function renderSavedFilters() {
   if (!appState.savedFilters.length) return '';
   return `<div class="saved-filters-bar">${appState.savedFilters.map(f =>
     `<span class="saved-filter-chip"><button class="ghost-button ghost-button--xs" data-action="load-saved-filter" data-name="${escapeAttr(f.name)}">${escapeHtml(f.name)}</button><button class="saved-filter-delete" data-action="delete-saved-filter" data-name="${escapeAttr(f.name)}" aria-label="Delete filter ${escapeAttr(f.name)}">&times;</button></span>`
   ).join('')}</div>`;
+}
+
+function renderActiveFilterStrip(query, labels = accountFilterLabels) {
+  const entries = normalizedFilterEntries(query);
+  if (!entries.length) {
+    return '<div class="active-filter-strip active-filter-strip--empty"><span>All accounts visible</span></div>';
+  }
+  return `
+    <div class="active-filter-strip">
+      <span>${formatNumber(entries.length)} active filter${entries.length === 1 ? '' : 's'}</span>
+      ${entries.map(([key, value]) => `<span class="filter-chip"><strong>${escapeHtml(labels[key] || humanize(key))}</strong>${escapeHtml(humanize(value))}</span>`).join('')}
+      <button class="ghost-button ghost-button--xs" type="button" data-action="reset-filters" data-view="accounts">Clear</button>
+    </div>
+  `;
+}
+
+function renderAccountPresetStrip() {
+  return `
+    <section class="account-preset-strip" aria-label="Account working lanes">
+      <div class="preset-strip-copy">
+        <p class="eyebrow">Working lanes</p>
+        <strong>Jump to the queue that matches the moment.</strong>
+      </div>
+      <div class="preset-button-row">
+        ${accountPresets.map((preset) => `
+          <button class="preset-button${isAccountPresetActive(preset) ? ' active' : ''}" type="button" data-action="apply-account-preset" data-preset="${escapeAttr(preset.id)}">
+            <span>${escapeHtml(preset.label)}</span>
+            <small>${escapeHtml(preset.description)}</small>
+          </button>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }) {
+  const freshJobs = dashboard.summary?.newJobsLast24h || 0;
+  const followUps = (extended.overdueFollowUps?.length || 0) + (extended.staleAccounts?.length || 0);
+  const boardsFound = dashboard.summary?.discoveredBoardCount || 0;
+  return `
+    <section class="workflow-strip" aria-label="Daily BD workflow">
+      <article class="workflow-card workflow-card--primary">
+        <span class="workflow-card__step">1</span>
+        <div class="workflow-card__copy">
+          <strong>${topCompany ? escapeHtml(topCompany.displayName) : 'Find the lead account'}</strong>
+          <span>${topCompany ? `${formatNumber(getTargetScore(topCompany))}/100 target score` : 'No top account yet'}</span>
+        </div>
+        ${topCompany ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${topCompany.id}">Open</button>` : '<a class="primary-button ghost-button--xs" href="#/admin">Seed</a>'}
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">2</span>
+        <div class="workflow-card__copy">
+          <strong>Recent role triggers</strong>
+          <span>${formatNumber(freshJobs)} jobs in 24h</span>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="fresh-roles" data-navigate="accounts">Open lane</button>
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">3</span>
+        <div class="workflow-card__copy">
+          <strong>Follow-up lane</strong>
+          <span>${formatNumber(followUps)} accounts need attention</span>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="follow-up" data-navigate="accounts">Open lane</button>
+      </article>
+      <article class="workflow-card">
+        <span class="workflow-card__step">4</span>
+        <div class="workflow-card__copy">
+          <strong>Coverage backlog</strong>
+          <span>${formatNumber(resolutionPressure)} identity gaps</span>
+        </div>
+        <a class="ghost-button ghost-button--xs" href="#/admin">${boardsFound ? 'Review' : 'Discover'}</a>
+      </article>
+    </section>
+  `;
 }
 
 function sleep(ms) {
@@ -2366,6 +2600,7 @@ function hydrateAdminRuntimePanels(runtime) {
         <div class="status-item"><span class="small muted">Running jobs</span><strong>${formatNumber(summary.runningJobs || 0)}</strong><span class="small muted">Currently executing</span></div>
         <div class="status-item"><span class="small muted">Queued jobs</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong><span class="small muted">${summary.queuedJobs ? 'Waiting for worker time' : 'Queue clear'}</span></div>
       </div>
+      ${renderIngestionHealthPanel(summary)}
     </div>
   `;
 
@@ -3060,6 +3295,8 @@ async function renderDashboardView() {
       ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
     </section>`)}
 
+    ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
+
     ${dashSection('metrics', `<section class="metrics-grid">
       ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
@@ -3339,6 +3576,8 @@ async function renderAccountsView() {
       </div>
     </section>
 
+    ${renderAccountPresetStrip()}
+
     <section class="detail-grid detail-grid--workspace">
       <div class="table-card">
         <div class="panel-header">
@@ -3364,6 +3603,7 @@ async function renderAccountsView() {
           <div class="field field--action">
             <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
             <button class="primary-button" type="submit">Apply</button>
+            <button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset</button>
             <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
           </div>
           ${renderSavedFilters()}
@@ -3379,6 +3619,7 @@ async function renderAccountsView() {
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
           </div>
         </form>
+        ${renderActiveFilterStrip(appState.accountQuery)}
         ${appState.kanbanMode
           ? (result.items.length ? renderKanbanBoard(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
           : (result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>')}
@@ -3766,7 +4007,7 @@ async function renderContactsView() {
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
       </form>
       ${result.items.length ? renderContactsTable(result.items) : '<div class="empty-state">No contacts match the current filters.</div>'}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
@@ -3806,7 +4047,7 @@ async function renderJobsView() {
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('New jobs', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>New this sync</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Existing</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : '<div class="empty-state">No jobs match the current filter set.</div>'}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
@@ -3816,7 +4057,7 @@ async function renderJobsView() {
 
 function renderCollapsibleStart(sectionId, title, subtitle) {
   const collapsed = appState.adminCollapsed[sectionId];
-  return `<div class="form-card">
+  return `<div class="form-card admin-section" id="admin-section-${escapeAttr(sectionId)}">
     <div class="collapsible-header${collapsed ? ' collapsed' : ''}" data-collapse-id="${escapeAttr(sectionId)}">
       <div class="panel-header" style="margin:0;flex:1"><div><h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="muted small">${subtitle}</p>` : ''}</div></div>
       <span class="chevron">\u25BC</span>
@@ -3828,24 +4069,99 @@ function renderCollapsibleEnd() {
   return `</div></div>`;
 }
 
+function persistAdminCollapsed() {
+  localStorage.setItem('bd_admin_collapsed', JSON.stringify(appState.adminCollapsed));
+}
+
+function setCollapsibleState(header, isCollapsed) {
+  const id = header.dataset.collapseId;
+  const body = header.nextElementSibling;
+  header.classList.toggle('collapsed', isCollapsed);
+  body?.classList.toggle('collapsed', isCollapsed);
+  header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+  appState.adminCollapsed[id] = isCollapsed;
+  persistAdminCollapsed();
+}
+
 function wireCollapsibleSections() {
   document.querySelectorAll('.collapsible-header[data-collapse-id]').forEach((header) => {
     header.setAttribute('role', 'button');
     header.setAttribute('tabindex', '0');
     header.setAttribute('aria-expanded', header.classList.contains('collapsed') ? 'false' : 'true');
     const toggleCollapse = () => {
-      const id = header.dataset.collapseId;
-      const body = header.nextElementSibling;
-      const isCollapsed = header.classList.toggle('collapsed');
-      body.classList.toggle('collapsed', isCollapsed);
-      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-      appState.adminCollapsed[id] = isCollapsed;
+      setCollapsibleState(header, !header.classList.contains('collapsed'));
     };
     header.addEventListener('click', toggleCollapse);
     header.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCollapse(); }
     });
   });
+}
+
+function openAdminSection(sectionId) {
+  const section = document.getElementById(`admin-section-${sectionId}`);
+  const header = section?.querySelector('.collapsible-header[data-collapse-id]');
+  if (header) {
+    setCollapsibleState(header, false);
+    window.requestAnimationFrame(() => {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+}
+
+function renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive }) {
+  const unresolvedCount = summary.unresolvedCount || 0;
+  const activeConfigs = summary.activeCount || 0;
+  const enrichmentCount = enrichmentQueue?.total || 0;
+  return `
+    <section class="admin-command-strip" aria-label="Admin command strip">
+      <article class="command-card command-card--warning">
+        <span class="command-card__step">1</span>
+        <div class="command-card__copy">
+          <strong>Review queue</strong>
+          <span>${formatNumber(reviewQueueCount)} config items</span>
+          <small>${formatNumber(enrichmentCount)} enrichment candidates</small>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="review-queues">Open</button>
+      </article>
+      <article class="command-card command-card--accent">
+        <span class="command-card__step">2</span>
+        <div class="command-card__copy">
+          <strong>Discover boards</strong>
+          <span>${formatNumber(unresolvedCount)} unresolved</span>
+          <small>Unresolved configs only</small>
+        </div>
+        <button class="secondary-button ghost-button--xs" type="button" data-action="run-discovery">Run</button>
+      </article>
+      <article class="command-card command-card--success">
+        <span class="command-card__step">3</span>
+        <div class="command-card__copy">
+          <strong>Import live jobs</strong>
+          <span>${formatNumber(activeConfigs)} active boards</span>
+          <small>${formatNumber(runtime.queuedJobs || 0)} jobs queued</small>
+        </div>
+        <button class="secondary-button ghost-button--xs" type="button" data-action="run-live-import">Import</button>
+      </article>
+      <article class="command-card ${rolloutActive ? 'command-card--accent' : (rolloutRemainingCount > 0 ? 'command-card--warning' : 'command-card--success')}">
+        <span class="command-card__step">4</span>
+        <div class="command-card__copy">
+          <strong>Score rollout</strong>
+          <span>${rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`}</span>
+          <small>Target intelligence fields</small>
+        </div>
+        <button class="primary-button ghost-button--xs" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutActive ? 'Monitor' : (rolloutRemainingCount > 0 ? 'Run' : 'Done')}</button>
+      </article>
+      <article class="command-card">
+        <span class="command-card__step">Ops</span>
+        <div class="command-card__copy">
+          <strong>Pipeline panel</strong>
+          <span>Advanced controls</span>
+          <small>Discovery, enrichment, sheets</small>
+        </div>
+        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="pipeline-ops">Open</button>
+      </article>
+    </section>
+  `;
 }
 
 async function renderAdminView() {
@@ -3971,6 +4287,8 @@ async function renderAdminView() {
       ${renderTrustCard('Coverage report', `${formatNumber(summary.coveragePercent || 0)}% board coverage`, 'See how much of the tracked universe is resolved and where review is still needed.', `${formatNumber(summary.resolvedCount || 0)} resolved boards`, 'success')}
       ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
     </section>
+
+    ${renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive })}
 
     <section class="admin-grid">
       <div class="two-column">
@@ -4189,7 +4507,7 @@ async function renderAdminView() {
             ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
-            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button></div>
+            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
           </form>
           ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
           ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
@@ -4397,11 +4715,12 @@ function renderEnrichmentFilters() {
         <option value="75" ${selected(q.minTargetScore, '75')}>Target score >= 75</option>
         <option value="90" ${selected(q.minTargetScore, '90')}>Target score >= 90</option>
       </select>
-      <button class="ghost-button" data-action="apply-enrichment-filter">Apply</button>
+      <button class="ghost-button" type="button" data-action="apply-enrichment-filter">Apply</button>
+      <button class="ghost-button" type="button" data-action="reset-filters" data-view="enrichment">Reset</button>
       <span class="small muted">Quick:</span>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="100">Top 100</button>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="250">Top 250</button>
-      <button class="ghost-button ghost-button--xs" data-action="enrichment-top-n" data-topn="">All</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="100">Top 100</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="250">Top 250</button>
+      <button class="ghost-button ghost-button--xs" type="button" data-action="enrichment-top-n" data-topn="">All</button>
     </div>
   `;
 }
@@ -4731,6 +5050,94 @@ function parseJobProgress(msg) {
   return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
 }
 
+function getRuntimeJobs(runtime) {
+  const seen = new Set();
+  return [...(runtime?.activeJobs || []), ...(runtime?.recentJobs || [])].filter((job) => {
+    if (!job || !job.id || seen.has(job.id)) return false;
+    seen.add(job.id);
+    return true;
+  });
+}
+
+function getRuntimeJobDuration(job) {
+  if (!job) return '';
+  const started = Date.parse(job.startedAt || job.queuedAt || '');
+  if (!Number.isFinite(started)) return '';
+  const finished = Date.parse(job.finishedAt || '');
+  const end = Number.isFinite(finished) ? finished : Date.now();
+  const ms = Math.max(0, end - started);
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return '<1m';
+  if (minutes < 90) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}h ${rest}m`;
+}
+
+function getJobPhaseLabel(job) {
+  const message = job?.progressMessage || '';
+  if (!message || message === 'Completed') return humanize(job?.status || 'idle');
+  return message.split(' - ')[0] || message;
+}
+
+function renderIngestionHealthPanel(runtime) {
+  const jobs = getRuntimeJobs(runtime);
+  const liveImports = jobs.filter((job) => job.type === 'live-job-import');
+  const activeImport = liveImports.find((job) => ['queued', 'running'].includes(job.status));
+  const lastImport = liveImports.find((job) => job.status === 'completed') || liveImports[0];
+  const lastFailed = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
+  const progress = activeImport ? parseJobProgress(activeImport.progressMessage) : null;
+  const activeLabel = activeImport
+    ? (progress ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : humanize(activeImport.status))
+    : 'Idle';
+  const activeMeta = activeImport
+    ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
+    : 'No live import is currently active';
+  const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
+  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} records` : 'No records yet';
+  const lastMeta = lastImport
+    ? `${lastDuration || humanize(lastImport.status)} · ${lastRecords}`
+    : 'No completed imports found';
+  const failureMeta = lastFailed
+    ? `${humanize(lastFailed.status)} · ${formatDate(lastFailed.finishedAt || lastFailed.updatedAt || lastFailed.queuedAt)}`
+    : 'No recent live import failures';
+
+  return `
+    <div class="ingestion-health">
+      <div class="ingestion-health__head">
+        <div>
+          <p class="eyebrow">Ingestion health</p>
+          <strong>${activeImport ? 'Live import in progress' : 'Live import ready'}</strong>
+        </div>
+        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill('Ready', 'success')}
+      </div>
+      <div class="ingestion-health__grid">
+        <div class="ingestion-health__metric">
+          <span class="small muted">Active import</span>
+          <strong>${escapeHtml(activeLabel)}</strong>
+          <span class="small muted">${escapeHtml(activeMeta)}</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Last import</span>
+          <strong>${escapeHtml(lastDuration || humanize(lastImport?.status || 'none'))}</strong>
+          <span class="small muted">${escapeHtml(lastMeta)}</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Queue load</span>
+          <strong>${formatNumber((runtime?.runningJobs || 0) + (runtime?.queuedJobs || 0))}</strong>
+          <span class="small muted">${formatNumber(runtime?.runningJobs || 0)} running · ${formatNumber(runtime?.queuedJobs || 0)} queued</span>
+        </div>
+        <div class="ingestion-health__metric">
+          <span class="small muted">Recent failures</span>
+          <strong>${lastFailed ? 'Review' : 'Clear'}</strong>
+          <span class="small muted">${escapeHtml(failureMeta)}</span>
+        </div>
+      </div>
+      ${progress ? `<div class="spark-bar job-progress-bar ingestion-health__bar"><span style="width:${progress.pct}%"></span></div>` : ''}
+    </div>
+  `;
+}
+
 function renderBackgroundJobItem(job) {
   const tone = job.status === 'completed'
     ? 'success'
@@ -4919,8 +5326,8 @@ async function reseedWorkbook(path) {
   });
 }
 
-async function runLiveImport() {
-  await withButtonState('[data-action="run-live-import"]', 'Running import...', async () => {
+async function runLiveImport(buttonEl) {
+  await withButtonState(buttonEl || '[data-action="run-live-import"]', 'Running import...', async () => {
     const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
     showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
@@ -4933,8 +5340,8 @@ async function runLiveImport() {
   });
 }
 
-async function runDiscovery() {
-  await withButtonState('[data-action="run-discovery"]', 'Discovering...', async () => {
+async function runDiscovery(buttonEl) {
+  await withButtonState(buttonEl || '[data-action="run-discovery"]', 'Discovering...', async () => {
     const limit = Number(document.getElementById('discovery-limit')?.value || 75);
     const onlyMissing = (document.getElementById('discovery-only-missing')?.value || 'true') === 'true';
     const forceRefresh = (document.getElementById('discovery-force-refresh')?.value || 'false') === 'true';
@@ -5000,8 +5407,8 @@ async function runEnrichment() {
   }
 }
 
-async function runTargetScoreRollout() {
-  const button = document.querySelector('[data-action="run-target-score-rollout"]');
+async function runTargetScoreRollout(buttonEl) {
+  const button = buttonEl || document.querySelector('[data-action="run-target-score-rollout"]');
   if (button) { button.disabled = true; button.textContent = 'Queueing rollout...'; }
   try {
     const limit = Number(document.getElementById('target-score-rollout-limit')?.value || appState.targetScoreRollout?.defaultLimit || 150);
