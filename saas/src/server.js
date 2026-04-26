@@ -11,6 +11,7 @@ const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
 const publicDir = join(rootDir, 'public');
 const port = Number(process.env.BD_CLOUD_PORT || 8787);
+const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 
 const mimeTypes = {
@@ -49,8 +50,8 @@ createServer(async (req, res) => {
     const elapsedMs = Math.round(performance.now() - startedAt);
     console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
   }
-}).listen(port, '127.0.0.1', () => {
-  console.log(`BD Engine Cloud running at http://127.0.0.1:${port}`);
+}).listen(port, host, () => {
+  console.log(`BD Engine Cloud running at http://${host}:${port}`);
   console.log(`  Demo login: demo@bdengine.io / demo1234`);
 });
 
