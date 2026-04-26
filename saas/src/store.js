@@ -695,7 +695,7 @@ export function createStore() {
       const detail = this.getAccountDetail(tenantId, accountId);
       if (!detail) return null;
       const selectedContact = selectContact(detail.contacts, payload.contactName);
-      return buildDraft({ account: detail.account, contact: selectedContact, jobs: detail.jobs, template: payload.template });
+      return buildDraft({ account: detail.account, contact: selectedContact, jobs: detail.jobs, template: payload.template, jobId: payload.jobId });
     },
 
     getTargetScoreRollout(tenantId) {
@@ -1087,13 +1087,83 @@ function normalizeConfigPatch(input) {
   return output;
 }
 
-function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJobs, template }) {
+function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJobs, template, jobId }) {
+  const specificJob = jobId ? accountJobs.find(j => j.id === jobId) : null;
   const roles = accountJobs.slice(0, 3).map((item) => item.title);
-  const roleList = roles.join(', ');
+  const roleList = specificJob ? specificJob.title : roles.join(', ');
+  
+  const firstName = itemContact?.firstName || itemContact?.fullName?.split(' ')[0] || 'there';
+  
+  if (template === 'job_intro' || template === 'job_networking' || template === 'job_referral') {
+    const jobMention = specificJob ? `the ${specificJob.title} position` : `the open roles`;
+    let subjectLine = `Interested in ${itemAccount.displayName} - ${jobMention}`;
+    let messageBody = [];
+    
+    if (template === 'job_intro') {
+      subjectLine = `${specificJob ? specificJob.title + ' role' : 'Opportunities'} at ${itemAccount.displayName}`;
+      messageBody = [
+        `Hi ${firstName},`,
+        '',
+        `I saw that ${itemAccount.displayName} is hiring for ${jobMention} and wanted to reach out directly.`,
+        '',
+        `Given your role as ${itemContact?.title || 'a leader on the team'}, I'd love to connect and share a bit about my background and how it aligns with what you're building.`,
+        '',
+        'Do you have 10 minutes next week for a quick intro?',
+      ];
+    } else if (template === 'job_networking') {
+      subjectLine = `Connecting - ${itemContact?.title || 'Team'} at ${itemAccount.displayName}`;
+      messageBody = [
+        `Hi ${firstName},`,
+        '',
+        `I've been following ${itemAccount.displayName}'s recent growth and noticed you are hiring for ${jobMention}.`,
+        '',
+        `I am actively exploring new opportunities in this space and would love to hear your perspective on the team's direction.`,
+        '',
+        'Would you be open to a quick 15-minute coffee chat or virtual intro next week?',
+      ];
+    } else if (template === 'job_referral') {
+      subjectLine = `Question about ${itemAccount.displayName} - ${jobMention}`;
+      messageBody = [
+        `Hi ${firstName},`,
+        '',
+        `I'm preparing to apply for ${jobMention} at ${itemAccount.displayName}.`,
+        '',
+        `I noticed your background in a similar space and thought you might have some insight into the team culture and what the hiring manager is looking for.`,
+        '',
+        'Would you be open to chatting briefly or passing my resume along if it looks like a fit?',
+      ];
+    }
+    
+    const linkedinMessage = `Hi ${firstName}, saw ${itemAccount.displayName} is hiring for ${jobMention}. I'm exploring new roles and would love to connect and learn more about your team.`;
+    
+    return {
+      account_id: itemAccount.id,
+      contact_name: itemContact?.fullName || '',
+      contact_title: itemContact?.title || '',
+      template_key: template,
+      template_label: 'Job Seeker note',
+      persona_label: itemContact?.title || 'Contact',
+      subject_line: subjectLine,
+      subject_options: [subjectLine, `Connecting regarding ${itemAccount.displayName}`, `Quick question about ${itemAccount.displayName}`],
+      message_body: messageBody.join('\n'),
+      linkedin_message: linkedinMessage,
+      follow_up_message: `Hi ${firstName}, just floating this to the top of your inbox. Let me know if you have time to chat!`,
+      call_opener: `Hi ${firstName}, calling regarding ${jobMention} at ${itemAccount.displayName}.`,
+      why_now: `Applying for ${jobMention}`,
+      contact_hook: `You are reaching out to ${itemContact?.title || 'someone'} at the company.`,
+      angle_summary: `Job seeker intro focusing on ${jobMention}.`,
+      signal_focus: specificJob ? specificJob.title : roles.join(', '),
+      suggested_next_step: 'Send email and connect on LinkedIn.',
+      company_snippet: `${itemAccount.displayName} is hiring for ${jobMention}.`,
+      timings: { generatedMs: 1 },
+      variants: [],
+    };
+  }
+
+  // Fallback to original B2B Sales logic for other templates
   const openRoleLine = roles.length
     ? `${itemAccount.displayName} has live roles showing up, including ${roleList}.`
     : `${itemAccount.displayName} has hiring movement worth watching.`;
-  const firstName = itemContact?.firstName || itemContact?.fullName?.split(' ')[0] || 'there';
   const persona = template === 'executive' ? 'commercial urgency' : template === 'hiring_manager' ? 'team bandwidth' : 'recruiting bandwidth';
   const subjectLine = `${itemAccount.displayName} hiring signal`;
   const messageBody = [

@@ -3856,13 +3856,26 @@ async function renderAccountDetail(accountId) {
               : '<option value="">No contacts</option>'}
           </select>
           <select id="outreach-template-select" class="inline-select">
-            <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
-            <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
-            <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
-            <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
-            <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
-            <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
-            <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
+            <optgroup label="Sales & Business Development">
+              <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
+              <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
+              <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
+              <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
+              <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
+              <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
+              <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
+            </optgroup>
+            <optgroup label="Job Seeker & Networking">
+              <option value="job_intro" ${selected(suggestedOutreachTemplate, 'job_intro')}>Intro to Hiring Manager</option>
+              <option value="job_networking" ${selected(suggestedOutreachTemplate, 'job_networking')}>Networking / Coffee Chat</option>
+              <option value="job_referral" ${selected(suggestedOutreachTemplate, 'job_referral')}>Ask for Referral</option>
+            </optgroup>
+          </select>
+          <select id="outreach-job-select" class="inline-select">
+            <option value="">General inquiry (No specific job)</option>
+            ${detail.jobs.length
+              ? detail.jobs.map((j) => `<option value="${escapeAttr(j.id)}">${escapeHtml(j.title)}</option>`).join('')
+              : ''}
           </select>
           <div class="button-row">
             <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
@@ -6416,6 +6429,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
         contactName,
         contactTitle,
         template: document.getElementById('outreach-template-select')?.value || 'cold',
+        jobId: document.getElementById('outreach-job-select')?.value || '',
         includeVariants,
       }),
     });
