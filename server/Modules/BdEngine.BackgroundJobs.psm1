@@ -949,6 +949,12 @@ function Invoke-BackgroundConnectionsCsvImportJob {
         }
     }
 
+    $stats = $result.importRun.stats
+    $actionableRows = [int](Get-ObjectValue -Object $stats -Name 'imported' -Default 0) + [int](Get-ObjectValue -Object $stats -Name 'updated' -Default 0)
+    if ($actionableRows -le 0) {
+        throw 'No LinkedIn connection rows were found. Choose the unzipped Connections.csv export from LinkedIn with headers like First Name, Last Name, URL, Email Address, Company, Position, and Connected On.'
+    }
+
     $persistence = Save-BackgroundJobState -State $result.state -Segments @('Contacts', 'Companies', 'BoardConfigs', 'ImportRuns') -JobId $JobId -OperationName 'connections-csv-import'
     return [ordered]@{
         importRun = $result.importRun
