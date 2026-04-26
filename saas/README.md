@@ -14,12 +14,9 @@ npm start
 
 Open <http://localhost:8787>.
 
-## Demo Account
+## Test Account
 
-```
-Email:    demo@bdengine.io
-Password: demo1234
-```
+Use the signup flow on the landing page to create a trial workspace.
 
 ## What This Prototype Includes
 
@@ -35,12 +32,12 @@ Password: demo1234
 - **Authentication** — Cookie-based sessions with signed HMAC cookies
 - **Signup / Login / Logout** — Full auth flow with form validation
 - **Landing page** — Premium dark SaaS landing page with hero, features, pricing sections
-- **Login / Signup pages** — Polished auth pages with demo account quick-login
+- **Login / Signup pages** — Polished auth pages with trial workspace creation
 - **Cloud app shell** — Top-bar with branding, plan badge, trial countdown, user menu
 - **Multi-tenant users** — User & tenant management with workspace creation
 - **Tenant-safe first run** — New signups get an empty workspace profile and first-run setup
-- **Plan tiers** — Trial, Starter ($49/mo), Pro ($149/mo), Enterprise with feature gating
-- **Billing stubs** — Usage metering, plan limits, trial expiry tracking
+- **Plan tiers** — Trial, Job Seeker ($5/mo), and Sales Professional ($10/mo)
+- **Billing** — Stripe Checkout, billing portal, webhook plan activation, usage metering, plan limits, and trial expiry tracking
 - **Shared app mount** — The local app runs inside the cloud shell from `/app/`, with service-worker registration disabled for the hosted wrapper
 
 ## Architecture

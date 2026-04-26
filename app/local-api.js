@@ -62,13 +62,19 @@
 
       if (!response.ok) {
         let message = `Request failed: ${response.status}`;
+        let payload = null;
         try {
-          const payload = await response.json();
+          payload = await response.json();
           message = payload.error || payload.details || message;
         } catch (_error) {
           // Ignore non-JSON error bodies.
         }
-        throw new Error(message);
+        const error = new Error(message);
+        error.status = response.status;
+        if (payload && typeof payload === 'object') {
+          Object.assign(error, payload);
+        }
+        throw error;
       }
 
       return response.status === 204 ? null : await response.json();

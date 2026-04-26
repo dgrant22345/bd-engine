@@ -23,6 +23,10 @@ export function isDbEnabled() {
   return !!process.env.DATABASE_URL;
 }
 
+export function isDbReady() {
+  return dbReady;
+}
+
 export async function initDb() {
   if (!isDbEnabled()) {
     console.log('  DB: No DATABASE_URL — running in-memory only');
@@ -60,6 +64,8 @@ export async function initDb() {
         plan TEXT NOT NULL DEFAULT 'trial',
         status TEXT NOT NULL DEFAULT 'trialing',
         persona TEXT NOT NULL DEFAULT 'bd',
+        stripe_customer_id TEXT NOT NULL DEFAULT '',
+        stripe_subscription_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -82,6 +88,11 @@ export async function initDb() {
         settings JSONB NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL DEFAULT ''
       );
+    `);
+
+    await pool.query(`
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NOT NULL DEFAULT '';
     `);
 
     dbReady = true;
@@ -140,16 +151,29 @@ export async function dbSaveTenant(tenant) {
   if (!dbReady) return;
   try {
     await pool.query(
-      `INSERT INTO tenants (id, slug, name, plan, status, persona, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (id) DO UPDATE SET
          slug = EXCLUDED.slug,
          name = EXCLUDED.name,
          plan = EXCLUDED.plan,
          status = EXCLUDED.status,
          persona = EXCLUDED.persona,
+         stripe_customer_id = EXCLUDED.stripe_customer_id,
+         stripe_subscription_id = EXCLUDED.stripe_subscription_id,
          updated_at = EXCLUDED.updated_at`,
-      [tenant.id, tenant.slug, tenant.name, tenant.plan, tenant.status, tenant.persona || 'bd', tenant.createdAt, tenant.updatedAt]
+      [
+        tenant.id,
+        tenant.slug,
+        tenant.name,
+        tenant.plan,
+        tenant.status,
+        tenant.persona || 'bd',
+        tenant.stripeCustomerId || tenant.stripe_customer_id || '',
+        tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+        tenant.createdAt,
+        tenant.updatedAt,
+      ]
     );
   } catch (err) {
     console.error('DB: Failed to save tenant:', err.message);
@@ -167,6 +191,8 @@ export async function dbLoadAllTenants() {
       plan: r.plan,
       status: r.status,
       persona: r.persona,
+      stripeCustomerId: r.stripe_customer_id || '',
+      stripeSubscriptionId: r.stripe_subscription_id || '',
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));

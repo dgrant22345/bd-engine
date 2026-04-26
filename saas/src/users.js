@@ -113,6 +113,8 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     plan,
     status: plan === 'trial' ? 'trialing' : 'active',
     persona: persona || 'bd',
+    stripeCustomerId: '',
+    stripeSubscriptionId: '',
     createdAt: now(),
     updatedAt: now(),
   };
@@ -137,6 +139,15 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
 
 export function findTenantById(tenantId) {
   return tenants.get(tenantId) || null;
+}
+
+export function findTenantByStripeCustomerId(customerId) {
+  const normalized = String(customerId || '').trim();
+  if (!normalized) return null;
+  for (const tenant of tenants.values()) {
+    if (tenant.stripeCustomerId === normalized || tenant.stripe_customer_id === normalized) return tenant;
+  }
+  return null;
 }
 
 export function updateTenant(tenantId, updates) {

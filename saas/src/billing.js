@@ -2,6 +2,39 @@ import Stripe from 'stripe';
 
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' }) : null;
 
+export function isStripeConfigured() {
+  return Boolean(stripe);
+}
+
+export function getStripeConfigStatus() {
+  const secretKey = process.env.STRIPE_SECRET_KEY || '';
+  const mode = secretKey.startsWith('sk_live_')
+    ? 'live'
+    : (secretKey.startsWith('sk_test_') ? 'test' : (secretKey ? 'unknown' : 'not_configured'));
+  const priceIds = {
+    jobseeker: process.env.STRIPE_PRICE_JOBSEEKER || '',
+    sales: process.env.STRIPE_PRICE_SALES || '',
+  };
+  const missing = [];
+  if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+  if (!process.env.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
+  if (!process.env.STRIPE_PRICE_JOBSEEKER) missing.push('STRIPE_PRICE_JOBSEEKER');
+  if (!process.env.STRIPE_PRICE_SALES) missing.push('STRIPE_PRICE_SALES');
+  return {
+    configured: Boolean(stripe),
+    ready: Boolean(stripe && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales)),
+    liveMode: mode === 'live',
+    commercialReady: Boolean(stripe && mode === 'live' && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales)),
+    mode,
+    allPricesConfigured: Boolean(priceIds.jobseeker && priceIds.sales),
+    missing,
+    prices: {
+      jobseeker: Boolean(priceIds.jobseeker),
+      sales: Boolean(priceIds.sales),
+    },
+  };
+}
+
 export const PLANS = {
   trial: {
     id: 'trial',
@@ -19,6 +52,7 @@ export const PLANS = {
     displayName: 'Job Seeker',
     price: 5,
     interval: 'month',
+    stripePriceEnv: 'STRIPE_PRICE_JOBSEEKER',
     stripePriceId: process.env.STRIPE_PRICE_JOBSEEKER || 'price_placeholder_jobseeker',
     trialDays: 0,
     limits: { accounts: 200, contacts: 1000, jobBoards: 10, users: 1, csvImports: 50 },
@@ -30,6 +64,7 @@ export const PLANS = {
     displayName: 'Sales Pro',
     price: 10,
     interval: 'month',
+    stripePriceEnv: 'STRIPE_PRICE_SALES',
     stripePriceId: process.env.STRIPE_PRICE_SALES || 'price_placeholder_sales',
     trialDays: 0,
     limits: { accounts: 1000, contacts: 10000, jobBoards: 100, users: 3, csvImports: -1 },
@@ -41,6 +76,11 @@ export const PLANS = {
 
 export function getPlan(planId) {
   return PLANS[planId] || PLANS.trial;
+}
+
+export function getPlanByStripePriceId(priceId) {
+  if (!priceId) return null;
+  return Object.values(PLANS).find((plan) => plan.stripePriceId === priceId) || null;
 }
 
 export function hasFeature(planId, feature) {
@@ -108,6 +148,9 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
   
   const plan = getPlan(planId);
   if (!plan || !plan.stripePriceId) throw new Error('Invalid plan selected.');
+  if (!plan.stripePriceId || plan.stripePriceId.startsWith('price_placeholder')) {
+    throw new Error(`Stripe price ID is not configured for ${plan.displayName}. Set ${plan.stripePriceEnv || 'the plan price environment variable'}.`);
+  }
 
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
@@ -115,6 +158,10 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     client_reference_id: tenantId,
     line_items: [{ price: plan.stripePriceId, quantity: 1 }],
     mode: 'subscription',
+    metadata: { tenantId, planId: plan.id },
+    subscription_data: {
+      metadata: { tenantId, planId: plan.id },
+    },
     success_url: successUrl,
     cancel_url: cancelUrl,
   });

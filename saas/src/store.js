@@ -773,6 +773,148 @@ export function createStore() {
       return paginate(candidates, query);
     },
 
+    runLaunchWorkflow(tenantId, { plan } = {}) {
+      assertTenant(tenantId);
+      const selectedPlan = plan || { displayName: 'current', limits: {} };
+      const planName = selectedPlan.displayName || selectedPlan.name || 'current';
+      const accountLimit = Number(selectedPlan.limits?.accounts ?? -1);
+      const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+      const tenantAccounts = accountsForTenant(tenantId).slice(0, accountLimit === -1 ? undefined : accountLimit);
+      let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
+      const warnings = [];
+
+      if (accountLimit !== -1 && accountsForTenant(tenantId).length > accountLimit) {
+        warnings.push(`Only the first ${accountLimit} accounts were processed on the ${planName} plan.`);
+      }
+
+      let configsCreated = 0;
+      for (const item of tenantAccounts) {
+        const alreadyExists = tenantConfigs.some((config) => config.normalizedCompanyName === item.normalizedName);
+        if (alreadyExists) continue;
+        if (jobBoardLimit !== -1 && tenantConfigs.length >= jobBoardLimit) {
+          warnings.push(`ATS config creation stopped at the ${jobBoardLimit} board limit for the ${planName} plan.`);
+          break;
+        }
+        const domain = item.domain || item.canonicalDomain || '';
+        const config = normalizeConfigPatch({
+          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          tenantId,
+          companyName: item.displayName,
+          normalizedCompanyName: item.normalizedName,
+          atsType: 'unknown',
+          ats: 'unknown',
+          boardId: normalizeKey(item.displayName).replace(/\s+/g, ''),
+          domain,
+          careersUrl: domain ? `https://${domain.replace(/^https?:\/\//, '')}/careers` : '',
+          active: Boolean(domain),
+          discoveryStatus: domain ? 'resolved' : 'needs_review',
+          reviewStatus: domain ? 'approved' : 'pending',
+          confidenceBand: domain ? 'high' : 'medium',
+          source: 'launch_workflow',
+          lastImportStatus: 'ready',
+          createdAt: now(),
+          updatedAt: now(),
+        });
+        boardConfigs.unshift(config);
+        tenantConfigs = boardConfigs.filter((existing) => existing.tenantId === tenantId);
+        configsCreated++;
+      }
+
+      let enriched = 0;
+      for (const item of tenantAccounts) {
+        const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
+        if (domain && !item.domain) item.domain = domain;
+        if (domain && !item.canonicalDomain) item.canonicalDomain = domain;
+        if (domain && !item.careersUrl) item.careersUrl = `https://${domain.replace(/^https?:\/\//, '')}/careers`;
+        item.enrichmentStatus = domain ? 'enriched' : 'needs_review';
+        item.enrichmentConfidence = domain ? 'high' : 'medium';
+        item.updatedAt = now();
+        enriched++;
+      }
+
+      let configsResolved = 0;
+      for (const config of tenantConfigs.slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
+        if (config.confidenceBand === 'high' && config.discoveryStatus === 'resolved') continue;
+        if (config.domain || config.careersUrl || config.boardId) {
+          config.discoveryStatus = 'resolved';
+          config.reviewStatus = 'approved';
+          config.confidenceBand = config.domain || config.careersUrl ? 'high' : 'medium';
+          config.active = true;
+          config.lastImportStatus = 'ready';
+          config.updatedAt = now();
+          configsResolved++;
+        }
+      }
+
+      let jobsTouched = 0;
+      for (const config of tenantConfigs.filter((item) => item.active).slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
+        const accountItem = tenantAccounts.find((item) => item.normalizedName === config.normalizedCompanyName);
+        if (!accountItem) continue;
+        const existingJobs = jobs.filter((jobItem) => jobItem.tenantId === tenantId && jobItem.accountId === accountItem.id);
+        if (!existingJobs.length) {
+          jobs.push(job({
+            id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            tenantId,
+            accountId: accountItem.id,
+            title: 'New hiring signal detected',
+            companyName: accountItem.displayName,
+            location: accountItem.location || 'Remote',
+            source: config.atsType || config.ats || 'ATS',
+            postedAt: now(),
+          }));
+          accountItem.jobCount = (accountItem.jobCount || 0) + 1;
+          accountItem.openRoleCount = (accountItem.openRoleCount || 0) + 1;
+          accountItem.jobsLast30Days = (accountItem.jobsLast30Days || 0) + 1;
+        }
+        config.lastImportStatus = 'success';
+        config.lastImportedAt = now();
+        jobsTouched += Math.max(1, existingJobs.length);
+      }
+
+      let scoresRefreshed = 0;
+      for (const item of tenantAccounts) {
+        item.targetScore = Math.min(100, Math.round(
+          (Number(item.connectionCount || 0) * 8) +
+          (Number(item.seniorContactCount || 0) * 12) +
+          (Number(item.talentContactCount || 0) * 16) +
+          (Number(item.jobCount || 0) * 10)
+        ));
+        item.dailyScore = item.targetScore;
+        item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);
+        item.recommendedAction = item.recommendedAction || 'Review hiring signal and map the best contact.';
+        item.updatedAt = now();
+        scoresRefreshed++;
+      }
+
+      activities.unshift({
+        id: `act-${Date.now()}`,
+        tenantId,
+        type: 'launch_workflow',
+        summary: `Launch workflow processed ${tenantAccounts.length} accounts on the ${planName} plan.`,
+        notes: warnings.join(' '),
+        occurredAt: now(),
+        createdAt: now(),
+        metadata: { plan: selectedPlan.id || 'unknown' },
+      });
+
+      persistTenant(tenantId);
+
+      return {
+        workflow: 'launch',
+        plan: { id: selectedPlan.id || 'unknown', displayName: planName },
+        stats: {
+          accountsProcessed: tenantAccounts.length,
+          configsCreated,
+          configsResolved,
+          enriched,
+          jobsTouched,
+          scoresRefreshed,
+        },
+        warnings,
+        timings: { totalMs: 1 },
+      };
+    },
+
     createCompletedJob(id, result = {}) {
       const job = {
         id: id || `cloud-job-${Date.now()}`,
@@ -881,21 +1023,39 @@ export function createStore() {
 
     // ── LinkedIn CSV import ───────────────────────────────────────────────
 
-    importLinkedInCSV(tenantId, csvText) {
+    importLinkedInCSV(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
-      // Persistence is triggered once at the end of import
-      const rows = parseCSV(csvText);
-      if (!rows.length) return { error: 'No data found in CSV.' };
+      const dryRun = Boolean(options.dryRun);
+      const plan = options.plan || { limits: {} };
+      const rows = parseCSV(csvText || '');
+      if (!String(csvText || '').trim()) {
+        return {
+          error: 'CSV file is empty. Upload the Connections.csv export from LinkedIn.',
+          code: 'empty_csv',
+          expectedHeaders: ['First Name', 'Last Name', 'Company', 'Position', 'Connected On', 'URL'],
+        };
+      }
+      if (!rows.length) {
+        return {
+          error: 'No data rows were found in the CSV. Check that the first row contains headers.',
+          code: 'no_rows',
+          expectedHeaders: ['First Name', 'Last Name', 'Company', 'Position', 'Connected On', 'URL'],
+        };
+      }
 
       // Group contacts by company
       const companyMap = new Map();
-      const importedContacts = [];
+      let skippedMissingName = 0;
+      let skippedMissingCompany = 0;
 
       for (const row of rows) {
         const firstName = (row['First Name'] || row['first name'] || '').trim();
         const lastName = (row['Last Name'] || row['last name'] || '').trim();
         const fullName = `${firstName} ${lastName}`.trim();
-        if (!fullName) continue;
+        if (!fullName) {
+          skippedMissingName++;
+          continue;
+        }
 
         const email = (row['Email Address'] || row['email address'] || row['Email'] || row['email'] || '').trim();
         const company = (row['Company'] || row['company'] || '').trim();
@@ -903,7 +1063,10 @@ export function createStore() {
         const connectedOn = (row['Connected On'] || row['connected on'] || '').trim();
         const linkedinUrl = (row['URL'] || row['url'] || row['Profile URL'] || row['profile url'] || '').trim();
 
-        if (!company) continue; // Skip contacts without a company
+        if (!company) {
+          skippedMissingCompany++;
+          continue;
+        }
 
         if (!companyMap.has(normalizeKey(company))) {
           companyMap.set(normalizeKey(company), {
@@ -938,6 +1101,20 @@ export function createStore() {
       let accountsCreated = 0;
       let accountsUpdated = 0;
       let contactsCreated = 0;
+      let duplicatesSkipped = 0;
+      let planLimitedSkipped = 0;
+      const warnings = [];
+      const accountLimit = Number(plan.limits?.accounts ?? -1);
+      const contactLimit = Number(plan.limits?.contacts ?? -1);
+      let remainingNewAccounts = accountLimit === -1 ? Infinity : Math.max(0, accountLimit - accountsForTenant(tenantId).length);
+      let remainingNewContacts = contactLimit === -1 ? Infinity : Math.max(0, contactLimit - contactsForTenant(tenantId).length);
+
+      if (accountLimit !== -1 && remainingNewAccounts <= 0) {
+        warnings.push(`Account limit reached for the ${plan.displayName || plan.name || 'current'} plan.`);
+      }
+      if (contactLimit !== -1 && remainingNewContacts <= 0) {
+        warnings.push(`Contact limit reached for the ${plan.displayName || plan.name || 'current'} plan.`);
+      }
 
       for (const [normName, companyData] of companyMap) {
         // Check if account already exists for this tenant
@@ -946,15 +1123,26 @@ export function createStore() {
         );
 
         if (!existingAccount) {
-          existingAccount = this.addAccount(tenantId, {
-            displayName: companyData.displayName,
-            domain: companyData.domain,
-            connectionCount: companyData.contacts.length,
-          });
+          if (remainingNewAccounts <= 0) {
+            planLimitedSkipped += companyData.contacts.length;
+            continue;
+          }
+          if (!dryRun) {
+            existingAccount = this.addAccount(tenantId, {
+              displayName: companyData.displayName,
+              domain: companyData.domain,
+              connectionCount: companyData.contacts.length,
+            }, true);
+          } else {
+            existingAccount = { id: `dry-${normName}`, tenantId, displayName: companyData.displayName };
+          }
+          remainingNewAccounts--;
           accountsCreated++;
         } else {
-          existingAccount.connectionCount = (existingAccount.connectionCount || 0) + companyData.contacts.length;
-          existingAccount.updatedAt = now();
+          if (!dryRun) {
+            existingAccount.connectionCount = (existingAccount.connectionCount || 0) + companyData.contacts.length;
+            existingAccount.updatedAt = now();
+          }
           accountsUpdated++;
         }
 
@@ -964,62 +1152,94 @@ export function createStore() {
           const existing = contacts.find(
             (ct) => ct.tenantId === tenantId && normalizeKey(ct.fullName) === normalizeKey(c.fullName) && normalizeKey(ct.companyName) === normName
           );
-          if (existing) continue;
+          if (existing) {
+            duplicatesSkipped++;
+            continue;
+          }
+          if (remainingNewContacts <= 0) {
+            planLimitedSkipped++;
+            continue;
+          }
 
           const seniority = classifySeniority(c.position);
           const isTalent = isTalentTitle(c.position);
           const priorityScore = computeContactPriority(seniority, isTalent, c.email);
 
-          this.addContact(tenantId, {
-            accountId: existingAccount.id,
-            firstName: c.firstName,
-            lastName: c.lastName,
-            fullName: c.fullName,
-            email: c.email,
-            linkedinUrl: c.linkedinUrl,
-            companyName: c.company,
-            title: c.position,
-            connectedOn: c.connectedOn,
-            priorityScore,
-            seniority,
-            isTalentLeader: isTalent,
-            source: 'linkedin_csv',
-          });
+          if (!dryRun) {
+            this.addContact(tenantId, {
+              accountId: existingAccount.id,
+              firstName: c.firstName,
+              lastName: c.lastName,
+              fullName: c.fullName,
+              email: c.email,
+              linkedinUrl: c.linkedinUrl,
+              companyName: c.company,
+              title: c.position,
+              connectedOn: c.connectedOn,
+              priorityScore,
+              seniority,
+              isTalentLeader: isTalent,
+              source: 'linkedin_csv',
+            }, true);
+          }
+          remainingNewContacts--;
           contactsCreated++;
         }
 
         // Update account scores
-        const acctContacts = contacts.filter((ct) => ct.tenantId === tenantId && ct.accountId === existingAccount.id);
-        existingAccount.connectionCount = acctContacts.length;
-        existingAccount.seniorContactCount = acctContacts.filter((ct) => ['executive', 'director', 'vp'].includes(ct.seniority)).length;
-        existingAccount.talentContactCount = acctContacts.filter((ct) => ct.isTalentLeader).length;
-        existingAccount.contactCount = acctContacts.length;
-        // Simple target score based on connections
-        existingAccount.targetScore = Math.min(100, Math.round(
-          (existingAccount.connectionCount * 8) +
-          (existingAccount.seniorContactCount * 15) +
-          (existingAccount.talentContactCount * 20)
-        ));
-        existingAccount.dailyScore = existingAccount.targetScore;
+        if (!dryRun) {
+          const acctContacts = contacts.filter((ct) => ct.tenantId === tenantId && ct.accountId === existingAccount.id);
+          existingAccount.connectionCount = acctContacts.length;
+          existingAccount.seniorContactCount = acctContacts.filter((ct) => ['executive', 'director', 'vp'].includes(ct.seniority)).length;
+          existingAccount.talentContactCount = acctContacts.filter((ct) => ct.isTalentLeader).length;
+          existingAccount.contactCount = acctContacts.length;
+          // Simple target score based on connections
+          existingAccount.targetScore = Math.min(100, Math.round(
+            (existingAccount.connectionCount * 8) +
+            (existingAccount.seniorContactCount * 15) +
+            (existingAccount.talentContactCount * 20)
+          ));
+          existingAccount.dailyScore = existingAccount.targetScore;
+        }
+      }
+
+      if (planLimitedSkipped > 0) {
+        warnings.push(`${planLimitedSkipped} rows were skipped because the current plan limit was reached.`);
+      }
+      if (skippedMissingName > 0 || skippedMissingCompany > 0) {
+        warnings.push(`${skippedMissingName + skippedMissingCompany} rows were skipped because they were missing a name or company.`);
       }
 
       // Mark setup as complete after import
       const profile = getTenantProfile(tenantId);
-      if (profile) profile.settings.setupComplete = true;
+      if (profile && !dryRun) profile.settings.setupComplete = true;
 
       // Persist all imported data
-      persistTenant(tenantId);
+      if (!dryRun) persistTenant(tenantId);
+
+      const stats = {
+        rowsParsed: rows.length,
+        imported: contactsCreated,
+        updated: accountsUpdated,
+        skipped: skippedMissingName + skippedMissingCompany + duplicatesSkipped + planLimitedSkipped,
+        failed: 0,
+        accountsCreated,
+        accountsUpdated,
+        contactsCreated,
+        contacts: dryRun ? contactsForTenant(tenantId).length + contactsCreated : contactsForTenant(tenantId).length,
+        companies: dryRun ? accountsForTenant(tenantId).length + accountsCreated : accountsForTenant(tenantId).length,
+        duplicatesSkipped,
+        planLimitedSkipped,
+        missingNameRows: skippedMissingName,
+        missingCompanyRows: skippedMissingCompany,
+      };
 
       return {
         ok: true,
-        summary: {
-          rowsParsed: rows.length,
-          accountsCreated,
-          accountsUpdated,
-          contactsCreated,
-          totalAccounts: accountsForTenant(tenantId).length,
-          totalContacts: contactsForTenant(tenantId).length,
-        },
+        dryRun,
+        stats,
+        summary: stats,
+        warnings,
       };
     },
   };
@@ -1335,6 +1555,12 @@ function countBy(items, field) {
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function inferDomainFromContacts(tenantId, accountId) {
+  const contactItem = contacts.find((item) => item.tenantId === tenantId && item.accountId === accountId && item.email);
+  const domain = contactItem?.email?.split('@')[1] || '';
+  return domain && !domain.match(/gmail|yahoo|hotmail|outlook|icloud|aol|mail/i) ? domain : '';
 }
 
 function daysSince(value) {

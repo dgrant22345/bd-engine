@@ -1852,6 +1852,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-launch-workflow') {
+      await runLaunchWorkflow(action);
+      return;
+    }
+
     if (actionName === 'dry-run-connections-csv') {
       await runConnectionsCsvImport(true);
       return;
@@ -1883,6 +1888,29 @@ function bindEvents() {
         showToast(err.message, 'error');
         action.disabled = false;
         action.textContent = 'Subscribe via Stripe';
+      }
+      return;
+    }
+
+    if (actionName === 'billing-portal') {
+      action.disabled = true;
+      action.textContent = 'Opening...';
+      try {
+        const result = await api('/api/billing/portal', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        if (result.url) {
+          window.location.href = result.url;
+        } else {
+          showToast(result.error || 'Failed to open billing portal', 'error');
+          action.disabled = false;
+          action.textContent = 'Manage billing';
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        action.disabled = false;
+        action.textContent = 'Manage billing';
       }
       return;
     }
@@ -4320,6 +4348,18 @@ async function renderAdminView() {
       tone: rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'),
     },
   ];
+  const billing = batch.billing || {};
+  const stripeStatus = billing.stripe || {};
+  const stripeReady = Boolean(stripeStatus.ready);
+  const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
+  const stripeMissing = Array.isArray(stripeStatus.missing) && stripeStatus.missing.length
+    ? stripeStatus.missing.join(', ')
+    : '';
+  const stripeBillingMessage = stripeCommercialReady
+    ? 'Stripe live checkout is ready.'
+    : (stripeReady
+      ? `Stripe checkout is configured in ${stripeStatus.mode || 'unknown'} mode. Use live Stripe keys before launch.`
+      : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`);
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -4452,6 +4492,12 @@ async function renderAdminView() {
       <div class="two-column">
         ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Run discovery, import jobs, or reseed the app without touching the spreadsheet manually.')}
           <div class="actions-grid">
+            <div class="action-card action-card--featured">
+              <p class="eyebrow">Recommended launch workflow</p>
+              <h4>Run everything plan allows</h4>
+              <p class="small muted">Creates missing ATS configs, enriches company identity, runs discovery, imports available job signals, and refreshes target scoring up to the current plan limits.</p>
+              <button class="primary-button" type="button" data-action="run-launch-workflow">Run launch workflow</button>
+            </div>
             <div class="action-card">
               <p class="eyebrow">Full pipeline</p>
               <h4>Run BD Engine</h4>
@@ -4544,16 +4590,17 @@ async function renderAdminView() {
         ${renderCollapsibleStart('billing-subscription', 'Billing & Subscription', 'Manage your plan and checkout.')}
           <div class="settings-grid">
             <div class="action-card">
-              <p class="eyebrow">Current Plan: ${escapeHtml(batch.billing?.plan?.name || 'Trial')}</p>
+              <p class="eyebrow">Current Plan: ${escapeHtml(billing.plan?.name || 'Trial')}</p>
               <h4>Upgrade your workspace</h4>
-              <p class="small muted">You are currently on the ${escapeHtml(batch.billing?.plan?.displayName || 'Trial')} plan. Select a new plan to upgrade via Stripe.</p>
+              <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}${stripeReady && stripeMissing ? ` Missing optional plans: ${escapeHtml(stripeMissing)}` : ''}</p>
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
-                  <option value="jobseeker">Job Seeker ($5/mo)</option>
-                  <option value="sales">Sales Professional ($10/mo)</option>
+                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
+                  <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">
-                  <button class="primary-button" type="button" data-action="billing-checkout">Subscribe via Stripe</button>
+                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>Subscribe via Stripe</button>
+                  ${billing.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
                 </div>
               </div>
             </div>
@@ -5276,6 +5323,21 @@ function formatConnectionsImportStats(stats = {}) {
   return `${formatNumber(stats.imported || 0)} imported, ${formatNumber(stats.updated || 0)} updated, ${formatNumber(stats.skipped || 0)} skipped, ${formatNumber(stats.failed || 0)} failed`;
 }
 
+function formatConnectionsImportWarnings(warnings = []) {
+  return Array.isArray(warnings) && warnings.length ? ` Warnings: ${warnings.join(' ')}` : '';
+}
+
+function formatConnectionsImportError(error) {
+  const parts = [error?.message || String(error || 'Import failed.')];
+  if (Array.isArray(error?.expectedHeaders) && error.expectedHeaders.length) {
+    parts.push(`Expected headers include: ${error.expectedHeaders.join(', ')}.`);
+  }
+  if (Array.isArray(error?.warnings) && error.warnings.length) {
+    parts.push(error.warnings.join(' '));
+  }
+  return parts.filter(Boolean).join(' ');
+}
+
 function renderTimelineItem(item) {
   return `<article class="timeline-item"><div class="inline-header"><strong>${escapeHtml(item.summary || item.type || 'Activity')}</strong><span class="small muted">${formatDate(item.occurredAt)}</span></div>${item.pipelineStage ? renderStatusPill(item.pipelineStage, 'neutral') : ''}<p>${escapeHtml(item.notes || '')}</p></article>`;
 }
@@ -5698,6 +5760,36 @@ async function runFullBdEngine() {
   }
 }
 
+async function runLaunchWorkflow(buttonEl) {
+  const button = buttonEl || document.querySelector('[data-action="run-launch-workflow"]');
+  if (button) { button.disabled = true; button.textContent = 'Running workflow...'; }
+  try {
+    const accepted = await api('/api/admin/run-workflow', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    showToast('Launch workflow queued.', 'success');
+    const job = accepted.job || await watchBackgroundJob(accepted.jobId, { label: 'Launch workflow' });
+    const result = job?.result || accepted || {};
+    const stats = result.stats || {};
+    const warnings = Array.isArray(result.warnings) && result.warnings.length
+      ? ` ${result.warnings.join(' ')}`
+      : '';
+    window.bdLocalApi.setAlert(
+      `Launch workflow complete for ${result.plan?.displayName || 'current plan'}: processed ${formatNumber(stats.accountsProcessed || 0)} accounts, created ${formatNumber(stats.configsCreated || 0)} configs, resolved ${formatNumber(stats.configsResolved || 0)} configs, enriched ${formatNumber(stats.enriched || 0)} accounts, touched ${formatNumber(stats.jobsTouched || 0)} jobs, and refreshed ${formatNumber(stats.scoresRefreshed || 0)} scores.${warnings}`,
+      appAlert
+    );
+    invalidateAppData();
+    await renderAdminView();
+  } catch (error) {
+    const message = `Launch workflow failed: ${error.message || error}`;
+    showToast(message, 'error', 9000);
+    window.bdLocalApi.setAlert(message, appAlert);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Run launch workflow'; }
+  }
+}
+
 function getConnectionsCsvPath() {
   const input = document.getElementById('connections-csv-path');
   return (input?.value || appState.bootstrap?.defaults?.connectionsCsvPath || '').trim();
@@ -5730,17 +5822,19 @@ async function runConnectionsCsvImport(dryRun) {
       const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
       showToast(queuedMessage, 'success', 9000);
       window.bdLocalApi.setAlert(queuedMessage, appAlert);
-      const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
-      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
-      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+      const job = run.job || await watchBackgroundJob(run.jobId, { label: 'Connections import' });
+      const result = job?.result || run || {};
+      const stats = result.stats || result.importRun?.stats || {};
+      const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || run.warnings);
+      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${warnings}`;
       window.bdLocalApi.setAlert(message, appAlert);
       return;
     }
     const stats = run?.stats || {};
-    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${formatConnectionsImportWarnings(run?.warnings)}`;
     window.bdLocalApi.setAlert(message, appAlert);
   } catch (error) {
-    const message = `Connections import failed: ${error.message || error}`;
+    const message = `Connections import failed: ${formatConnectionsImportError(error)}`;
     showToast(message, 'error', 9000);
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {

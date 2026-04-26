@@ -645,9 +645,137 @@ a:hover { text-decoration: underline; }
   margin-bottom: 8px;
 }
 
+.landing-footer-links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 12px 0;
+}
+
 .landing-footer-copy {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* ── Trust/legal/status pages ── */
+
+.trust-page {
+  min-height: 100vh;
+  background: var(--bg-base);
+}
+
+.trust-nav {
+  position: static;
+}
+
+.trust-main {
+  width: min(100%, 980px);
+  margin: 0 auto;
+  padding: 72px 28px 96px;
+}
+
+.trust-main h1 {
+  max-width: 760px;
+  margin: 14px 0 16px;
+  font-size: clamp(36px, 6vw, 64px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.trust-intro {
+  max-width: 740px;
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+
+.trust-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 24px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.trust-meta span {
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.trust-grid,
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.trust-doc-card,
+.status-check {
+  padding: 22px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.trust-doc-card h2 {
+  margin-bottom: 8px;
+  font-size: 18px;
+}
+
+.trust-doc-card p,
+.status-check small {
+  color: var(--text-secondary);
+}
+
+.trust-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.status-panel {
+  margin-top: 28px;
+}
+
+.status-check {
+  display: grid;
+  gap: 5px;
+}
+
+.status-check span {
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-check--ok span {
+  color: var(--green);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.status-check--warn span {
+  color: var(--amber);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.status-json {
+  margin-top: 16px;
+  padding: 18px;
+  overflow-x: auto;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1036,5 +1164,13 @@ a:hover { text-decoration: underline; }
   .pricing { padding: 64px 16px; }
 
   .landing-nav { padding: 12px 16px; }
+  .landing-nav-actions { gap: 8px; }
   .auth-card { padding: 28px 20px; }
+
+  .trust-main { padding: 48px 16px 72px; }
+  .trust-main h1 { font-size: 34px; }
+  .trust-grid,
+  .status-grid { grid-template-columns: 1fr; }
+  .trust-actions { flex-direction: column; }
+  .trust-actions .btn { width: 100%; }
 }

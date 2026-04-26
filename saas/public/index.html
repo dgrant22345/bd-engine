@@ -21,7 +21,7 @@
 
     // ── State ─────────────────────────────────────────────────────────────
     let state = {
-      view: 'loading', // loading | landing | login | signup | app
+      view: 'loading', // loading | landing | login | signup | app | trust | privacy | terms | security | status
       user: null,
       tenant: null,
       tenants: [],
@@ -135,6 +135,12 @@
         case 'login': return renderLogin();
         case 'signup': return renderSignup();
         case 'app': return renderApp();
+        case 'trust':
+        case 'privacy':
+        case 'terms':
+        case 'security':
+          return renderTrustSurface(state.view);
+        case 'status': return renderStatusPage();
       }
     }
 
@@ -158,6 +164,8 @@
               <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
             </div>
             <div class="landing-nav-actions">
+              <button class="nav-link" data-trust-page="trust">Trust</button>
+              <button class="nav-link" data-trust-page="status">Status</button>
               <button class="nav-link" id="nav-login">Log in</button>
               <button class="btn btn-primary btn-glow" id="nav-signup">Start free trial</button>
             </div>
@@ -300,6 +308,13 @@
             <div class="landing-footer-brand">
               <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
             </div>
+            <div class="landing-footer-links">
+              <button class="link-btn" data-trust-page="trust">Trust</button>
+              <button class="link-btn" data-trust-page="privacy">Privacy</button>
+              <button class="link-btn" data-trust-page="terms">Terms</button>
+              <button class="link-btn" data-trust-page="security">Security</button>
+              <button class="link-btn" data-trust-page="status">Status</button>
+            </div>
             <p class="landing-footer-copy">&copy; ${new Date().getFullYear()} BD Engine. Built for staffing and recruiting teams.</p>
           </footer>
         </div>`;
@@ -309,6 +324,148 @@
       root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
       root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
+      root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+    }
+
+    function getTrustContent(kind) {
+      const updated = 'April 26, 2026';
+      const shared = {
+        updated,
+        support: 'Support: support@bdengine.io',
+      };
+      const pages = {
+        trust: {
+          eyebrow: 'Trust center',
+          title: 'Built for responsible recruiting and BD workflows',
+          intro: 'BD Engine Cloud helps users organize account, contact, job, and outreach signals. We keep trust surfaces visible before launch so buyers can understand how the product handles data.',
+          sections: [
+            ['Data use', 'The app stores workspace data you import or create, including company records, contacts, jobs, notes, activity, and settings. Use only data you have the right to process.'],
+            ['Payments', 'Paid plans are intended to run through Stripe Checkout. Billing credentials are handled by Stripe, not stored in BD Engine Cloud.'],
+            ['User control', 'Users can log out, manage workspace data inside the app, and request help through support. Cancellation and plan management should remain visible in Billing.'],
+            ['Operational health', 'The public status page reports server, database, and Stripe configuration health without exposing secrets or private workspace data.'],
+          ],
+          cta: 'Start free trial',
+        },
+        privacy: {
+          eyebrow: 'Privacy notice',
+          title: 'Plain-language privacy basics',
+          intro: 'This launch notice explains the practical data boundaries for BD Engine Cloud. It should be reviewed by counsel before broad commercial launch.',
+          sections: [
+            ['Information collected', 'Account profile data, workspace names, imported company/contact data, job-board configuration, activity notes, and product usage needed to operate the app.'],
+            ['How it is used', 'To authenticate users, provide the workspace, rank accounts, show hiring and relationship signals, support imports, and manage subscriptions.'],
+            ['Processors', 'Railway hosts the app infrastructure. Stripe may process checkout and subscription billing when enabled.'],
+            ['Retention and deletion', 'Workspace data should be retained while the account is active and removed or exported on verified customer request where legally appropriate.'],
+          ],
+          cta: 'Create account',
+        },
+        terms: {
+          eyebrow: 'Terms summary',
+          title: 'Launch terms for early customers',
+          intro: 'These terms are a concise launch surface, not a substitute for a final legal agreement.',
+          sections: [
+            ['Acceptable use', 'Do not use BD Engine Cloud for spam, unlawful outreach, scraping abuse, credential sharing, or processing data you are not allowed to use.'],
+            ['Customer responsibility', 'You are responsible for the legality, accuracy, and compliance of imported contacts, outreach, and job-signal use.'],
+            ['Subscription', 'Paid access is month-to-month unless otherwise agreed. Users should be able to cancel from Billing once Stripe is connected.'],
+            ['No guarantee', 'Hiring signals, scores, and drafts are decision-support tools and may be incomplete or wrong. Review before acting.'],
+          ],
+          cta: 'Review pricing',
+        },
+        security: {
+          eyebrow: 'Security basics',
+          title: 'Security controls for launch readiness',
+          intro: 'The product is moving from prototype to commercial service. These are the minimum controls exposed to customers and operators.',
+          sections: [
+            ['Authentication', 'Sessions use secure HTTP-only cookies in production. Passwords are hashed before storage.'],
+            ['Secrets', 'Stripe and database secrets must live in Railway environment variables, never in the client bundle or repository.'],
+            ['Monitoring', 'Health endpoints expose sanitized server, database, Stripe, uptime, and request metrics. They do not expose customer records.'],
+            ['Incident contact', 'Security or privacy concerns should be sent to support@bdengine.io until a dedicated security inbox is created.'],
+          ],
+          cta: 'Open status',
+        },
+      };
+      return { ...shared, ...pages[kind] };
+    }
+
+    function renderTrustSurface(kind) {
+      const content = getTrustContent(kind);
+      root.innerHTML = `
+        <div class="trust-page">
+          <nav class="landing-nav trust-nav">
+            <div class="landing-nav-brand">
+              <div class="brand-icon"><svg width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#trustBg)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="trustBg" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg></div>
+              <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
+            </div>
+            <button class="nav-link" data-back-home>Back home</button>
+          </nav>
+          <main class="trust-main">
+            <p class="hero-badge">${escapeHtml(content.eyebrow)}</p>
+            <h1>${escapeHtml(content.title)}</h1>
+            <p class="trust-intro">${escapeHtml(content.intro)}</p>
+            <div class="trust-meta">
+              <span>Last updated ${escapeHtml(content.updated)}</span>
+              <span>${escapeHtml(content.support)}</span>
+            </div>
+            <div class="trust-grid">
+              ${content.sections.map(([title, body]) => `
+                <article class="trust-doc-card">
+                  <h2>${escapeHtml(title)}</h2>
+                  <p>${escapeHtml(body)}</p>
+                </article>
+              `).join('')}
+            </div>
+            <div class="trust-actions">
+              <button class="btn btn-primary" data-trust-cta>${escapeHtml(content.cta)}</button>
+              <button class="btn btn-ghost" data-trust-page="status">View status</button>
+            </div>
+          </main>
+        </div>`;
+
+      root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
+      root.querySelector('[data-trust-cta]')?.addEventListener('click', () => {
+        state.view = kind === 'security' ? 'status' : 'signup';
+        render();
+      });
+      root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+    }
+
+    async function renderStatusPage() {
+      root.innerHTML = `
+        <div class="trust-page">
+          <nav class="landing-nav trust-nav">
+            <div class="landing-nav-brand"><span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span></div>
+            <button class="nav-link" data-back-home>Back home</button>
+          </nav>
+          <main class="trust-main">
+            <p class="hero-badge">System status</p>
+            <h1>Production health</h1>
+            <p class="trust-intro">A sanitized status view for launch checks. It reports service configuration and health without exposing secrets or workspace data.</p>
+            <div id="status-panel" class="status-panel">Loading status...</div>
+          </main>
+        </div>`;
+      root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
+      try {
+        const status = await api('/api/status');
+        const checks = status.checks || {};
+        const metrics = status.metrics || {};
+        const panel = root.querySelector('#status-panel');
+        if (!panel) return;
+        panel.innerHTML = `
+          <div class="status-grid">
+            ${renderStatusCheck('Server', checks.server, `Uptime ${Math.round((status.uptimeSeconds || 0) / 60)}m`)}
+            ${renderStatusCheck('Database', checks.databaseConfigured ? checks.databaseConnected : true, checks.databaseConfigured ? 'Configured' : 'In-memory mode')}
+            ${renderStatusCheck('Stripe', checks.stripeCommercialReady, checks.stripeCommercialReady ? 'Live checkout ready' : (checks.stripeReady ? `Checkout is in ${checks.stripeMode || 'unknown'} mode` : `Missing ${(checks.stripeMissing || []).join(', ') || 'configuration'}`))}
+            ${renderStatusCheck('Requests', true, `${metrics.requestCount || 0} served`)}
+          </div>
+          <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, metrics, lastError: status.lastError || null }, null, 2))}</pre>
+        `;
+      } catch (err) {
+        const panel = root.querySelector('#status-panel');
+        if (panel) panel.innerHTML = `<div class="auth-error">Status check failed: ${escapeHtml(err.message || err)}</div>`;
+      }
+    }
+
+    function renderStatusCheck(label, ok, detail) {
+      return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'OK' : 'Needs setup'}</span><small>${escapeHtml(detail || '')}</small></article>`;
     }
 
     // ── Login page ────────────────────────────────────────────────────────
@@ -491,7 +648,9 @@
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
-        alert('Billing page coming soon. Current plan: ' + planBadge);
+        const frame = root.querySelector('.cloud-app-frame');
+        if (frame) frame.src = '/app/#/admin';
+        dropdown?.classList.add('hidden');
       });
     }
 

@@ -13,17 +13,23 @@ await check('protected API rejects anonymous requests', async () => {
   assert(response.status === 401, `expected 401, got ${response.status}`);
 });
 
-await check('demo login creates a session', async () => {
-  const response = await fetch(`${baseUrl}/api/auth/login`, {
+await check('signup creates a session', async () => {
+  const email = `smoke-auth-${Date.now()}@example.com`;
+  const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'demo@bdengine.io', password: 'demo1234' }),
+    body: JSON.stringify({
+      email,
+      password: 'smoke1234',
+      name: 'Smoke Auth User',
+      workspaceName: 'Smoke Auth Workspace',
+    }),
   });
-  assert(response.ok, `login failed with ${response.status}`);
+  assert(response.status === 201, `signup failed with ${response.status}`);
   cookie = response.headers.get('set-cookie')?.split(';')[0] || '';
-  assert(cookie.includes('bd_session='), 'login did not set bd_session cookie');
+  assert(cookie.includes('bd_session='), 'signup did not set bd_session cookie');
   const body = await response.json();
-  assert(body.user?.email === 'demo@bdengine.io', 'login returned unexpected user');
+  assert(body.user?.email === email, 'signup returned unexpected user');
 });
 
 await check('authenticated session can load bootstrap', async () => {

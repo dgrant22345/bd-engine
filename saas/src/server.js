@@ -4,9 +4,9 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
-import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, getMembership, safeUser, createTenant, loadFromDb as loadUsersFromDb } from './users.js';
-import { getPlan, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession } from './billing.js';
-import { initDb, closeDb } from './db.js';
+import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, getMembership, safeUser, createTenant, updateTenant, loadFromDb as loadUsersFromDb } from './users.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, isStripeConfigured, getStripeConfigStatus } from './billing.js';
+import { initDb, closeDb, isDbEnabled, isDbReady } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -14,6 +14,15 @@ const publicDir = join(rootDir, 'public');
 const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
+const serverStartedAt = new Date();
+const serverStats = {
+  requestCount: 0,
+  errorCount: 0,
+  statusCounts: {},
+  totalDurationMs: 0,
+  slowestRequest: null,
+  lastError: null,
+};
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -52,18 +61,25 @@ async function startServer() {
     try {
       await route(req, res);
     } catch (error) {
+      serverStats.errorCount += 1;
+      serverStats.lastError = {
+        at: new Date().toISOString(),
+        method: req.method,
+        url: req.url,
+        message: error.message || 'Unexpected server error',
+      };
       sendJson(res, error.status || 500, {
         error: error.message || 'Unexpected server error',
       });
     } finally {
       const elapsedMs = Math.round(performance.now() - startedAt);
+      recordRequestMetric(req, res, elapsedMs);
       console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
     }
   });
 
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
-    console.log(`  Demo login: demo@bdengine.io / demo1234`);
   });
 
   // Graceful shutdown
@@ -88,13 +104,9 @@ async function route(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
   const pathname = url.pathname;
 
-  // Health check
-  if (pathname === '/health') {
-    return sendJson(res, 200, {
-      ok: true,
-      app: 'bd-engine-cloud',
-      mode: process.env.BD_CLOUD_ENV || 'development',
-    });
+  // Health and public status checks.
+  if (pathname === '/health' || pathname === '/api/health' || pathname === '/api/status') {
+    return sendJson(res, 200, getHealthPayload(pathname === '/api/status'));
   }
 
   // ── Auth endpoints (public) ───────────────────────────────────────────────
@@ -156,10 +168,9 @@ self.addEventListener('activate', (event) => {
     const payload = await readBody(req);
     try {
       const event = handleWebhookEvent(payload, signature);
-      // Process event (e.g. customer.subscription.created, etc)
-      // Implementation pending real stripe keys
-      console.log('Received Stripe Event:', event.type);
-      return sendJson(res, 200, { received: true });
+      const result = handleStripeBillingEvent(event);
+      console.log('Received Stripe Event:', event.type, result);
+      return sendJson(res, 200, { received: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
     }
@@ -218,6 +229,8 @@ self.addEventListener('activate', (event) => {
       plan,
       trialDaysRemaining,
       usage,
+      stripe: getStripeConfigStatus(),
+      canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
       tenant: { id: tenant.id, name: tenant.name, plan: tenant.plan, status: tenant.status },
     });
   }
@@ -226,10 +239,23 @@ self.addEventListener('activate', (event) => {
     const body = await readJson(req);
     const planId = body.planId;
     try {
-      const successUrl = `${url.origin}/app/#/billing?success=true`;
-      const cancelUrl = `${url.origin}/app/#/billing?canceled=true`;
+      const successUrl = `${url.origin}/app/#/admin`;
+      const cancelUrl = `${url.origin}/app/#/admin`;
       const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl);
       return sendJson(res, 200, { url: sessionUrl });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  if (pathname === '/api/billing/portal' && req.method === 'POST') {
+    const customerId = tenant.stripeCustomerId || tenant.stripe_customer_id || '';
+    if (!customerId) {
+      return sendJson(res, 400, { error: 'No Stripe customer is attached to this workspace yet. Complete checkout first.' });
+    }
+    try {
+      const portalUrl = await createBillingPortalSession(customerId, `${url.origin}/app/#/admin`);
+      return sendJson(res, 200, { url: portalUrl });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
     }
@@ -271,6 +297,8 @@ self.addEventListener('activate', (event) => {
         plan: getPlan(tenant.plan),
         trialDaysRemaining: getTrialDaysRemaining(tenant),
         usage: getUsageSummary(tenantId, tenant.plan),
+        stripe: getStripeConfigStatus(),
+        canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: { plan: tenant.plan, status: tenant.status },
       },
     });
@@ -423,16 +451,41 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
     const bodyStr = await readBody(req);
     let csvText = bodyStr;
+    let payload = {};
     try {
-      const payload = JSON.parse(bodyStr);
+      payload = JSON.parse(bodyStr);
       if (payload.csvContent) csvText = payload.csvContent;
     } catch {
       // It might have been sent as raw text, which is fine
     }
-    
-    const result = store.importLinkedInCSV(tenantId, csvText);
+
+    const plan = getPlan(tenant.plan);
+    const result = store.importLinkedInCSV(tenantId, csvText, {
+      dryRun: Boolean(payload.dryRun),
+      plan,
+    });
     if (result.error) return sendJson(res, 400, result);
-    return sendJson(res, 200, result);
+    if (payload.dryRun) {
+      return sendJson(res, 200, result);
+    }
+    const jobResult = {
+      stats: result.stats,
+      importRun: {
+        status: result.warnings?.length ? 'completed_with_warnings' : 'completed',
+        stats: result.stats,
+        warnings: result.warnings || [],
+      },
+      warnings: result.warnings || [],
+    };
+    const job = store.createCompletedJob('linkedin-csv-import', jobResult);
+    return sendJson(res, 202, { ...job, stats: result.stats, warnings: result.warnings || [] });
+  }
+
+  if (pathname === '/api/admin/run-workflow' && req.method === 'POST') {
+    const plan = getPlan(tenant.plan);
+    const result = store.runLaunchWorkflow(tenantId, { plan });
+    const job = store.createCompletedJob('launch-workflow', result);
+    return sendJson(res, 202, { ...job, ...result });
   }
 
   // Stub remaining import/enrichment/discovery endpoints
@@ -464,6 +517,57 @@ self.addEventListener('activate', (event) => {
   }
 
   return sendJson(res, 404, { error: 'Not found' });
+}
+
+function handleStripeBillingEvent(event) {
+  const object = event?.data?.object || {};
+  if (event.type === 'checkout.session.completed') {
+    const tenantId = object.client_reference_id || object.metadata?.tenantId || '';
+    const planId = object.metadata?.planId || '';
+    if (!tenantId || !planId) return { updated: false, reason: 'missing checkout metadata' };
+    const tenant = updateTenant(tenantId, {
+      plan: planId,
+      status: 'active',
+      stripeCustomerId: getStripeId(object.customer),
+      stripeSubscriptionId: getStripeId(object.subscription),
+    });
+    return { updated: Boolean(tenant), tenantId, planId };
+  }
+
+  if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created') {
+    const customerId = getStripeId(object.customer);
+    const tenantId = object.metadata?.tenantId || findTenantByStripeCustomerId(customerId)?.id || '';
+    const priceId = object.items?.data?.[0]?.price?.id || '';
+    const planId = object.metadata?.planId || getPlanByStripePriceId(priceId)?.id || '';
+    if (!tenantId) return { updated: false, reason: 'workspace not found for subscription' };
+    const updates = {
+      status: object.status || 'active',
+      stripeCustomerId: customerId,
+      stripeSubscriptionId: object.id || '',
+    };
+    if (planId) updates.plan = planId;
+    const tenant = updateTenant(tenantId, updates);
+    return { updated: Boolean(tenant), tenantId, planId: planId || tenant?.plan || '' };
+  }
+
+  if (event.type === 'customer.subscription.deleted') {
+    const customerId = getStripeId(object.customer);
+    const tenantId = object.metadata?.tenantId || findTenantByStripeCustomerId(customerId)?.id || '';
+    if (!tenantId) return { updated: false, reason: 'workspace not found for canceled subscription' };
+    const tenant = updateTenant(tenantId, {
+      status: 'canceled',
+      stripeCustomerId: customerId,
+      stripeSubscriptionId: object.id || '',
+    });
+    return { updated: Boolean(tenant), tenantId, status: 'canceled' };
+  }
+
+  return { updated: false, ignored: true };
+}
+
+function getStripeId(value) {
+  if (!value) return '';
+  return typeof value === 'string' ? value : value.id || '';
 }
 
 // ── Auth handlers ───────────────────────────────────────────────────────────
@@ -652,6 +756,64 @@ function streamFile(filePath, res) {
     'Cache-Control': 'no-store',
   });
   createReadStream(filePath).pipe(res);
+}
+
+function recordRequestMetric(req, res, elapsedMs) {
+  const statusCode = String(res.statusCode || 200);
+  serverStats.requestCount += 1;
+  serverStats.totalDurationMs += elapsedMs;
+  serverStats.statusCounts[statusCode] = (serverStats.statusCounts[statusCode] || 0) + 1;
+  if (Number(statusCode) >= 500) {
+    serverStats.errorCount += 1;
+  }
+  if (!serverStats.slowestRequest || elapsedMs > serverStats.slowestRequest.elapsedMs) {
+    serverStats.slowestRequest = {
+      method: req.method,
+      path: (req.url || '').split('?')[0],
+      statusCode: Number(statusCode),
+      elapsedMs,
+      at: new Date().toISOString(),
+    };
+  }
+}
+
+function getHealthPayload(includeDetails = false) {
+  const uptimeSeconds = Math.round((Date.now() - serverStartedAt.getTime()) / 1000);
+  const averageDurationMs = serverStats.requestCount
+    ? Math.round(serverStats.totalDurationMs / serverStats.requestCount)
+    : 0;
+  const stripeStatus = getStripeConfigStatus();
+  const checks = {
+    server: true,
+    databaseConfigured: isDbEnabled(),
+    databaseConnected: isDbReady(),
+    stripeConfigured: isStripeConfigured(),
+    stripeReady: stripeStatus.ready,
+    stripeLiveMode: stripeStatus.liveMode,
+    stripeCommercialReady: stripeStatus.commercialReady,
+    stripeMode: stripeStatus.mode,
+    stripeMissing: stripeStatus.missing,
+  };
+  const payload = {
+    ok: true,
+    app: 'bd-engine-cloud',
+    mode: process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development',
+    startedAt: serverStartedAt.toISOString(),
+    uptimeSeconds,
+    checks,
+  };
+  if (includeDetails) {
+    payload.metrics = {
+      requestCount: serverStats.requestCount,
+      errorCount: serverStats.errorCount,
+      statusCounts: serverStats.statusCounts,
+      averageDurationMs,
+      slowestRequest: serverStats.slowestRequest,
+      memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    };
+    payload.lastError = serverStats.lastError;
+  }
+  return payload;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
