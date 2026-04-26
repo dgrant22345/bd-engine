@@ -728,7 +728,7 @@ function Get-ConfigResults {
     if ($Query.ats) { $items = @($items | Where-Object { $_.atsType -eq $Query.ats }) }
     if ($Query.discoveryStatus) { $items = @($items | Where-Object { $_.discoveryStatus -eq $Query.discoveryStatus }) }
     if ($Query.confidenceBand) { $items = @($items | Where-Object { ([string]$(if ($_.confidenceBand) { $_.confidenceBand } else { 'unresolved' })) -eq $Query.confidenceBand }) }
-    if ($Query.reviewStatus) { $items = @($items | Where-Object { ([string]$(if ($_.reviewStatus) { $_.reviewStatus } else { 'pending' })) -eq $Query.reviewStatus }) }
+    if ($Query.reviewStatus) { $items = @($items | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'reviewStatus' -Default 'pending')) -eq $Query.reviewStatus }) }
     if ($Query.active) {
         $want = Test-Truthy $Query.active
         $items = @($items | Where-Object { (Test-Truthy $_.active) -eq $want })
@@ -1532,8 +1532,8 @@ function Handle-ApiRequest {
                         unresolvedCount = [int][Math]::Max(0, $total - $resolved)
                         activeCount = @($configs | Where-Object { $_.active }).Count
                         coveragePercent = if ($total -gt 0) { [double][Math]::Round(($resolved / $total) * 100, 1) } else { 0 }
-                        mediumReviewQueueCount = @($configs | Where-Object { $_.confidenceBand -eq 'medium' -and ([string]$(if ($_.reviewStatus) { $_.reviewStatus } else { 'pending' })) -eq 'pending' }).Count
-                        unresolvedReviewQueueCount = @($configs | Where-Object { ([string]$(if ($_.confidenceBand) { $_.confidenceBand } else { 'unresolved' })) -eq 'unresolved' -and ([string]$(if ($_.reviewStatus) { $_.reviewStatus } else { 'pending' })) -ne 'rejected' }).Count
+                        mediumReviewQueueCount = @($configs | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'confidenceBand' -Default 'unresolved')) -eq 'medium' -and ([string](Get-ObjectValue -Object $_ -Name 'reviewStatus' -Default 'pending')) -eq 'pending' }).Count
+                        unresolvedReviewQueueCount = @($configs | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'confidenceBand' -Default 'unresolved')) -eq 'unresolved' -and ([string](Get-ObjectValue -Object $_ -Name 'reviewStatus' -Default 'pending')) -ne 'rejected' }).Count
                     }
                     byAtsType = @()
                     byConfidenceBand = @()

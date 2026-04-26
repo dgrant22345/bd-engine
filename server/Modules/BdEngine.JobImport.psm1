@@ -909,8 +909,9 @@ function New-GeneratedBoardConfig {
         $template.confidenceScore = if (Test-ObjectHasKey -Object $template -Name 'confidenceScore' | Where-Object { $_ }) { Get-ObjectValue -Object $template -Name 'confidenceScore' } else { 100 }
         $template.confidenceBand = 'high'
         $template.supportedImport = [bool](Test-ImportCapableAtsType -AtsType ([string]$template.atsType))
-        $template.active = [bool]($template.supportedImport -and $template.active)
-        $template.reviewStatus = if ($template.reviewStatus) { $template.reviewStatus } else { 'auto' }
+        $template.active = [bool]($template.supportedImport -and (Test-Truthy (Get-ObjectValue -Object $template -Name 'active' -Default $true)))
+        $templateReviewStatus = [string](Get-ObjectValue -Object $template -Name 'reviewStatus' -Default '')
+        $template.reviewStatus = if ($templateReviewStatus) { $templateReviewStatus } else { 'auto' }
     } elseif ($templateDiscoveryStatus -eq 'verified') {
         $template.discoveryStatus = 'discovered'
     } elseif ($templateDiscoveryStatus -eq 'unresolved') {
