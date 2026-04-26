@@ -67,6 +67,30 @@ await check('new signup gets an empty first-run workspace', async () => {
   assert(setup.workspaceName === 'Smoke Test Workspace', 'new workspace name was not preserved');
 });
 
+await check('job seeker persona persists into the app bootstrap', async () => {
+  const email = `smoke-jobseeker-${Date.now()}@example.com`;
+  const response = await fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      password: 'smoke1234',
+      name: 'Smoke Job Seeker',
+      workspaceName: 'Smoke Job Search',
+      persona: 'jobseeker',
+    }),
+  });
+  assert(response.status === 201, `signup returned ${response.status}`);
+  const signupCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
+  const signupBody = await response.json();
+  assert(signupBody.persona === 'jobseeker', 'signup did not return jobseeker persona');
+  assert(signupBody.tenant?.persona === 'jobseeker', 'tenant did not persist jobseeker persona');
+  const me = await getJson('/api/auth/me', signupCookie);
+  assert(me.persona === 'jobseeker', '/api/auth/me did not return jobseeker persona');
+  const bootstrap = await getJson('/api/bootstrap?includeFilters=true', signupCookie);
+  assert(bootstrap.persona === 'jobseeker', '/api/bootstrap did not return jobseeker persona');
+});
+
 for (const item of checks) {
   console.log(`${item.ok ? 'OK' : 'FAIL'} ${item.name}${item.error ? `: ${item.error}` : ''}`);
 }

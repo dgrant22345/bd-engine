@@ -656,6 +656,7 @@ async function handleLogin(req, res) {
 
   store.ensureTenant(primaryTenant, result.user);
   await persistUserWorkspace(result.user, primaryTenant);
+  const persona = store.getPersona(primaryTenant.id);
   const { cookie } = createSession(result.user.id, primaryTenant.id);
   setSessionCookie(res, cookie);
 
@@ -663,6 +664,7 @@ async function handleLogin(req, res) {
     user: safeUser(result.user),
     tenant: primaryTenant,
     tenants: userTenants,
+    persona,
     workspaceRecovered,
   });
 }
@@ -703,10 +705,13 @@ function handleMe(req, res) {
       const { cookie } = createSession(user.id, tenant.id);
       setSessionCookie(res, cookie);
     }
+  } else {
+    store.ensureTenant(tenant, user);
   }
 
   const plan = tenant ? getPlan(tenant.plan) : null;
   const trialDaysRemaining = tenant ? getTrialDaysRemaining(tenant) : null;
+  const persona = tenant ? store.getPersona(tenant.id) : 'bd';
 
   return sendJson(res, 200, {
     authenticated: true,
@@ -716,7 +721,7 @@ function handleMe(req, res) {
     membership: membership ? { role: membership.role } : null,
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
     trialDaysRemaining,
-    persona: tenant ? store.getPersona(tenant.id) : 'bd',
+    persona,
   });
 }
 

@@ -379,13 +379,16 @@ export function createStore() {
 
     setPersona(tenantId, persona) {
       const profile = getTenantProfile(tenantId);
-      if (profile) profile.persona = persona || 'bd';
+      if (profile) {
+        profile.persona = normalizePersona(persona);
+        profile.settings.persona = profile.persona;
+      }
       persistTenant(tenantId);
     },
 
     getPersona(tenantId) {
       const profile = getTenantProfile(tenantId);
-      return profile?.persona || 'bd';
+      return normalizePersona(profile?.persona || profile?.settings?.persona);
     },
 
     getSession() {
@@ -1505,9 +1508,19 @@ function assertTenant(tenantId) {
 
 function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
   if (!tenantId) return null;
-  if (tenantProfiles.has(tenantId)) return tenantProfiles.get(tenantId);
+  const tenantPersona = readPersona(tenant?.persona || tenant?.settings?.persona);
+  if (tenantProfiles.has(tenantId)) {
+    const existing = tenantProfiles.get(tenantId);
+    if (tenantPersona && tenantPersona !== normalizePersona(existing.persona || existing.settings?.persona)) {
+      existing.persona = tenantPersona;
+      existing.settings.persona = tenantPersona;
+      persistTenant(tenantId);
+    }
+    return existing;
+  }
   const ownerName = user.name || user.email || 'Owner';
   const ownerEmail = user.email || '';
+  const initialPersona = tenantPersona || 'bd';
   const profile = {
     workspace: {
       id: `workspace-${tenantId}`,
@@ -1526,7 +1539,9 @@ function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
         name: ownerName,
         email: ownerEmail,
       },
+      persona: initialPersona,
     },
+    persona: initialPersona,
   };
   tenantProfiles.set(tenantId, profile);
   return profile;
@@ -1534,6 +1549,14 @@ function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
 
 function getTenantProfile(tenantId) {
   return tenantProfiles.get(tenantId) || null;
+}
+
+function normalizePersona(value) {
+  return value === 'jobseeker' ? 'jobseeker' : 'bd';
+}
+
+function readPersona(value) {
+  return value === 'jobseeker' || value === 'bd' ? value : '';
 }
 
 function unique(values) {
