@@ -456,17 +456,17 @@ export function createStore() {
       assertTenant(tenantId);
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
-      const newJobsToday = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1);
-      const followUpAccounts = tenantAccounts.filter((item) => item.nextActionAt);
+      const newJobsToday = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1).slice(0, 100);
+      const followUpAccounts = tenantAccounts.filter((item) => item.nextActionAt).slice(0, 50);
       return {
         summary: {
           accountCount: tenantAccounts.length,
           hiringAccountCount: tenantAccounts.filter((item) => item.jobCount > 0).length,
           newJobsLast24h: newJobsToday.length,
           discoveredBoardCount: boardConfigs.length,
-          needsResolutionCount: 1,
+          needsResolutionCount: tenantAccounts.filter((item) => item.status === 'new').length,
         },
-        todayQueue: tenantAccounts,
+        todayQueue: tenantAccounts.slice(0, 100),
         followUpAccounts,
         newJobsToday,
         networkLeaders: contactsForTenant(tenantId).slice(0, 5),
@@ -492,7 +492,7 @@ export function createStore() {
       return {
         playbook: tenantAccounts.slice(0, 5),
         overdueFollowUps: [],
-        staleAccounts: tenantAccounts.filter((item) => item.status === 'new'),
+        staleAccounts: tenantAccounts.filter((item) => item.status === 'new').slice(0, 50),
         activityFeed: activitiesForTenant(tenantId).slice(0, 10),
         enrichmentFunnel: { resolved: 2, needsReview: 1, missing: 0 },
         alertQueue: tenantAccounts.slice(0, 3).map((item) => ({
