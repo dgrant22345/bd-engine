@@ -38,6 +38,7 @@ export async function initDb() {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
       max: 5,
+      connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
     });
 

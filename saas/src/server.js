@@ -40,12 +40,7 @@ const mimeTypes = {
 // ── Server ──────────────────────────────────────────────────────────────────
 
 async function startServer() {
-  // Initialize database (if DATABASE_URL is set)
-  const dbConnected = await initDb();
-  if (dbConnected) {
-    await loadUsersFromDb();
-    await store.loadFromDb();
-  }
+  const startupPromise = initializeData();
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
@@ -59,6 +54,9 @@ async function startServer() {
       return;
     }
     try {
+      if (!isHealthRequest(req)) {
+        await startupPromise;
+      }
       await route(req, res);
     } catch (error) {
       serverStats.errorCount += 1;
@@ -90,6 +88,27 @@ async function startServer() {
       await closeDb();
       process.exit(0);
     });
+  }
+}
+
+async function initializeData() {
+  try {
+    const dbConnected = await initDb();
+    if (dbConnected) {
+      await loadUsersFromDb();
+      await store.loadFromDb();
+    }
+  } catch (error) {
+    console.error('Startup data initialization failed:', error.message || error);
+  }
+}
+
+function isHealthRequest(req) {
+  try {
+    const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+    return url.pathname === '/health' || url.pathname === '/api/health' || url.pathname === '/api/status';
+  } catch {
+    return false;
   }
 }
 
