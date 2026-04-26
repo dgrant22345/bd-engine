@@ -1166,11 +1166,21 @@ export function createStore() {
         warnings.push(`Contact limit reached for the ${plan.displayName || plan.name || 'current'} plan.`);
       }
 
+      // Create a fast lookup for existing contacts to avoid O(N^2) search
+      const existingContactsMap = new Map();
+      contacts.filter(c => c.tenantId === tenantId).forEach(c => {
+        const key = `${normalizeKey(c.fullName)}|${normalizeKey(c.companyName)}`;
+        existingContactsMap.set(key, c);
+      });
+
+      const existingAccountsMap = new Map();
+      accounts.filter(a => a.tenantId === tenantId).forEach(a => {
+        existingAccountsMap.set(normalizeKey(a.displayName), a);
+      });
+
       for (const [normName, companyData] of companyMap) {
         // Check if account already exists for this tenant
-        let existingAccount = accounts.find(
-          (a) => a.tenantId === tenantId && normalizeKey(a.displayName) === normName
-        );
+        let existingAccount = existingAccountsMap.get(normName);
 
         if (!existingAccount) {
           if (remainingNewAccounts <= 0) {
@@ -1197,13 +1207,18 @@ export function createStore() {
         }
 
         // Create contacts
+        let newSeniorCount = 0;
+        let newTalentCount = 0;
+        const newContacts = [];
+
         for (const c of companyData.contacts) {
           // Skip if contact already exists
-          const existing = contacts.find(
-            (ct) => ct.tenantId === tenantId && normalizeKey(ct.fullName) === normalizeKey(c.fullName) && normalizeKey(ct.companyName) === normName
-          );
+          const contactKey = `${normalizeKey(c.fullName)}|${normName}`;
+          const existing = existingContactsMap.get(contactKey);
           if (existing) {
             duplicatesSkipped++;
+            if (['executive', 'director', 'vp'].includes(existing.seniority)) newSeniorCount++;
+            if (existing.isTalentLeader) newTalentCount++;
             continue;
           }
           if (remainingNewContacts <= 0) {
@@ -1214,9 +1229,12 @@ export function createStore() {
           const seniority = classifySeniority(c.position);
           const isTalent = isTalentTitle(c.position);
           const priorityScore = computeContactPriority(seniority, isTalent, c.email);
+          
+          if (['executive', 'director', 'vp'].includes(seniority)) newSeniorCount++;
+          if (isTalent) newTalentCount++;
 
           if (!dryRun) {
-            this.addContact(tenantId, {
+            const contact = this.addContact(tenantId, {
               accountId: existingAccount.id,
               firstName: c.firstName,
               lastName: c.lastName,
@@ -1231,18 +1249,19 @@ export function createStore() {
               isTalentLeader: isTalent,
               source: 'linkedin_csv',
             }, true);
+            newContacts.push(contact);
           }
           remainingNewContacts--;
           contactsCreated++;
         }
 
-        // Update account scores
+        // Update account scores using aggregated data instead of filtering global array
         if (!dryRun) {
-          const acctContacts = contacts.filter((ct) => ct.tenantId === tenantId && ct.accountId === existingAccount.id);
-          existingAccount.connectionCount = acctContacts.length;
-          existingAccount.seniorContactCount = acctContacts.filter((ct) => ['executive', 'director', 'vp'].includes(ct.seniority)).length;
-          existingAccount.talentContactCount = acctContacts.filter((ct) => ct.isTalentLeader).length;
-          existingAccount.contactCount = acctContacts.length;
+          existingAccount.seniorContactCount = (existingAccount.seniorContactCount || 0) + newSeniorCount;
+          existingAccount.talentContactCount = (existingAccount.talentContactCount || 0) + newTalentCount;
+          existingAccount.connectionCount = (existingAccount.connectionCount || 0) + newContacts.length;
+          existingAccount.contactCount = existingAccount.connectionCount;
+          
           // Simple target score based on connections
           existingAccount.targetScore = Math.min(100, Math.round(
             (existingAccount.connectionCount * 8) +
