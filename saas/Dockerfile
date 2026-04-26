@@ -7,6 +7,9 @@ ENV BD_CLOUD_HOST=0.0.0.0
 
 # Copy app files
 COPY saas/package.json ./
+COPY saas/package-lock.json ./
+RUN npm install --omit=dev
+
 COPY saas/src ./src
 COPY saas/public ./public
 COPY saas/schema.sql ./
