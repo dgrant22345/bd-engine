@@ -2917,6 +2917,8 @@ async function renderSetupWizard() {
 function renderSetupStepContent(stepKey) {
   const draft = appState.setupDraft;
   if (stepKey === 'profile') {
+    const defaultName = draft.userName || appState.user?.name || '';
+    const defaultEmail = draft.userEmail || appState.user?.email || '';
     return `
       <form id="setup-profile-form" class="setup-form">
         <div class="setup-grid">
@@ -2924,10 +2926,10 @@ function renderSetupStepContent(stepKey) {
             <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="Your company or team" />
           </label>
           <label>Your name
-            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(draft.userName)}" placeholder="Full name" />
+            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(defaultName)}" placeholder="Full name" />
           </label>
           <label>Your email
-            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(draft.userEmail)}" placeholder="you@example.com" />
+            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(defaultEmail)}" placeholder="you@example.com" />
           </label>
         </div>
         <div class="button-row">
