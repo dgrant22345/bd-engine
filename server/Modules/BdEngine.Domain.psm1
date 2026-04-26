@@ -516,7 +516,14 @@ function Test-ObjectHasKey {
     }
 
     if ($Object -is [System.Collections.IDictionary]) {
-        return $Object.Contains($Name)
+        if ($Object.PSObject.Methods.Name -contains 'ContainsKey') {
+            return $Object.ContainsKey($Name)
+        }
+        try {
+            return $Object.Contains($Name)
+        } catch {
+            return $false
+        }
     }
 
     return [bool]$Object.PSObject.Properties[$Name]
@@ -5549,7 +5556,7 @@ function Set-AccountFields {
         }
 
         foreach ($key in @('canonicalDomain', 'careersUrl', 'domain', 'enrichmentStatus', 'enrichmentSource', 'enrichmentConfidence', 'enrichmentConfidenceScore', 'linkedinCompanySlug', 'aliases', 'tags')) {
-            if ($account -is [System.Collections.IDictionary] -and -not $account.Contains($key)) {
+            if ($account -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $account -Name $key)) {
                 $account[$key] = $null
             }
         }
@@ -5687,14 +5694,14 @@ function Add-Activity {
 
     # Ensure optional keys exist before access (strict-mode safe)
     foreach ($optKey in 'contactId', 'type', 'summary', 'notes', 'pipelineStage', 'metadata') {
-        if ($Payload -is [System.Collections.IDictionary] -and -not $Payload.Contains($optKey)) {
+        if ($Payload -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $Payload -Name $optKey)) {
             $Payload[$optKey] = $null
         }
     }
 
     $activity = [ordered]@{
         id = New-RandomId -Prefix 'act'
-        workspaceId = $State.workspace.id
+        workspaceId = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $State -Name 'workspace' -Default $null) -Name 'id' -Default 'workspace-default')
         accountId = [string]$Payload.accountId
         contactId = if ($Payload.contactId) { [string]$Payload.contactId } else { '' }
         normalizedCompanyName = $normalizedCompanyName
@@ -5722,7 +5729,7 @@ function Add-Activity {
     if ($relatedAccount) {
         # Ensure keys exist before writing (strict-mode safe)
         foreach ($k in 'lastContactedAt', 'outreachStatus') {
-            if ($relatedAccount -is [System.Collections.IDictionary] -and -not $relatedAccount.Contains($k)) {
+            if ($relatedAccount -is [System.Collections.IDictionary] -and -not (Test-ObjectHasKey -Object $relatedAccount -Name $k)) {
                 $relatedAccount[$k] = $null
             }
         }
@@ -5731,7 +5738,7 @@ function Add-Activity {
             $relatedAccount['outreachStatus'] = $activity.pipelineStage
         }
         $relatedActivities = @($State.activities | Where-Object {
-                ([string](Get-ObjectValue -Object $_ -Name 'accountId' -Default '')) -eq [string]$relatedAccount.id -or
+                ([string](Get-ObjectValue -Object $_ -Name 'accountId' -Default '')) -eq [string](Get-ObjectValue -Object $relatedAccount -Name 'id' -Default '') -or
                 ([string](Get-ObjectValue -Object $_ -Name 'normalizedCompanyName' -Default '')) -eq [string]$normalizedCompanyName
             })
         $relatedAccount = Update-CompanyProjection -Company $relatedAccount -Activities $relatedActivities

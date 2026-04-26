@@ -125,6 +125,12 @@ Some Admin buttons are for legacy or advanced workflows. In particular, `Run Ful
 6. Update statuses and next actions as you work.
 7. Re-import LinkedIn periodically to refresh contacts without creating duplicates.
 
+## Outreach Workflow
+
+From Contacts, click `Outreach` on a contact. BD Engine opens that contact's account, preselects the person, and generates an email plus LinkedIn message from the company's current hiring signals and open roles.
+
+BD Engine can open an email draft and copy/open the LinkedIn message, but it does not send messages directly from your email or LinkedIn account. After you send them, click `Log sent + follow-up` to add an outreach note, mark the contact/account as contacted, and create a one-week follow-up reminder.
+
 ## Updating BD Engine
 
 Run the newer `BD-Engine-Setup.exe`.

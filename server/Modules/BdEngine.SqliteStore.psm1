@@ -248,7 +248,17 @@ function Get-BdSqliteRecordValue {
     }
 
     if ($Record -is [System.Collections.IDictionary]) {
-        if ($Record.Contains($Name)) {
+        $hasKey = $false
+        if ($Record.PSObject.Methods.Name -contains 'ContainsKey') {
+            $hasKey = $Record.ContainsKey($Name)
+        } else {
+            try {
+                $hasKey = $Record.Contains($Name)
+            } catch {
+                $hasKey = $false
+            }
+        }
+        if ($hasKey) {
             return $Record[$Name]
         }
         return $Default

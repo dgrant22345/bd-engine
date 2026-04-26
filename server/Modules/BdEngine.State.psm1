@@ -12,6 +12,34 @@ function Test-AppStoreUsesSqlite {
     return (Test-BdSqliteStoreEnabled)
 }
 
+function Test-AppRecordHasKey {
+    param(
+        $Record,
+        [string]$Name
+    )
+
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+
+    if ($Record -is [System.Collections.Generic.Dictionary[string, object]]) {
+        return $Record.ContainsKey($Name)
+    }
+
+    if ($Record -is [System.Collections.IDictionary]) {
+        if ($Record.PSObject.Methods.Name -contains 'ContainsKey') {
+            return $Record.ContainsKey($Name)
+        }
+        try {
+            return $Record.Contains($Name)
+        } catch {
+            return $false
+        }
+    }
+
+    return [bool]$Record.PSObject.Properties[$Name]
+}
+
 function Get-JsonSerializer {
     if (-not ('System.Web.Script.Serialization.JavaScriptSerializer' -as [type])) {
         Add-Type -AssemblyName System.Web.Extensions
@@ -193,12 +221,7 @@ function Test-CollectionHasFields {
         $item = $Items[$index]
         foreach ($field in $Fields) {
             if ($item -is [System.Collections.IDictionary]) {
-                $hasField = $false
-                if ($item -is [System.Collections.Generic.Dictionary[string, object]]) {
-                    $hasField = $item.ContainsKey($field)
-                } else {
-                    $hasField = $item.Contains($field)
-                }
+                $hasField = Test-AppRecordHasKey -Record $item -Name $field
 
                 if (-not $hasField) {
                     return $false
@@ -221,12 +244,7 @@ function Ensure-RecordDefaults {
     )
 
     foreach ($key in @($Defaults.Keys)) {
-        $hasKey = $false
-        if ($Record -is [System.Collections.Generic.Dictionary[string, object]]) {
-            $hasKey = $Record.ContainsKey($key)
-        } else {
-            $hasKey = $Record.Contains($key)
-        }
+        $hasKey = Test-AppRecordHasKey -Record $Record -Name $key
 
         if (-not $hasKey) {
             $Record[$key] = Get-DefaultClone -Default $Defaults[$key]
