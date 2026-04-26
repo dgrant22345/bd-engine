@@ -2,6 +2,18 @@ import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
 
 const now = () => new Date().toISOString();
 
+const pastDate = (days) => {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().split('T')[0];
+};
+
+const futureDate = (days) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+};
+
 const seedTenant = {
   id: 'tenant-demo',
   slug: 'demo',
@@ -15,6 +27,76 @@ const seedUser = {
   email: 'founder@example.com',
   name: 'BD Engine Founder',
 };
+
+// ── Factories ───────────────────────────────────────────────────────────────
+
+function account(input) {
+  return {
+    id: `acct-${Math.random().toString(36).slice(2, 6)}`,
+    tenantId: seedTenant.id,
+    normalizedName: input.displayName ? normalizeKey(input.displayName) : '',
+    displayName: '',
+    domain: '',
+    industry: '',
+    location: '',
+    status: 'new',
+    outreachStatus: 'not_started',
+    targetScore: 0,
+    dailyScore: 0,
+    priorityTier: 'C',
+    owner: '',
+    connectionCount: 0,
+    seniorContactCount: 0,
+    talentContactCount: 0,
+    buyerTitleCount: 0,
+    jobCount: 0,
+    openRoleCount: 0,
+    newRoleCount7d: 0,
+    jobsLast30Days: 0,
+    hiringVelocity: 0,
+    engagementScore: 0,
+    relationshipStrengthScore: 0,
+    alertPriorityScore: 0,
+    nextAction: '',
+    notes: '',
+    createdAt: now(),
+    updatedAt: now(),
+    tags: [],
+    aliases: [],
+    hiringSpikeScore: 0,
+    externalRecruiterLikelihoodScore: 0,
+    companyGrowthSignalScore: 0,
+    avgRoleSeniorityScore: 0,
+    ...input,
+  };
+}
+
+function contact(input) {
+  return {
+    id: `ct-${Math.random().toString(36).slice(2, 6)}`,
+    tenantId: seedTenant.id,
+    createdAt: now(),
+    updatedAt: now(),
+    source: 'manual',
+    sourceMetadata: {},
+    ...input,
+  };
+}
+
+function job(input) {
+  return {
+    id: `job-${Math.random().toString(36).slice(2, 6)}`,
+    tenantId: seedTenant.id,
+    active: true,
+    atsType: input.atsType || input.source || 'unknown',
+    sourceUrl: '',
+    createdAt: now(),
+    updatedAt: now(),
+    ...input,
+  };
+}
+
+// ── Seed Data ───────────────────────────────────────────────────────────────
 
 const workspace = {
   id: 'workspace-demo',
@@ -54,18 +136,28 @@ const configsByTenant = new Map();
 const activitiesByTenant = new Map();
 const tasksByTenant = new Map();
 
-// Global arrays for backward compatibility or cross-tenant ops if needed
-let accounts = [];
-let contacts = [];
-let jobs = [];
-let boardConfigs = [];
-let activities = [];
-let tasks = [];
-
 function getTenantArray(map, tenantId) {
   if (!map.has(tenantId)) map.set(tenantId, []);
   return map.get(tenantId);
 }
+
+let accounts = [
+  account({
+    id: 'acct-northstar',
+    displayName: 'Northstar Robotics',
+    domain: 'northstar.example',
+    industry: 'Industrial automation',
+    location: 'Toronto, ON',
+    status: 'contacted',
+    outreachStatus: 'contacted',
+    targetScore: 91,
+    dailyScore: 91,
+    priorityTier: 'A',
+    owner: 'BD Engine Founder',
+    connectionCount: 2,
+    seniorContactCount: 2,
+    talentContactCount: 1,
+    buyerTitleCount: 1,
     jobCount: 2,
     openRoleCount: 14,
     newRoleCount7d: 2,
@@ -118,43 +210,9 @@ function getTenantArray(map, tenantId) {
     hiringStatus: 'Active hiring',
     notes: 'New product hiring with several data engineering openings.',
   }),
-  account({
-    id: 'acct-lumen',
-    displayName: 'LumenGrid Energy',
-    domain: 'lumengrid.example',
-    industry: 'Clean energy',
-    location: 'Denver, CO',
-    status: 'new',
-    outreachStatus: 'not_started',
-    targetScore: 78,
-    dailyScore: 78,
-    priorityTier: 'B',
-    owner: '',
-    connectionCount: 1,
-    seniorContactCount: 1,
-    talentContactCount: 0,
-    buyerTitleCount: 1,
-    jobCount: 1,
-    openRoleCount: 5,
-    newRoleCount7d: 0,
-    jobsLast30Days: 1,
-    hiringVelocity: 62,
-    engagementScore: 22,
-    relationshipStrengthScore: 64,
-    alertPriorityScore: 70,
-    nextAction: 'Find talent leader',
-    nextActionAt: futureDate(7),
-    recommendedAction: 'Map the talent function and test a technical buyer angle.',
-    targetScoreExplanation: 'Active hiring for grid software and project delivery.',
-    topContactName: 'Amara Patel',
-    topContactTitle: 'Head of Engineering',
-    atsTypesText: 'Ashby',
-    hiringStatus: 'Active hiring',
-    notes: 'Active hiring for grid software and project delivery.',
-  }),
 ];
 
-const contacts = [
+let contacts = [
   contact({
     id: 'ct-priya',
     accountId: 'acct-northstar',
@@ -170,45 +228,10 @@ const contacts = [
     priorityScore: 93,
     seniority: 'director',
     isTalentLeader: true,
-    notes: 'Warm fit for recruiting delivery conversation.',
-  }),
-  contact({
-    id: 'ct-marcus',
-    accountId: 'acct-vertex',
-    fullName: 'Marcus Lee',
-    firstName: 'Marcus',
-    lastName: 'Lee',
-    email: 'marcus.lee@example.com',
-    linkedinUrl: 'https://www.linkedin.com/in/marcus-lee',
-    companyName: 'Vertex Health Systems',
-    title: 'VP People',
-    connectedOn: '2026-01-09',
-    outreachStatus: 'ready_to_contact',
-    priorityScore: 88,
-    seniority: 'executive',
-    isTalentLeader: true,
-    notes: '',
-  }),
-  contact({
-    id: 'ct-amara',
-    accountId: 'acct-lumen',
-    fullName: 'Amara Patel',
-    firstName: 'Amara',
-    lastName: 'Patel',
-    email: '',
-    linkedinUrl: 'https://www.linkedin.com/in/amara-patel',
-    companyName: 'LumenGrid Energy',
-    title: 'Head of Engineering',
-    connectedOn: '2025-09-04',
-    outreachStatus: 'not_started',
-    priorityScore: 81,
-    seniority: 'executive',
-    isTalentLeader: false,
-    notes: 'Technical buyer angle.',
   }),
 ];
 
-const jobs = [
+let jobs = [
   job({
     id: 'job-controls',
     accountId: 'acct-northstar',
@@ -218,63 +241,23 @@ const jobs = [
     source: 'Greenhouse',
     postedAt: pastDate(2),
   }),
-  job({
-    id: 'job-embedded',
-    accountId: 'acct-northstar',
-    title: 'Embedded Software Engineer',
-    companyName: 'Northstar Robotics',
-    location: 'Remote Canada',
-    source: 'Greenhouse',
-    postedAt: pastDate(5),
-  }),
-  job({
-    id: 'job-data',
-    accountId: 'acct-vertex',
-    title: 'Data Platform Engineer',
-    companyName: 'Vertex Health Systems',
-    location: 'Boston, MA',
-    source: 'Lever',
-    postedAt: pastDate(1),
-  }),
-  job({
-    id: 'job-grid',
-    accountId: 'acct-lumen',
-    title: 'Grid Software Program Manager',
-    companyName: 'LumenGrid Energy',
-    location: 'Denver, CO',
-    source: 'Ashby',
-    postedAt: pastDate(9),
-  }),
 ];
 
-const tasks = [];
-
-const activities = [
-  {
-    id: 'act-seed',
-    tenantId: seedTenant.id,
-    accountId: 'acct-northstar',
-    contactId: 'ct-priya',
-    type: 'outreach',
-    summary: 'Sent email + LinkedIn outreach to Priya Shah',
-    notes: 'Manual seed activity for the SaaS prototype.',
-    occurredAt: pastDate(3),
-    createdAt: pastDate(3),
-    metadata: { channels: ['email', 'linkedin'] },
-  },
+let boardConfigs = [
+  { id: 'cfg-northstar', tenantId: seedTenant.id, companyName: 'Northstar Robotics', normalizedCompanyName: 'northstar robotics', ats: 'greenhouse', discoveryStatus: 'resolved', active: true },
 ];
 
-const followups = [
-  {
-    id: 'fu-priya',
-    tenantId: seedTenant.id,
-    accountId: 'acct-northstar',
-    contactId: 'ct-priya',
-    dueAt: `${futureDate(4)}T09:00:00.000Z`,
-    status: 'open',
-    note: 'Follow up with Priya Shah after email + LinkedIn outreach',
-  },
-];
+let activities = [];
+let tasks = [];
+let followups = [];
+
+// Populate maps from seed data
+accounts.forEach(a => getTenantArray(accountsByTenant, a.tenantId).push(a));
+contacts.forEach(c => getTenantArray(contactsByTenant, c.tenantId).push(c));
+jobs.forEach(j => getTenantArray(jobsByTenant, j.tenantId).push(j));
+boardConfigs.forEach(c => getTenantArray(configsByTenant, c.tenantId).push(c));
+activities.forEach(a => getTenantArray(activitiesByTenant, a.tenantId).push(a));
+tasks.forEach(t => getTenantArray(tasksByTenant, t.tenantId).push(t));
 
 const backgroundJobs = new Map();
 
@@ -284,7 +267,6 @@ const pendingSaves = new Map();
 
 function persistTenant(tenantId) {
   if (!isDbEnabled()) return;
-  // Debounce: wait 500ms to batch rapid writes
   if (pendingSaves.has(tenantId)) clearTimeout(pendingSaves.get(tenantId));
   pendingSaves.set(tenantId, setTimeout(() => {
     pendingSaves.delete(tenantId);
@@ -315,6 +297,18 @@ export function createStore() {
             settings: { ...data.settings },
             persona: data.settings?.persona || 'bd',
           });
+        }
+        
+        const tenantAccts = data.accounts || [];
+        accountsByTenant.set(tenantId, tenantAccts);
+        contactsByTenant.set(tenantId, data.contacts || []);
+        jobsByTenant.set(tenantId, data.jobs || []);
+        configsByTenant.set(tenantId, data.configs || []);
+        activitiesByTenant.set(tenantId, data.activities || []);
+        tasksByTenant.set(tenantId, data.tasks || []);
+
+        // Load into global arrays (avoid duplicates)
+        for (const a of tenantAccts) {
           if (!accounts.some(x => x.id === a.id)) accounts.push(a);
         }
         // Load contacts
@@ -1260,55 +1254,6 @@ export function createStore() {
 
 const processStartedAt = now();
 
-function account(input) {
-  return {
-    tenantId: seedTenant.id,
-    normalizedName: normalizeKey(input.displayName),
-    createdAt: pastDate(30),
-    updatedAt: now(),
-    lastJobPostedAt: pastDate(2),
-    lastContactedAt: '',
-    daysSinceContact: 999,
-    staleFlag: '',
-    priority: input.priority || input.priorityTier || 'medium',
-    networkStrength: input.networkStrength || (input.connectionCount > 1 ? 'warm' : 'mapped'),
-    canonicalDomain: input.canonicalDomain || input.domain || '',
-    careersUrl: input.careersUrl || '',
-    enrichmentStatus: input.enrichmentStatus || 'enriched',
-    enrichmentConfidence: input.enrichmentConfidence || 'medium',
-    jobsLast90Days: input.jobsLast90Days || input.jobsLast30Days || 0,
-    hiringSpikeScore: input.hiringSpikeScore || 0,
-    externalRecruiterLikelihoodScore: input.externalRecruiterLikelihoodScore || 0,
-    companyGrowthSignalScore: input.companyGrowthSignalScore || 0,
-    avgRoleSeniorityScore: input.avgRoleSeniorityScore || 0,
-    tags: [],
-    aliases: [],
-    ...input,
-  };
-}
-
-function contact(input) {
-  return {
-    tenantId: seedTenant.id,
-    createdAt: pastDate(20),
-    updatedAt: now(),
-    source: 'seed',
-    sourceMetadata: {},
-    ...input,
-  };
-}
-
-function job(input) {
-  return {
-    tenantId: seedTenant.id,
-    active: true,
-    atsType: input.atsType || input.source || 'unknown',
-    sourceUrl: '',
-    createdAt: pastDate(10),
-    updatedAt: now(),
-    ...input,
-  };
-}
 
 function normalizeConfigPatch(input) {
   const output = { ...input };
@@ -1602,17 +1547,6 @@ function daysSince(value) {
   return Math.floor((Date.now() - new Date(value).getTime()) / 86400000);
 }
 
-function futureDate(days) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function pastDate(days) {
-  const date = new Date();
-  date.setDate(date.getDate() - days);
-  return date.toISOString();
-}
 
 // ── CSV parser ───────────────────────────────────────────────────────────────
 
