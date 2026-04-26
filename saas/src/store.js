@@ -46,58 +46,26 @@ const tenantProfiles = new Map([
   [seedTenant.id, { workspace, settings }],
 ]);
 
-const boardConfigs = [
-  {
-    id: 'cfg-northstar',
-    tenantId: seedTenant.id,
-    companyName: 'Northstar Robotics',
-    normalizedCompanyName: 'northstar robotics',
-    ats: 'greenhouse',
-    atsType: 'greenhouse',
-    boardId: 'northstarrobotics',
-    slug: 'northstarrobotics',
-    active: true,
-    discoveryStatus: 'resolved',
-    reviewStatus: 'approved',
-    confidenceBand: 'high',
-    source: 'seed',
-    lastImportStatus: 'success',
-  },
-  {
-    id: 'cfg-vertex',
-    tenantId: seedTenant.id,
-    companyName: 'Vertex Health Systems',
-    normalizedCompanyName: 'vertex health systems',
-    ats: 'lever',
-    atsType: 'lever',
-    boardId: 'vertexhealth',
-    slug: 'vertexhealth',
-    active: true,
-    discoveryStatus: 'resolved',
-    reviewStatus: 'approved',
-    confidenceBand: 'high',
-    source: 'seed',
-    lastImportStatus: 'success',
-  },
-];
+// Efficient tenant-keyed storage
+const accountsByTenant = new Map();
+const contactsByTenant = new Map();
+const jobsByTenant = new Map();
+const configsByTenant = new Map();
+const activitiesByTenant = new Map();
+const tasksByTenant = new Map();
 
-const accounts = [
-  account({
-    id: 'acct-northstar',
-    displayName: 'Northstar Robotics',
-    domain: 'northstar.example',
-    industry: 'Industrial automation',
-    location: 'Toronto, ON',
-    status: 'contacted',
-    outreachStatus: 'contacted',
-    targetScore: 91,
-    dailyScore: 91,
-    priorityTier: 'A',
-    owner: 'BD Engine Founder',
-    connectionCount: 2,
-    seniorContactCount: 2,
-    talentContactCount: 1,
-    buyerTitleCount: 1,
+// Global arrays for backward compatibility or cross-tenant ops if needed
+let accounts = [];
+let contacts = [];
+let jobs = [];
+let boardConfigs = [];
+let activities = [];
+let tasks = [];
+
+function getTenantArray(map, tenantId) {
+  if (!map.has(tenantId)) map.set(tenantId, []);
+  return map.get(tenantId);
+}
     jobCount: 2,
     openRoleCount: 14,
     newRoleCount7d: 2,
@@ -322,12 +290,12 @@ function persistTenant(tenantId) {
     pendingSaves.delete(tenantId);
     const profile = tenantProfiles.get(tenantId);
     const data = {
-      accounts: accounts.filter(a => a.tenantId === tenantId),
-      contacts: contacts.filter(c => c.tenantId === tenantId),
-      jobs: jobs.filter(j => j.tenantId === tenantId),
-      configs: boardConfigs.filter(c => c.tenantId === tenantId),
-      activities: activities.filter(a => a.tenantId === tenantId),
-      tasks: tasks.filter(t => t.tenantId === tenantId),
+      accounts: accountsByTenant.get(tenantId) || [],
+      contacts: contactsByTenant.get(tenantId) || [],
+      jobs: jobsByTenant.get(tenantId) || [],
+      configs: configsByTenant.get(tenantId) || [],
+      activities: activitiesByTenant.get(tenantId) || [],
+      tasks: tasksByTenant.get(tenantId) || [],
       settings: profile ? { ...profile.settings, persona: profile.persona } : {},
     };
     dbSaveTenantData(tenantId, data).catch(err => console.error('Persist error:', err.message));
@@ -347,14 +315,6 @@ export function createStore() {
             settings: { ...data.settings },
             persona: data.settings?.persona || 'bd',
           });
-        } else {
-          const profile = tenantProfiles.get(tenantId);
-          if (data.settings) Object.assign(profile.settings, data.settings);
-          if (data.settings?.persona) profile.persona = data.settings.persona;
-        }
-
-        // Load accounts (avoid duplicates)
-        for (const a of (data.accounts || [])) {
           if (!accounts.some(x => x.id === a.id)) accounts.push(a);
         }
         // Load contacts
@@ -1010,30 +970,13 @@ export function createStore() {
         location: payload.location || '',
         status: payload.status || 'new',
         outreachStatus: payload.outreachStatus || 'not_started',
-        targetScore: payload.targetScore || 0,
-        dailyScore: 0,
-        priorityTier: payload.priorityTier || 'C',
-        owner: payload.owner || '',
-        connectionCount: payload.connectionCount || 0,
-        seniorContactCount: payload.seniorContactCount || 0,
-        talentContactCount: payload.talentContactCount || 0,
-        buyerTitleCount: payload.buyerTitleCount || 0,
-        jobCount: 0,
-        openRoleCount: 0,
-        newRoleCount7d: 0,
-        jobsLast30Days: 0,
-        hiringVelocity: 0,
-        engagementScore: 0,
-        relationshipStrengthScore: 0,
-        alertPriorityScore: 0,
-        nextAction: '',
-        notes: payload.notes || '',
+        ...payload,
         createdAt: now(),
         updatedAt: now(),
       });
-      // Override the default tenantId from account() factory
       item.tenantId = tenantId;
       accounts.push(item);
+      getTenantArray(accountsByTenant, tenantId).push(item);
       if (!_skipPersist) persistTenant(tenantId);
       return item;
     },
@@ -1067,6 +1010,7 @@ export function createStore() {
       // Override the default tenantId from contact() factory
       item.tenantId = tenantId;
       contacts.push(item);
+      getTenantArray(contactsByTenant, tenantId).push(item);
       if (!_skipPersist) persistTenant(tenantId);
       return item;
     },
@@ -1531,32 +1475,27 @@ function pickPatch(input, fields) {
 }
 
 function accountsForTenant(tenantId) {
-  return accounts
-    .filter((item) => item.tenantId === tenantId)
+  return (accountsByTenant.get(tenantId) || [])
     .sort((a, b) => b.targetScore - a.targetScore);
 }
 
 function contactsForTenant(tenantId) {
-  return contacts
-    .filter((item) => item.tenantId === tenantId)
+  return (contactsByTenant.get(tenantId) || [])
     .sort((a, b) => b.priorityScore - a.priorityScore);
 }
 
 function jobsForTenant(tenantId) {
-  return jobs
-    .filter((item) => item.tenantId === tenantId)
+  return (jobsByTenant.get(tenantId) || [])
     .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)));
 }
 
 function activitiesForTenant(tenantId) {
-  return activities
-    .filter((a) => a.tenantId === tenantId)
+  return (activitiesByTenant.get(tenantId) || [])
     .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
 }
 
 function tasksForTenant(tenantId) {
-  return tasks
-    .filter((t) => t.tenantId === tenantId)
+  return (tasksByTenant.get(tenantId) || [])
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 }
 
