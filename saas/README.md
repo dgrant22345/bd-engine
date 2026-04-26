@@ -16,8 +16,8 @@ Open <http://localhost:8787>.
 
 ## What This Prototype Includes
 
-- Hosted web shell for BD Engine Cloud
-- Tenant-aware API shape
+- The same static v0 frontend used by the local Windows app, served from `../app`
+- Tenant-aware API compatibility layer for the existing frontend routes
 - Seeded demo tenant with accounts, contacts, jobs, activity, and follow-ups
 - Outreach draft and log endpoints
 - Production data model draft in `schema.sql`
@@ -27,6 +27,7 @@ Open <http://localhost:8787>.
 
 - Authentication is a development stub
 - Data is in-memory unless the Postgres adapter is implemented
+- Some local-admin workflows are stubbed until they are moved to hosted workers
 - Stripe billing is not connected
 - Email/LinkedIn sending is not automated
 - No production audit logging, rate limiting, or tenant isolation tests yet
@@ -44,4 +45,3 @@ or, if explicitly resetting this branch:
 ```powershell
 git reset --hard saas-experiment-start-2026-04-26
 ```
-

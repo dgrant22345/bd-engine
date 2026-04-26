@@ -14,12 +14,12 @@ BD Engine Cloud helps staffing and recruiting business development teams:
 
 ## Architecture Direction
 
-The first prototype is deliberately dependency-light:
+The first prototype is deliberately dependency-light, but it now serves the same v0 frontend used by the local app:
 
 - `saas/src/server.js` hosts the API and static app shell.
-- `saas/src/store.js` exposes the tenant-aware data access boundary.
+- `saas/src/store.js` exposes the tenant-aware data access boundary and compatibility payloads for the existing frontend.
 - `saas/schema.sql` defines the intended hosted Postgres model.
-- `saas/public/` is a hosted dashboard shell.
+- `app/` remains the shared frontend until the hosted app needs a build system.
 
 The local Windows app remains unchanged and can keep shipping as a private/local edition.
 
@@ -82,4 +82,3 @@ or:
 ```powershell
 git reset --hard saas-experiment-start-2026-04-26
 ```
-
