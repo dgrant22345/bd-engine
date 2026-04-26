@@ -560,7 +560,8 @@ function getAppIndexHtml() {
     .replace(/href="\/app\.js/g, 'href="/app/app.js')
     .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
-    .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?navigator\.serviceWorker\.register\('\/sw\.js'\)[\s\S]*?\}\s*<\/script>/, '');
+    .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?navigator\.serviceWorker\.register\('\/sw\.js'\)[\s\S]*?\}\s*<\/script>/, '')
+    .replace('</body>', '<script src="/persona-labels.js"></script>\n</body>');
 }
 
 function tryStaticFile(baseDir, pathname) {
