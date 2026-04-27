@@ -1526,6 +1526,9 @@ async function init() {
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
       location.hash = '#/setup';
       await renderRoute();
+      if (!appState.onboardingDone) {
+        setTimeout(startProductTour, 500);
+      }
       return;
     }
     if (routeNeedsBootstrapFilters(initialRoot)) {
@@ -1690,6 +1693,14 @@ function bindEvents() {
     }
 
     const actionName = action.dataset.action;
+    if (actionName === 'next-tour-step') {
+      nextTourStep();
+      return;
+    }
+    if (actionName === 'end-tour') {
+      endTour();
+      return;
+    }
     if (actionName === 'setup-browse-csv') {
       document.getElementById('setup-csv-file')?.click();
       return;
@@ -1720,6 +1731,9 @@ function bindEvents() {
       await loadBootstrap(true, { includeFilters: true });
       location.hash = '#/dashboard';
       await renderRoute();
+      if (!appState.onboardingDone) {
+        setTimeout(startProductTour, 500);
+      }
       return;
     }
     if (actionName === 'paginate') {
@@ -1735,6 +1749,9 @@ function bindEvents() {
         return;
       }
       await renderRoute();
+      if (!appState.onboardingDone) {
+        setTimeout(startProductTour, 500);
+      }
       return;
     }
     if (actionName === 'save-current-filter') {
@@ -3091,6 +3108,22 @@ function renderSetupStepContent(stepKey) {
           <h3>${escapeHtml(importTitle)}</h3>
           <p class="muted">${importCopyHtml}</p>
         </div>
+        
+        <div class="onboarding-guide onboarding-guide--setup">
+          <p class="onboarding-guide__title">How to get your Connections.csv:</p>
+          <ol class="onboarding-guide__list">
+            <li>Go to <strong>Settings & Privacy</strong> on LinkedIn.</li>
+            <li>Click <strong>Data privacy</strong> in the sidebar.</li>
+            <li>Select <strong>Get a copy of your data</strong>.</li>
+            <li>Choose <strong>"Want something in particular?"</strong> and check <strong>Connections</strong>.</li>
+            <li>Click <strong>Request archive</strong>. LinkedIn will email you a link usually within <strong>10–15 minutes</strong>.</li>
+          </ol>
+          <div class="onboarding-guide__note">
+            <span class="toast-icon">&#8505;</span>
+            <span>Once you receive the zip from LinkedIn, look for the <code>Connections.csv</code> file inside.</span>
+          </div>
+        </div>
+
         <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
           <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
@@ -6915,4 +6948,77 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+/* -- Product Tour Logic -- */
+const tourSteps = [
+  { title: 'Welcome to BD Engine!', copy: 'Your revenue intelligence workspace is ready. Let’s take a 30-second tour to show you how to dominate your market.', target: null },
+  { title: 'Revenue Dashboard', copy: 'This is your high-level pulse. See your board coverage, active jobs, and intelligence freshness at a glance.', target: '.hero-signal-strip' },
+  { title: 'Tracked Accounts', copy: 'We’ve mapped your connections to companies. Each gets a Target Score based on your network strength and hiring velocity.', target: '[data-nav="accounts"]' },
+  { title: 'Open Roles', copy: 'Our engine automatically scrapes careers pages for your accounts. Fresh leads appear here every morning.', target: '[data-nav="jobs"]' },
+  { title: 'Global Pipeline', copy: 'The Revenue Pipeline is your automation hub. It enriches data and ingests jobs automatically every 24 hours.', target: '[data-action="run-pipeline"]' }
+];
+
+let currentTourStep = 0;
+
+async function startProductTour() {
+  if (appState.onboardingDone) return;
+  currentTourStep = 0;
+  appState.activeView = 'dashboard';
+  await renderDashboardView();
+  renderTourStep();
+}
+
+function renderTourStep() {
+  const step = tourSteps[currentTourStep];
+  if (!step) return endTour();
+
+  const existing = document.querySelector('.tour-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'tour-overlay';
+  overlay.innerHTML = `
+    <div class="tour-card">
+      <p class="tour-step-indicator">Step ${currentTourStep + 1} of ${tourSteps.length}</p>
+      <h3 class="tour-title">${step.title}</h3>
+      <p class="tour-copy">${step.copy}</p>
+      <div class="tour-actions">
+        <button class="ghost-button" data-action="end-tour">Skip tour</button>
+        <button class="primary-button" data-action="next-tour-step">${currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  if (step.target) {
+    const targetEl = document.querySelector(step.target);
+    if (targetEl) {
+      const rect = targetEl.getBoundingClientRect();
+      const highlight = document.createElement('div');
+      highlight.className = 'tour-highlight';
+      highlight.style.top = `${rect.top - 8 + window.scrollY}px`;
+      highlight.style.left = `${rect.left - 8 + window.scrollX}px`;
+      highlight.style.width = `${rect.width + 16}px`;
+      highlight.style.height = `${rect.height + 16}px`;
+      overlay.appendChild(highlight);
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+}
+
+function nextTourStep() {
+  currentTourStep++;
+  if (currentTourStep >= tourSteps.length) {
+    endTour();
+  } else {
+    renderTourStep();
+  }
+}
+
+function endTour() {
+  const overlay = document.querySelector('.tour-overlay');
+  if (overlay) overlay.remove();
+  appState.onboardingDone = true;
+  localStorage.setItem('bd_onboarding_done', 'true');
+  showToast('Tour complete! Happy hunting.', 'success');
 }

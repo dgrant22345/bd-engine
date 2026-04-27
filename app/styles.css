@@ -4694,3 +4694,16 @@ textarea:focus-visible {
 .pipeline-progress-bar-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent); animation: progress-shimmer 2s infinite; }
 @keyframes progress-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 @keyframes slide-down { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* -- Product Tour -- */
+.tour-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(4px); z-index: 10000; display: flex; align-items: center; justify-content: center; animation: fade-in 0.3s ease; }
+.tour-card { width: min(90vw, 420px); background: var(--surface-strong); border-radius: var(--radius-xl); padding: 32px; box-shadow: var(--shadow-lg); border: 1px solid var(--accent); position: relative; animation: rise-in 0.4s cubic-bezier(0.2, 0.65, 0.2, 1) both; }
+.tour-step-indicator { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.tour-title { font-size: 1.5rem; margin-bottom: 12px; color: var(--ink); }
+.tour-copy { color: var(--muted); line-height: 1.6; margin-bottom: 24px; }
+.tour-actions { display: flex; justify-content: space-between; align-items: center; }
+.tour-highlight { position: absolute; border: 3px solid var(--accent); border-radius: 8px; pointer-events: none; z-index: 10001; box-shadow: 0 0 0 5000px rgba(15, 23, 42, 0.4); transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+.onboarding-guide { background: var(--bg-soft); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 24px; border: 1px solid var(--line); }
+.onboarding-guide__title { font-weight: 700; margin-bottom: 12px; font-size: 0.95rem; }
+.onboarding-guide__list { padding-left: 20px; display: grid; gap: 8px; font-size: 0.9rem; }
+.onboarding-guide__note { margin-top: 12px; display: flex; gap: 8px; font-size: 0.85rem; color: var(--muted); font-style: italic; }
