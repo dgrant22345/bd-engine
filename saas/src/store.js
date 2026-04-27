@@ -729,7 +729,8 @@ export function createStore() {
 
     findTasks(tenantId, query) {
       assertTenant(tenantId);
-      return paginate(tasksForTenant(tenantId).filter(t => t.status === 'pending'), query);
+      const status = query.status || 'pending';
+      return paginate(tasksForTenant(tenantId).filter(t => t.status === status), query);
     },
 
     completeTask(tenantId, taskId) {

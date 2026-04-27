@@ -90,6 +90,7 @@ const appState = {
     ownersText: '',
     licenseKey: '',
   },
+  taskQuery: { page: 1, pageSize: 50, status: 'pending' },
 };
 
 const viewTitle = document.getElementById('view-title');
@@ -2009,15 +2010,15 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'filter-tasks') {
+      appState.taskQuery.status = action.dataset.status;
+      appState.taskQuery.page = 1;
+      await renderTasksView();
+      return;
+    }
+
     if (actionName === 'complete-task') {
-      const taskId = action.dataset.id;
-      await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
-      const item = document.getElementById(`task-${taskId}`);
-      if (item) {
-        item.classList.add('task-completed');
-        setTimeout(() => item.remove(), 600);
-      }
-      showToast('Task marked as complete');
+      await completeTask(action.dataset.id);
       return;
     }
 
@@ -2911,6 +2912,13 @@ async function renderRoute() {
     activateNav('contacts');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Contacts' }]);
     await renderContactsView();
+    return;
+  }
+
+  if (root === 'tasks') {
+    activateNav('tasks');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Tasks' }]);
+    await renderTasksView();
     return;
   }
 
@@ -7035,4 +7043,88 @@ function endTour() {
   appState.onboardingDone = true;
   localStorage.setItem('bd_onboarding_done', 'true');
   showToast('Tour complete! Happy hunting.', 'success');
+}
+
+async function renderTasksView() {
+  renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
+  try {
+    const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    setViewTitle('Tasks & Reminders');
+
+    const overdue = tasks.items.filter(t => new Date(t.dueDate) < new Date() && t.status === 'pending');
+    const today = tasks.items.filter(t => isToday(t.dueDate) && t.status === 'pending');
+    const upcoming = tasks.items.filter(t => new Date(t.dueDate) > new Date() && !isToday(t.dueDate) && t.status === 'pending');
+    const completed = tasks.items.filter(t => t.status === 'completed');
+
+    appRoot.innerHTML = `
+      <section class="tasks-view">
+        <div class="tasks-header">
+          <div class="tasks-tabs">
+            <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" data-action="filter-tasks" data-status="pending">Pending</button>
+            <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" data-action="filter-tasks" data-status="completed">Completed</button>
+          </div>
+        </div>
+
+        <div class="tasks-content">
+          ${appState.taskQuery.status === 'pending' ? `
+            ${renderTaskSection('Overdue', overdue, 'error')}
+            ${renderTaskSection('Today', today, 'warning')}
+            ${renderTaskSection('Upcoming', upcoming, 'success')}
+            ${!overdue.length && !today.length && !upcoming.length ? '<div class="empty-state">No pending tasks! Time to generate some outreach.</div>' : ''}
+          ` : `
+            ${renderTaskSection('Completed', completed, 'neutral')}
+            ${!completed.length ? '<div class="empty-state">No completed tasks yet.</div>' : ''}
+          `}
+        </div>
+      </section>
+    `;
+  } catch (error) {
+    appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${error.message}</div>`;
+  }
+}
+
+function renderTaskSection(title, tasks, tone) {
+  if (!tasks.length) return '';
+  return `
+    <div class="task-section">
+      <h4 class="task-section-title task-section-title--${tone}">${title} (${tasks.length})</h4>
+      <div class="task-list">
+        ${tasks.map(renderTaskItem).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderTaskItem(task) {
+  return `
+    <article class="task-item">
+      <div class="task-item-main">
+        <div class="task-item-info">
+          <strong>${escapeHtml(task.summary)}</strong>
+          <div class="small muted">Due ${formatDate(task.dueDate)}</div>
+        </div>
+        <div class="task-item-actions">
+          ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
+          ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+async function completeTask(taskId) {
+  try {
+    await api(\`/api/tasks/\${taskId}/complete\`, { method: 'POST' });
+    showToast('Task completed!', 'success');
+    invalidateAppData();
+    await renderTasksView();
+  } catch (error) {
+    showToast('Failed to complete task: ' + error.message, 'error');
+  }
+}
+
+function isToday(dateStr) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
 }
