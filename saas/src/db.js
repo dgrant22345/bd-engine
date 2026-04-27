@@ -240,25 +240,28 @@ export async function dbLoadAllMemberships() {
 export async function dbSaveTenantData(tenantId, data) {
   if (!dbReady) return;
   try {
+    // Only stringify if provided, otherwise pass null to trigger COALESCE in SQL
+    const s = (v) => (v === undefined || v === null) ? null : JSON.stringify(v);
+
     await pool.query(
       `INSERT INTO tenant_data (tenant_id, accounts, contacts, jobs, configs, activities, settings, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (tenant_id) DO UPDATE SET
-         accounts = EXCLUDED.accounts,
-         contacts = EXCLUDED.contacts,
-         jobs = EXCLUDED.jobs,
-         configs = EXCLUDED.configs,
-         activities = EXCLUDED.activities,
-         settings = EXCLUDED.settings,
+         accounts = COALESCE(EXCLUDED.accounts, tenant_data.accounts),
+         contacts = COALESCE(EXCLUDED.contacts, tenant_data.contacts),
+         jobs = COALESCE(EXCLUDED.jobs, tenant_data.jobs),
+         configs = COALESCE(EXCLUDED.configs, tenant_data.configs),
+         activities = COALESCE(EXCLUDED.activities, tenant_data.activities),
+         settings = COALESCE(EXCLUDED.settings, tenant_data.settings),
          updated_at = EXCLUDED.updated_at`,
       [
         tenantId,
-        JSON.stringify(data.accounts || []),
-        JSON.stringify(data.contacts || []),
-        JSON.stringify(data.jobs || []),
-        JSON.stringify(data.configs || []),
-        JSON.stringify(data.activities || []),
-        JSON.stringify(data.settings || {}),
+        s(data.accounts),
+        s(data.contacts),
+        s(data.jobs),
+        s(data.configs),
+        s(data.activities),
+        s(data.settings),
         new Date().toISOString(),
       ]
     );

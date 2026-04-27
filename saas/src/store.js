@@ -271,15 +271,25 @@ function persistTenant(tenantId) {
   pendingSaves.set(tenantId, setTimeout(() => {
     pendingSaves.delete(tenantId);
     const profile = tenantProfiles.get(tenantId);
+    const status = loadedTenants.get(tenantId) || {};
+    
+    // Only persist fields that have actually been loaded/initialized
     const data = {
-      accounts: accountsByTenant.get(tenantId) || [],
-      contacts: contactsByTenant.get(tenantId) || [],
-      jobs: jobsByTenant.get(tenantId) || [],
-      configs: configsByTenant.get(tenantId) || [],
-      activities: activitiesByTenant.get(tenantId) || [],
-      tasks: tasksByTenant.get(tenantId) || [],
-      settings: profile ? { ...profile.settings, persona: profile.persona } : {},
+      settings: profile ? { ...profile.settings, persona: profile.persona } : undefined
     };
+
+    if (status.core) {
+      data.accounts = accountsByTenant.get(tenantId);
+      data.jobs = jobsByTenant.get(tenantId);
+      data.configs = configsByTenant.get(tenantId);
+      data.activities = activitiesByTenant.get(tenantId);
+      data.tasks = tasksByTenant.get(tenantId);
+    }
+
+    if (status.contacts) {
+      data.contacts = contactsByTenant.get(tenantId);
+    }
+
     dbSaveTenantData(tenantId, data).catch(err => console.error('Persist error:', err.message));
   }, 500));
 }
@@ -288,15 +298,17 @@ const loadedTenants = new Map(); // tenantId -> { core: boolean, contacts: boole
 
 async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (!isDbEnabled()) return;
-  
   const status = loadedTenants.get(tenantId) || { core: false, contacts: false };
+  
+  // If we already have what we need, return immediately
   if (status.core && (!needsContacts || status.contacts)) return;
 
+  const start = Date.now();
+  console.log(`  Store: Loading data for ${tenantId} (needsContacts: ${needsContacts})`);
+
   const { dbLoadTenantData } = await import('./db.js');
-  // If we have core but need contacts, only load contacts.
-  // Actually, for simplicity, we reload if we need more, but ideally we'd just fetch the missing column.
-  // Let's do the simplest: if we don't have what we need, fetch.
   const data = await dbLoadTenantData(tenantId, needsContacts);
+  
   if (data) {
     if (data.accounts.length > 0 || !status.core) {
       const tenantAccts = data.accounts || [];
@@ -307,25 +319,28 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       activitiesByTenant.set(tenantId, data.activities || []);
       tasksByTenant.set(tenantId, data.tasks || []);
 
-      const existingAcctIds = new Set(accounts.map(x => x.id));
-      for (const a of tenantAccts) if (!existingAcctIds.has(a.id)) accounts.push(a);
+      // Optimization: Only merge into global arrays if this is the FIRST load for this tenant
+      if (!status.core) {
+        const existingAcctIds = new Set(accounts.map(x => x.id));
+        for (const a of tenantAccts) if (!existingAcctIds.has(a.id)) accounts.push(a);
 
-      const existingJobIds = new Set(jobs.map(x => x.id));
-      for (const j of (data.jobs || [])) if (!existingJobIds.has(j.id)) jobs.push(j);
+        const existingJobIds = new Set(jobs.map(x => x.id));
+        for (const j of (data.jobs || [])) if (!existingJobIds.has(j.id)) jobs.push(j);
 
-      const existingConfigIds = new Set(boardConfigs.map(x => x.id));
-      for (const c of (data.configs || [])) if (!existingConfigIds.has(c.id)) boardConfigs.push(c);
+        const existingConfigIds = new Set(boardConfigs.map(x => x.id));
+        for (const c of (data.configs || [])) if (!existingConfigIds.has(c.id)) boardConfigs.push(c);
 
-      const existingActivityIds = new Set(activities.map(x => x.id));
-      for (const a of (data.activities || [])) if (!existingActivityIds.has(a.id)) activities.push(a);
+        const existingActivityIds = new Set(activities.map(x => x.id));
+        for (const a of (data.activities || [])) if (!existingActivityIds.has(a.id)) activities.push(a);
 
-      const existingTaskIds = new Set(tasks.map(x => x.id));
-      for (const t of (data.tasks || [])) if (!existingTaskIds.has(t.id)) tasks.push(t);
+        const existingTaskIds = new Set(tasks.map(x => x.id));
+        for (const t of (data.tasks || [])) if (!existingTaskIds.has(t.id)) tasks.push(t);
+      }
 
       status.core = true;
     }
     
-    if (needsContacts) {
+    if (needsContacts && !status.contacts) {
       const tenantConts = data.contacts || [];
       tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
       contactsByTenant.set(tenantId, tenantConts);
@@ -336,7 +351,9 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       status.contacts = true;
     }
   }
+  
   loadedTenants.set(tenantId, status);
+  console.log(`  Store: Data loaded for ${tenantId} in ${Date.now() - start}ms`);
 }
 
 export function createStore() {
