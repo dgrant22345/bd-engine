@@ -114,6 +114,7 @@ const settings = {
   maxCompaniesToReview: 100,
   geographyFocus: 'Canada + US',
   gtaPriority: false,
+  jobRetentionDays: 28,
   ownerRoster: [
     { id: 'owner-founder', name: 'BD Engine Founder', displayName: 'BD Engine Founder', email: 'founder@example.com', role: 'Owner' },
     { id: 'owner-ae', name: 'Cloud AE', displayName: 'Cloud AE', email: 'ae@example.com', role: 'BD' },
@@ -649,6 +650,7 @@ export function createStore() {
         'maxCompaniesToReview',
         'geographyFocus',
         'gtaPriority',
+        'jobRetentionDays',
       ]));
       persistTenant(tenantId);
       return { ok: true, settings: { ...profile.settings } };
@@ -1044,9 +1046,13 @@ export function createStore() {
           }
           update('ingestion', 90, 'Job ingestion complete.');
 
-          // Stage 4: Scoring (100%)
+          // Stage 4: Scoring (95%)
           update('scoring', 95, 'Recalculating target scores...');
           await new Promise(r => setTimeout(r, 500));
+
+          // Stage 5: Cleanup (100%)
+          update('cleanup', 98, 'Purging stale data and optimizing database...');
+          this.purgeStaleJobs(tenantId);
           
           job.status = 'completed';
           job.progress = 100;
@@ -1060,6 +1066,28 @@ export function createStore() {
       })();
 
       return job;
+    },
+
+    purgeStaleJobs(tenantId) {
+      assertTenant(tenantId);
+      const profile = getTenantProfile(tenantId);
+      const retentionDays = Number(profile.settings.jobRetentionDays || 28);
+      const threshold = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+      
+      const tenantJobs = jobsByTenant.get(tenantId);
+      if (!tenantJobs) return;
+
+      const initialCount = tenantJobs.length;
+      const filteredJobs = tenantJobs.filter(j => {
+        const postedAt = new Date(j.postedAt).getTime();
+        return postedAt > threshold;
+      });
+
+      if (filteredJobs.length !== initialCount) {
+        jobsByTenant.set(tenantId, filteredJobs);
+        console.log(`[Purge] Removed ${initialCount - filteredJobs.length} jobs for ${tenantId} (Retention: ${retentionDays} days)`);
+        persistTenant(tenantId);
+      }
     },
 
     search(tenantId, query) {

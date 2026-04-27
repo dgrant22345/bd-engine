@@ -4088,6 +4088,13 @@ async function renderAccountDetail(accountId) {
             <input name="summary" placeholder="Quick note..." class="compact-input">
             <select name="type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
             <select name="pipelineStage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
+            <select name="followUpDays" class="compact-select">
+              <option value="">No reminder</option>
+              <option value="3">Follow up in 3 days</option>
+              <option value="7">Follow up in 1 week</option>
+              <option value="14">Follow up in 2 weeks</option>
+              <option value="30">Follow up in 1 month</option>
+            </select>
             <button class="secondary-button compact-btn" type="submit">Log</button>
           </form>
           <div class="timeline" style="max-height:400px;overflow-y:auto;">
@@ -4791,6 +4798,7 @@ async function renderAdminView() {
             ${renderField('Max companies to review', `<input name="maxCompaniesToReview" type="number" min="1" value="${escapeAttr(stateBootstrap.settings.maxCompaniesToReview)}">`)}
             ${renderField('Geography focus', `<input name="geographyFocus" value="${escapeAttr(stateBootstrap.settings.geographyFocus)}">`)}
             ${renderField('GTA priority', `<select name="gtaPriority"><option value="true" ${selected(String(stateBootstrap.settings.gtaPriority), 'true')}>Enabled</option><option value="false" ${selected(String(stateBootstrap.settings.gtaPriority), 'false')}>Disabled</option></select>`)}
+            ${renderField('Job retention (days)', `<input name="jobRetentionDays" type="number" min="1" value="${escapeAttr(stateBootstrap.settings.jobRetentionDays || 28)}">`)}
             <div><button class="primary-button" type="submit">Save settings</button></div>
           </form>
         ${renderCollapsibleEnd()}
@@ -6397,7 +6405,8 @@ async function logGeneratedOutreach(buttonEl) {
   const account = detail.account;
   const contact = getSelectedOutreachContact();
   const contactLabel = contact.name || 'selected contact';
-  const followUpAt = getFutureDateInput(7);
+  const followUpDays = parseInt(document.getElementById('outreach-followup-days')?.value || '7', 10);
+  const followUpAt = getFutureDateInput(followUpDays);
   const today = getFutureDateInput(0);
   const summary = `Sent email + LinkedIn outreach to ${contactLabel}`;
   const notes = buildOutreachLogNotes(outreach, contact, followUpAt);
@@ -6602,6 +6611,11 @@ function renderGeneratedOutreach(outreach) {
         ${outreach.sequenceGuidance ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Sequence context</span><p>${escapeHtml(outreach.sequenceGuidance)}</p></div>` : ''}
         ${outreach.companySnippet ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Company context</span><p>${escapeHtml(outreach.companySnippet)}</p></div>` : ''}
         <div class="button-row outreach-piece-actions">
+          <select id="outreach-followup-days" class="inline-select inline-select--sm" style="width: auto; margin-right: 8px;">
+            <option value="3">3 days</option>
+            <option value="7" selected>1 week</option>
+            <option value="14">2 weeks</option>
+          </select>
           <button class="primary-button" data-action="log-generated-outreach" type="button">Log sent + follow-up</button>
           <span class="small muted">Use after sending the email draft and LinkedIn message.</span>
         </div>
