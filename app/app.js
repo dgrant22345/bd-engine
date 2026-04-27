@@ -4,6 +4,7 @@ const appState = {
   localOverlays: null,
   activeView: 'dashboard',
   accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', priority: '', status: '', owner: '', outreachStatus: '', sortBy: '' },
+  taskQuery: { page: 1, pageSize: 25, q: '', owner: '', due: 'all' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -96,6 +97,7 @@ function bindEvents() {
       const view = action.dataset.view;
       const page = Number(action.dataset.page);
       if (view === 'accounts') appState.accountQuery.page = page;
+      if (view === 'tasks') appState.taskQuery.page = page;
       if (view === 'contacts') appState.contactQuery.page = page;
       if (view === 'jobs') appState.jobQuery.page = page;
       if (view === 'configs') appState.configQuery.page = page;
@@ -104,7 +106,15 @@ function bindEvents() {
         await refreshEnrichmentPanel();
         return;
       }
+      if (view === 'tasks') {
+        await renderTasksView();
+        return;
+      }
       await renderRoute();
+      return;
+    }
+    if (actionName === 'complete-task') {
+      await completeTask(action.dataset.id);
       return;
     }
     if (actionName === 'apply-enrichment-filter') {
@@ -250,6 +260,12 @@ function bindEvents() {
     if (form.id === 'contacts-filter-form') {
       appState.contactQuery = { ...appState.contactQuery, page: 1, ...getFormValues(form) };
       await renderContactsView();
+      return;
+    }
+
+    if (form.id === 'tasks-filter-form') {
+      appState.taskQuery = { ...appState.taskQuery, page: 1, ...getFormValues(form) };
+      await renderTasksView();
       return;
     }
 
@@ -411,7 +427,7 @@ function getRouteRoot(hashValue = location.hash) {
 }
 
 function routeNeedsBootstrapFilters(routeRoot) {
-  return routeRoot === 'accounts' || routeRoot === 'admin';
+  return routeRoot === 'accounts' || routeRoot === 'admin' || routeRoot === 'tasks';
 }
 
 function invalidateAppData() {
@@ -576,6 +592,12 @@ async function renderRoute() {
   if (root === 'contacts') {
     activateNav('contacts');
     await renderContactsView();
+    return;
+  }
+
+  if (root === 'tasks') {
+    activateNav('tasks');
+    await renderTasksView();
     return;
   }
 
@@ -987,6 +1009,70 @@ async function renderContactsView() {
   `;
 }
 
+async function renderTasksView() {
+  renderLoadingState('Tasks', 'Prioritizing follow-ups and next actions...');
+  setViewTitle('Tasks');
+  const query = {
+    page: appState.taskQuery.page,
+    pageSize: appState.taskQuery.pageSize,
+    q: appState.taskQuery.q,
+    owner: appState.taskQuery.owner,
+    sortBy: 'score',
+    active: 'true',
+  };
+  const result = await api(`/api/accounts${buildQuery(query)}`);
+  const dueFilter = appState.taskQuery.due || 'all';
+  const now = new Date();
+  const filtered = (result.items || []).filter((item) => {
+    const hasTask = Boolean((item.nextAction || '').trim()) || Boolean(item.nextActionAt);
+    if (!hasTask) return false;
+    if (dueFilter === 'all') return true;
+    if (!item.nextActionAt) return dueFilter === 'unscheduled';
+    const dueAt = new Date(item.nextActionAt);
+    if (Number.isNaN(dueAt.getTime())) return dueFilter === 'unscheduled';
+    if (dueFilter === 'overdue') return dueAt < now;
+    if (dueFilter === 'today') return dueAt.toDateString() === now.toDateString();
+    if (dueFilter === 'week') return dueAt <= new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+    return true;
+  });
+
+  appRoot.innerHTML = `
+    <section class="hero-card">
+      <div class="hero-layout">
+        <div class="hero-copy">
+          <p class="eyebrow">Task board</p>
+          <h3>Focused follow-up queue</h3>
+          <p class="subtitle">Track due outreach and clear completed next actions without leaving the app.</p>
+        </div>
+        <div class="kpi-ribbon">
+          ${renderMetricTile('Visible tasks', formatNumber(filtered.length))}
+          ${renderMetricTile('Overdue', formatNumber(filtered.filter((item) => item.nextActionAt && new Date(item.nextActionAt) < now).length))}
+          ${renderMetricTile('Unscheduled', formatNumber(filtered.filter((item) => !item.nextActionAt).length))}
+        </div>
+      </div>
+    </section>
+    <section class="table-card">
+      <form id="tasks-filter-form" class="filter-grid">
+        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Company, owner, or action">`)}
+        ${renderField('Owner', `<input name="owner" value="${escapeAttr(appState.taskQuery.owner || '')}" placeholder="Owner name">`)}
+        ${renderField('Due window', `
+          <select name="due">
+            ${renderOption('all', 'All tasks', appState.taskQuery.due)}
+            ${renderOption('overdue', 'Overdue', appState.taskQuery.due)}
+            ${renderOption('today', 'Due today', appState.taskQuery.due)}
+            ${renderOption('week', 'Due in 7 days', appState.taskQuery.due)}
+            ${renderOption('unscheduled', 'Unscheduled', appState.taskQuery.due)}
+          </select>
+        `)}
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">Apply</button>
+        </div>
+      </form>
+      ${renderTasksTable(filtered)}
+    </section>
+  `;
+}
+
 async function renderJobsView() {
   renderLoadingState('Jobs', 'Loading job activity...');
   setViewTitle('Jobs');
@@ -1332,6 +1418,28 @@ function renderContactsTable(items) {
           <td><form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form></td>
         </tr>`).join('')}
     </tbody></table></div>`;
+}
+
+function renderTasksTable(items) {
+  if (!items || items.length === 0) {
+    return '<div class="empty-state">No tasks match these filters. Try switching the due window or adding a next action on an account.</div>';
+  }
+  return `
+    <table>
+      <thead><tr><th>Account</th><th>Next action</th><th>Owner</th><th>Due</th><th></th></tr></thead>
+      <tbody>
+        ${items.map((item) => `
+          <tr>
+            <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a></td>
+            <td>${escapeHtml(item.nextAction || 'Follow up')}</td>
+            <td>${escapeHtml(item.owner || 'Unassigned')}</td>
+            <td>${item.nextActionAt ? escapeHtml(formatDate(item.nextActionAt)) : '<span class="muted">Unscheduled</span>'}</td>
+            <td><button class="ghost-button" data-action="complete-task" data-id="${item.id}">Mark done</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function renderJobsTable(items, compact) {
@@ -1892,6 +2000,17 @@ async function retryConfigResolution(configId) {
   window.bdLocalApi.setAlert('Config resolution queued.', appAlert);
   await watchBackgroundJob(accepted.jobId, { label: 'Config resolution' });
   window.bdLocalApi.setAlert('Config resolution finished.', appAlert);
+}
+
+async function completeTask(accountId) {
+  if (!accountId) return;
+  await api(`/api/accounts/${accountId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ nextAction: '', nextActionAt: '' }),
+  });
+  invalidateAppData();
+  window.bdLocalApi.setAlert('Task marked complete.', appAlert);
+  await renderTasksView();
 }
 
 async function reviewConfig(configId, decision) {

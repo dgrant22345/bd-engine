@@ -2275,6 +2275,52 @@ function Save-BdSqliteSegment {
     Sync-BdSqliteSegment -Segment $Segment -Data $Data -SkipSnapshots:$SkipSnapshots | Out-Null
 }
 
+function Sync-BdSqliteSegmentPartial {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities', 'ImportRuns')]
+        [string]$Segment,
+        [Parameter(Mandatory = $true)]
+        $Data,
+        [switch]$SkipSnapshots
+    )
+
+    $state = [ordered]@{
+        workspace = $null
+        settings = $null
+        companies = @()
+        contacts = @()
+        jobs = @()
+        boardConfigs = @()
+        activities = @()
+        importRuns = @()
+    }
+
+    switch ($Segment) {
+        'Companies' { $state.companies = @($Data) }
+        'Contacts' { $state.contacts = @($Data) }
+        'Jobs' { $state.jobs = @($Data) }
+        'BoardConfigs' { $state.boardConfigs = @($Data) }
+        'Activities' { $state.activities = @($Data) }
+        'ImportRuns' { $state.importRuns = @($Data) }
+    }
+
+    return (Sync-BdSqliteStateSegmentsPartial -State $state -Segments @($Segment) -SkipSnapshots:$SkipSnapshots)
+}
+
+function Save-BdSqliteSegmentPartial {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities', 'ImportRuns')]
+        [string]$Segment,
+        [Parameter(Mandatory = $true)]
+        $Data,
+        [switch]$SkipSnapshots
+    )
+
+    Sync-BdSqliteSegmentPartial -Segment $Segment -Data $Data -SkipSnapshots:$SkipSnapshots | Out-Null
+}
+
 function Get-BdSqliteStoreSignature {
     $dbPath = Get-BdSqliteDatabasePath
     if (-not (Test-Path -LiteralPath $dbPath)) {
