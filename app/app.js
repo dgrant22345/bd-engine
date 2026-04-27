@@ -4439,11 +4439,15 @@ async function renderAdminView() {
   const rolloutRemainingCount = Number(targetScoreRollout.remainingCount || 0);
   const rolloutActive = Boolean(targetScoreRollout.hasActiveJob);
   const rolloutButtonLabel = rolloutActive ? 'Monitor rollout' : (rolloutRemainingCount > 0 ? 'Run rollout' : 'No rollout needed');
+  const lastRun = stateBootstrap.settings?.lastPipelineRun || 0;
+  const lastRunTime = lastRun ? new Date(lastRun).toLocaleString() : 'Never';
+  const isStale = !lastRun || (Date.now() - lastRun > 24 * 60 * 60 * 1000);
+  
   const rolloutHint = rolloutActive
     ? (targetScoreRollout.activeJobProgressMessage || 'A rollout job is already draining the backlog in the background worker.')
     : (rolloutRemainingCount > 0
       ? 'Run partial batches through the worker so the remaining intelligence backfill does not block startup.'
-      : 'The target-score intelligence backlog is fully caught up.');
+      : (isStale ? 'Revenue intelligence is stale. Run the global pipeline to refresh jobs and scores.' : 'The revenue pipeline is up to date.'));
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
   const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
@@ -4498,6 +4502,7 @@ async function renderAdminView() {
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
             ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
             ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
+            ${renderSignalChip('Last run', lastRunTime, isStale ? 'warning' : 'success')}
             ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
           </div>
           <div class="story-strip">

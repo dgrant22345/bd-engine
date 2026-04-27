@@ -78,6 +78,7 @@ async function startServer() {
 
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
+    startPeriodicPipelineRunner();
   });
 
   // Graceful shutdown
@@ -89,6 +90,24 @@ async function startServer() {
       process.exit(0);
     });
   }
+}
+
+function startPeriodicPipelineRunner() {
+  const interval = 24 * 60 * 60 * 1000; // 24 hours
+  console.log('[Scheduler] Starting 24-hour periodic pipeline runner...');
+  
+  setInterval(() => {
+    console.log('[Scheduler] Running scheduled pipelines for all tenants...');
+    const tenants = store.getAllTenants?.() || [];
+    tenants.forEach(tenant => {
+      try {
+        console.log(`[Scheduler] Auto-starting pipeline for ${tenant.id}`);
+        store.startRevenuePipeline(tenant.id);
+      } catch (err) {
+        console.error(`[Scheduler] Failed to auto-start pipeline for ${tenant.id}:`, err.message);
+      }
+    });
+  }, interval);
 }
 
 async function initializeData() {

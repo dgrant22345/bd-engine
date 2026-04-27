@@ -657,8 +657,15 @@ export function createStore() {
     completeSetup(tenantId) {
       assertTenant(tenantId);
       const profile = getTenantProfile(tenantId);
+      const wasComplete = profile.settings.setupComplete;
       profile.settings.setupComplete = true;
+      profile.settings.lastPipelineRun = now();
       persistTenant(tenantId);
+      
+      if (!wasComplete) {
+        console.log(`[Auto-Pipeline] Triggering initial pipeline for ${tenantId}`);
+        this.startRevenuePipeline(tenantId);
+      }
       return { ok: true };
     },
 
@@ -1063,6 +1070,10 @@ export function createStore() {
         contacts: filterText(contactsForTenant(tenantId), q, ['fullName', 'companyName', 'title', 'email']).slice(0, 8),
         jobs: filterText(jobsForTenant(tenantId), q, ['title', 'companyName', 'location']).slice(0, 8),
       };
+    },
+
+    getAllTenants() {
+      return Array.from(tenantsById.values());
     },
 
     // ── Account creation ──────────────────────────────────────────────────
