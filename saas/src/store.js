@@ -1062,9 +1062,12 @@ export function createStore() {
 
     async importLinkedInCSV(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      // IMPORTANT: Must load contacts to perform deduplication correctly
+      await ensureDataLoaded(tenantId, true);
       const dryRun = Boolean(options.dryRun);
       const plan = options.plan || { limits: {} };
+      const timestamp = now();
+      
       const rows = parseCSV(csvText || '');
       if (!String(csvText || '').trim()) {
         return {
@@ -1106,16 +1109,16 @@ export function createStore() {
           continue;
         }
 
-        if (!companyMap.has(normalizeKey(company))) {
-          companyMap.set(normalizeKey(company), {
+        const compKey = normalizeKey(company);
+        if (!companyMap.has(compKey)) {
+          companyMap.set(compKey, {
             displayName: company,
             contacts: [],
             domain: email ? email.split('@')[1] || '' : '',
           });
         }
 
-        const companyEntry = companyMap.get(normalizeKey(company));
-        // If this contact has an email domain, use it for the company
+        const companyEntry = companyMap.get(compKey);
         if (email && !companyEntry.domain) {
           const domain = email.split('@')[1] || '';
           if (domain && !domain.match(/gmail|yahoo|hotmail|outlook|icloud|aol|mail/i)) {
@@ -1142,10 +1145,14 @@ export function createStore() {
       let duplicatesSkipped = 0;
       let planLimitedSkipped = 0;
       const warnings = [];
+      
+      const tenantAcctArray = getTenantArray(accountsByTenant, tenantId);
+      const tenantContArray = getTenantArray(contactsByTenant, tenantId);
+      
       const accountLimit = Number(plan.limits?.accounts ?? -1);
       const contactLimit = Number(plan.limits?.contacts ?? -1);
-      let remainingNewAccounts = accountLimit === -1 ? Infinity : Math.max(0, accountLimit - accountsForTenant(tenantId).length);
-      let remainingNewContacts = contactLimit === -1 ? Infinity : Math.max(0, contactLimit - contactsForTenant(tenantId).length);
+      let remainingNewAccounts = accountLimit === -1 ? Infinity : Math.max(0, accountLimit - tenantAcctArray.length);
+      let remainingNewContacts = contactLimit === -1 ? Infinity : Math.max(0, contactLimit - tenantContArray.length);
 
       if (accountLimit !== -1 && remainingNewAccounts <= 0) {
         warnings.push(`Account limit reached for the ${plan.displayName || plan.name || 'current'} plan.`);
@@ -1154,20 +1161,18 @@ export function createStore() {
         warnings.push(`Contact limit reached for the ${plan.displayName || plan.name || 'current'} plan.`);
       }
 
-      // Create a fast lookup for existing contacts to avoid O(N^2) search
+      // Create fast lookups
       const existingContactsMap = new Map();
-      contacts.filter(c => c.tenantId === tenantId).forEach(c => {
-        const key = `${normalizeKey(c.fullName)}|${normalizeKey(c.companyName)}`;
-        existingContactsMap.set(key, c);
-      });
+      for (const c of tenantContArray) {
+        existingContactsMap.set(`${normalizeKey(c.fullName)}|${normalizeKey(c.companyName)}`, c);
+      }
 
       const existingAccountsMap = new Map();
-      accounts.filter(a => a.tenantId === tenantId).forEach(a => {
+      for (const a of tenantAcctArray) {
         existingAccountsMap.set(normalizeKey(a.displayName), a);
-      });
+      }
 
       for (const [normName, companyData] of companyMap) {
-        // Check if account already exists for this tenant
         let existingAccount = existingAccountsMap.get(normName);
 
         if (!existingAccount) {
@@ -1176,11 +1181,16 @@ export function createStore() {
             continue;
           }
           if (!dryRun) {
-            existingAccount = await this.addAccount(tenantId, {
+            existingAccount = account({
+              tenantId,
               displayName: companyData.displayName,
               domain: companyData.domain,
               connectionCount: companyData.contacts.length,
-            }, true);
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            });
+            accounts.push(existingAccount);
+            tenantAcctArray.push(existingAccount);
           } else {
             existingAccount = { id: `dry-${normName}`, tenantId, displayName: companyData.displayName };
           }
@@ -1189,7 +1199,7 @@ export function createStore() {
         } else {
           if (!dryRun) {
             existingAccount.connectionCount = (existingAccount.connectionCount || 0) + companyData.contacts.length;
-            existingAccount.updatedAt = now();
+            existingAccount.updatedAt = timestamp;
           }
           accountsUpdated++;
         }
@@ -1200,7 +1210,6 @@ export function createStore() {
         const newContacts = [];
 
         for (const c of companyData.contacts) {
-          // Skip if contact already exists
           const contactKey = `${normalizeKey(c.fullName)}|${normName}`;
           const existing = existingContactsMap.get(contactKey);
           if (existing) {
@@ -1222,7 +1231,8 @@ export function createStore() {
           if (isTalent) newTalentCount++;
 
           if (!dryRun) {
-            const contact = await this.addContact(tenantId, {
+            const contactItem = contact({
+              tenantId,
               accountId: existingAccount.id,
               firstName: c.firstName,
               lastName: c.lastName,
@@ -1236,8 +1246,12 @@ export function createStore() {
               seniority,
               isTalentLeader: isTalent,
               source: 'linkedin_csv',
-            }, true);
-            newContacts.push(contact);
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            });
+            contacts.push(contactItem);
+            tenantContArray.push(contactItem);
+            newContacts.push(contactItem);
           }
           remainingNewContacts--;
           contactsCreated++;
