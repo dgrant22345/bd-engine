@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, optimize/* ]
+    paths:
+      - 'server/**/*.psm1'
+      - 'server/**/*.psd1'
+      - 'tests/**/*.ps1'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'server/**/*.psm1'
+      - 'server/**/*.psd1'
+      - 'tests/**/*.ps1'
+
+jobs:
+  pester:
+    name: Run Pester Tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell
+        uses: potatoqualitee/psmodulecache@v6.1
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -Force -SkipPublisherCheck -Scope CurrentUser
+          Import-Module Pester -PassThru
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'tests'
+          $config.Run.PassThru = $true
+          $config.Output.Verbosity = 'Detailed'
+          $result = Invoke-Pester -Configuration $config
+          if ($result.FailedCount -gt 0) {
+            throw "$($result.FailedCount) tests failed."
+          }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-results
+          path: TestResults/
+          retention-days: 7
+
+  syntax-check:
+    name: PowerShell Syntax Check
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check PowerShell syntax
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem -Path 'server' -Recurse -Include '*.psm1','*.psd1','*.ps1' | ForEach-Object {
+            try {
+              $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $_.FullName -Raw), [ref]$null)
+            } catch {
+              $errors += "$($_.FullName): $_"
+            }
+          }
+          if ($errors.Count -gt 0) {
+            Write-Error "Syntax errors found:"
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+          Write-Host "All $($files.Count) PowerShell files passed syntax check."
