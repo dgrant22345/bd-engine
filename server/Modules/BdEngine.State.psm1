@@ -1089,6 +1089,66 @@ function Save-AppSegment {
     Sync-AppSegment -Segment $Segment -Data $Data -SkipSnapshots:$SkipSnapshots | Out-Null
 }
 
+function Sync-AppSegmentPartial {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities', 'ImportRuns')]
+        [string]$Segment,
+        [Parameter(Mandatory = $true)]
+        $Data,
+        [switch]$SkipSnapshots
+    )
+
+    Initialize-DataStore
+    if (Test-AppStoreUsesSqlite) {
+        $result = Sync-BdSqliteSegmentPartial -Segment $Segment -Data $Data -SkipSnapshots:$SkipSnapshots
+    } else {
+        $existingSegment = @(Read-AppSegment -Segment $Segment)
+        $mergedById = [ordered]@{}
+
+        foreach ($record in @($existingSegment)) {
+            $recordId = [string](Get-ObjectValue -Object $record -Name 'id')
+            if ($recordId) {
+                $mergedById[$recordId] = $record
+            }
+        }
+
+        foreach ($record in @($Data)) {
+            $recordId = [string](Get-ObjectValue -Object $record -Name 'id')
+            if ($recordId) {
+                $mergedById[$recordId] = $record
+            }
+        }
+
+        $merged = @($mergedById.Values)
+        $map = Get-StorageMap
+        Write-JsonFile -Path $map[$Segment] -Data $merged
+        $result = [ordered]@{
+            ok = $true
+            mode = 'partial_upsert'
+            segment = $Segment
+            snapshot = $null
+            updatedAt = (Get-Date).ToString('o')
+        }
+        Set-AppSegmentCache -Segment $Segment -Data $merged
+    }
+
+    return $result
+}
+
+function Save-AppSegmentPartial {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities', 'ImportRuns')]
+        [string]$Segment,
+        [Parameter(Mandatory = $true)]
+        $Data,
+        [switch]$SkipSnapshots
+    )
+
+    Sync-AppSegmentPartial -Segment $Segment -Data $Data -SkipSnapshots:$SkipSnapshots | Out-Null
+}
+
 function Get-AppDashboardModelFast {
     if (-not (Test-AppStoreUsesSqlite)) {
         return $null
@@ -1443,4 +1503,3 @@ function Invoke-AppLocalEnrichmentPassFast {
 }
 
 Export-ModuleMember -Function *-*
-
