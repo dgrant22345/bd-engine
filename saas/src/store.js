@@ -306,7 +306,22 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       configsByTenant.set(tenantId, data.configs || []);
       activitiesByTenant.set(tenantId, data.activities || []);
       tasksByTenant.set(tenantId, data.tasks || []);
-      for (const a of tenantAccts) if (!accounts.some(x => x.id === a.id)) accounts.push(a);
+
+      const existingAcctIds = new Set(accounts.map(x => x.id));
+      for (const a of tenantAccts) if (!existingAcctIds.has(a.id)) accounts.push(a);
+
+      const existingJobIds = new Set(jobs.map(x => x.id));
+      for (const j of (data.jobs || [])) if (!existingJobIds.has(j.id)) jobs.push(j);
+
+      const existingConfigIds = new Set(boardConfigs.map(x => x.id));
+      for (const c of (data.configs || [])) if (!existingConfigIds.has(c.id)) boardConfigs.push(c);
+
+      const existingActivityIds = new Set(activities.map(x => x.id));
+      for (const a of (data.activities || [])) if (!existingActivityIds.has(a.id)) activities.push(a);
+
+      const existingTaskIds = new Set(tasks.map(x => x.id));
+      for (const t of (data.tasks || [])) if (!existingTaskIds.has(t.id)) tasks.push(t);
+
       status.core = true;
     }
     
@@ -314,7 +329,10 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       const tenantConts = data.contacts || [];
       tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
       contactsByTenant.set(tenantId, tenantConts);
-      for (const c of tenantConts) if (!contacts.some(x => x.id === c.id)) contacts.push(c);
+
+      const existingContactIds = new Set(contacts.map(x => x.id));
+      for (const c of tenantConts) if (!existingContactIds.has(c.id)) contacts.push(c);
+
       status.contacts = true;
     }
   }
