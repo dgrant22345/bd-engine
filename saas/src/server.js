@@ -313,8 +313,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/admin/bootstrap') {
+    const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
     return sendJson(res, 200, {
-      bootstrap: store.getBootstrap(tenantId, { includeFilters: true, session }),
+      bootstrap: bootstrapData,
       runtime: store.getRuntimeStatus(),
       targetScoreRollout: store.getTargetScoreRollout(tenantId),
       resolverReport: store.getResolverReport(tenantId),
@@ -335,7 +336,8 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/owners') {
-    return sendJson(res, 200, { owners: store.getBootstrap(tenantId, { session }).ownerRoster });
+    const bootstrapData = await store.getBootstrap(tenantId, { session });
+    return sendJson(res, 200, { owners: bootstrapData.ownerRoster });
   }
 
   if (pathname === '/api/dashboard') {
