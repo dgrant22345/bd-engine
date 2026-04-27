@@ -284,27 +284,41 @@ function persistTenant(tenantId) {
   }, 500));
 }
 
-const loadedTenants = new Set();
-async function ensureDataLoaded(tenantId) {
+const loadedTenants = new Map(); // tenantId -> { core: boolean, contacts: boolean }
+
+async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (!isDbEnabled()) return;
-  if (loadedTenants.has(tenantId)) return;
+  
+  const status = loadedTenants.get(tenantId) || { core: false, contacts: false };
+  if (status.core && (!needsContacts || status.contacts)) return;
+
   const { dbLoadTenantData } = await import('./db.js');
-  const data = await dbLoadTenantData(tenantId);
+  // If we have core but need contacts, only load contacts.
+  // Actually, for simplicity, we reload if we need more, but ideally we'd just fetch the missing column.
+  // Let's do the simplest: if we don't have what we need, fetch.
+  const data = await dbLoadTenantData(tenantId, needsContacts);
   if (data) {
-    const tenantAccts = data.accounts || [];
-    tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
-    accountsByTenant.set(tenantId, tenantAccts);
-    const tenantConts = data.contacts || [];
-    tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-    contactsByTenant.set(tenantId, tenantConts);
-    jobsByTenant.set(tenantId, data.jobs || []);
-    configsByTenant.set(tenantId, data.configs || []);
-    activitiesByTenant.set(tenantId, data.activities || []);
-    tasksByTenant.set(tenantId, data.tasks || []);
-    for (const a of tenantAccts) if (!accounts.some(x => x.id === a.id)) accounts.push(a);
-    for (const c of tenantConts) if (!contacts.some(x => x.id === c.id)) contacts.push(c);
+    if (data.accounts.length > 0 || !status.core) {
+      const tenantAccts = data.accounts || [];
+      tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
+      accountsByTenant.set(tenantId, tenantAccts);
+      jobsByTenant.set(tenantId, data.jobs || []);
+      configsByTenant.set(tenantId, data.configs || []);
+      activitiesByTenant.set(tenantId, data.activities || []);
+      tasksByTenant.set(tenantId, data.tasks || []);
+      for (const a of tenantAccts) if (!accounts.some(x => x.id === a.id)) accounts.push(a);
+      status.core = true;
+    }
+    
+    if (needsContacts) {
+      const tenantConts = data.contacts || [];
+      tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+      contactsByTenant.set(tenantId, tenantConts);
+      for (const c of tenantConts) if (!contacts.some(x => x.id === c.id)) contacts.push(c);
+      status.contacts = true;
+    }
   }
-  loadedTenants.add(tenantId);
+  loadedTenants.set(tenantId, status);
 }
 
 export function createStore() {
@@ -372,7 +386,7 @@ export function createStore() {
 
     async getBootstrap(tenantId, { includeFilters = false, session = null } = {}) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, false); // Don't need contacts for bootstrap
       const profile = getTenantProfile(tenantId);
       return {
         workspace: { ...profile.workspace },
@@ -391,7 +405,7 @@ export function createStore() {
 
     async getDashboard(tenantId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, false); // Don't need full contact list for dashboard summary
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
       const newJobsToday = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1).slice(0, 100);
@@ -426,7 +440,7 @@ export function createStore() {
 
     async getDashboardExtended(tenantId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, false);
       const tenantAccounts = accountsForTenant(tenantId);
       return {
         playbook: tenantAccounts.slice(0, 5),
@@ -521,7 +535,7 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, true); // MUST load contacts here
       return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
     },
 

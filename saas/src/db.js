@@ -267,10 +267,14 @@ export async function dbSaveTenantData(tenantId, data) {
   }
 }
 
-export async function dbLoadTenantData(tenantId) {
+export async function dbLoadTenantData(tenantId, includeContacts = true) {
   if (!dbReady) return null;
   try {
-    const result = await pool.query('SELECT * FROM tenant_data WHERE tenant_id = $1', [tenantId]);
+    const columns = includeContacts 
+      ? 'accounts, contacts, jobs, configs, activities, settings, updated_at'
+      : 'accounts, jobs, configs, activities, settings, updated_at';
+    
+    const result = await pool.query(`SELECT ${columns} FROM tenant_data WHERE tenant_id = $1`, [tenantId]);
     if (result.rows.length === 0) return null;
     const r = result.rows[0];
     return {
