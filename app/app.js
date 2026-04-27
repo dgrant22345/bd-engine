@@ -77,7 +77,7 @@ const appState = {
   setupStatus: null,
   setupStep: 1,
   setupBusy: false,
-  setupCsvContent: '',
+  setupCsvFile: null, setupCsvContent: '',
   setupCsvFileName: '',
   setupPreview: null,
   setupResult: null,
@@ -1713,6 +1713,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-skip-import') {
+        appState.setupCsvFile = null;
       appState.setupCsvContent = '';
       appState.setupCsvFileName = '';
       appState.setupPreview = null;
@@ -3292,62 +3293,90 @@ function formatCsvUploadSummary(file, csvContent = '') {
 async function handleSetupCsvFile(file) {
   if (!file) return;
   persistSetupDraftFromDom();
+
   if (!file.name.toLowerCase().endsWith('.csv')) {
     showToast('Please choose the Connections.csv file from LinkedIn.', 'warning');
+    return;
   }
-  appState.setupCsvContent = await readTextFile(file);
+
+  appState.setupCsvFile = file;
+  appState.setupCsvContent = '';
   appState.setupCsvFileName = file.name;
   appState.setupPreview = null;
-  await renderSetupWizard();
-}
 
+  await renderSetupWizard();
+  showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
+}
 async function previewSetupCsv() {
-  persistSetupDraftFromDom();
-  if (!appState.setupCsvContent) {
-    showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+  if (!appState.setupCsvFile) {
+    showToast('Choose Connections.csv first.', 'warning');
     return;
   }
 
   appState.setupBusy = true;
+  appState.setupProgressMessage = 'Checking CSV format and previewing matches...';
+  await renderSetupWizard();
+
   try {
+    const formData = new FormData();
+    formData.append(
+      'connectionsCsv',
+      appState.setupCsvFile,
+      appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv'
+    );
+
     appState.setupPreview = await api('/api/import/connections-csv/preview', {
       method: 'POST',
-      body: JSON.stringify({ csvContent: appState.setupCsvContent, useEmptyState: false }),
+      body: formData,
     });
-    showToast('CSV preview is ready.', 'success');
+
+    showToast('Preview ready.', 'success');
+  } catch (error) {
+    appState.setupPreview = null;
+    showToast(`Preview failed: ${error.message || error}`, 'error', 8000);
   } finally {
     appState.setupBusy = false;
+    appState.setupProgressMessage = '';
     await renderSetupWizard();
   }
-}
+}}
 
 async function completeSetupWizard() {
   persistSetupDraftFromDom();
   const draft = appState.setupDraft;
+
   if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
-    appState.setupStep = 1;
-    await renderSetupWizard();
-    showToast('Workspace, name, and email are required.', 'warning');
+    showToast('Workspace, name, and email are required before finishing setup.', 'warning');
     return;
   }
 
   appState.setupBusy = true;
-  appState.setupProgressMessage = appState.setupCsvContent
+  appState.setupProgressMessage = appState.setupCsvFile
     ? 'Saving setup and queuing your LinkedIn connections import...'
     : 'Saving setup...';
+
   try {
+    const formData = new FormData();
+    formData.append('workspaceName', draft.workspaceName);
+    formData.append('userName', draft.userName);
+    formData.append('userEmail', draft.userEmail);
+    formData.append('owners', JSON.stringify(parseSetupOwners(draft.ownersText)));
+    formData.append('licenseKey', draft.licenseKey || '');
+    formData.append('csvFileName', appState.setupCsvFileName || '');
+
+    if (appState.setupCsvFile) {
+      formData.append(
+        'connectionsCsv',
+        appState.setupCsvFile,
+        appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv'
+      );
+    }
+
     const result = await api('/api/setup/complete', {
       method: 'POST',
-      body: JSON.stringify({
-        workspaceName: draft.workspaceName,
-        userName: draft.userName,
-        userEmail: draft.userEmail,
-        owners: parseSetupOwners(draft.ownersText),
-        licenseKey: draft.licenseKey,
-        csvContent: appState.setupCsvContent,
-        csvFileName: appState.setupCsvFileName,
-      }),
+      body: formData,
     });
+
     appState.setupResult = result;
     appState.setupStatus = result.status;
     appState.setupStep = getSetupSteps().length;
@@ -3357,8 +3386,10 @@ async function completeSetupWizard() {
       appState.setupImportJobId = result.jobId;
       appState.setupProgressMessage = 'Import queued. Starting the background worker...';
       await renderSetupWizard();
+
       const job = await watchSetupImportJob(result.jobId);
       const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
+
       appState.setupResult = {
         ...result,
         stats: {
@@ -3369,10 +3400,15 @@ async function completeSetupWizard() {
           failed: stats.failed || 0,
         },
       };
+
       appState.setupProgressMessage = 'Import complete.';
+      appState.setupCsvFile = null;
+      appState.setupCsvContent = '';
       showToast('Setup complete. LinkedIn connections imported.', 'success');
     } else {
       appState.setupProgressMessage = '';
+      appState.setupCsvFile = null;
+      appState.setupCsvContent = '';
       showToast('Setup complete.', 'success');
     }
   } catch (error) {
@@ -3385,14 +3421,6 @@ async function completeSetupWizard() {
     await renderSetupWizard();
   }
 }
-
-async function watchSetupImportJob(jobId) {
-  while (true) {
-    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
-    const message = job.progressMessage || humanize(job.status || 'running');
-    appState.setupProgressMessage = message;
-    await renderSetupWizard();
-
     if (job.status === 'completed') {
       invalidateAppData();
       return job;
