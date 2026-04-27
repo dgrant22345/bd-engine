@@ -530,6 +530,17 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 202, { ...job, ...result });
   }
 
+  if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
+    const job = store.startRevenuePipeline(tenantId);
+    return sendJson(res, 202, job);
+  }
+
+  const pipelineStatusMatch = pathname.match(/^\/api\/admin\/pipeline\/status\/([^/]+)$/);
+  if (pipelineStatusMatch && req.method === 'GET') {
+    const job = store.getBackgroundJob(pipelineStatusMatch[1]);
+    return sendJson(res, 200, job);
+  }
+
   // Stub remaining import/enrichment/discovery endpoints
   if (pathname.startsWith('/api/import/') || pathname.startsWith('/api/enrichment/') || pathname.startsWith('/api/discovery/') || pathname.startsWith('/api/google-sheets/')) {
     return sendJson(res, 202, store.createCompletedJob('cloud-stub-job'));

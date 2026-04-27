@@ -1833,6 +1833,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-pipeline') {
+      await runRevenuePipeline(action);
+      return;
+    }
+
     if (actionName === 'run-discovery') {
       await runDiscovery(action);
       return;
@@ -4333,6 +4338,15 @@ function renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmen
   const enrichmentCount = enrichmentQueue?.total || 0;
   return `
     <section class="admin-command-strip" aria-label="Admin command strip">
+      <article class="command-card command-card--accent" style="border-left: 4px solid var(--accent); background: var(--accent-soft);">
+        <span class="command-card__step" style="background: var(--accent); color: white;">Run</span>
+        <div class="command-card__copy">
+          <strong>Global Pipeline</strong>
+          <span>End-to-end flow</span>
+          <small>Enrich, Discover, Ingest</small>
+        </div>
+        <button class="primary-button ghost-button--xs" type="button" data-action="run-pipeline">Start</button>
+      </article>
       <article class="command-card command-card--warning">
         <span class="command-card__step">1</span>
         <div class="command-card__copy">
@@ -4517,6 +4531,19 @@ async function renderAdminView() {
       ${renderTrustCard('Coverage report', `${formatNumber(summary.coveragePercent || 0)}% board coverage`, 'See how much of the tracked universe is resolved and where review is still needed.', `${formatNumber(summary.resolvedCount || 0)} resolved boards`, 'success')}
       ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
     </section>
+
+    <div id="pipeline-progress-container" class="pipeline-progress hidden">
+      <div class="pipeline-progress-header">
+        <div class="pipeline-progress-copy">
+          <p class="eyebrow">Revenue Pipeline</p>
+          <h4 class="pipeline-progress-stage">Starting...</h4>
+        </div>
+        <div class="pipeline-progress-label">0%</div>
+      </div>
+      <div class="pipeline-progress-bar">
+        <div class="pipeline-progress-bar-fill" style="width: 0%;"></div>
+      </div>
+    </div>
 
     ${renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive })}
 
@@ -5638,6 +5665,45 @@ async function runDiscovery(buttonEl) {
       appAlert
     );
   });
+}
+
+async function runRevenuePipeline(buttonEl) {
+  try {
+    const job = await api('/api/admin/pipeline/start', { method: 'POST' });
+    showToast('Revenue pipeline started.', 'success');
+    await watchPipelineProgress(job.id);
+  } catch (err) {
+    showToast('Failed to start pipeline: ' + err.message, 'error');
+  }
+}
+
+async function watchPipelineProgress(jobId) {
+  const container = document.getElementById('pipeline-progress-container');
+  if (!container) return;
+  container.classList.remove('hidden');
+  
+  while (true) {
+    const job = await api(`/api/admin/pipeline/status/${jobId}`, { skipCache: true });
+    const bar = container.querySelector('.pipeline-progress-bar-fill');
+    const label = container.querySelector('.pipeline-progress-label');
+    const stage = container.querySelector('.pipeline-progress-stage');
+    
+    if (bar) bar.style.width = `${job.progress}%`;
+    if (label) label.textContent = `${job.progress}%`;
+    if (stage) stage.textContent = job.message || job.stage || 'Processing...';
+
+    if (job.status === 'completed' || job.status === 'failed') {
+      if (job.status === 'completed') {
+        showToast('Revenue pipeline completed successfully.', 'success');
+      } else {
+        showToast('Revenue pipeline failed: ' + job.message, 'error');
+      }
+      setTimeout(() => container.classList.add('hidden'), 5000);
+      renderAdminView(); // Refresh data
+      break;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
 }
 
 async function runLocalEnrichment() {
