@@ -16,10 +16,25 @@ const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const serverStartedAt = new Date();
 const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
-const analyticsAdminEmails = new Set(String(process.env.BD_ANALYTICS_ADMIN_EMAILS || '')
-  .split(',')
-  .map((email) => email.trim().toLowerCase())
-  .filter(Boolean));
+const internalOwnerEmails = new Set(parseEmailList([
+  process.env.BD_INTERNAL_OWNER_EMAILS,
+  process.env.BD_OWNER_EMAILS,
+  'dgrant22@gmail.com',
+].join(',')));
+const configuredAnalyticsAdminEmails = parseEmailList(process.env.BD_ANALYTICS_ADMIN_EMAILS);
+const analyticsAdminEmails = new Set(parseEmailList([
+  ...configuredAnalyticsAdminEmails,
+  ...internalOwnerEmails,
+].join(',')));
+const ownerPlanId = 'owner';
+
+function parseEmailList(value) {
+  return String(value || '')
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 const serverStats = {
   requestCount: 0,
   errorCount: 0,
@@ -137,10 +152,28 @@ function isHealthRequest(req) {
 }
 
 function canViewSiteAnalytics(user) {
-  if (!analyticsAdminEmails.size) {
+  const isProduction = (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production';
+  if (!isProduction && configuredAnalyticsAdminEmails.length === 0) {
     return (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') !== 'production';
   }
   return analyticsAdminEmails.has(String(user?.email || '').trim().toLowerCase());
+}
+
+function isInternalOwner(user) {
+  return internalOwnerEmails.has(String(user?.email || '').trim().toLowerCase());
+}
+
+function getEffectivePlanId(tenant, user) {
+  return isInternalOwner(user) ? ownerPlanId : (tenant?.plan || 'trial');
+}
+
+function getEffectiveMembershipRole(membership, user) {
+  return isInternalOwner(user) ? 'owner' : (membership?.role || 'member');
+}
+
+function withEffectiveTenantRoles(tenants, user) {
+  if (!isInternalOwner(user)) return tenants;
+  return (tenants || []).map((tenant) => ({ ...tenant, role: 'owner' }));
 }
 
 function getRequestOrigin(req) {
@@ -168,8 +201,9 @@ function isBillingExemptPath(pathname) {
   return billingExemptApiPaths.has(pathname);
 }
 
-function isTenantBillingBlocked(tenant) {
+function isTenantBillingBlocked(tenant, user = null) {
   if (!tenant) return false;
+  if (isInternalOwner(user)) return false;
   if (tenant.plan === 'trial') return isTrialExpired(tenant);
   const status = String(tenant.status || '').toLowerCase();
   return !['active', 'trialing'].includes(status);
@@ -229,15 +263,17 @@ async function route(req, res) {
 
   if (pathname === '/api/plans') {
     return sendJson(res, 200, {
-      plans: Object.values(PLANS).map((p) => ({
-        id: p.id,
-        name: p.name,
-        displayName: p.displayName,
-        price: p.price,
-        interval: p.interval,
-        limits: p.limits,
-        features: p.features,
-      })),
+      plans: Object.values(PLANS)
+        .filter((p) => p.id !== ownerPlanId)
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          displayName: p.displayName,
+          price: p.price,
+          interval: p.interval,
+          limits: p.limits,
+          features: p.features,
+        })),
     });
   }
 
@@ -323,11 +359,11 @@ self.addEventListener('activate', (event) => {
   const session = {
     tenant: { ...tenant },
     user: safeUser(user),
-    membership: { role: membership.role },
+    membership: { role: getEffectiveMembershipRole(membership, user) },
   };
   store.ensureTenant(tenant, session.user);
 
-  if (isTenantBillingBlocked(tenant) && !isBillingExemptPath(pathname)) {
+  if (isTenantBillingBlocked(tenant, user) && !isBillingExemptPath(pathname)) {
     return sendBillingRequired(res, tenant);
   }
 
@@ -339,15 +375,16 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/tenants') {
     const userTenants = findTenantsForUser(user.id);
-    return sendJson(res, 200, { tenants: userTenants });
+    return sendJson(res, 200, { tenants: withEffectiveTenantRoles(userTenants, user) });
   }
 
   // ── Billing ───────────────────────────────────────────────────────────────
 
   if (pathname === '/api/billing') {
-    const plan = getPlan(tenant.plan);
-    const trialDaysRemaining = getTrialDaysRemaining(tenant);
-    const usage = getUsageSummary(tenantId, tenant.plan);
+    const effectivePlanId = getEffectivePlanId(tenant, user);
+    const plan = getPlan(effectivePlanId);
+    const trialDaysRemaining = effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant);
+    const usage = getUsageSummary(tenantId, effectivePlanId);
     const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
       plan,
@@ -414,6 +451,7 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/admin/bootstrap') {
     const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
     const canViewAnalytics = canViewSiteAnalytics(user);
+    const effectivePlanId = getEffectivePlanId(tenant, user);
     let analytics = null;
     if (canViewAnalytics) {
       const analyticsStartedAt = performance.now();
@@ -437,9 +475,9 @@ self.addEventListener('activate', (event) => {
       analytics,
       canViewSiteAnalytics: canViewAnalytics,
       billing: {
-        plan: getPlan(tenant.plan),
-        trialDaysRemaining: getTrialDaysRemaining(tenant),
-        usage: getUsageSummary(tenantId, tenant.plan),
+        plan: getPlan(effectivePlanId),
+        trialDaysRemaining: effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant),
+        usage: getUsageSummary(tenantId, effectivePlanId),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: { plan: tenant.plan, status: tenant.status },
@@ -541,7 +579,7 @@ self.addEventListener('activate', (event) => {
     const payload = await readFormOrJson(req);
     const fields = payload.fields || payload;
     const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || '';
-    const plan = getPlan(tenant.plan);
+    const plan = getPlan(getEffectivePlanId(tenant, user));
 
     if (csvText) {
       const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan });
@@ -621,7 +659,7 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/import/connections-csv/preview' && req.method === 'POST') {
     const payload = await readFormOrJson(req);
     const csvText = payload.files?.connectionsCsv?.content || payload.fields?.csvContent || payload.csvContent || '';
-    const plan = getPlan(tenant.plan);
+    const plan = getPlan(getEffectivePlanId(tenant, user));
     const result = await store.importLinkedInCSV(tenantId, csvText, {
       dryRun: true,
       plan,
@@ -635,7 +673,7 @@ self.addEventListener('activate', (event) => {
     const fields = payload.fields || payload;
     const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || payload.text || '';
 
-    const plan = getPlan(tenant.plan);
+    const plan = getPlan(getEffectivePlanId(tenant, user));
     const dryRun = isTruthy(fields.dryRun);
     if (!dryRun) {
       return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan }));
@@ -650,7 +688,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/admin/run-workflow' && req.method === 'POST') {
-    const plan = getPlan(tenant.plan);
+    const plan = getPlan(getEffectivePlanId(tenant, user));
     const result = store.runLaunchWorkflow(tenantId, { plan });
     const job = store.createCompletedJob('launch-workflow', result);
     return sendJson(res, 202, { ...job, ...result });
@@ -953,17 +991,18 @@ function handleMe(req, res) {
     store.ensureTenant(tenant, user);
   }
 
-  const plan = tenant ? getPlan(tenant.plan) : null;
-  const trialDaysRemaining = tenant ? getTrialDaysRemaining(tenant) : null;
+  const effectivePlanId = tenant ? getEffectivePlanId(tenant, user) : null;
+  const plan = effectivePlanId ? getPlan(effectivePlanId) : null;
+  const trialDaysRemaining = tenant && effectivePlanId !== ownerPlanId ? getTrialDaysRemaining(tenant) : null;
   const persona = tenant ? store.getPersona(tenant.id) : 'bd';
-  const billingRequired = tenant ? isTenantBillingBlocked(tenant) : false;
+  const billingRequired = tenant ? isTenantBillingBlocked(tenant, user) : false;
 
   return sendJson(res, 200, {
     authenticated: true,
     user: safeUser(user),
     tenant,
-    tenants: userTenants,
-    membership: membership ? { role: membership.role } : null,
+    tenants: withEffectiveTenantRoles(userTenants, user),
+    membership: membership ? { role: getEffectiveMembershipRole(membership, user) } : null,
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
     trialDaysRemaining,
     billingRequired,

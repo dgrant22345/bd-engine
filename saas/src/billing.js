@@ -89,6 +89,16 @@ export const PLANS = {
     limits: { accounts: 1000, contacts: 10000, jobBoards: 100, users: 3, csvImports: -1 },
     features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export'],
   },
+  owner: {
+    id: 'owner',
+    name: 'Internal Owner',
+    displayName: 'Owner',
+    price: 0,
+    interval: null,
+    trialDays: 0,
+    limits: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export'],
+  },
 };
 
 // ── Plan checking ───────────────────────────────────────────────────────────
