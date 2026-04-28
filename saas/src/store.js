@@ -475,9 +475,16 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
+      const hasWorkspaceData = accountsForTenant(tenantId).length > 0 || jobsForTenant(tenantId).length > 0;
+      if (!profile.settings.setupComplete && hasWorkspaceData) {
+        profile.settings.setupComplete = true;
+        profile.settings.lastPipelineRun = profile.settings.lastPipelineRun || now();
+        persistTenant(tenantId);
+      }
+      const setupComplete = Boolean(profile.settings.setupComplete);
       return {
-        requiresSetup: !profile.settings.setupComplete,
-        setupComplete: Boolean(profile.settings.setupComplete),
+        requiresSetup: !setupComplete,
+        setupComplete,
         licensingEnabled: false,
         workspaceName: profile.workspace.name,
         persona: this.getPersona(tenantId),

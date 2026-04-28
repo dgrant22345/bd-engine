@@ -1538,7 +1538,13 @@ async function init() {
     const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
+      clearTimeout(longLoadTimer);
       location.hash = '#/setup';
+      await renderRoute();
+      return;
+    }
+    if (initialRoot === 'setup') {
+      clearTimeout(longLoadTimer);
       await renderRoute();
       return;
     }
