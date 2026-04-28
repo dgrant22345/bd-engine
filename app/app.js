@@ -240,6 +240,7 @@ const cmdActions = [
   { id: 'nav-dashboard', label: 'Go to Dashboard', icon: '&#9632;', key: 'G D', action: () => { location.hash = '#/dashboard'; } },
   { id: 'nav-accounts', label: 'Go to Accounts', icon: '&#9632;', key: 'G A', action: () => { location.hash = '#/accounts'; } },
   { id: 'nav-contacts', label: 'Go to Contacts', icon: '&#9632;', key: 'G C', action: () => { location.hash = '#/contacts'; } },
+  { id: 'nav-tasks', label: 'Go to Tasks', icon: '&#9632;', key: 'G T', action: () => { location.hash = '#/tasks'; } },
   { id: 'nav-jobs', label: 'Go to Jobs', icon: '&#9632;', key: 'G J', action: () => { location.hash = '#/jobs'; } },
   { id: 'nav-admin', label: 'Go to Admin', icon: '&#9632;', key: 'G X', action: () => { location.hash = '#/admin'; } },
   { id: 'toggle-theme', label: 'Toggle theme', icon: '&#9789;', key: '', action: cycleTheme },
@@ -1604,7 +1605,7 @@ function bindEvents() {
     const now = Date.now();
     if (appState.lastKey === 'g' && now - appState.lastKeyTime < 800) {
       appState.lastKey = '';
-      const navMap = { d: '#/dashboard', a: '#/accounts', c: '#/contacts', j: '#/jobs', x: '#/admin' };
+      const navMap = { d: '#/dashboard', a: '#/accounts', c: '#/contacts', t: '#/tasks', j: '#/jobs', x: '#/admin' };
       if (navMap[e.key]) { e.preventDefault(); location.hash = navMap[e.key]; return; }
     }
     appState.lastKey = e.key;

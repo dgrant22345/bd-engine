@@ -2554,6 +2554,7 @@ a {
 .nav a[data-route="dashboard"]::before { content: "D"; }
 .nav a[data-route="accounts"]::before { content: "A"; }
 .nav a[data-route="contacts"]::before { content: "C"; }
+.nav a[data-route="tasks"]::before { content: "T"; }
 .nav a[data-route="jobs"]::before { content: "J"; }
 .nav a[data-route="admin"]::before { content: "O"; }
 
