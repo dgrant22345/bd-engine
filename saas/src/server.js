@@ -694,6 +694,17 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 202, { ...job, ...result });
   }
 
+  if (pathname === '/api/discovery/run' && req.method === 'POST') {
+    const plan = getPlan(getEffectivePlanId(tenant, user));
+    const body = await readJson(req);
+    return sendJson(res, 202, store.startAtsDiscovery(tenantId, { ...body, plan }));
+  }
+
+  if (pathname === '/api/import/jobs' && req.method === 'POST') {
+    const plan = getPlan(getEffectivePlanId(tenant, user));
+    return sendJson(res, 202, store.startLiveJobImport(tenantId, { plan }));
+  }
+
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
     const job = store.startRevenuePipeline(tenantId);
     return sendJson(res, 202, job);

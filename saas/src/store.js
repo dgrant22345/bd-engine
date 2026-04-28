@@ -713,6 +713,7 @@ export function createStore() {
         ...payload,
       });
       boardConfigs.unshift(config);
+      getTenantArray(configsByTenant, tenantId).unshift(config);
       persistTenant(tenantId);
       return config;
     },
@@ -968,6 +969,7 @@ export function createStore() {
           updatedAt: now(),
         });
         boardConfigs.unshift(config);
+        getTenantArray(configsByTenant, tenantId).unshift(config);
         tenantConfigs = boardConfigs.filter((existing) => existing.tenantId === tenantId);
         configsCreated++;
       }
@@ -1064,6 +1066,398 @@ export function createStore() {
         },
         warnings,
         timings: { totalMs: 1 },
+      };
+    },
+
+    startAtsDiscovery(tenantId, options = {}) {
+      assertTenant(tenantId);
+      const jobId = `ats-discovery-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'ats-discovery',
+        status: 'queued',
+        summary: 'ATS discovery',
+        progressMessage: 'Queued ATS discovery.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          job.progressMessage = 'Mapping public ATS boards...';
+          const result = await this.runAtsDiscovery(tenantId, options);
+          job.status = 'completed';
+          job.progressMessage = 'Completed';
+          job.recordsAffected = result.stats?.mapped || result.stats?.discovered || 0;
+          job.result = result;
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'ATS discovery failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
+    async runAtsDiscovery(tenantId, options = {}) {
+      assertTenant(tenantId);
+      const totalStartedAt = performance.now();
+      const timings = {};
+      const warnings = [];
+      const errors = [];
+      const selectedPlan = options.plan || { displayName: 'current', limits: {} };
+      const limit = Math.max(1, Math.min(200, Number(options.limit || 75)));
+      const onlyMissing = options.onlyMissing !== false && options.onlyMissing !== 'false';
+      const forceRefresh = options.forceRefresh === true || options.forceRefresh === 'true';
+      const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+
+      const loadStartedAt = performance.now();
+      await ensureDataLoaded(tenantId, false);
+      timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
+
+      const tenantAccounts = accountsForTenant(tenantId);
+      let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
+      const existingConfigNames = new Set(tenantConfigs.map((item) => normalizeKey(item.normalizedCompanyName || item.companyName)));
+      let createdConfigs = 0;
+      for (const item of tenantAccounts) {
+        if (createdConfigs + tenantConfigs.length >= (jobBoardLimit === -1 ? Infinity : jobBoardLimit)) break;
+        const normalizedName = normalizeKey(item.normalizedName || item.displayName);
+        if (!normalizedName || existingConfigNames.has(normalizedName)) continue;
+        const config = normalizeConfigPatch({
+          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          tenantId,
+          accountId: item.id,
+          companyName: item.displayName,
+          normalizedCompanyName: normalizedName,
+          atsType: 'unknown',
+          ats: 'unknown',
+          boardId: '',
+          domain: item.domain || item.canonicalDomain || '',
+          careersUrl: item.careersUrl || '',
+          active: true,
+          discoveryStatus: 'needs_review',
+          reviewStatus: 'pending',
+          confidenceBand: 'medium',
+          source: 'ats_discovery',
+          createdAt: now(),
+          updatedAt: now(),
+        });
+        boardConfigs.unshift(config);
+        getTenantArray(configsByTenant, tenantId).unshift(config);
+        tenantConfigs.unshift(config);
+        existingConfigNames.add(normalizedName);
+        createdConfigs++;
+      }
+
+      let candidates = tenantConfigs.filter((item) => item.active !== false);
+      if (onlyMissing && !forceRefresh) {
+        candidates = candidates.filter((item) => {
+          const atsType = normalizeAtsType(item.atsType || item.ats);
+          return !ATS_FETCHERS.has(atsType) || !getConfigBoardId(item) || item.discoveryStatus === 'needs_review' || item.discoveryStatus === 'unresolved';
+        });
+      }
+      candidates = candidates.slice(0, limit);
+
+      let checked = 0;
+      let mapped = 0;
+      let highConfidence = 0;
+      let unresolved = 0;
+      const discoveryStartedAt = performance.now();
+      for (const config of candidates) {
+        checked++;
+        try {
+          const match = await discoverAtsBoard(config);
+          if (match) {
+            Object.assign(config, {
+              atsType: match.atsType,
+              ats: match.atsType,
+              boardId: match.boardId,
+              apiUrl: match.apiUrl,
+              resolvedBoardUrl: match.resolvedBoardUrl,
+              discoveryStatus: 'resolved',
+              discoveryMethod: match.method,
+              confidenceBand: 'high',
+              reviewStatus: 'approved',
+              active: true,
+              lastDiscoveryJobCount: match.jobCount,
+              lastDiscoveryCheckedAt: now(),
+              updatedAt: now(),
+            });
+            mapped++;
+            highConfidence++;
+          } else {
+            config.discoveryStatus = 'unresolved';
+            config.discoveryMethod = 'public_ats_probe';
+            config.confidenceBand = config.domain || config.careersUrl ? 'medium' : 'unresolved';
+            config.lastDiscoveryCheckedAt = now();
+            config.updatedAt = now();
+            unresolved++;
+          }
+        } catch (err) {
+          const message = err.message || 'Discovery failed';
+          errors.push({ configId: config.id, companyName: config.companyName, error: message });
+          config.discoveryStatus = 'error';
+          config.discoveryMethod = 'public_ats_probe';
+          config.lastDiscoveryError = message;
+          config.lastDiscoveryCheckedAt = now();
+          config.updatedAt = now();
+          unresolved++;
+        }
+      }
+      timings.discoveryMs = Math.round(performance.now() - discoveryStartedAt);
+
+      const persistStartedAt = performance.now();
+      if (createdConfigs || checked) persistTenant(tenantId);
+      timings.persistQueuedMs = Math.round(performance.now() - persistStartedAt);
+      timings.totalMs = Math.round(performance.now() - totalStartedAt);
+
+      if (timings.totalMs > 10000) {
+        console.warn(`Slow ATS discovery: saas/src/store.js runAtsDiscovery ${timings.totalMs}ms`, timings);
+      }
+      if (!mapped && checked) {
+        warnings.push('No public Greenhouse, Lever, or Ashby boards were matched. Add a board ID manually for any company you know uses one.');
+      }
+
+      const stats = {
+        checked,
+        mapped,
+        discovered: mapped,
+        highConfidence,
+        unresolved,
+        configsCreated: createdConfigs,
+        errors: errors.length,
+      };
+      return {
+        ok: true,
+        stats,
+        timings,
+        warnings,
+        errors,
+      };
+    },
+
+    startLiveJobImport(tenantId, options = {}) {
+      assertTenant(tenantId);
+      const jobId = `live-job-import-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'live-job-import',
+        status: 'queued',
+        summary: 'Live ATS job import',
+        progressMessage: 'Queued live ATS job import.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          job.progressMessage = 'Fetching active ATS boards...';
+          const result = await this.importLiveJobs(tenantId, options);
+          if (result.error) {
+            job.status = 'failed';
+            job.errorMessage = result.error;
+            job.result = result;
+          } else {
+            job.status = 'completed';
+            job.progressMessage = 'Completed';
+            job.recordsAffected = result.stats?.runImported || result.stats?.newJobs || result.stats?.updatedJobs || 0;
+            job.result = {
+              stats: result.stats,
+              importRun: result.importRun,
+              warnings: result.warnings || [],
+            };
+          }
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'Live ATS job import failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
+    async importLiveJobs(tenantId, options = {}) {
+      assertTenant(tenantId);
+      const totalStartedAt = performance.now();
+      const timings = {};
+      const warnings = [];
+      const errors = [];
+      const selectedPlan = options.plan || { displayName: 'current', limits: {} };
+      const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+
+      const loadStartedAt = performance.now();
+      await ensureDataLoaded(tenantId, false);
+      timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
+
+      const tenantAccounts = accountsForTenant(tenantId);
+      const tenantJobs = getTenantArray(jobsByTenant, tenantId);
+      let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId && item.active !== false);
+      if (jobBoardLimit !== -1 && tenantConfigs.length > jobBoardLimit) {
+        tenantConfigs = tenantConfigs.slice(0, jobBoardLimit);
+        warnings.push(`Only the first ${jobBoardLimit} active ATS configs were processed on the ${selectedPlan.displayName || selectedPlan.name || 'current'} plan.`);
+      }
+
+      const activeConfigs = tenantConfigs.length;
+      const supportedConfigs = tenantConfigs
+        .map((config) => ({ config, atsType: normalizeAtsType(config.atsType || config.ats), boardId: getConfigBoardId(config) }))
+        .filter(({ atsType, boardId }) => ATS_FETCHERS.has(atsType) && boardId);
+      const unsupportedCount = tenantConfigs.length - supportedConfigs.length;
+      if (!tenantConfigs.length) {
+        warnings.push('No active ATS configs were found yet. Run setup/workflow first so the app can discover job boards for your accounts.');
+      } else if (!supportedConfigs.length) {
+        warnings.push('No supported ATS boards were ready to import. Add or approve configs with Greenhouse, Lever, or Ashby board IDs.');
+      } else if (unsupportedCount > 0) {
+        warnings.push(`${unsupportedCount} active config${unsupportedCount === 1 ? '' : 's'} could not be fetched because the ATS type or board ID is missing/unsupported.`);
+      }
+
+      const accountsByNormalizedName = new Map(tenantAccounts.map((item) => [normalizeKey(item.displayName || item.normalizedName), item]));
+      const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+      const existingByNaturalKey = new Map();
+      for (const existingJob of tenantJobs) {
+        const key = getJobNaturalKey(existingJob);
+        if (key && !existingByNaturalKey.has(key)) existingByNaturalKey.set(key, existingJob);
+      }
+
+      let fetched = 0;
+      let canadaKept = 0;
+      let filteredOutNonCanada = 0;
+      let newJobs = 0;
+      let updatedJobs = 0;
+      const touchedAccountIds = new Set();
+
+      const fetchStartedAt = performance.now();
+      const fetchedBoards = await Promise.allSettled(supportedConfigs.map(async ({ config, atsType, boardId }) => {
+        const fetcher = ATS_FETCHERS.get(atsType);
+        const response = await fetcher(config, boardId);
+        return { config, atsType, jobs: response.jobs || [] };
+      }));
+      timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
+
+      const upsertStartedAt = performance.now();
+      for (let index = 0; index < fetchedBoards.length; index++) {
+        const configInfo = supportedConfigs[index];
+        const { config, atsType } = configInfo;
+        const settled = fetchedBoards[index];
+
+        if (settled.status === 'rejected') {
+          const message = settled.reason?.message || 'Unknown ATS fetch failure';
+          errors.push({ configId: config.id, companyName: config.companyName, atsType, error: message });
+          config.lastImportStatus = 'failed';
+          config.lastImportError = message;
+          config.updatedAt = now();
+          continue;
+        }
+
+        const fetchedJobs = settled.value.jobs;
+        fetched += fetchedJobs.length;
+        const accountItem = findAccountForConfig(config, accountsByNormalizedName, accountsById);
+        let configKept = 0;
+
+        for (const fetchedJob of fetchedJobs) {
+          const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
+          if (!normalizedJob) continue;
+          if (!isCanadaJob(normalizedJob, accountItem)) {
+            filteredOutNonCanada++;
+            continue;
+          }
+
+          canadaKept++;
+          configKept++;
+          const naturalKey = getJobNaturalKey(normalizedJob);
+          const existingJob = existingByNaturalKey.get(naturalKey);
+          if (existingJob) {
+            Object.assign(existingJob, {
+              ...normalizedJob,
+              id: existingJob.id,
+              tenantId,
+              createdAt: existingJob.createdAt || normalizedJob.createdAt,
+              updatedAt: now(),
+            });
+            updatedJobs++;
+          } else {
+            const newJob = job({
+              ...normalizedJob,
+              id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              tenantId,
+              createdAt: now(),
+              updatedAt: now(),
+            });
+            tenantJobs.unshift(newJob);
+            jobs.push(newJob);
+            existingByNaturalKey.set(naturalKey, newJob);
+            newJobs++;
+          }
+          if (accountItem?.id) touchedAccountIds.add(accountItem.id);
+        }
+
+        config.lastImportStatus = configKept > 0 ? 'success' : 'empty';
+        config.lastImportedAt = now();
+        config.lastImportError = '';
+        config.updatedAt = now();
+      }
+
+      for (const accountId of touchedAccountIds) {
+        const item = accountsById.get(accountId);
+        if (item) refreshAccountHiringStats(item, tenantJobs);
+      }
+
+      tenantJobs.sort((a, b) => String(b.postedAt || b.importedAt || b.updatedAt).localeCompare(String(a.postedAt || a.importedAt || a.updatedAt)));
+      timings.upsertMs = Math.round(performance.now() - upsertStartedAt);
+
+      const persistStartedAt = performance.now();
+      if (supportedConfigs.length || touchedAccountIds.size || errors.length) persistTenant(tenantId);
+      timings.persistQueuedMs = Math.round(performance.now() - persistStartedAt);
+      timings.totalMs = Math.round(performance.now() - totalStartedAt);
+
+      if (timings.totalMs > 5000) {
+        console.warn(`Slow live job import: saas/src/store.js importLiveJobs ${timings.totalMs}ms`, timings);
+      }
+
+      const activeTrackedJobs = tenantJobs.filter((item) => item.active !== false).length;
+      const stats = {
+        activeConfigs,
+        configs: supportedConfigs.length,
+        unsupportedConfigs: unsupportedCount,
+        fetched,
+        canadaKept,
+        filteredOutNonCanada,
+        imported: activeTrackedJobs,
+        runImported: newJobs + updatedJobs,
+        newJobs,
+        updatedJobs,
+        errors: errors.length,
+      };
+      const importRun = {
+        status: errors.length ? 'completed_with_errors' : warnings.length ? 'completed_with_warnings' : 'completed',
+        stats,
+        timings,
+        warnings,
+        errors,
+      };
+
+      return {
+        ok: true,
+        stats,
+        importRun,
+        timings,
+        warnings,
+        errors,
       };
     },
 
@@ -1880,6 +2274,312 @@ function inferDomainFromContacts(tenantId, accountId) {
 function daysSince(value) {
   if (!value) return 999;
   return Math.floor((Date.now() - new Date(value).getTime()) / 86400000);
+}
+
+const ATS_FETCHERS = new Map([
+  ['greenhouse', fetchGreenhouseJobs],
+  ['lever', fetchLeverJobs],
+  ['ashby', fetchAshbyJobs],
+]);
+
+function normalizeAtsType(value) {
+  const normalized = normalizeKey(value).replace(/[^a-z0-9]/g, '');
+  if (normalized.includes('greenhouse')) return 'greenhouse';
+  if (normalized.includes('lever')) return 'lever';
+  if (normalized.includes('ashby')) return 'ashby';
+  return normalized;
+}
+
+function getConfigBoardId(config = {}) {
+  const direct = config.boardId || config.board_id || config.slug || config.boardSlug || '';
+  if (direct) return String(direct).trim();
+  const sourceUrl = config.sourceUrl || config.boardUrl || config.careersUrl || config.url || config.apiUrl || '';
+  const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
+  if (greenhouse) return decodeURIComponent(greenhouse[1]);
+  const lever = String(sourceUrl).match(/lever\.co\/(?:v0\/)?postings\/([^/?#]+)/i);
+  if (lever) return decodeURIComponent(lever[1]);
+  const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
+  if (ashby) return decodeURIComponent(ashby[1]);
+  return '';
+}
+
+async function fetchGreenhouseJobs(config, boardId) {
+  const url = config.apiUrl || `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardId)}/jobs?content=true`;
+  const payload = await fetchJson(url);
+  return { jobs: Array.isArray(payload?.jobs) ? payload.jobs : [] };
+}
+
+async function fetchLeverJobs(config, boardId) {
+  const url = config.apiUrl || `https://api.lever.co/v0/postings/${encodeURIComponent(boardId)}?mode=json`;
+  const payload = await fetchJson(url);
+  return { jobs: Array.isArray(payload) ? payload : [] };
+}
+
+async function fetchAshbyJobs(config, boardId) {
+  const url = config.apiUrl || `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(boardId)}`;
+  const payload = await fetchJson(url);
+  return { jobs: Array.isArray(payload?.jobs) ? payload.jobs : [] };
+}
+
+async function fetchJson(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`ATS request failed with HTTP ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function discoverAtsBoard(config) {
+  const knownAtsType = normalizeAtsType(config.atsType || config.ats);
+  const atsTypes = ATS_FETCHERS.has(knownAtsType)
+    ? [knownAtsType, ...[...ATS_FETCHERS.keys()].filter((item) => item !== knownAtsType)]
+    : [...ATS_FETCHERS.keys()];
+  const candidates = buildBoardCandidates(config);
+
+  for (const boardId of candidates) {
+    for (const atsType of atsTypes) {
+      const result = await probeAtsBoard(atsType, boardId);
+      if (result) {
+        return {
+          atsType,
+          boardId,
+          apiUrl: result.apiUrl,
+          resolvedBoardUrl: result.resolvedBoardUrl,
+          jobCount: result.jobCount,
+          method: 'public_ats_probe',
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function buildBoardCandidates(config) {
+  const candidates = [];
+  const add = (value) => {
+    const cleaned = String(value || '').trim().toLowerCase();
+    if (cleaned && !candidates.includes(cleaned)) candidates.push(cleaned);
+  };
+  const directBoardId = getConfigBoardId(config);
+  if (!['unknown', 'n/a', 'none'].includes(normalizeKey(directBoardId))) add(directBoardId);
+  const domain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  const domainRoot = domain.split('.')[0] || '';
+  add(domainRoot);
+  add(normalizeKey(config.companyName).replace(/[^a-z0-9]/g, ''));
+  add(normalizeKey(config.companyName).replace(/\b(inc|incorporated|corp|corporation|ltd|llc|co|company|technologies|technology|systems|solutions|group)\b/g, '').replace(/[^a-z0-9]/g, ''));
+  return candidates.filter((value) => value.length >= 2);
+}
+
+async function probeAtsBoard(atsType, boardId) {
+  const encoded = encodeURIComponent(boardId);
+  const endpoints = {
+    greenhouse: {
+      apiUrl: `https://boards-api.greenhouse.io/v1/boards/${encoded}/jobs`,
+      resolvedBoardUrl: `https://boards.greenhouse.io/${encoded}`,
+      readJobs: (payload) => payload?.jobs,
+    },
+    lever: {
+      apiUrl: `https://api.lever.co/v0/postings/${encoded}?mode=json`,
+      resolvedBoardUrl: `https://jobs.lever.co/${encoded}`,
+      readJobs: (payload) => payload,
+    },
+    ashby: {
+      apiUrl: `https://api.ashbyhq.com/posting-api/job-board/${encoded}`,
+      resolvedBoardUrl: `https://jobs.ashbyhq.com/${encoded}`,
+      readJobs: (payload) => payload?.jobs,
+    },
+  };
+  const endpoint = endpoints[atsType];
+  if (!endpoint) return null;
+  try {
+    const payload = await fetchJson(endpoint.apiUrl, 6000);
+    const jobs = endpoint.readJobs(payload);
+    if (!Array.isArray(jobs)) return null;
+    return {
+      apiUrl: endpoint.apiUrl,
+      resolvedBoardUrl: endpoint.resolvedBoardUrl,
+      jobCount: jobs.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function findAccountForConfig(config, accountsByNormalizedName, accountsById) {
+  if (config.accountId && accountsById.has(config.accountId)) return accountsById.get(config.accountId);
+  const normalized = normalizeKey(config.normalizedCompanyName || config.companyName);
+  return accountsByNormalizedName.get(normalized) || null;
+}
+
+function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
+  const retrievedAt = now();
+  const companyName = accountItem?.displayName || config.companyName || raw.company || raw.companyName || '';
+  const accountId = accountItem?.id || config.accountId || '';
+  if (atsType === 'greenhouse') {
+    const title = raw.title || raw.name || '';
+    if (!title) return null;
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location: raw.location?.name || raw.location || '',
+      department: firstString(raw.departments?.map((item) => item.name)) || firstString(raw.offices?.map((item) => item.name)) || '',
+      atsType,
+      source: 'Greenhouse',
+      jobId: String(raw.id || raw.internal_job_id || ''),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.internal_job_id || title, raw.location?.name || ''),
+      jobUrl: raw.absolute_url || raw.url || '',
+      url: raw.absolute_url || raw.url || '',
+      postedAt: raw.first_published || raw.updated_at || raw.created_at || retrievedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(raw.first_published || raw.updated_at || retrievedAt) <= 7,
+      isGta: isGtaLocation(raw.location?.name || ''),
+    };
+  }
+  if (atsType === 'lever') {
+    const title = raw.text || raw.title || '';
+    if (!title) return null;
+    const location = raw.categories?.location || raw.location || '';
+    const postedAt = raw.createdAt ? new Date(Number(raw.createdAt)).toISOString() : (raw.updatedAt || retrievedAt);
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.categories?.team || raw.department || '',
+      commitment: raw.categories?.commitment || '',
+      atsType,
+      source: 'Lever',
+      jobId: String(raw.id || ''),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || title, location),
+      jobUrl: raw.hostedUrl || raw.applyUrl || '',
+      url: raw.hostedUrl || raw.applyUrl || '',
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'ashby') {
+    const title = raw.title || '';
+    if (!title) return null;
+    const location = readAshbyLocation(raw.location);
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || raw.team || '',
+      employmentType: raw.employmentType || '',
+      atsType,
+      source: 'Ashby',
+      jobId: String(raw.id || raw.jobId || ''),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.jobId || title, location),
+      jobUrl: raw.jobUrl || raw.applyUrl || raw.externalLink || '',
+      url: raw.jobUrl || raw.applyUrl || raw.externalLink || '',
+      postedAt: raw.publishedAt || raw.updatedAt || retrievedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(raw.publishedAt || retrievedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  return null;
+}
+
+function firstString(values = []) {
+  return (values || []).find((value) => String(value || '').trim()) || '';
+}
+
+function readAshbyLocation(location) {
+  if (!location) return '';
+  if (typeof location === 'string') return location;
+  return location.name || [location.city, location.region, location.country].filter(Boolean).join(', ');
+}
+
+function makeJobNaturalKey(config, atsType, jobId, location = '') {
+  return [
+    config.tenantId,
+    config.id || normalizeKey(config.companyName),
+    atsType,
+    String(jobId || '').trim() || normalizeKey(`${config.companyName}|${location}`),
+  ].map((part) => normalizeKey(part)).join('|');
+}
+
+function getJobNaturalKey(item) {
+  if (item.naturalKey) return item.naturalKey;
+  return [
+    item.tenantId,
+    item.configId || item.accountId || normalizeKey(item.companyName),
+    normalizeAtsType(item.atsType || item.source),
+    String(item.jobId || item.id || normalizeKey(`${item.title}|${item.location}`)).trim(),
+  ].map((part) => normalizeKey(part)).join('|');
+}
+
+function isCanadaJob(item, accountItem = null) {
+  const text = [
+    item.location,
+    item.country,
+    item.region,
+    item.office,
+    !item.location && accountItem?.location,
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (!text.trim()) return true;
+  if (/\b(canada|remote canada|canadian|ontario|on\b|toronto|gta|mississauga|ottawa|waterloo|kitchener|hamilton|london,?\s*on|british columbia|bc\b|vancouver|victoria|alberta|ab\b|calgary|edmonton|quebec|qc\b|montreal|montr[eé]al|nova scotia|ns\b|halifax|manitoba|mb\b|winnipeg|saskatchewan|sk\b|regina|saskatoon|new brunswick|nb\b|newfoundland|nl\b|prince edward island|pei\b|yukon|northwest territories|nunavut)\b/i.test(text)) {
+    return true;
+  }
+  if (/\b(us|usa|united states|california|ca\b|new york|ny\b|texas|tx\b|washington|wa\b|massachusetts|ma\b|florida|fl\b|illinois|il\b)\b/i.test(text)) {
+    return false;
+  }
+  return /remote/i.test(text);
+}
+
+function isGtaLocation(location) {
+  return /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill)\b/i.test(String(location || ''));
+}
+
+function refreshAccountHiringStats(item, tenantJobs) {
+  const accountJobs = tenantJobs.filter((jobItem) => jobItem.accountId === item.id && jobItem.active !== false);
+  const recent30 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 30);
+  const recent90 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 90);
+  const recent7 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 7);
+  item.jobCount = accountJobs.length;
+  item.openRoleCount = accountJobs.length;
+  item.jobsLast30Days = recent30.length;
+  item.jobsLast90Days = recent90.length;
+  item.newRoleCount7d = recent7.length;
+  item.lastJobPostedAt = accountJobs[0]?.postedAt || accountJobs[0]?.importedAt || '';
+  item.hiringStatus = accountJobs.length ? 'Active hiring' : 'No active roles found';
+  item.hiringVelocity = Math.min(100, Math.round((recent30.length * 8) + (recent7.length * 10)));
+  item.targetScore = Math.min(100, Math.round(
+    (Number(item.connectionCount || 0) * 8) +
+    (Number(item.seniorContactCount || 0) * 12) +
+    (Number(item.talentContactCount || 0) * 16) +
+    (Number(item.jobCount || 0) * 10)
+  ));
+  item.dailyScore = item.targetScore;
+  item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);
+  item.updatedAt = now();
 }
 
 

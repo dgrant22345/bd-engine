@@ -5906,10 +5906,11 @@ async function runLiveImport(buttonEl) {
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
     const run = job?.result?.importRun || {};
     const stats = run?.stats || {};
+    const warnings = run?.warnings || job?.result?.warnings || [];
     const status = run?.status === 'completed_with_errors'
       ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs. ${formatNumber(stats.errors || 0)} configs errored.`
       : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.`;
-    window.bdLocalApi.setAlert(status, appAlert);
+    window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
   });
 }
 
@@ -5925,8 +5926,9 @@ async function runDiscovery(buttonEl) {
     showToast('ATS discovery queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'ATS discovery' });
     const stats = job?.result?.stats || {};
+    const warnings = job?.result?.warnings || [];
     window.bdLocalApi.setAlert(
-      `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.`,
+      `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.${warnings.length ? ` ${warnings[0]}` : ''}`,
       appAlert
     );
   });
