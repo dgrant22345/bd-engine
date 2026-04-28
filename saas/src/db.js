@@ -93,6 +93,19 @@ export async function initDb() {
         settings JSONB NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL DEFAULT ''
       );
+
+      CREATE TABLE IF NOT EXISTS analytics_events (
+        id BIGSERIAL PRIMARY KEY,
+        visitor_id TEXT NOT NULL,
+        event_type TEXT NOT NULL DEFAULT 'pageview',
+        path TEXT NOT NULL DEFAULT '/',
+        referrer TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        tenant_id TEXT NOT NULL DEFAULT '',
+        user_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        day TEXT NOT NULL
+      );
     `);
 
     await pool.query(`
@@ -103,6 +116,9 @@ export async function initDb() {
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credited_at TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credit_transaction_id TEXT NOT NULL DEFAULT '';
       CREATE UNIQUE INDEX IF NOT EXISTS tenants_referral_code_idx ON tenants (referral_code) WHERE referral_code <> '';
+      CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
+      CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
+      CREATE INDEX IF NOT EXISTS analytics_events_created_at_idx ON analytics_events (created_at);
     `);
 
     dbReady = true;
@@ -336,6 +352,196 @@ export async function dbLoadAllTenantData() {
     console.error('DB: Failed to load tenant data:', err.message);
     return new Map();
   }
+}
+
+// ── First-party analytics ───────────────────────────────────────────────────
+
+const memoryAnalyticsEvents = [];
+
+export async function dbRecordAnalyticsVisit(event) {
+  const payload = normalizeAnalyticsEvent(event);
+  if (!payload.visitorId) return { recorded: false, reason: 'missing visitor id' };
+
+  if (!dbReady) {
+    memoryAnalyticsEvents.push(payload);
+    return { recorded: true, storage: 'memory' };
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO analytics_events (visitor_id, event_type, path, referrer, source, tenant_id, user_id, created_at, day)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        payload.visitorId,
+        payload.eventType,
+        payload.path,
+        payload.referrer,
+        payload.source,
+        payload.tenantId,
+        payload.userId,
+        payload.createdAt,
+        payload.day,
+      ]
+    );
+    return { recorded: true, storage: 'postgres' };
+  } catch (err) {
+    console.error('DB: Failed to record analytics visit:', err.message);
+    return { recorded: false, reason: err.message };
+  }
+}
+
+export async function dbGetAnalyticsSummary(days = 30) {
+  const lookbackDays = Math.max(1, Math.min(365, Number(days) || 30));
+  const since = new Date(Date.now() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const sinceDay = since.toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (!dbReady) {
+    return summarizeAnalyticsRows(memoryAnalyticsEvents, sinceDay, today);
+  }
+
+  try {
+    const [totals, recent, byDay, topPaths, topSources] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors FROM analytics_events`),
+      pool.query(
+        `SELECT
+           COUNT(*)::int AS visits,
+           COUNT(DISTINCT visitor_id)::int AS visitors,
+           COUNT(*) FILTER (WHERE day = $2)::int AS visits_today,
+           COUNT(DISTINCT visitor_id) FILTER (WHERE day = $2)::int AS visitors_today
+         FROM analytics_events
+         WHERE day >= $1`,
+        [sinceDay, today]
+      ),
+      pool.query(
+        `SELECT day, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
+         FROM analytics_events
+         WHERE day >= $1
+         GROUP BY day
+         ORDER BY day ASC`,
+        [sinceDay]
+      ),
+      pool.query(
+        `SELECT path, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
+         FROM analytics_events
+         WHERE day >= $1
+         GROUP BY path
+         ORDER BY visits DESC
+         LIMIT 8`,
+        [sinceDay]
+      ),
+      pool.query(
+        `SELECT source, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
+         FROM analytics_events
+         WHERE day >= $1
+         GROUP BY source
+         ORDER BY visits DESC
+         LIMIT 8`,
+        [sinceDay]
+      ),
+    ]);
+
+    return {
+      lookbackDays,
+      totals: {
+        visits: totals.rows[0]?.visits || 0,
+        visitors: totals.rows[0]?.visitors || 0,
+      },
+      recent: {
+        visits: recent.rows[0]?.visits || 0,
+        visitors: recent.rows[0]?.visitors || 0,
+        visitsToday: recent.rows[0]?.visits_today || 0,
+        visitorsToday: recent.rows[0]?.visitors_today || 0,
+      },
+      byDay: byDay.rows.map((row) => ({ day: row.day, visits: row.visits, visitors: row.visitors })),
+      topPaths: topPaths.rows.map((row) => ({ path: row.path || '/', visits: row.visits, visitors: row.visitors })),
+      topSources: topSources.rows.map((row) => ({ source: row.source || 'direct', visits: row.visits, visitors: row.visitors })),
+    };
+  } catch (err) {
+    console.error('DB: Failed to load analytics summary:', err.message);
+    return summarizeAnalyticsRows(memoryAnalyticsEvents, sinceDay, today);
+  }
+}
+
+function normalizeAnalyticsEvent(event = {}) {
+  const createdAt = new Date().toISOString();
+  return {
+    visitorId: String(event.visitorId || '').trim().slice(0, 96),
+    eventType: String(event.eventType || 'pageview').trim().slice(0, 32) || 'pageview',
+    path: sanitizeAnalyticsPath(event.path),
+    referrer: sanitizeAnalyticsReferrer(event.referrer),
+    source: sanitizeAnalyticsSource(event.source),
+    tenantId: String(event.tenantId || '').trim().slice(0, 96),
+    userId: String(event.userId || '').trim().slice(0, 96),
+    createdAt,
+    day: createdAt.slice(0, 10),
+  };
+}
+
+function sanitizeAnalyticsPath(value) {
+  const raw = String(value || '/').trim() || '/';
+  try {
+    const url = new URL(raw, 'https://bd-engine.local');
+    return `${url.pathname || '/'}${url.hash || ''}`.slice(0, 240);
+  } catch {
+    return raw.split('?')[0].slice(0, 240) || '/';
+  }
+}
+
+function sanitizeAnalyticsReferrer(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    return `${url.origin}${url.pathname || ''}`.slice(0, 240);
+  } catch {
+    return raw.split('?')[0].slice(0, 240);
+  }
+}
+
+function sanitizeAnalyticsSource(value) {
+  const normalized = String(value || 'direct').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '-');
+  return (normalized || 'direct').slice(0, 80);
+}
+
+function summarizeAnalyticsRows(rows, sinceDay, today) {
+  const recentRows = rows.filter((row) => row.day >= sinceDay);
+  const unique = (items) => new Set(items.map((row) => row.visitorId)).size;
+  const byDayMap = new Map();
+  const pathMap = new Map();
+  const sourceMap = new Map();
+
+  for (const row of recentRows) {
+    if (!byDayMap.has(row.day)) byDayMap.set(row.day, []);
+    byDayMap.get(row.day).push(row);
+    const pathRows = pathMap.get(row.path) || [];
+    pathRows.push(row);
+    pathMap.set(row.path, pathRows);
+    const sourceRows = sourceMap.get(row.source) || [];
+    sourceRows.push(row);
+    sourceMap.set(row.source, sourceRows);
+  }
+
+  return {
+    lookbackDays: Math.max(1, Math.round((Date.now() - Date.parse(`${sinceDay}T00:00:00Z`)) / (24 * 60 * 60 * 1000)) + 1),
+    totals: { visits: rows.length, visitors: unique(rows) },
+    recent: {
+      visits: recentRows.length,
+      visitors: unique(recentRows),
+      visitsToday: recentRows.filter((row) => row.day === today).length,
+      visitorsToday: unique(recentRows.filter((row) => row.day === today)),
+    },
+    byDay: Array.from(byDayMap.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([day, dayRows]) => ({ day, visits: dayRows.length, visitors: unique(dayRows) })),
+    topPaths: summarizeAnalyticsGroup(pathMap, 'path'),
+    topSources: summarizeAnalyticsGroup(sourceMap, 'source'),
+  };
+}
+
+function summarizeAnalyticsGroup(groupMap, key) {
+  return Array.from(groupMap.entries())
+    .map(([name, rows]) => ({ [key]: name || (key === 'source' ? 'direct' : '/'), visits: rows.length, visitors: new Set(rows.map((row) => row.visitorId)).size }))
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 8);
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────────────

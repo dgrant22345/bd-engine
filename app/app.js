@@ -1529,6 +1529,7 @@ init();
 async function init() {
   bindEvents();
   window.bdLocalApi.setAlert('', appAlert);
+  trackAppVisit().catch(() => {});
   renderLoadingState('Dashboard', 'Building your operating view...');
   
   // Set a timer to show a "long setup" warning if things are taking a while
@@ -2415,6 +2416,33 @@ async function loadBootstrap(force, options = {}) {
 
 async function api(path, options = {}) {
   return window.bdLocalApi.api(appState, path, options);
+}
+
+function getVisitorId() {
+  const key = 'bd_visitor_id';
+  let visitorId = localStorage.getItem(key);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID ? crypto.randomUUID() : `visitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(key, visitorId);
+  }
+  return visitorId;
+}
+
+async function trackAppVisit() {
+  const payload = {
+    visitorId: getVisitorId(),
+    eventType: 'pageview',
+    path: `${window.location.pathname}${window.location.hash || ''}`,
+    referrer: document.referrer || '',
+    source: document.referrer ? 'referrer' : 'direct',
+  };
+  await fetch('/api/analytics/visit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+    keepalive: true,
+  });
 }
 
 async function loadSetupStatus(force = false) {
@@ -4673,6 +4701,7 @@ async function renderAdminView() {
   const billing = batch.billing || {};
   const referral = billing.referral || {};
   const referralLink = referral.link || '';
+  const analytics = batch.analytics || {};
   const stripeStatus = billing.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
   const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
@@ -4751,6 +4780,24 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       <div class="two-column">
+        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
+          <div class="metrics-grid metrics-grid--compact">
+            ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
+            ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
+            ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
+          </div>
+          <div class="inline-split">
+            <div>
+              <p class="eyebrow">Top sources</p>
+              ${renderMiniStatList((analytics.topSources || []).map((item) => ({ label: item.source || 'direct', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+            <div>
+              <p class="eyebrow">Top pages</p>
+              ${renderMiniStatList((analytics.topPaths || []).map((item) => ({ label: item.path || '/', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}

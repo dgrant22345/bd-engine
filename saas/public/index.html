@@ -55,9 +55,44 @@
       return data;
     }
 
+    function getVisitorId() {
+      const key = 'bd_visitor_id';
+      let visitorId = localStorage.getItem(key);
+      if (!visitorId) {
+        visitorId = crypto.randomUUID ? crypto.randomUUID() : `visitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(key, visitorId);
+      }
+      return visitorId;
+    }
+
+    async function trackPageVisit() {
+      const params = new URLSearchParams(window.location.search);
+      const source = params.get('utm_source') || (params.get('ref') ? 'referral' : (document.referrer ? 'referrer' : 'direct'));
+      const payload = {
+        visitorId: getVisitorId(),
+        eventType: 'pageview',
+        path: `${window.location.pathname}${window.location.hash || ''}`,
+        referrer: document.referrer || '',
+        source,
+      };
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/analytics/visit', new Blob([body], { type: 'application/json' }));
+        return;
+      }
+      await fetch('/api/analytics/visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body,
+        keepalive: true,
+      });
+    }
+
     // ── Check auth status on load ─────────────────────────────────────────
     async function checkAuth() {
       cleanupServiceWorkers();
+      trackPageVisit().catch(() => {});
       try {
         const data = await api('/api/auth/me');
         if (data.authenticated) {

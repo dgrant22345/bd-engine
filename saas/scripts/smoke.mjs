@@ -47,6 +47,24 @@ await check('shared app is mounted under /app', async () => {
   assert(!html.includes('serviceWorker.register'), 'app html should not register a service worker in SaaS shell');
 });
 
+await check('analytics visit records and summarizes visitors', async () => {
+  const visitorId = `smoke-visitor-${Date.now()}`;
+  const response = await fetch(`${baseUrl}/api/analytics/visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      visitorId,
+      path: '/',
+      referrer: 'https://example.com/search?q=private',
+      source: 'smoke',
+    }),
+  });
+  assert(response.status === 202, `analytics visit returned ${response.status}`);
+  const admin = await getJson('/api/admin/bootstrap', cookie);
+  assert(admin.analytics?.recent?.visitors >= 1, 'analytics summary did not count visitors');
+  assert(Array.isArray(admin.analytics?.topSources), 'analytics summary did not include sources');
+});
+
 await check('new signup gets an empty first-run workspace', async () => {
   const email = `smoke-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {

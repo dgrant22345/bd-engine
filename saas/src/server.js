@@ -6,7 +6,7 @@ import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
 import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -269,6 +269,10 @@ self.addEventListener('activate', (event) => {
     }
   }
 
+  if (pathname === '/api/analytics/visit' && req.method === 'POST') {
+    return handleAnalyticsVisit(req, res);
+  }
+
   // ── All /api/ routes below require authentication ─────────────────────────
 
   const sessionData = extractSession(req);
@@ -398,6 +402,12 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/admin/bootstrap') {
     const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
+    const analyticsStartedAt = performance.now();
+    const analytics = await dbGetAnalyticsSummary(30);
+    const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
+    if (analyticsElapsedMs > 250) {
+      console.warn(`Slow analytics summary: saas/src/db.js dbGetAnalyticsSummary ${analyticsElapsedMs}ms`);
+    }
     const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
@@ -409,6 +419,7 @@ self.addEventListener('activate', (event) => {
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
       enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
       configs: store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      analytics,
       billing: {
         plan: getPlan(tenant.plan),
         trialDaysRemaining: getTrialDaysRemaining(tenant),
@@ -669,6 +680,26 @@ self.addEventListener('activate', (event) => {
   }
 
   return sendJson(res, 404, { error: 'Not found' });
+}
+
+async function handleAnalyticsVisit(req, res) {
+  const body = await readJson(req);
+  const sessionData = extractSession(req);
+  const startedAt = performance.now();
+  const result = await dbRecordAnalyticsVisit({
+    visitorId: body.visitorId,
+    eventType: body.eventType || 'pageview',
+    path: body.path || '/',
+    referrer: body.referrer || '',
+    source: body.source || '',
+    tenantId: sessionData?.tenantId || '',
+    userId: sessionData?.userId || '',
+  });
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 150) {
+    console.warn(`Slow analytics write: saas/src/db.js dbRecordAnalyticsVisit ${elapsedMs}ms`);
+  }
+  return sendJson(res, result.recorded ? 202 : 400, result);
 }
 
 async function handleStripeBillingEvent(event) {
