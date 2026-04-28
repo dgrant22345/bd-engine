@@ -1540,7 +1540,6 @@ async function init() {
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
       clearTimeout(longLoadTimer);
       location.hash = '#/setup';
-      await renderRoute();
       return;
     }
     if (initialRoot === 'setup') {
@@ -2885,7 +2884,6 @@ async function renderRoute() {
   if (root === 'setup') {
     if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
       location.hash = '#/dashboard';
-      await renderDashboardView();
       return;
     }
     activateNav('');
@@ -2896,9 +2894,6 @@ async function renderRoute() {
 
   if (appState.setupStatus?.requiresSetup) {
     location.hash = '#/setup';
-    activateNav('');
-    renderBreadcrumbs(null);
-    await renderSetupWizard();
     return;
   }
 
