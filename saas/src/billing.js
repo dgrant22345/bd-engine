@@ -1,16 +1,30 @@
 import Stripe from 'stripe';
 
-const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' }) : null;
+function normalizeStripeSecretKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^STRIPE_SECRET_KEY\s*=\s*/i, '')
+    .replace(/^['"]|['"]$/g, '')
+    .trim();
+}
+
+function getStripeKeyMode(secretKey) {
+  if (!secretKey) return 'not_configured';
+  if (secretKey.startsWith('sk_live_') || secretKey.startsWith('rk_live_')) return 'live';
+  if (secretKey.startsWith('sk_test_') || secretKey.startsWith('rk_test_')) return 'test';
+  return 'unknown';
+}
+
+const stripeSecretKey = normalizeStripeSecretKey(process.env.STRIPE_SECRET_KEY);
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2023-10-16' }) : null;
 
 export function isStripeConfigured() {
   return Boolean(stripe);
 }
 
 export function getStripeConfigStatus() {
-  const secretKey = process.env.STRIPE_SECRET_KEY || '';
-  const mode = secretKey.startsWith('sk_live_')
-    ? 'live'
-    : (secretKey.startsWith('sk_test_') ? 'test' : (secretKey ? 'unknown' : 'not_configured'));
+  const secretKey = stripeSecretKey;
+  const mode = getStripeKeyMode(secretKey);
   const allowTestCheckout = process.env.BD_ALLOW_TEST_CHECKOUT === 'true';
   const priceIds = {
     jobseeker: process.env.STRIPE_PRICE_JOBSEEKER || '',
