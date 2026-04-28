@@ -1977,6 +1977,16 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'copy-referral-link') {
+      const link = action.dataset.referralLink || document.getElementById('referral-link')?.value || '';
+      if (!link) return;
+      const originalText = action.textContent;
+      await navigator.clipboard.writeText(link);
+      action.textContent = 'Copied!';
+      setTimeout(() => { action.textContent = originalText; }, 1400);
+      return;
+    }
+
     if (actionName === 'cancel-background-job') {
       await cancelBackgroundJob(action.dataset.id);
       return;
@@ -4661,6 +4671,8 @@ async function renderAdminView() {
     },
   ];
   const billing = batch.billing || {};
+  const referral = billing.referral || {};
+  const referralLink = referral.link || '';
   const stripeStatus = billing.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
   const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
@@ -4790,6 +4802,17 @@ async function renderAdminView() {
             <div>
               <p class="eyebrow">Top failure reasons</p>
               ${renderMiniStatList((resolverReport.topFailureReasons || []).map((item) => ({ label: item.failureReason, value: formatNumber(item.count) })))}
+            </div>
+            <div class="action-card">
+              <p class="eyebrow">Referral credit</p>
+              <h4>Give $5, get $5</h4>
+              <p class="small muted">Share your referral link. When a referred user becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
+              <div class="inline-field-stack">
+                <input id="referral-link" readonly value="${escapeAttr(referralLink || 'Referral link will appear after your workspace finishes loading.')}">
+                <div class="button-row">
+                  <button class="secondary-button" type="button" data-action="copy-referral-link" data-referral-link="${escapeAttr(referralLink)}"${referralLink ? '' : ' disabled'}>Copy referral link</button>
+                </div>
+              </div>
             </div>
           </div>
         ${renderCollapsibleEnd()}

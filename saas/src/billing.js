@@ -162,7 +162,7 @@ export function getUsageSummary(tenantId, planId) {
 
 // ── Stripe Checkout ─────────────────────────────────────────────────────────
 
-export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl) {
+export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}) {
   if (!stripe) throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY environment variable.');
   const status = getStripeConfigStatus();
   if (!status.checkoutReady) {
@@ -175,25 +175,42 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     throw new Error(`Stripe price ID is not configured for ${plan.displayName}. Set ${plan.stripePriceEnv || 'the plan price environment variable'}.`);
   }
 
+  const checkoutMetadata = {
+    tenantId,
+    planId: plan.id,
+    ...Object.fromEntries(Object.entries(metadata || {}).filter(([, value]) => value !== undefined && value !== null && value !== '')),
+  };
+
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
     customer_email: userEmail,
     client_reference_id: tenantId,
     line_items: [{ price: plan.stripePriceId, quantity: 1 }],
     mode: 'subscription',
-    metadata: { tenantId, planId: plan.id },
+    metadata: checkoutMetadata,
     subscription_data: {
-      metadata: { tenantId, planId: plan.id },
+      metadata: checkoutMetadata,
     },
     success_url: successUrl,
     cancel_url: cancelUrl,
-    metadata: {
-      tenantId: tenantId,
-      planId: planId,
-    },
   });
 
   return session.url;
+}
+
+export async function createReferralCredit(customerId, { amountCents = 500, currency = 'usd', referredTenantId = '', referrerTenantId = '' } = {}) {
+  if (!stripe) throw new Error('Stripe is not configured.');
+  if (!customerId) throw new Error('Stripe customer is required for referral credit.');
+  return stripe.customers.createBalanceTransaction(customerId, {
+    amount: -Math.abs(Number(amountCents || 0)),
+    currency,
+    description: 'BD Engine referral credit',
+    metadata: {
+      source: 'bd_engine_referral',
+      referredTenantId,
+      referrerTenantId,
+    },
+  });
 }
 
 export async function createBillingPortalSession(customerId, returnUrl) {

@@ -30,6 +30,10 @@ export async function loadFromDb() {
     users.set(u.id, u);
   }
   for (const t of dbTenants) {
+    if (!t.referralCode && !t.referral_code) {
+      t.referralCode = makeUniqueReferralCode();
+      dbSaveTenant(t).catch(() => {});
+    }
     tenants.set(t.id, t);
   }
   for (const m of dbMemberships) {
@@ -90,7 +94,7 @@ export function authenticateUser(email, password) {
 
 // ── Tenant CRUD ─────────────────────────────────────────────────────────────
 
-export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd' }) {
+export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '' }) {
   const id = `tenant-${randomUUID().slice(0, 8)}`;
   const normalizedSlug = makeUniqueTenantSlug(slug || name || id, id);
 
@@ -103,6 +107,10 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     persona: persona || 'bd',
     stripeCustomerId: '',
     stripeSubscriptionId: '',
+    referralCode: makeUniqueReferralCode(),
+    referredByTenantId: String(referredByTenantId || ''),
+    referralCreditedAt: '',
+    referralCreditTransactionId: '',
     createdAt: now(),
     updatedAt: now(),
   };
@@ -125,7 +133,7 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
   return { tenant };
 }
 
-export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial' } = {}) {
+export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial', referredByTenantId = '' } = {}) {
   if (!user?.id) return { error: 'User not found.' };
 
   const userTenants = findTenantsForUser(user.id);
@@ -152,6 +160,7 @@ export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', 
     plan,
     ownerUserId: user.id,
     persona,
+    referredByTenantId,
   });
   if (result.error) return result;
 
@@ -175,6 +184,23 @@ export function findTenantByStripeCustomerId(customerId) {
     if (tenant.stripeCustomerId === normalized || tenant.stripe_customer_id === normalized) return tenant;
   }
   return null;
+}
+
+export function findTenantByReferralCode(code) {
+  const normalized = normalizeReferralCode(code);
+  if (!normalized) return null;
+  for (const tenant of tenants.values()) {
+    if (normalizeReferralCode(tenant.referralCode || tenant.referral_code) === normalized) return tenant;
+  }
+  return null;
+}
+
+export function findTenantsReferredBy(tenantId) {
+  const normalized = String(tenantId || '');
+  if (!normalized) return [];
+  return Array.from(tenants.values()).filter((tenant) => {
+    return (tenant.referredByTenantId || tenant.referred_by_tenant_id || '') === normalized;
+  });
 }
 
 export function updateTenant(tenantId, updates) {
@@ -269,6 +295,22 @@ function tenantSlugExists(slug) {
     if (tenant.slug === slug) return true;
   }
   return false;
+}
+
+function makeUniqueReferralCode() {
+  for (let i = 0; i < 1000; i += 1) {
+    const code = randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
+    if (!findTenantByReferralCode(code)) return code;
+  }
+  return randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
+}
+
+export function normalizeReferralCode(code) {
+  return String(code || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 24);
 }
 
 function findUnclaimedTenantForUser(user) {

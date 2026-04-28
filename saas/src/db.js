@@ -67,6 +67,10 @@ export async function initDb() {
         persona TEXT NOT NULL DEFAULT 'bd',
         stripe_customer_id TEXT NOT NULL DEFAULT '',
         stripe_subscription_id TEXT NOT NULL DEFAULT '',
+        referral_code TEXT NOT NULL DEFAULT '',
+        referred_by_tenant_id TEXT NOT NULL DEFAULT '',
+        referral_credited_at TEXT NOT NULL DEFAULT '',
+        referral_credit_transaction_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -94,6 +98,11 @@ export async function initDb() {
     await pool.query(`
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_code TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referred_by_tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credited_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credit_transaction_id TEXT NOT NULL DEFAULT '';
+      CREATE UNIQUE INDEX IF NOT EXISTS tenants_referral_code_idx ON tenants (referral_code) WHERE referral_code <> '';
     `);
 
     dbReady = true;
@@ -152,8 +161,8 @@ export async function dbSaveTenant(tenant) {
   if (!dbReady) return;
   try {
     await pool.query(
-      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (id) DO UPDATE SET
          slug = EXCLUDED.slug,
          name = EXCLUDED.name,
@@ -162,6 +171,10 @@ export async function dbSaveTenant(tenant) {
          persona = EXCLUDED.persona,
          stripe_customer_id = EXCLUDED.stripe_customer_id,
          stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+         referral_code = EXCLUDED.referral_code,
+         referred_by_tenant_id = EXCLUDED.referred_by_tenant_id,
+         referral_credited_at = EXCLUDED.referral_credited_at,
+         referral_credit_transaction_id = EXCLUDED.referral_credit_transaction_id,
          updated_at = EXCLUDED.updated_at`,
       [
         tenant.id,
@@ -172,6 +185,10 @@ export async function dbSaveTenant(tenant) {
         tenant.persona || 'bd',
         tenant.stripeCustomerId || tenant.stripe_customer_id || '',
         tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+        tenant.referralCode || tenant.referral_code || '',
+        tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
+        tenant.referralCreditedAt || tenant.referral_credited_at || '',
+        tenant.referralCreditTransactionId || tenant.referral_credit_transaction_id || '',
         tenant.createdAt,
         tenant.updatedAt,
       ]
@@ -194,6 +211,10 @@ export async function dbLoadAllTenants() {
       persona: r.persona,
       stripeCustomerId: r.stripe_customer_id || '',
       stripeSubscriptionId: r.stripe_subscription_id || '',
+      referralCode: r.referral_code || '',
+      referredByTenantId: r.referred_by_tenant_id || '',
+      referralCreditedAt: r.referral_credited_at || '',
+      referralCreditTransactionId: r.referral_credit_transaction_id || '',
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));

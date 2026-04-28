@@ -29,7 +29,19 @@
       trialDaysRemaining: null,
       error: '',
       busy: false,
+      referralCode: getInitialReferralCode(),
     };
+
+    function getInitialReferralCode() {
+      const fromUrl = new URLSearchParams(window.location.search).get('ref') || '';
+      const normalized = String(fromUrl || localStorage.getItem('bd_referral_code') || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 24);
+      if (normalized) localStorage.setItem('bd_referral_code', normalized);
+      return normalized;
+    }
 
     // ── API helper ────────────────────────────────────────────────────────
     async function api(path, options = {}) {
@@ -104,7 +116,7 @@
       try {
         const data = await api('/api/auth/signup', {
           method: 'POST',
-          body: JSON.stringify({ email, password, name, workspaceName, persona: persona || 'bd' }),
+          body: JSON.stringify({ email, password, name, workspaceName, persona: persona || 'bd', referralCode: state.referralCode || '' }),
         });
         state.user = data.user;
         state.tenant = data.tenant;
@@ -523,6 +535,7 @@
               <h2>Create your account</h2>
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
+            ${state.referralCode ? `<div class="auth-error" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
             ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">

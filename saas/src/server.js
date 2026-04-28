@@ -4,8 +4,8 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
-import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
+import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -15,6 +15,7 @@ const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const serverStartedAt = new Date();
+const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
 const serverStats = {
   requestCount: 0,
   errorCount: 0,
@@ -131,6 +132,14 @@ function isHealthRequest(req) {
   }
 }
 
+function getRequestOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${port}`;
+  const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : String(hostHeader).split(',')[0].trim();
+  const protoValue = Array.isArray(proto) ? proto[0] : String(proto).split(',')[0].trim();
+  return `${protoValue || 'https'}://${hostValue}`;
+}
+
 const billingExemptApiPaths = new Set([
   '/api/auth/me',
   '/api/auth/logout',
@@ -161,6 +170,17 @@ function sendBillingRequired(res, tenant) {
     status: tenant?.status || '',
     trialDaysRemaining: tenant ? getTrialDaysRemaining(tenant) : null,
   });
+}
+
+function getReferralSummary(tenant, origin = '') {
+  const code = normalizeReferralCode(tenant?.referralCode || tenant?.referral_code || '');
+  return {
+    code,
+    link: code && origin ? `${origin}/?ref=${encodeURIComponent(code)}` : '',
+    creditAmountCents: referralCreditAmountCents,
+    referredByTenantId: tenant?.referredByTenantId || tenant?.referred_by_tenant_id || '',
+    creditedAt: tenant?.referralCreditedAt || tenant?.referral_credited_at || '',
+  };
 }
 
 startServer().catch(err => {
@@ -238,7 +258,7 @@ self.addEventListener('activate', (event) => {
     const payload = await readBody(req);
     try {
       const event = handleWebhookEvent(payload, signature);
-      const result = handleStripeBillingEvent(event);
+      const result = await handleStripeBillingEvent(event);
       console.log('Received Stripe Event:', event.type, result);
       return sendJson(res, 200, { received: true, ...result });
     } catch (err) {
@@ -317,6 +337,7 @@ self.addEventListener('activate', (event) => {
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
       tenant: { id: tenant.id, name: tenant.name, plan: tenant.plan, status: tenant.status },
+      referral: getReferralSummary(tenant, url.origin),
     });
   }
 
@@ -326,7 +347,10 @@ self.addEventListener('activate', (event) => {
     try {
       const successUrl = `${url.origin}/app/#/admin`;
       const cancelUrl = `${url.origin}/app/#/admin`;
-      const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl);
+      const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl, {
+        referredByTenantId: tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
+        referralCode: tenant.referralCode || tenant.referral_code || '',
+      });
       return sendJson(res, 200, { url: sessionUrl });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
@@ -386,6 +410,7 @@ self.addEventListener('activate', (event) => {
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: { plan: tenant.plan, status: tenant.status },
+        referral: getReferralSummary(tenant, url.origin),
       },
     });
   }
@@ -640,7 +665,7 @@ self.addEventListener('activate', (event) => {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
-function handleStripeBillingEvent(event) {
+async function handleStripeBillingEvent(event) {
   const object = event?.data?.object || {};
   if (event.type === 'checkout.session.completed') {
     const tenantId = object.client_reference_id || object.metadata?.tenantId || '';
@@ -652,7 +677,9 @@ function handleStripeBillingEvent(event) {
       stripeCustomerId: getStripeId(object.customer),
       stripeSubscriptionId: getStripeId(object.subscription),
     });
-    return { updated: Boolean(tenant), tenantId, planId };
+    const referral = await maybeGrantReferralCredit(tenant, object);
+    const pendingReferralCredits = tenant ? await grantPendingReferralCreditsForReferrer(tenant) : [];
+    return { updated: Boolean(tenant), tenantId, planId, referral, pendingReferralCredits };
   }
 
   if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created') {
@@ -686,6 +713,57 @@ function handleStripeBillingEvent(event) {
   return { updated: false, ignored: true };
 }
 
+async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {
+  if (!referredTenant) return { credited: false, reason: 'referred workspace not found' };
+  if (referredTenant.referralCreditedAt || referredTenant.referral_credited_at) {
+    return { credited: false, reason: 'already credited' };
+  }
+
+  const referrerTenantId = referredTenant.referredByTenantId || referredTenant.referred_by_tenant_id || stripeObject.metadata?.referredByTenantId || '';
+  if (!referrerTenantId || referrerTenantId === referredTenant.id) {
+    return { credited: false, reason: 'no eligible referrer' };
+  }
+
+  const referrerTenant = findTenantById(referrerTenantId);
+  if (!referrerTenant) return { credited: false, reason: 'referrer not found' };
+
+  const customerId = referrerTenant.stripeCustomerId || referrerTenant.stripe_customer_id || '';
+  if (!customerId) {
+    return { credited: false, reason: 'referrer has no Stripe customer yet' };
+  }
+
+  try {
+    const transaction = await createReferralCredit(customerId, {
+      amountCents: referralCreditAmountCents,
+      currency: 'usd',
+      referredTenantId: referredTenant.id,
+      referrerTenantId,
+    });
+    updateTenant(referredTenant.id, {
+      referralCreditedAt: new Date().toISOString(),
+      referralCreditTransactionId: transaction?.id || '',
+    });
+    return { credited: true, referrerTenantId, amountCents: referralCreditAmountCents, transactionId: transaction?.id || '' };
+  } catch (error) {
+    console.error('Referral credit failed:', error.message || error);
+    return { credited: false, reason: error.message || 'credit failed' };
+  }
+}
+
+async function grantPendingReferralCreditsForReferrer(referrerTenant) {
+  const customerId = referrerTenant?.stripeCustomerId || referrerTenant?.stripe_customer_id || '';
+  if (!referrerTenant?.id || !customerId) return [];
+  const paidReferredTenants = findTenantsReferredBy(referrerTenant.id).filter((tenant) => {
+    const status = String(tenant.status || '').toLowerCase();
+    return !tenant.referralCreditedAt && !tenant.referral_credited_at && tenant.id !== referrerTenant.id && ['active', 'trialing'].includes(status) && tenant.plan !== 'trial';
+  });
+  const results = [];
+  for (const referredTenant of paidReferredTenants) {
+    results.push(await maybeGrantReferralCredit(referredTenant));
+  }
+  return results;
+}
+
 function getStripeId(value) {
   if (!value) return '';
   return typeof value === 'string' ? value : value.id || '';
@@ -694,7 +772,7 @@ function getStripeId(value) {
 // ── Auth handlers ───────────────────────────────────────────────────────────
 
 async function handleSignup(req, res) {
-  const { email, password, name, workspaceName, persona } = await readJson(req);
+  const { email, password, name, workspaceName, persona, referralCode } = await readJson(req);
 
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
@@ -712,10 +790,12 @@ async function handleSignup(req, res) {
   // Create default workspace
   const userPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
   const workspaceDisplayName = workspaceName || `${userResult.user.name}'s Workspace`;
+  const referrerTenant = findTenantByReferralCode(referralCode);
   const tenantResult = ensureTenantForUser(userResult.user, {
     workspaceName: workspaceDisplayName,
     persona: userPersona,
     plan: 'trial',
+    referredByTenantId: referrerTenant?.id || '',
   });
 
   if (tenantResult.error) {
@@ -735,6 +815,7 @@ async function handleSignup(req, res) {
     tenant: tenantResult.tenant || null,
     tenants: tenantResult.tenants || [tenantResult.tenant],
     persona: userPersona,
+    referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
   });
 }
 
@@ -833,6 +914,7 @@ function handleMe(req, res) {
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
     trialDaysRemaining,
     billingRequired,
+    referral: getReferralSummary(tenant, getRequestOrigin(req)),
     persona,
   });
 }

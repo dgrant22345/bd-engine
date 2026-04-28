@@ -93,6 +93,41 @@ await check('job seeker persona persists into the app bootstrap', async () => {
   assert(bootstrap.persona === 'jobseeker', '/api/bootstrap did not return jobseeker persona');
 });
 
+await check('referral code tracks referred signup', async () => {
+  const referrerEmail = `smoke-referrer-${Date.now()}@example.com`;
+  const referrerResponse = await fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: referrerEmail,
+      password: 'smoke1234',
+      name: 'Smoke Referrer',
+      workspaceName: 'Smoke Referrer Workspace',
+    }),
+  });
+  assert(referrerResponse.status === 201, `referrer signup returned ${referrerResponse.status}`);
+  const referrerCookie = referrerResponse.headers.get('set-cookie')?.split(';')[0] || '';
+  const referrerBilling = await getJson('/api/billing', referrerCookie);
+  assert(referrerBilling.referral?.code, 'referrer did not receive a referral code');
+
+  const referredEmail = `smoke-referred-${Date.now()}@example.com`;
+  const referredResponse = await fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: referredEmail,
+      password: 'smoke1234',
+      name: 'Smoke Referred',
+      workspaceName: 'Smoke Referred Workspace',
+      referralCode: referrerBilling.referral.code,
+    }),
+  });
+  assert(referredResponse.status === 201, `referred signup returned ${referredResponse.status}`);
+  const referredCookie = referredResponse.headers.get('set-cookie')?.split(';')[0] || '';
+  const referredMe = await getJson('/api/auth/me', referredCookie);
+  assert(referredMe.referral?.referredByTenantId, 'referred signup did not retain referrer tenant');
+});
+
 for (const item of checks) {
   console.log(`${item.ok ? 'OK' : 'FAIL'} ${item.name}${item.error ? `: ${item.error}` : ''}`);
 }
