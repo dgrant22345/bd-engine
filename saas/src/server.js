@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
 import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, isStripeConfigured, getStripeConfigStatus } from './billing.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady } from './db.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -129,6 +129,38 @@ function isHealthRequest(req) {
   } catch {
     return false;
   }
+}
+
+const billingExemptApiPaths = new Set([
+  '/api/auth/me',
+  '/api/auth/logout',
+  '/api/billing',
+  '/api/billing/checkout',
+  '/api/billing/portal',
+  '/api/plans',
+  '/api/session',
+]);
+
+function isBillingExemptPath(pathname) {
+  return billingExemptApiPaths.has(pathname);
+}
+
+function isTenantBillingBlocked(tenant) {
+  if (!tenant) return false;
+  if (tenant.plan === 'trial') return isTrialExpired(tenant);
+  const status = String(tenant.status || '').toLowerCase();
+  return !['active', 'trialing'].includes(status);
+}
+
+function sendBillingRequired(res, tenant) {
+  return sendJson(res, 402, {
+    error: 'Your trial has ended. Choose a plan to continue using BD Engine.',
+    code: 'billing_required',
+    billingRequired: true,
+    plan: tenant?.plan || 'trial',
+    status: tenant?.status || '',
+    trialDaysRemaining: tenant ? getTrialDaysRemaining(tenant) : null,
+  });
 }
 
 startServer().catch(err => {
@@ -256,6 +288,10 @@ self.addEventListener('activate', (event) => {
     membership: { role: membership.role },
   };
   store.ensureTenant(tenant, session.user);
+
+  if (isTenantBillingBlocked(tenant) && !isBillingExemptPath(pathname)) {
+    return sendBillingRequired(res, tenant);
+  }
 
   // ── Tenant management ─────────────────────────────────────────────────────
 
@@ -786,6 +822,7 @@ function handleMe(req, res) {
   const plan = tenant ? getPlan(tenant.plan) : null;
   const trialDaysRemaining = tenant ? getTrialDaysRemaining(tenant) : null;
   const persona = tenant ? store.getPersona(tenant.id) : 'bd';
+  const billingRequired = tenant ? isTenantBillingBlocked(tenant) : false;
 
   return sendJson(res, 200, {
     authenticated: true,
@@ -795,6 +832,7 @@ function handleMe(req, res) {
     membership: membership ? { role: membership.role } : null,
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
     trialDaysRemaining,
+    billingRequired,
     persona,
   });
 }

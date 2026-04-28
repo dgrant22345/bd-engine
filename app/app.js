@@ -1513,6 +1513,10 @@ function renderDashboardCharts(accounts) {
 
 window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
+  if (isBillingRequiredError(event.reason)) {
+    renderBillingRequiredView(event.reason);
+    return;
+  }
   window.bdLocalApi.handleError(event.reason, appAlert);
 });
 
@@ -1561,13 +1565,26 @@ async function init() {
       });
     }
   } catch (error) {
+    if (isBillingRequiredError(error)) {
+      clearTimeout(longLoadTimer);
+      await renderBillingRequiredView(error);
+      return;
+    }
     window.bdLocalApi.handleError(error, appAlert);
     appRoot.innerHTML = `<div class="empty-state">Unable to load the BD Engine data. ${escapeHtml(error.message || String(error))}</div>`;
   }
 }
 
 function bindEvents() {
-  window.addEventListener('hashchange', () => renderRoute());
+  window.addEventListener('hashchange', () => {
+    renderRoute().catch((error) => {
+      if (isBillingRequiredError(error)) {
+        renderBillingRequiredView(error);
+        return;
+      }
+      window.bdLocalApi.handleError(error, appAlert);
+    });
+  });
   document.addEventListener('keydown', (e) => {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
@@ -2853,6 +2870,53 @@ function renderLoadingState(title, subtitle) {
       else if (progress > 25) text.textContent = 'Parsing LinkedIn connections...';
     }, 3000);
   }
+}
+
+function isBillingRequiredError(error) {
+  return Boolean(error && (error.status === 402 || error.billingRequired || error.code === 'billing_required'));
+}
+
+async function renderBillingRequiredView(error = {}) {
+  setViewTitle('Billing required');
+  activateNav('');
+  renderBreadcrumbs(null);
+  window.bdLocalApi.setAlert('', appAlert);
+
+  let billing = null;
+  try {
+    billing = await api('/api/billing', { skipCache: true });
+  } catch (_billingError) {
+    billing = null;
+  }
+
+  const stripeStatus = billing?.stripe || {};
+  const stripeReady = Boolean(stripeStatus.checkoutReady);
+  const selectedPlanId = billing?.plan?.id === 'sales' ? 'sales' : 'jobseeker';
+  const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
+  const stripeBillingMessage = stripeReady
+    ? 'Checkout is ready.'
+    : 'Live checkout is not enabled yet. Ask the BD Engine owner to finish Stripe live-mode setup.';
+
+  appRoot.innerHTML = `
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Billing required</p>
+        <h2>Choose a plan to continue</h2>
+        <p class="subtitle">${escapeHtml(message)}</p>
+        <p class="small muted">${escapeHtml(stripeBillingMessage)}</p>
+        <div class="inline-field-stack" style="max-width: 420px;">
+          <select id="billing-plan-select">
+            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
+            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
+          </select>
+          <div class="button-row">
+            <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
+            ${billing?.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function countAppliedFilters(query) {
