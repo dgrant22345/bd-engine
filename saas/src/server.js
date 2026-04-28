@@ -136,7 +136,10 @@ function getRequestOrigin(req) {
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${port}`;
   const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : String(hostHeader).split(',')[0].trim();
-  const protoValue = Array.isArray(proto) ? proto[0] : String(proto).split(',')[0].trim();
+  let protoValue = Array.isArray(proto) ? proto[0] : String(proto).split(',')[0].trim();
+  if (protoValue === 'http' && !/^(localhost|127\.0\.0\.1)(:|$)/i.test(hostValue)) {
+    protoValue = 'https';
+  }
   return `${protoValue || 'https'}://${hostValue}`;
 }
 
