@@ -55,65 +55,90 @@
 
   let currentPersona = 'bd';
   let applied = false;
+  let applying = false;
+  let applyQueued = false;
 
   function getLabels() {
     return LABELS[currentPersona] || LABELS.bd;
   }
 
+  function setText(el, value) {
+    if (el && el.textContent !== value) el.textContent = value;
+  }
+
+  function setHtml(el, value) {
+    if (el && el.innerHTML !== value) el.innerHTML = value;
+  }
+
+  function scheduleApplyLabels() {
+    if (currentPersona === 'bd' || applyQueued) return;
+    applyQueued = true;
+    requestAnimationFrame(() => {
+      applyQueued = false;
+      applyLabels();
+    });
+  }
+
   function applyLabels() {
-    const labels = getLabels();
+    if (applying) return;
+    applying = true;
+    try {
+      const labels = getLabels();
 
-    // Sidebar brand
-    const sidebarEyebrow = document.querySelector('.sidebar .eyebrow');
-    if (sidebarEyebrow) sidebarEyebrow.textContent = labels.eyebrow;
-    const brandCopy = document.querySelector('.sidebar .brand-copy');
-    if (brandCopy) brandCopy.textContent = labels.brandCopy;
+      // Sidebar brand
+      const sidebarEyebrow = document.querySelector('.sidebar .eyebrow');
+      setText(sidebarEyebrow, labels.eyebrow);
+      const brandCopy = document.querySelector('.sidebar .brand-copy');
+      setText(brandCopy, labels.brandCopy);
 
-    // Nav items
-    const navRoutes = {
-      dashboard: 'navDashboard',
-      accounts: 'navAccounts',
-      contacts: 'navContacts',
-      jobs: 'navJobs',
-      admin: 'navAdmin',
-    };
-    for (const [route, key] of Object.entries(navRoutes)) {
-      const el = document.querySelector(`.nav a[data-route="${route}"] .nav-label`);
-      if (el) el.textContent = labels[key];
-    }
-
-    // Topbar eyebrow
-    const topbarEyebrow = document.querySelector('.topbar .eyebrow');
-    if (topbarEyebrow) topbarEyebrow.textContent = labels.topbarEyebrow;
-
-    // Search
-    const searchShell = document.querySelector('.search-shell span');
-    if (searchShell) {
-      const kbd = searchShell.querySelector('kbd');
-      const kbdHtml = kbd ? ` ${kbd.outerHTML}` : '';
-      searchShell.innerHTML = `${labels.searchLabel}${kbdHtml}`;
-    }
-    const searchInput = document.getElementById('global-search-input');
-    if (searchInput) searchInput.placeholder = labels.searchPlaceholder;
-
-    // View title — swap known titles
-    const viewTitle = document.getElementById('view-title');
-    if (viewTitle && currentPersona === 'jobseeker') {
-      const titleMap = { 'Accounts': 'Companies', 'Contacts': 'Hiring Contacts', 'Jobs': 'Open Roles', 'Admin': 'Settings' };
-      if (titleMap[viewTitle.textContent]) {
-        viewTitle.textContent = titleMap[viewTitle.textContent];
+      // Nav items
+      const navRoutes = {
+        dashboard: 'navDashboard',
+        accounts: 'navAccounts',
+        contacts: 'navContacts',
+        jobs: 'navJobs',
+        admin: 'navAdmin',
+      };
+      for (const [route, key] of Object.entries(navRoutes)) {
+        const el = document.querySelector(`.nav a[data-route="${route}"] .nav-label`);
+        setText(el, labels[key]);
       }
-    }
 
-    // Breadcrumbs — swap text
-    if (currentPersona === 'jobseeker') {
-      document.querySelectorAll('#breadcrumbs a, #breadcrumbs span').forEach((el) => {
-        const swapMap = { 'Accounts': 'Companies', 'Contacts': 'Hiring Contacts', 'Jobs': 'Open Roles', 'Admin': 'Settings' };
-        if (swapMap[el.textContent]) el.textContent = swapMap[el.textContent];
-      });
-    }
+      // Topbar eyebrow
+      const topbarEyebrow = document.querySelector('.topbar .eyebrow');
+      setText(topbarEyebrow, labels.topbarEyebrow);
 
-    applied = true;
+      // Search
+      const searchShell = document.querySelector('.search-shell span');
+      if (searchShell) {
+        const kbd = searchShell.querySelector('kbd');
+        const kbdHtml = kbd ? ` ${kbd.outerHTML}` : '';
+        setHtml(searchShell, `${labels.searchLabel}${kbdHtml}`);
+      }
+      const searchInput = document.getElementById('global-search-input');
+      if (searchInput && searchInput.placeholder !== labels.searchPlaceholder) searchInput.placeholder = labels.searchPlaceholder;
+
+      // View title — swap known titles
+      const viewTitle = document.getElementById('view-title');
+      if (viewTitle && currentPersona === 'jobseeker') {
+        const titleMap = { 'Accounts': 'Companies', 'Contacts': 'Hiring Contacts', 'Jobs': 'Open Roles', 'Admin': 'Settings' };
+        if (titleMap[viewTitle.textContent]) {
+          setText(viewTitle, titleMap[viewTitle.textContent]);
+        }
+      }
+
+      // Breadcrumbs — swap text
+      if (currentPersona === 'jobseeker') {
+        document.querySelectorAll('#breadcrumbs a, #breadcrumbs span').forEach((el) => {
+          const swapMap = { 'Accounts': 'Companies', 'Contacts': 'Hiring Contacts', 'Jobs': 'Open Roles', 'Admin': 'Settings' };
+          if (swapMap[el.textContent]) setText(el, swapMap[el.textContent]);
+        });
+      }
+
+      applied = true;
+    } finally {
+      applying = false;
+    }
   }
 
   // Detect persona from the bootstrap API response
@@ -143,7 +168,7 @@
           currentPersona = persona;
           window.__bdPersona = persona;
           // Re-apply labels when persona is detected
-          requestAnimationFrame(() => applyLabels());
+          scheduleApplyLabels();
         }
       } catch {
         // Ignore parse errors
@@ -154,9 +179,7 @@
 
   // Use MutationObserver to re-apply labels when the DOM changes (view switches)
   const observer = new MutationObserver(() => {
-    if (currentPersona !== 'bd') {
-      applyLabels();
-    }
+    if (!applying) scheduleApplyLabels();
   });
 
   // Start observing once the app shell is ready
@@ -184,8 +207,6 @@
 
   // Also apply on hash changes (route switches)
   window.addEventListener('hashchange', () => {
-    if (currentPersona !== 'bd') {
-      setTimeout(applyLabels, 100);
-    }
+    setTimeout(scheduleApplyLabels, 100);
   });
 })();
