@@ -1,6 +1,7 @@
 import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
 
 const now = () => new Date().toISOString();
+const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 
 const pastDate = (days) => {
   const d = new Date();
@@ -93,6 +94,35 @@ function job(input) {
     createdAt: now(),
     updatedAt: now(),
     ...input,
+  };
+}
+
+function dashboardAccountSummary(item) {
+  return {
+    id: item.id,
+    accountId: item.id,
+    displayName: item.displayName,
+    normalizedName: item.normalizedName,
+    status: item.status,
+    outreachStatus: item.outreachStatus,
+    targetScore: item.targetScore,
+    dailyScore: item.dailyScore,
+    priorityTier: item.priorityTier,
+    domain: item.domain,
+    canonicalDomain: item.canonicalDomain,
+    careersUrl: item.careersUrl,
+    openRoleCount: item.openRoleCount,
+    jobCount: item.jobCount,
+    connectionCount: item.connectionCount,
+    seniorContactCount: item.seniorContactCount,
+    talentContactCount: item.talentContactCount,
+    enrichmentConfidence: item.enrichmentConfidence,
+    enrichmentStatus: item.enrichmentStatus,
+    reviewReason: item.reviewReason,
+    recommendedAction: item.recommendedAction,
+    nextAction: item.nextAction,
+    nextActionAt: item.nextActionAt,
+    targetScoreExplanation: item.targetScoreExplanation,
   };
 }
 
@@ -478,10 +508,14 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
       const tenantAccounts = accountsForTenant(tenantId);
+      const unresolvedAccounts = tenantAccounts.filter((item) => item.status === 'new');
+      const unresolvedDashboardAccounts = unresolvedAccounts
+        .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
+        .map(dashboardAccountSummary);
       return {
         playbook: tenantAccounts.slice(0, 5),
         overdueFollowUps: [],
-        staleAccounts: tenantAccounts.filter((item) => item.status === 'new').slice(0, 50),
+        staleAccounts: unresolvedDashboardAccounts,
         activityFeed: activitiesForTenant(tenantId).slice(0, 10),
         enrichmentFunnel: { resolved: 2, needsReview: 1, missing: 0 },
         alertQueue: tenantAccounts.slice(0, 3).map((item) => ({
@@ -514,7 +548,8 @@ export function createStore() {
           introSummary: `Best path is through ${item.fullName}.`,
           pathLength: 1,
         })),
-        resolutionQueue: tenantAccounts.filter((item) => item.status === 'new'),
+        resolutionQueue: unresolvedDashboardAccounts,
+        resolutionQueueTotal: unresolvedAccounts.length,
       };
     },
 
