@@ -330,6 +330,7 @@ self.addEventListener('activate', (event) => {
     const plan = getPlan(tenant.plan);
     const trialDaysRemaining = getTrialDaysRemaining(tenant);
     const usage = getUsageSummary(tenantId, tenant.plan);
+    const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
       plan,
       trialDaysRemaining,
@@ -337,7 +338,7 @@ self.addEventListener('activate', (event) => {
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
       tenant: { id: tenant.id, name: tenant.name, plan: tenant.plan, status: tenant.status },
-      referral: getReferralSummary(tenant, url.origin),
+      referral: getReferralSummary(tenant, origin),
     });
   }
 
@@ -345,8 +346,9 @@ self.addEventListener('activate', (event) => {
     const body = await readJson(req);
     const planId = body.planId;
     try {
-      const successUrl = `${url.origin}/app/#/admin`;
-      const cancelUrl = `${url.origin}/app/#/admin`;
+      const origin = getRequestOrigin(req);
+      const successUrl = `${origin}/app/#/admin`;
+      const cancelUrl = `${origin}/app/#/admin`;
       const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl, {
         referredByTenantId: tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
         referralCode: tenant.referralCode || tenant.referral_code || '',
@@ -363,7 +365,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 400, { error: 'No Stripe customer is attached to this workspace yet. Complete checkout first.' });
     }
     try {
-      const portalUrl = await createBillingPortalSession(customerId, `${url.origin}/app/#/admin`);
+      const portalUrl = await createBillingPortalSession(customerId, `${getRequestOrigin(req)}/app/#/admin`);
       return sendJson(res, 200, { url: portalUrl });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
@@ -393,6 +395,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/admin/bootstrap') {
     const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
+    const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
       runtime: store.getRuntimeStatus(),
@@ -410,7 +413,7 @@ self.addEventListener('activate', (event) => {
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: { plan: tenant.plan, status: tenant.status },
-        referral: getReferralSummary(tenant, url.origin),
+        referral: getReferralSummary(tenant, origin),
       },
     });
   }
