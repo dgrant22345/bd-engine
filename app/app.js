@@ -12,6 +12,16 @@ const defaultAdminCollapsed = {
   'ats-config-records': true,
 };
 
+const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
+const DASHBOARD_RENDER_LIMITS = {
+  todayQueue: 50,
+  followUps: 10,
+  resolution: 8,
+  recentJobs: 12,
+  tasks: 6,
+  analytics: 40,
+};
+
 function readJsonSetting(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -65,6 +75,8 @@ const appState = {
   stageTimestamps: JSON.parse(localStorage.getItem('bd_stage_ts') || '{}'),
   // Phase 6: Commercial-grade features
   onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
+  postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
+  tourActive: false,
   dashboardLayout: JSON.parse(localStorage.getItem('bd_dash_layout') || 'null'),
   dashboardCollapsed: JSON.parse(localStorage.getItem('bd_dash_collapsed') || '{}'),
   customFields: JSON.parse(localStorage.getItem('bd_custom_fields') || '[]'),
@@ -1528,9 +1540,6 @@ async function init() {
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
       location.hash = '#/setup';
       await renderRoute();
-      if (!appState.onboardingDone) {
-        setTimeout(startProductTour, 500);
-      }
       return;
     }
     if (routeNeedsBootstrapFilters(initialRoot)) {
@@ -1730,13 +1739,11 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-open-dashboard') {
+      queuePostSetupTour();
       invalidateAppData();
       await loadBootstrap(true, { includeFilters: true });
       location.hash = '#/dashboard';
       await renderRoute();
-      if (!appState.onboardingDone) {
-        setTimeout(startProductTour, 500);
-      }
       return;
     }
     if (actionName === 'paginate') {
@@ -1752,9 +1759,6 @@ function bindEvents() {
         return;
       }
       await renderRoute();
-      if (!appState.onboardingDone) {
-        setTimeout(startProductTour, 500);
-      }
       return;
     }
     if (actionName === 'save-current-filter') {
@@ -3445,19 +3449,45 @@ async function watchSetupImportJob(jobId) {
 }
 
 async function renderDashboardView() {
+  const dashboardStartedAt = performance.now();
   renderLoadingState('Dashboard', "Building today's hiring radar...");
   setViewTitle('Dashboard');
-  const dashboard = await api('/api/dashboard');
-  const tasks = await api('/api/tasks');
-  const taskList = Array.isArray(tasks.items) ? tasks.items : [];
-  if (!dashboard.todayQueue) dashboard.todayQueue = [];
-  if (!dashboard.followUpAccounts) dashboard.followUpAccounts = [];
-  if (!dashboard.newJobsToday) dashboard.newJobsToday = [];
-  if (!dashboard.recommendedActions) dashboard.recommendedActions = [];
-  if (!dashboard.recentlyDiscoveredBoards) dashboard.recentlyDiscoveredBoards = [];
-  if (!dashboard.summary) dashboard.summary = {};
-  let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
-  try { extended = await api('/api/dashboard/extended'); } catch(e) { console.warn('Extended dashboard data unavailable:', e); }
+  const [dashboardPayload, tasksPayload, extendedPayload] = await Promise.all([
+    api('/api/dashboard', { skipCache: true }),
+    api('/api/tasks', { skipCache: true }),
+    api('/api/dashboard/extended', { skipCache: true }).catch((e) => {
+      console.warn('Extended dashboard data unavailable:', e);
+      return null;
+    }),
+  ]);
+  const dashboard = dashboardPayload || {};
+  const tasks = tasksPayload || {};
+  const taskList = (Array.isArray(tasks.items) ? tasks.items : []).slice(0, DASHBOARD_RENDER_LIMITS.tasks);
+  dashboard.todayQueue = (Array.isArray(dashboard.todayQueue) ? dashboard.todayQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.todayQueue);
+  dashboard.followUpAccounts = (Array.isArray(dashboard.followUpAccounts) ? dashboard.followUpAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  dashboard.newJobsToday = (Array.isArray(dashboard.newJobsToday) ? dashboard.newJobsToday : []).slice(0, DASHBOARD_RENDER_LIMITS.recentJobs);
+  dashboard.recommendedActions = Array.isArray(dashboard.recommendedActions) ? dashboard.recommendedActions : [];
+  dashboard.recentlyDiscoveredBoards = Array.isArray(dashboard.recentlyDiscoveredBoards) ? dashboard.recentlyDiscoveredBoards : [];
+  dashboard.needsResolution = (Array.isArray(dashboard.needsResolution) ? dashboard.needsResolution : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
+  dashboard.summary = dashboard.summary || {};
+  const extended = {
+    playbook: [],
+    overdueFollowUps: [],
+    staleAccounts: [],
+    activityFeed: [],
+    enrichmentFunnel: {},
+    alertQueue: [],
+    sequenceQueue: [],
+    introQueue: [],
+    ...(extendedPayload || {}),
+  };
+  extended.playbook = (Array.isArray(extended.playbook) ? extended.playbook : []).slice(0, 5);
+  extended.overdueFollowUps = (Array.isArray(extended.overdueFollowUps) ? extended.overdueFollowUps : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.staleAccounts = (Array.isArray(extended.staleAccounts) ? extended.staleAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.activityFeed = (Array.isArray(extended.activityFeed) ? extended.activityFeed : []).slice(0, 10);
+  extended.alertQueue = (Array.isArray(extended.alertQueue) ? extended.alertQueue : []).slice(0, 3);
+  extended.sequenceQueue = (Array.isArray(extended.sequenceQueue) ? extended.sequenceQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.introQueue = (Array.isArray(extended.introQueue) ? extended.introQueue : []).slice(0, 3);
   const topCompany = dashboard.todayQueue[0];
   const networkLeadersList = Array.isArray(dashboard.networkLeaders) ? dashboard.networkLeaders : [];
   const maxNetwork = Math.max(1, ...networkLeadersList.map((item) => item.connectionCount || 0));
@@ -3465,8 +3495,9 @@ async function renderDashboardView() {
   const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
   const resolutionQueue = (dashboard.needsResolution && dashboard.needsResolution.length)
     ? dashboard.needsResolution
-    : (extended.resolutionQueue || []);
+    : (Array.isArray(extended.resolutionQueue) ? extended.resolutionQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
   const resolutionPressure = dashboard.summary.needsResolutionCount || resolutionQueue.length || 0;
+  const analyticsQueue = dashboard.todayQueue.slice(0, DASHBOARD_RENDER_LIMITS.analytics);
   const dashboardStory = [
     {
       label: 'Priority lane',
@@ -3497,7 +3528,6 @@ async function renderDashboardView() {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
-    ${renderOnboardingTour()}
     <div class="dash-toolbar">${renderDashboardCustomizer()}<button class="ghost-button ghost-button--xs" data-action="export-pdf">Export PDF</button></div>
     ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
       <div class="hero-layout">
@@ -3694,7 +3724,7 @@ async function renderDashboardView() {
     ` : '')}
 
     ${dashSection('queue', `<section class="dashboard-grid">
-      <div class="table-card emphasis-card">
+      <div class="table-card emphasis-card" data-tour="today-queue">
         <div class="panel-header">
           <div>
             <h3>Today queue</h3>
@@ -3807,14 +3837,14 @@ async function renderDashboardView() {
         </div>
       </div>
     </section>`)}
-    ${dashSection('heatmap', renderPipelineHeatmap(dashboard.todayQueue))}
-    ${dashSection('smart-alerts', renderSmartAlerts(detectSmartAlerts(dashboard.todayQueue)))}
-    ${dashSection('velocity', renderDealVelocity(dashboard.todayQueue))}
-    ${dashSection('leaderboard', renderTeamLeaderboard(dashboard.todayQueue))}
-    ${dashSection('data-quality', renderDataQualityPanel(dashboard.todayQueue))}
+    ${dashSection('heatmap', renderPipelineHeatmap(analyticsQueue))}
+    ${dashSection('smart-alerts', renderSmartAlerts(detectSmartAlerts(analyticsQueue)))}
+    ${dashSection('velocity', renderDealVelocity(analyticsQueue))}
+    ${dashSection('leaderboard', renderTeamLeaderboard(analyticsQueue))}
+    ${dashSection('data-quality', renderDataQualityPanel(analyticsQueue))}
     ${dashSection('duplicates', renderDuplicatePanel(dupeGroups))}
-    ${dashSection('sales-cycle', renderSalesCycleAnalytics(dashboard.todayQueue))}
-    ${dashSection('charts', renderDashboardCharts(dashboard.todayQueue))}
+    ${dashSection('sales-cycle', renderSalesCycleAnalytics(analyticsQueue))}
+    ${dashSection('charts', renderDashboardCharts(analyticsQueue))}
   `;
   // Record score history for sparklines
   (dashboard.todayQueue || []).forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
@@ -3824,8 +3854,9 @@ async function renderDashboardView() {
   }
   // Wire dashboard customizer
   wireDashboardCustomizer();
-  // Wire onboarding
-  wireOnboarding();
+  const elapsedMs = Math.round(performance.now() - dashboardStartedAt);
+  console.info(`BD Engine dashboard render: ${elapsedMs}ms (${dashboard.todayQueue.length} accounts, ${resolutionQueue.length}/${resolutionPressure} resolution rows)`);
+  maybeStartPendingProductTour();
 }
 
 async function renderAccountsView() {
@@ -7013,20 +7044,33 @@ function escapeAttr(value) {
 
 /* -- Product Tour Logic -- */
 const tourSteps = [
-  { title: 'Welcome to BD Engine!', copy: 'Your revenue intelligence workspace is ready. Let’s take a 30-second tour to show you how to dominate your market.', target: null },
-  { title: 'Revenue Dashboard', copy: 'This is your high-level pulse. See your board coverage, active jobs, and intelligence freshness at a glance.', target: '.hero-signal-strip' },
-  { title: 'Tracked Accounts', copy: 'We’ve mapped your connections to companies. Each gets a Target Score based on your network strength and hiring velocity.', target: '[data-nav="accounts"]' },
-  { title: 'Open Roles', copy: 'Our engine automatically scrapes careers pages for your accounts. Fresh leads appear here every morning.', target: '[data-nav="jobs"]' },
-  { title: 'Global Pipeline', copy: 'The Revenue Pipeline is your automation hub. It enriches data and ingests jobs automatically every 24 hours.', target: '[data-action="run-pipeline"]' }
+  { title: 'Your workspace is ready', copy: 'Here is the quick tour: dashboard first, then accounts, jobs, tasks, and admin controls.', target: null },
+  { title: 'Read the operating pulse', copy: 'These chips summarize today’s account queue, fresh roles, follow-up pressure, and identity work.', target: '.hero-signal-strip' },
+  { title: 'Work the ranked queue', copy: 'Start here when you want the highest-priority companies and the next move for each one.', target: '[data-tour="today-queue"]' },
+  { title: 'Open the source lists', copy: 'Accounts, Contacts, Jobs, and Tasks are your day-to-day work tabs once setup is complete.', target: '[data-route="accounts"]' },
+  { title: 'Tune the engine', copy: 'Admin holds imports, ATS discovery, enrichment, scoring settings, and background-job controls.', target: '[data-route="admin"]' }
 ];
 
 let currentTourStep = 0;
 
-async function startProductTour() {
-  if (appState.onboardingDone) return;
+function queuePostSetupTour() {
+  appState.postSetupTourPending = true;
+  appState.onboardingDone = false;
+  localStorage.setItem(POST_SETUP_TOUR_PENDING_KEY, 'true');
+  localStorage.removeItem('bd_onboarding_done');
+}
+
+function maybeStartPendingProductTour() {
+  if (!appState.postSetupTourPending || appState.onboardingDone || appState.tourActive || getRouteRoot() !== 'dashboard') return;
+  appState.postSetupTourPending = false;
+  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
+  window.setTimeout(() => startProductTour(), 250);
+}
+
+function startProductTour() {
+  if (appState.onboardingDone || appState.tourActive) return;
   currentTourStep = 0;
-  appState.activeView = 'dashboard';
-  await renderDashboardView();
+  appState.tourActive = true;
   renderTourStep();
 }
 
@@ -7062,7 +7106,7 @@ function renderTourStep() {
       highlight.style.width = `${rect.width + 16}px`;
       highlight.style.height = `${rect.height + 16}px`;
       overlay.appendChild(highlight);
-      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      targetEl.scrollIntoView({ behavior: 'auto', block: 'center' });
     }
   }
 }
@@ -7079,9 +7123,12 @@ function nextTourStep() {
 function endTour() {
   const overlay = document.querySelector('.tour-overlay');
   if (overlay) overlay.remove();
+  appState.tourActive = false;
+  appState.postSetupTourPending = false;
   appState.onboardingDone = true;
+  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
   localStorage.setItem('bd_onboarding_done', 'true');
-  showToast('Tour complete! Happy hunting.', 'success');
+  showToast('Tour complete.', 'success');
 }
 
 async function renderTasksView() {

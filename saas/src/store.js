@@ -105,24 +105,74 @@ function dashboardAccountSummary(item) {
     normalizedName: item.normalizedName,
     status: item.status,
     outreachStatus: item.outreachStatus,
+    priority: item.priority,
     targetScore: item.targetScore,
     dailyScore: item.dailyScore,
     priorityTier: item.priorityTier,
+    owner: item.owner,
     domain: item.domain,
     canonicalDomain: item.canonicalDomain,
     careersUrl: item.careersUrl,
+    industry: item.industry,
+    location: item.location,
     openRoleCount: item.openRoleCount,
     jobCount: item.jobCount,
+    jobsLast30Days: item.jobsLast30Days,
+    jobsLast90Days: item.jobsLast90Days,
+    hiringVelocity: item.hiringVelocity,
+    hiringStatus: item.hiringStatus,
     connectionCount: item.connectionCount,
     seniorContactCount: item.seniorContactCount,
     talentContactCount: item.talentContactCount,
+    engagementScore: item.engagementScore,
+    relationshipStrengthScore: item.relationshipStrengthScore,
+    alertPriorityScore: item.alertPriorityScore,
+    networkStrength: item.networkStrength,
+    companyGrowthSignalScore: item.companyGrowthSignalScore,
     enrichmentConfidence: item.enrichmentConfidence,
     enrichmentStatus: item.enrichmentStatus,
     reviewReason: item.reviewReason,
     recommendedAction: item.recommendedAction,
     nextAction: item.nextAction,
     nextActionAt: item.nextActionAt,
+    topContactName: item.topContactName,
+    isOverdue: item.isOverdue,
+    staleFlag: item.staleFlag,
     targetScoreExplanation: item.targetScoreExplanation,
+  };
+}
+
+function dashboardJobSummary(item) {
+  return {
+    id: item.id,
+    accountId: item.accountId,
+    title: item.title,
+    companyName: item.companyName,
+    location: item.location,
+    department: item.department,
+    atsType: item.atsType,
+    jobUrl: item.jobUrl,
+    url: item.url,
+    jobId: item.jobId,
+    postedAt: item.postedAt,
+    retrievedAt: item.retrievedAt,
+    importedAt: item.importedAt,
+    active: item.active,
+    isNew: item.isNew,
+    isGta: item.isGta,
+  };
+}
+
+function dashboardContactSummary(item) {
+  return {
+    id: item.id,
+    accountId: item.accountId,
+    fullName: item.fullName,
+    companyName: item.companyName,
+    title: item.title,
+    priorityScore: item.priorityScore,
+    connectionCount: item.connectionCount,
+    outreachStatus: item.outreachStatus,
   };
 }
 
@@ -474,24 +524,30 @@ export function createStore() {
       await ensureDataLoaded(tenantId, false); // Don't need full contact list for dashboard summary
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
-      const newJobsToday = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1).slice(0, 100);
-      const followUpAccounts = tenantAccounts.filter((item) => item.nextActionAt).slice(0, 50);
+      const newJobsLast24h = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1);
+      const unresolvedAccounts = tenantAccounts.filter((item) => item.status === 'new');
+      const newJobsToday = newJobsLast24h.slice(0, 50).map(dashboardJobSummary);
+      const followUpAccounts = tenantAccounts
+        .filter((item) => item.nextActionAt)
+        .slice(0, 25)
+        .map(dashboardAccountSummary);
       return {
         summary: {
           accountCount: tenantAccounts.length,
           hiringAccountCount: tenantAccounts.filter((item) => item.jobCount > 0).length,
-          newJobsLast24h: newJobsToday.length,
+          newJobsLast24h: newJobsLast24h.length,
           discoveredBoardCount: boardConfigs.length,
-          needsResolutionCount: tenantAccounts.filter((item) => item.status === 'new').length,
+          needsResolutionCount: unresolvedAccounts.length,
         },
-        todayQueue: tenantAccounts.slice(0, 100),
+        todayQueue: tenantAccounts.slice(0, 50).map(dashboardAccountSummary),
         followUpAccounts,
         newJobsToday,
-        networkLeaders: contactsForTenant(tenantId).slice(0, 5),
-        needsResolution: tenantAccounts.filter((item) => item.status === 'new').slice(0, 5),
+        networkLeaders: contactsForTenant(tenantId).slice(0, 5).map(dashboardContactSummary),
+        needsResolution: unresolvedAccounts.slice(0, 5).map(dashboardAccountSummary),
         recommendedActions: tenantAccounts.slice(0, 5).map((item) => ({
           accountId: item.id,
           company: item.displayName,
+          text: item.recommendedAction,
           recommendedAction: item.recommendedAction,
           outreachStatus: item.outreachStatus,
         })),
@@ -513,13 +569,13 @@ export function createStore() {
         .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
         .map(dashboardAccountSummary);
       return {
-        playbook: tenantAccounts.slice(0, 5),
+        playbook: tenantAccounts.slice(0, 5).map(dashboardAccountSummary),
         overdueFollowUps: [],
         staleAccounts: unresolvedDashboardAccounts,
         activityFeed: activitiesForTenant(tenantId).slice(0, 10),
         enrichmentFunnel: { resolved: 2, needsReview: 1, missing: 0 },
         alertQueue: tenantAccounts.slice(0, 3).map((item) => ({
-          ...item,
+          ...dashboardAccountSummary(item),
           accountId: item.id,
           type: 'hiring_signal',
           title: 'Hiring signal',
@@ -527,6 +583,7 @@ export function createStore() {
         })),
         sequenceQueue: followups
           .filter((item) => item.tenantId === tenantId && item.status === 'open')
+          .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
           .map((item) => {
             const itemAccount = accountById(item.accountId);
             return {
