@@ -6482,6 +6482,9 @@ function getOutreachTemplateMeta(template) {
 }
 
 function getSuggestedOutreachTemplate(detail) {
+  if (isJobSeekerPersona()) {
+    return detail?.jobs?.length ? 'job_intro' : 'job_networking';
+  }
   const account = detail?.account || {};
   const contact = detail?.contacts?.[0] || {};
   const title = String(contact.title || account.topContactTitle || '').toLowerCase();

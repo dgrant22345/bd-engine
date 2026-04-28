@@ -510,14 +510,14 @@ self.addEventListener('activate', (event) => {
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
   if (accountOutreachMatch && req.method === 'POST') {
     const payload = await readJson(req);
-    const draft = store.createOutreachDraft(tenantId, accountOutreachMatch[1], payload);
+    const draft = await store.createOutreachDraft(tenantId, accountOutreachMatch[1], payload);
     if (!draft) return sendJson(res, 404, { error: 'Account not found' });
     return sendJson(res, 201, draft);
   }
 
   const hiringVelocityMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/hiring-velocity$/);
   if (hiringVelocityMatch && req.method === 'GET') {
-    const velocity = store.getHiringVelocity(tenantId, hiringVelocityMatch[1]);
+    const velocity = await store.getHiringVelocity(tenantId, hiringVelocityMatch[1]);
     if (!velocity) return sendJson(res, 404, { error: 'Account not found' });
     return sendJson(res, 200, velocity);
   }
@@ -728,7 +728,7 @@ self.addEventListener('activate', (event) => {
 
   const draftMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/outreach-draft$/);
   if (draftMatch && req.method === 'POST') {
-    const draft = store.createOutreachDraft(tenantId, draftMatch[1]);
+    const draft = await store.createContactOutreachDraft(tenantId, draftMatch[1]);
     if (!draft) return sendJson(res, 404, { error: 'Contact not found' });
     return sendJson(res, 201, draft);
   }

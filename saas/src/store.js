@@ -625,7 +625,12 @@ export function createStore() {
 
     async getAccountDetail(tenantId, accountId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      const loadStartedAt = performance.now();
+      await ensureDataLoaded(tenantId, true);
+      const loadElapsedMs = Math.round(performance.now() - loadStartedAt);
+      if (loadElapsedMs > 500) {
+        console.warn(`Slow account detail load: saas/src/store.js getAccountDetail ${loadElapsedMs}ms`);
+      }
       const item = accountById(accountId);
       if (!item || item.tenantId !== tenantId) return null;
       const accountContacts = contacts.filter((contactItem) => contactItem.tenantId === tenantId && contactItem.accountId === accountId);
@@ -642,9 +647,9 @@ export function createStore() {
       };
     },
 
-    getHiringVelocity(tenantId, accountId) {
+    async getHiringVelocity(tenantId, accountId) {
       assertTenant(tenantId);
-      const detail = this.getAccountDetail(tenantId, accountId);
+      const detail = await this.getAccountDetail(tenantId, accountId);
       if (!detail) return null;
       return {
         weeks: {
@@ -843,12 +848,36 @@ export function createStore() {
       return task;
     },
 
-    createOutreachDraft(tenantId, accountId, payload = {}) {
+    async createOutreachDraft(tenantId, accountId, payload = {}) {
       assertTenant(tenantId);
-      const detail = this.getAccountDetail(tenantId, accountId);
+      const totalStartedAt = performance.now();
+      const detailStartedAt = performance.now();
+      const detail = await this.getAccountDetail(tenantId, accountId);
+      const detailLoadMs = Math.round(performance.now() - detailStartedAt);
       if (!detail) return null;
       const selectedContact = selectContact(detail.contacts, payload.contactName);
-      return buildDraft({ account: detail.account, contact: selectedContact, jobs: detail.jobs, template: payload.template, jobId: payload.jobId });
+      const template = payload.template || (this.getPersona(tenantId) === 'jobseeker' ? 'job_intro' : 'cold');
+      const draft = buildDraft({ account: detail.account, contact: selectedContact, jobs: detail.jobs, template, jobId: payload.jobId });
+      draft.timings = {
+        ...(draft.timings || {}),
+        detailLoadMs,
+        totalMs: Math.round(performance.now() - totalStartedAt),
+      };
+      if (draft.timings.totalMs > 500) {
+        console.warn(`Slow outreach draft: saas/src/store.js createOutreachDraft ${draft.timings.totalMs}ms`, draft.timings);
+      }
+      return draft;
+    },
+
+    async createContactOutreachDraft(tenantId, contactId, payload = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const itemContact = contacts.find((item) => item.tenantId === tenantId && item.id === contactId);
+      if (!itemContact) return null;
+      return this.createOutreachDraft(tenantId, itemContact.accountId, {
+        ...payload,
+        contactName: payload.contactName || itemContact.fullName || itemContact.id,
+      });
     },
 
     getTargetScoreRollout(tenantId) {
@@ -2178,7 +2207,7 @@ function accountById(accountId) {
 }
 
 function selectContact(accountContacts, contactName) {
-  if (!accountContacts.length) return null;
+  if (!Array.isArray(accountContacts) || !accountContacts.length) return null;
   const normalized = normalizeKey(contactName || '');
   return accountContacts.find((item) => normalizeKey(item.fullName) === normalized || item.id === contactName) || accountContacts[0];
 }
