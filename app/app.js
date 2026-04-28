@@ -3106,7 +3106,7 @@ function renderSetupStepContent(stepKey) {
   }
 
   if (stepKey === 'import') {
-    const hasCsv = Boolean(appState.setupCsvContent);
+    const hasCsv = Boolean(appState.setupCsvFile);
     const importTitle = jobSeeker ? 'Import LinkedIn Connections.csv' : 'Import LinkedIn Connections.csv';
     const importCopyHtml = jobSeeker
       ? 'Upload your LinkedIn <code>Connections.csv</code> to map people you know to target companies and open roles.'
@@ -3339,7 +3339,7 @@ async function previewSetupCsv() {
     appState.setupProgressMessage = '';
     await renderSetupWizard();
   }
-}}
+}
 
 async function completeSetupWizard() {
   persistSetupDraftFromDom();
@@ -3421,6 +3421,13 @@ async function completeSetupWizard() {
     await renderSetupWizard();
   }
 }
+
+async function watchSetupImportJob(jobId) {
+  while (true) {
+    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    appState.setupProgressMessage = job.progressMessage || job.message || humanize(job.status || 'running');
+    await renderSetupWizard();
+
     if (job.status === 'completed') {
       invalidateAppData();
       return job;
@@ -6069,13 +6076,16 @@ async function runConnectionsCsvImport(dryRun) {
       return;
     }
 
-    const csvContent = await readTextFile(file);
-    const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
-    const uploadSummary = formatCsvUploadSummary(file, csvContent);
+    const uploadSummary = `${file.name} (${formatFileSize(file.size || 0)})`;
+    const formData = new FormData();
+    formData.append('connectionsCsv', file, file.name || 'Connections.csv');
+    formData.append('fileName', file.name || 'Connections.csv');
+    formData.append('dryRun', dryRun ? 'true' : 'false');
+    formData.append('useEmptyState', dryRun ? 'true' : 'false');
 
     const run = await api('/api/import/linkedin-csv', {
       method: 'POST',
-      body: JSON.stringify(requestPayload),
+      body: formData,
     });
     if (!dryRun) {
       const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
@@ -7142,7 +7152,7 @@ function renderTaskItem(task) {
 
 async function completeTask(taskId) {
   try {
-    await api(\`/api/tasks/\${taskId}/complete\`, { method: 'POST' });
+    await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
     showToast('Task completed!', 'success');
     invalidateAppData();
     await renderTasksView();

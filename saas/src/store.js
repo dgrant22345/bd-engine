@@ -985,6 +985,58 @@ export function createStore() {
       return { ok: true, jobId: job.id, job };
     },
 
+    startLinkedInCsvImport(tenantId, csvText, options = {}) {
+      assertTenant(tenantId);
+      const jobId = `linkedin-csv-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'linkedin-csv-import',
+        status: 'queued',
+        summary: 'LinkedIn connections CSV import',
+        progressMessage: 'Queued LinkedIn connections import.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          job.progressMessage = 'Parsing LinkedIn connections CSV...';
+          const result = await this.importLinkedInCSV(tenantId, csvText, options);
+          if (result.error) {
+            job.status = 'failed';
+            job.errorMessage = result.error;
+            job.result = result;
+          } else {
+            job.status = 'completed';
+            job.progressMessage = 'Completed';
+            job.recordsAffected = result.stats?.imported || result.stats?.contactsCreated || 0;
+            job.result = {
+              stats: result.stats,
+              importRun: {
+                status: result.warnings?.length ? 'completed_with_warnings' : 'completed',
+                stats: result.stats,
+                warnings: result.warnings || [],
+              },
+              warnings: result.warnings || [],
+            };
+          }
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'LinkedIn connections import failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
     getBackgroundJob(jobId) {
       return backgroundJobs.get(jobId) || this.createCompletedJob(jobId).job;
     },

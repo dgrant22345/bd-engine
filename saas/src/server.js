@@ -444,12 +444,27 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/setup/complete' && req.method === 'POST') {
-    const payload = await readJson(req);
-    if (payload.csvContent) {
-      store.importLinkedInCSV(tenantId, payload.csvContent);
+    const payload = await readFormOrJson(req);
+    const fields = payload.fields || payload;
+    const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || '';
+    const plan = getPlan(tenant.plan);
+
+    if (csvText) {
+      const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan });
+      return sendJson(res, 202, {
+        ok: true,
+        setupComplete: false,
+        status: await store.getSetupStatus(tenantId),
+        ...accepted,
+      });
     }
+
     store.completeSetup(tenantId);
-    return sendJson(res, 200, { ok: true, setupComplete: true });
+    return sendJson(res, 200, {
+      ok: true,
+      setupComplete: true,
+      status: await store.getSetupStatus(tenantId),
+    });
   }
 
   if (pathname === '/api/activity') {
@@ -509,37 +524,35 @@ self.addEventListener('activate', (event) => {
   }
 
   // ── LinkedIn CSV import (real) ─────────────────────────────────────────
-  if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
-    const bodyStr = await readBody(req);
-    let csvText = bodyStr;
-    let payload = {};
-    try {
-      payload = JSON.parse(bodyStr);
-      if (payload.csvContent) csvText = payload.csvContent;
-    } catch {
-      // It might have been sent as raw text, which is fine
-    }
-
+  if (pathname === '/api/import/connections-csv/preview' && req.method === 'POST') {
+    const payload = await readFormOrJson(req);
+    const csvText = payload.files?.connectionsCsv?.content || payload.fields?.csvContent || payload.csvContent || '';
     const plan = getPlan(tenant.plan);
     const result = await store.importLinkedInCSV(tenantId, csvText, {
-      dryRun: Boolean(payload.dryRun),
+      dryRun: true,
       plan,
     });
     if (result.error) return sendJson(res, 400, result);
-    if (payload.dryRun) {
-      return sendJson(res, 200, result);
+    return sendJson(res, 200, result);
+  }
+
+  if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
+    const payload = await readFormOrJson(req);
+    const fields = payload.fields || payload;
+    const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || payload.text || '';
+
+    const plan = getPlan(tenant.plan);
+    const dryRun = isTruthy(fields.dryRun);
+    if (!dryRun) {
+      return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan }));
     }
-    const jobResult = {
-      stats: result.stats,
-      importRun: {
-        status: result.warnings?.length ? 'completed_with_warnings' : 'completed',
-        stats: result.stats,
-        warnings: result.warnings || [],
-      },
-      warnings: result.warnings || [],
-    };
-    const job = store.createCompletedJob('linkedin-csv-import', jobResult);
-    return sendJson(res, 202, { ...job, stats: result.stats, warnings: result.warnings || [] });
+
+    const result = await store.importLinkedInCSV(tenantId, csvText, {
+      dryRun,
+      plan,
+    });
+    if (result.error) return sendJson(res, 400, result);
+    return sendJson(res, 200, result);
   }
 
   if (pathname === '/api/admin/run-workflow' && req.method === 'POST') {
@@ -943,12 +956,7 @@ function sendJson(res, status, body) {
 }
 
 async function readJson(req) {
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return {};
-  const text = Buffer.concat(chunks).toString('utf8');
+  const text = await readBody(req);
   if (!text.trim()) return {};
   return JSON.parse(text);
 }
@@ -958,9 +966,74 @@ function isTruthy(value) {
 }
 
 async function readBody(req) {
+  return (await readRawBody(req)).toString('utf8');
+}
+
+async function readRawBody(req) {
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+}
+
+async function readFormOrJson(req) {
+  const contentType = String(req.headers['content-type'] || '');
+  const body = await readRawBody(req);
+  if (!body.length) return { fields: {}, files: {}, text: '' };
+
+  if (/multipart\/form-data/i.test(contentType)) {
+    return parseMultipartFormData(body, contentType);
+  }
+
+  const text = body.toString('utf8');
+  if (/application\/json/i.test(contentType)) {
+    return JSON.parse(text || '{}');
+  }
+
+  return { fields: {}, files: {}, text };
+}
+
+function parseMultipartFormData(body, contentType) {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+  if (!boundary) {
+    const error = new Error('Malformed multipart upload: missing boundary.');
+    error.status = 400;
+    throw error;
+  }
+
+  const fields = {};
+  const files = {};
+  const raw = body.toString('utf8');
+  const parts = raw.split(`--${boundary}`);
+
+  for (const part of parts) {
+    const normalizedPart = part.replace(/^\r?\n/, '');
+    if (!normalizedPart.trim() || normalizedPart.startsWith('--')) continue;
+
+    const separator = normalizedPart.indexOf('\r\n\r\n');
+    if (separator < 0) continue;
+
+    const headerText = normalizedPart.slice(0, separator);
+    let content = normalizedPart.slice(separator + 4);
+    content = content.replace(/\r?\n--$/, '').replace(/\r?\n$/, '');
+
+    const disposition = headerText.match(/content-disposition:[^\n]*/i)?.[0] || '';
+    const name = disposition.match(/name="([^"]+)"/i)?.[1];
+    const filename = disposition.match(/filename="([^"]*)"/i)?.[1];
+    if (!name) continue;
+
+    if (filename !== undefined) {
+      files[name] = {
+        filename,
+        content,
+        size: Buffer.byteLength(content, 'utf8'),
+      };
+    } else {
+      fields[name] = content;
+    }
+  }
+
+  return { fields, files, text: raw };
 }

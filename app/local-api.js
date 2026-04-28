@@ -51,10 +51,15 @@
     const fetchPromise = (async () => {
       let response;
       try {
+        const headers = new Headers(options.headers || {});
+        if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+          headers.set('Content-Type', 'application/json');
+        }
+
         response = await fetch(path, {
-          headers: { 'Content-Type': 'application/json' },
-          cache: 'no-store',
           ...options,
+          headers,
+          cache: 'no-store',
         });
       } catch (error) {
         throw new Error(getNetworkErrorMessage(path, error));
