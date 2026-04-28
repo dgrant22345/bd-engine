@@ -4702,6 +4702,7 @@ async function renderAdminView() {
   const referral = billing.referral || {};
   const referralLink = referral.link || '';
   const analytics = batch.analytics || {};
+  const canViewSiteAnalytics = Boolean(batch.canViewSiteAnalytics && batch.analytics);
   const stripeStatus = billing.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
   const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
@@ -4715,6 +4716,25 @@ async function renderAdminView() {
       : (stripeStatus.ready && stripeStatus.mode === 'test'
         ? 'Stripe is in test mode, so public paid checkout is disabled until live keys are set.'
         : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`));
+  const siteAnalyticsSection = canViewSiteAnalytics ? `
+        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
+          <div class="metrics-grid metrics-grid--compact">
+            ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
+            ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
+            ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
+          </div>
+          <div class="inline-split">
+            <div>
+              <p class="eyebrow">Top sources</p>
+              ${renderMiniStatList((analytics.topSources || []).map((item) => ({ label: item.source || 'direct', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+            <div>
+              <p class="eyebrow">Top pages</p>
+              ${renderMiniStatList((analytics.topPaths || []).map((item) => ({ label: item.path || '/', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+` : '';
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -4780,23 +4800,7 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       <div class="two-column">
-        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
-          <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
-            ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
-            ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Top sources</p>
-              ${renderMiniStatList((analytics.topSources || []).map((item) => ({ label: item.source || 'direct', value: `${formatNumber(item.visitors || 0)} visitors` })))}
-            </div>
-            <div>
-              <p class="eyebrow">Top pages</p>
-              ${renderMiniStatList((analytics.topPaths || []).map((item) => ({ label: item.path || '/', value: `${formatNumber(item.visitors || 0)} visitors` })))}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
+        ${siteAnalyticsSection}
 
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
           <div class="metrics-grid metrics-grid--compact">

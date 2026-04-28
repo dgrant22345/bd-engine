@@ -16,6 +16,10 @@ const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const serverStartedAt = new Date();
 const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
+const analyticsAdminEmails = new Set(String(process.env.BD_ANALYTICS_ADMIN_EMAILS || '')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean));
 const serverStats = {
   requestCount: 0,
   errorCount: 0,
@@ -130,6 +134,13 @@ function isHealthRequest(req) {
   } catch {
     return false;
   }
+}
+
+function canViewSiteAnalytics(user) {
+  if (!analyticsAdminEmails.size) {
+    return (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') !== 'production';
+  }
+  return analyticsAdminEmails.has(String(user?.email || '').trim().toLowerCase());
 }
 
 function getRequestOrigin(req) {
@@ -402,11 +413,15 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/admin/bootstrap') {
     const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
-    const analyticsStartedAt = performance.now();
-    const analytics = await dbGetAnalyticsSummary(30);
-    const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
-    if (analyticsElapsedMs > 250) {
-      console.warn(`Slow analytics summary: saas/src/db.js dbGetAnalyticsSummary ${analyticsElapsedMs}ms`);
+    const canViewAnalytics = canViewSiteAnalytics(user);
+    let analytics = null;
+    if (canViewAnalytics) {
+      const analyticsStartedAt = performance.now();
+      analytics = await dbGetAnalyticsSummary(30);
+      const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
+      if (analyticsElapsedMs > 250) {
+        console.warn(`Slow analytics summary: saas/src/db.js dbGetAnalyticsSummary ${analyticsElapsedMs}ms`);
+      }
     }
     const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
@@ -420,6 +435,7 @@ self.addEventListener('activate', (event) => {
       enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
       configs: store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
       analytics,
+      canViewSiteAnalytics: canViewAnalytics,
       billing: {
         plan: getPlan(tenant.plan),
         trialDaysRemaining: getTrialDaysRemaining(tenant),
