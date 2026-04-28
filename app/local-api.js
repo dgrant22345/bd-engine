@@ -96,7 +96,7 @@
       } else if (method !== 'GET') {
         invalidateCache();
       }
-      return cloneValue(payload);
+      return useCache ? cloneValue(payload) : payload;
     } finally {
       if (useCache) {
         inflightRequests.delete(cacheKey);
