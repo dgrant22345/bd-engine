@@ -1923,7 +1923,7 @@ function bindEvents() {
           body: JSON.stringify({ planId }),
         });
         if (result.url) {
-          window.location.href = result.url;
+          (window.top || window).location.href = result.url;
         } else {
           showToast(result.error || 'Failed to initialize checkout', 'error');
           action.disabled = false;
@@ -1946,7 +1946,7 @@ function bindEvents() {
           body: JSON.stringify({}),
         });
         if (result.url) {
-          window.location.href = result.url;
+          (window.top || window).location.href = result.url;
         } else {
           showToast(result.error || 'Failed to open billing portal', 'error');
           action.disabled = false;
@@ -2940,6 +2940,9 @@ async function renderRoute() {
     activateNav('admin');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Admin' }]);
     await renderAdminView();
+    if (parts[1] === 'billing') {
+      openAdminSection('billing-subscription');
+    }
     scheduleRuntimePoll();
     return;
   }
@@ -4595,7 +4598,7 @@ async function renderAdminView() {
   ];
   const billing = batch.billing || {};
   const stripeStatus = billing.stripe || {};
-  const stripeReady = Boolean(stripeStatus.ready);
+  const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
   const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
   const stripeMissing = Array.isArray(stripeStatus.missing) && stripeStatus.missing.length
     ? stripeStatus.missing.join(', ')
@@ -4604,7 +4607,9 @@ async function renderAdminView() {
     ? 'Stripe live checkout is ready.'
     : (stripeReady
       ? `Stripe checkout is configured in ${stripeStatus.mode || 'unknown'} mode. Use live Stripe keys before launch.`
-      : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`);
+      : (stripeStatus.ready && stripeStatus.mode === 'test'
+        ? 'Stripe is in test mode, so public paid checkout is disabled until live keys are set.'
+        : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`));
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -4858,7 +4863,7 @@ async function renderAdminView() {
                   <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">
-                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>Subscribe via Stripe</button>
+                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
                   ${billing.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
                 </div>
               </div>

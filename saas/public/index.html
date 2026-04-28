@@ -649,7 +649,7 @@
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
         const frame = root.querySelector('.cloud-app-frame');
-        if (frame) frame.src = '/app/#/admin';
+        if (frame) frame.src = '/app/#/admin/billing';
         dropdown?.classList.add('hidden');
       });
     }

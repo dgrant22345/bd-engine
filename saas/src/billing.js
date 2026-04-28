@@ -11,10 +11,13 @@ export function getStripeConfigStatus() {
   const mode = secretKey.startsWith('sk_live_')
     ? 'live'
     : (secretKey.startsWith('sk_test_') ? 'test' : (secretKey ? 'unknown' : 'not_configured'));
+  const allowTestCheckout = process.env.BD_ALLOW_TEST_CHECKOUT === 'true';
   const priceIds = {
     jobseeker: process.env.STRIPE_PRICE_JOBSEEKER || '',
     sales: process.env.STRIPE_PRICE_SALES || '',
   };
+  const ready = Boolean(stripe && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales));
+  const liveMode = mode === 'live';
   const missing = [];
   if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
   if (!process.env.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
@@ -22,9 +25,11 @@ export function getStripeConfigStatus() {
   if (!process.env.STRIPE_PRICE_SALES) missing.push('STRIPE_PRICE_SALES');
   return {
     configured: Boolean(stripe),
-    ready: Boolean(stripe && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales)),
-    liveMode: mode === 'live',
-    commercialReady: Boolean(stripe && mode === 'live' && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales)),
+    ready,
+    liveMode,
+    allowTestCheckout,
+    checkoutReady: Boolean(ready && (liveMode || allowTestCheckout)),
+    commercialReady: Boolean(ready && liveMode),
     mode,
     allPricesConfigured: Boolean(priceIds.jobseeker && priceIds.sales),
     missing,
@@ -145,6 +150,10 @@ export function getUsageSummary(tenantId, planId) {
 
 export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl) {
   if (!stripe) throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY environment variable.');
+  const status = getStripeConfigStatus();
+  if (!status.checkoutReady) {
+    throw new Error('Live Stripe checkout is not enabled yet. Set live Stripe keys before taking public paid upgrades.');
+  }
   
   const plan = getPlan(planId);
   if (!plan || !plan.stripePriceId) throw new Error('Invalid plan selected.');
