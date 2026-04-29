@@ -251,9 +251,9 @@ document.querySelectorAll('.nav a').forEach(a => {
 const cmdActions = [
   { id: 'nav-dashboard', label: 'Go to Dashboard', icon: '&#9632;', key: 'G D', action: () => { location.hash = '#/dashboard'; } },
   { id: 'nav-accounts', label: 'Go to Accounts', icon: '&#9632;', key: 'G A', action: () => { location.hash = '#/accounts'; } },
+  { id: 'nav-jobs', label: 'Go to Jobs', icon: '&#9632;', key: 'G J', action: () => { location.hash = '#/jobs'; } },
   { id: 'nav-contacts', label: 'Go to Contacts', icon: '&#9632;', key: 'G C', action: () => { location.hash = '#/contacts'; } },
   { id: 'nav-tasks', label: 'Go to Tasks', icon: '&#9632;', key: 'G T', action: () => { location.hash = '#/tasks'; } },
-  { id: 'nav-jobs', label: 'Go to Jobs', icon: '&#9632;', key: 'G J', action: () => { location.hash = '#/jobs'; } },
   { id: 'nav-admin', label: 'Go to Admin', icon: '&#9632;', key: 'G X', action: () => { location.hash = '#/admin'; } },
   { id: 'toggle-theme', label: 'Toggle theme', icon: '&#9789;', key: '', action: cycleTheme },
   { id: 'refresh', label: 'Refresh data', icon: '&#8635;', key: '', action: () => refreshBootstrapButton?.click() },
@@ -4661,6 +4661,12 @@ async function renderAdminView() {
             ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
           </div>
         </div>
+        <div class="action-card action-card--featured">
+          <p class="eyebrow">Most used</p>
+          <h4>Run everything</h4>
+          <p class="small muted">Enriches accounts, discovers ATS boards, imports jobs, and refreshes scores in one background run.</p>
+          <button class="primary-button" type="button" data-action="run-launch-workflow">Run everything</button>
+        </div>
       </div>
     </section>
 
@@ -4679,110 +4685,12 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       <div class="two-column">
-        ${siteAnalyticsSection}
-
-        ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
-          <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}
-            ${renderMetricCard('Careers URLs', enrichmentSummary.careersUrlCount || 0, 'Companies with a verified careers endpoint')}
-            ${renderMetricCard('Aliases', enrichmentSummary.aliasesCount || 0, 'Companies with stored brand variants')}
-            ${renderMetricCard('Enriched companies', enrichmentSummary.enrichedCount || 0, `${formatNumber(enrichmentSummary.enrichmentCoveragePercent || 0)}% coverage`) }
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Confidence mix</p>
-              ${renderMiniStatList((enrichmentReport.byConfidence || []).map((item) => ({ label: humanize(item.confidence), value: formatNumber(item.count) })))}
-            </div>
-            <div>
-              <p class="eyebrow">Top unresolved reasons</p>
-              ${renderMiniStatList((enrichmentReport.topUnresolvedReasons || []).map((item) => ({ label: item.reason, value: formatNumber(item.count) })))}
-            </div>
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Resolution coverage by enrichment</p>
-              ${renderMiniStatList((enrichmentReport.resolutionByEnrichmentPresence || []).map((item) => ({ label: `${humanize(item.enrichmentPresence)} (${formatNumber(item.totalCompanies)})`, value: `${formatNumber(item.coveragePercent)}%` })))}
-            </div>
-            <div>
-              <p class="eyebrow">Enrichment sources</p>
-              ${renderMiniStatList((enrichmentReport.bySource || []).slice(0, 6).map((item) => ({ label: humanize(item.source), value: formatNumber(item.count) })))}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('enrichment-queue', 'Enrichment review queue', `Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.`)}
-          ${renderEnrichmentFilters()}
-          ${renderEnrichmentQueuePanel(enrichmentQueue)}
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.')}
-          <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Tracked companies', summary.totalCompanies || 0, 'Board config rows in the resolver')}
-            ${renderMetricCard('Resolved boards', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total coverage`)}
-            ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
-            ${renderMetricCard('Unresolved', summary.unresolvedCount || 0, 'Still missing strong ATS evidence')}
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Confidence mix</p>
-              ${renderMiniStatList((resolverReport.byConfidenceBand || []).map((item) => ({ label: humanize(item.confidenceBand), value: formatNumber(item.count) })))}
-            </div>
-            <div>
-              <p class="eyebrow">Top failure reasons</p>
-              ${renderMiniStatList((resolverReport.topFailureReasons || []).map((item) => ({ label: item.failureReason, value: formatNumber(item.count) })))}
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Referral credit</p>
-              <h4>Give $5, get $5</h4>
-              <p class="small muted">Share your referral link. When a referred user becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
-              <div class="inline-field-stack">
-                <input id="referral-link" readonly value="${escapeAttr(referralLink || 'Referral link will appear after your workspace finishes loading.')}">
-                <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="copy-referral-link" data-referral-link="${escapeAttr(referralLink)}"${referralLink ? '' : ' disabled'}>Copy referral link</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
-          <div class="panel-stack">
-            <div>
-              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
-              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : '<div class="empty-state empty-state--compact">No medium-confidence configs need review right now.</div>'}
-            </div>
-            <div>
-              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
-              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
-          <div id="runtime-status-panel"></div>
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
-          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Run discovery, import jobs, or reseed the app without touching the spreadsheet manually.')}
+        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Most used workflow actions, from full automation to targeted refreshes.')}
           <div class="actions-grid">
-            <div class="action-card action-card--featured">
-              <p class="eyebrow">Recommended launch workflow</p>
-              <h4>Run everything plan allows</h4>
-              <p class="small muted">Creates missing ATS configs, enriches company identity, runs discovery, imports available job signals, and refreshes target scoring up to the current plan limits.</p>
-              <button class="primary-button" type="button" data-action="run-launch-workflow">Run launch workflow</button>
-            </div>
             <div class="action-card">
-              <p class="eyebrow">ATS discovery</p>
+              <p class="eyebrow">Next most used</p>
               <h4>Discover supported boards</h4>
-              <p class="small muted">Runs the staged resolver: known mappings, hosted ATS probes, and careers-page detection with diagnostics and confidence bands.</p>
+              <p class="small muted">Use this when you only need to remap ATS boards without re-running imports and scoring.</p>
               <div class="inline-field-stack">
                 <input id="discovery-limit" type="number" min="1" value="75" placeholder="Rows to check">
                 <label class="field"><span class="small muted">Only unresolved configs</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
@@ -4793,15 +4701,15 @@ async function renderAdminView() {
               </div>
             </div>
             <div class="action-card">
-              <p class="eyebrow">Live ATS sync</p>
-              <h4>Run job import</h4>
-              <p class="small muted">Fetches jobs from active ATS configs, upserts them, and marks closed roles inactive on repeat runs.</p>
+              <p class="eyebrow">Frequent refresh</p>
+              <h4>Import live jobs</h4>
+              <p class="small muted">Fetches jobs from active ATS configs and updates tracked roles.</p>
               <button class="secondary-button" data-action="run-live-import">Run live import</button>
             </div>
             <div class="action-card">
-              <p class="eyebrow">LinkedIn import</p>
+              <p class="eyebrow">Setup and reseed</p>
               <h4>Connections CSV</h4>
-              <p class="small muted">Validate or import a LinkedIn Connections.csv file. Dry run stays in memory and does not modify local state.</p>
+              <p class="small muted">Validate or import a LinkedIn Connections.csv file.</p>
               <div class="inline-field-stack">
                 <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
                 <input type="file" id="connections-csv-file" accept=".csv">
@@ -4813,7 +4721,9 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-
+        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
+          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
+        ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('billing-subscription', 'Billing & Subscription', 'Manage your plan and checkout.')}
           <div class="settings-grid">
             <div class="action-card">
@@ -4831,12 +4741,94 @@ async function renderAdminView() {
                 </div>
               </div>
             </div>
+            <div class="action-card">
+              <p class="eyebrow">Referral credit</p>
+              <h4>Give $5, get $5</h4>
+              <p class="small muted">Share your referral link. When a referred user becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
+              <div class="inline-field-stack">
+                <input id="referral-link" readonly value="${escapeAttr(referralLink || 'Referral link will appear after your workspace finishes loading.')}">
+                <div class="button-row">
+                  <button class="secondary-button" type="button" data-action="copy-referral-link" data-referral-link="${escapeAttr(referralLink)}"${referralLink ? '' : ' disabled'}>Copy referral link</button>
+                </div>
+              </div>
+            </div>
           </div>
         ${renderCollapsibleEnd()}
-
       </div>
 
       <div class="two-column">
+        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
+          <form id="configs-filter-form" class="filter-grid filter-grid--compact">
+            ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
+            ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters?.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
+            ${renderField('Discovery', `<select name="discoveryStatus"><option value="">All</option>${(stateBootstrap.filters?.configDiscoveryStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.discoveryStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters?.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters?.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
+            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
+          </form>
+          ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
+          ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
+          <div class="panel-stack">
+            <div>
+              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
+              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : '<div class="empty-state empty-state--compact">No medium-confidence configs need review right now.</div>'}
+            </div>
+            <div>
+              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
+              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+      </div>
+
+      <div class="two-column">
+        ${siteAnalyticsSection}
+        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
+          <div id="runtime-status-panel"></div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
+          <div class="metrics-grid metrics-grid--compact">
+            ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}
+            ${renderMetricCard('Careers URLs', enrichmentSummary.careersUrlCount || 0, 'Companies with a verified careers endpoint')}
+            ${renderMetricCard('Aliases', enrichmentSummary.aliasesCount || 0, 'Companies with stored brand variants')}
+            ${renderMetricCard('Enriched companies', enrichmentSummary.enrichedCount || 0, `${formatNumber(enrichmentSummary.enrichmentCoveragePercent || 0)}% coverage`) }
+          </div>
+          <div class="inline-split">
+            <div>
+              <p class="eyebrow">Confidence mix</p>
+              ${renderMiniStatList((enrichmentReport.byConfidence || []).map((item) => ({ label: humanize(item.confidence), value: formatNumber(item.count) })))}
+            </div>
+            <div>
+              <p class="eyebrow">Top unresolved reasons</p>
+              ${renderMiniStatList((enrichmentReport.topUnresolvedReasons || []).map((item) => ({ label: item.reason, value: formatNumber(item.count) })))}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('enrichment-queue', 'Enrichment review queue', `Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.`)}
+          ${renderEnrichmentFilters()}
+          ${renderEnrichmentQueuePanel(enrichmentQueue)}
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.')}
+          <div class="metrics-grid metrics-grid--compact">
+            ${renderMetricCard('Tracked companies', summary.totalCompanies || 0, 'Board config rows in the resolver')}
+            ${renderMetricCard('Resolved boards', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total coverage`)}
+            ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
+            ${renderMetricCard('Unresolved', summary.unresolvedCount || 0, 'Still missing strong ATS evidence')}
+          </div>
+          <div class="inline-split">
+            <div>
+              <p class="eyebrow">Confidence mix</p>
+              ${renderMiniStatList((resolverReport.byConfidenceBand || []).map((item) => ({ label: humanize(item.confidenceBand), value: formatNumber(item.count) })))}
+            </div>
+            <div>
+              <p class="eyebrow">Top failure reasons</p>
+              ${renderMiniStatList((resolverReport.topFailureReasons || []).map((item) => ({ label: item.failureReason, value: formatNumber(item.count) })))}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Admin-managed job board records replace hardcoded spreadsheet helpers.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <form id="config-form" class="detail-form">
@@ -4850,20 +4842,6 @@ async function renderAdminView() {
             <div class="field" style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes" rows="4"></textarea></div>
             <div><button class="primary-button" type="submit">${appState.configEditingId ? 'Save config' : 'Create config'}</button></div>
           </form>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
-          <form id="configs-filter-form" class="filter-grid filter-grid--compact">
-            ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
-            ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters?.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
-            ${renderField('Discovery', `<select name="discoveryStatus"><option value="">All</option>${(stateBootstrap.filters?.configDiscoveryStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.discoveryStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters?.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters?.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
-            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
-          </form>
-          ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
-          ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
         ${renderCollapsibleEnd()}
       </div>
     </section>
