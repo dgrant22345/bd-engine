@@ -199,6 +199,20 @@ function getBillingTenantPayload(tenant, user) {
   };
 }
 
+function getPublicPlanPayload(plan) {
+  if (!plan) return null;
+  return {
+    id: plan.id,
+    name: plan.name,
+    displayName: plan.displayName,
+    price: plan.price,
+    interval: plan.interval,
+    trialDays: plan.trialDays,
+    limits: plan.limits,
+    features: plan.features,
+  };
+}
+
 function getEffectiveMembershipRole(membership, user) {
   return isInternalOwner(user) ? 'owner' : (membership?.role || 'member');
 }
@@ -966,6 +980,8 @@ async function handleSignup(req, res) {
     user: safeUser(userResult.user),
     tenant: getEffectiveTenant(tenantResult.tenant, userResult.user) || null,
     tenants: withEffectiveTenantRoles(tenantResult.tenants || [tenantResult.tenant], userResult.user),
+    plan: getPublicPlanPayload(getPlan(getEffectivePlanId(tenantResult.tenant, userResult.user))),
+    trialDaysRemaining: getTrialDaysRemaining(tenantResult.tenant),
     persona: userPersona,
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
   });
@@ -1009,6 +1025,9 @@ async function handleLogin(req, res) {
     user: safeUser(result.user),
     tenant: getEffectiveTenant(primaryTenant, result.user),
     tenants: withEffectiveTenantRoles(userTenants, result.user),
+    plan: getPublicPlanPayload(getPlan(getEffectivePlanId(primaryTenant, result.user))),
+    trialDaysRemaining: getEffectivePlanId(primaryTenant, result.user) !== ownerPlanId ? getTrialDaysRemaining(primaryTenant) : null,
+    referral: getReferralSummary(primaryTenant, getRequestOrigin(req)),
     persona,
     workspaceRecovered,
   });
@@ -1070,7 +1089,7 @@ function handleMe(req, res) {
     tenant: getEffectiveTenant(tenant, user),
     tenants: withEffectiveTenantRoles(userTenants, user),
     membership: membership ? { role: getEffectiveMembershipRole(membership, user) } : null,
-    plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
+    plan: getPublicPlanPayload(plan),
     trialDaysRemaining,
     billingRequired,
     referral: getReferralSummary(tenant, getRequestOrigin(req)),

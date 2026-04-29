@@ -27,6 +27,7 @@
       tenants: [],
       plan: null,
       trialDaysRemaining: null,
+      referral: null,
       error: '',
       busy: false,
       referralCode: getInitialReferralCode(),
@@ -101,6 +102,7 @@
           state.tenants = data.tenants || [];
           state.plan = data.plan;
           state.trialDaysRemaining = data.trialDaysRemaining;
+          state.referral = data.referral || null;
           state.view = 'app';
         } else {
           state.view = 'landing';
@@ -134,6 +136,9 @@
         state.user = data.user;
         state.tenant = data.tenant;
         state.tenants = data.tenants || [];
+        state.plan = data.plan || null;
+        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
+        state.referral = data.referral || null;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -155,6 +160,10 @@
         });
         state.user = data.user;
         state.tenant = data.tenant;
+        state.tenants = data.tenants || [];
+        state.plan = data.plan || null;
+        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
+        state.referral = data.referral || null;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -169,9 +178,78 @@
       try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
       state.user = null;
       state.tenant = null;
+      state.plan = null;
+      state.trialDaysRemaining = null;
+      state.referral = null;
       state.view = 'landing';
       state.error = '';
       render();
+    }
+
+    const fallbackPlanLimits = {
+      trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
+      jobseeker: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
+      sales: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 3, csvImports: -1 },
+      owner: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
+    };
+
+    function isTrialPlan() {
+      const planId = state.plan?.id || state.tenant?.plan || 'trial';
+      return planId === 'trial';
+    }
+
+    function getPlanLimits(planId = state.plan?.id || state.tenant?.plan || 'trial') {
+      return state.plan?.limits || fallbackPlanLimits[planId] || fallbackPlanLimits.trial;
+    }
+
+    function formatLimit(value) {
+      if (value === -1) return 'Unlimited';
+      return new Intl.NumberFormat().format(Number(value || 0));
+    }
+
+    function formatCredit(cents) {
+      const amount = Number(cents || 0) / 100;
+      if (!amount) return 'billing credit';
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: amount % 1 ? 2 : 0 }).format(amount);
+    }
+
+    function getReferralLink() {
+      return state.referral?.link || '';
+    }
+
+    function openBillingPage() {
+      const frame = root.querySelector('.cloud-app-frame');
+      if (frame) frame.src = '/app/#/admin/billing';
+    }
+
+    async function copyReferralLink(btn) {
+      const link = getReferralLink();
+      if (!link) {
+        openBillingPage();
+        return;
+      }
+      const original = btn?.textContent || 'Copy referral link';
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(link);
+        } else {
+          const input = document.createElement('input');
+          input.value = link;
+          input.setAttribute('readonly', '');
+          input.style.position = 'fixed';
+          input.style.opacity = '0';
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          input.remove();
+        }
+        if (btn) {
+          btn.textContent = 'Copied';
+          window.setTimeout(() => { btn.textContent = original; }, 1800);
+        }
+      } catch {
+        openBillingPage();
+      }
     }
 
     // ── Render ────────────────────────────────────────────────────────────
@@ -231,7 +309,7 @@
               <div class="hero-cta">
                 <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
               </div>
-              <p class="hero-note">No credit card required · 14-day free trial · Cancel anytime</p>
+              <p class="hero-note">No credit card required · 14-day trial includes 25 accounts, 100 contacts, and 50 ATS boards</p>
             </div>
             <div class="hero-visual">
               <div class="hero-card hero-card-1">
@@ -305,6 +383,31 @@
             </div>
           </section>
 
+          <section class="referral-program" id="referrals">
+            <div class="referral-copy">
+              <span class="section-kicker">Referral program</span>
+              <h2>Share BD Engine, earn billing credit.</h2>
+              <p>Every workspace gets a referral link. Invite another job seeker, founder, recruiter, or sales team and earn credit when they become a paid customer.</p>
+            </div>
+            <div class="referral-flow" aria-label="Referral program steps">
+              <div class="referral-step">
+                <span class="referral-step-number">1</span>
+                <strong>Share your link</strong>
+                <p>Use the referral link in Billing after you create a workspace.</p>
+              </div>
+              <div class="referral-step">
+                <span class="referral-step-number">2</span>
+                <strong>They upgrade</strong>
+                <p>The referral is tracked through signup and subscription.</p>
+              </div>
+              <div class="referral-step">
+                <span class="referral-step-number">3</span>
+                <strong>You get credit</strong>
+                <p>Credits are applied toward future BD Engine billing.</p>
+              </div>
+            </div>
+          </section>
+
           <section class="pricing" id="pricing">
             <h2 class="section-title">Simple, transparent pricing</h2>
             <div class="pricing-grid">
@@ -315,9 +418,9 @@
                 <ul class="pricing-features">
                   <li>25 accounts</li>
                   <li>100 contacts</li>
-                  <li>3 job boards</li>
+                  <li>50 ATS job boards</li>
                   <li>Basic outreach drafts</li>
-                  <li>CSV import</li>
+                  <li>3 CSV imports</li>
                 </ul>
                 <button class="btn btn-primary btn-block" data-signup>Start free trial</button>
               </div>
@@ -328,8 +431,8 @@
                 <ul class="pricing-features">
                   <li>200 accounts</li>
                   <li>1,000 contacts</li>
-                  <li>10 job boards</li>
-                  <li>CSV import</li>
+                  <li>50 ATS job boards</li>
+                  <li>50 CSV imports</li>
                   <li>1 user</li>
                 </ul>
                 <button class="btn btn-primary btn-block" data-signup>Get started</button>
@@ -341,7 +444,7 @@
                 <ul class="pricing-features">
                   <li>1,000 accounts</li>
                   <li>10,000 contacts</li>
-                  <li>100 job boards</li>
+                  <li>Unlimited ATS job boards</li>
                   <li>Enrichment + Outreach Drafts</li>
                   <li>CSV export</li>
                   <li>3 team members</li>
@@ -647,11 +750,36 @@
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
     }
 
+    function renderTrialUpgradeBanner() {
+      if (!isTrialPlan()) return '';
+      const trialLimits = getPlanLimits('trial');
+      const creditLabel = formatCredit(state.referral?.creditAmountCents);
+      const referralAction = getReferralLink() ? 'Copy referral link' : 'Referral program';
+      const daysCopy = state.trialDaysRemaining !== null
+        ? `${state.trialDaysRemaining} day${state.trialDaysRemaining === 1 ? '' : 's'} left`
+        : '14-day trial';
+
+      return `
+        <div class="cloud-trial-cta" role="region" aria-label="Free trial limits and upgrade options">
+          <div class="cloud-trial-cta-copy">
+            <span class="cloud-trial-cta-kicker">Free trial · ${escapeHtml(daysCopy)}</span>
+            <strong>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} accounts, ${formatLimit(trialLimits.contacts)} contacts.</strong>
+            <span>Paid plans remove the trial clock; Sales Pro adds unlimited ATS boards, enrichment, CSV export, and team seats.</span>
+          </div>
+          <div class="cloud-trial-cta-actions">
+            <button class="btn btn-primary btn-sm" id="cloud-upgrade-btn">Upgrade plan</button>
+            <button class="btn btn-ghost btn-sm" id="cloud-referral-btn">${escapeHtml(referralAction)}</button>
+            <span class="cloud-referral-note">Earn ${escapeHtml(creditLabel)} when referrals upgrade.</span>
+          </div>
+        </div>`;
+    }
+
     // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
     function renderApp() {
       const planBadge = state.plan ? state.plan.displayName : 'Trial';
       const trialNotice = state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
         ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
+      const trialUpgradeBanner = renderTrialUpgradeBanner();
 
       root.innerHTML = `
         <div class="cloud-shell">
@@ -677,11 +805,13 @@
                   </div>
                   <hr>
                   <button class="cloud-menu-item" id="cloud-billing-btn">💳 Billing & Plan</button>
+                  <button class="cloud-menu-item" id="cloud-referral-menu-btn">Referral Program</button>
                   <button class="cloud-menu-item" id="cloud-logout-btn">🚪 Log out</button>
                 </div>
               </div>
             </div>
           </div>
+          ${trialUpgradeBanner}
           <div class="cloud-app-container">
             <iframe class="cloud-app-frame" title="BD Engine workspace" src="/app/#/dashboard"></iframe>
           </div>
@@ -696,8 +826,13 @@
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
-        const frame = root.querySelector('.cloud-app-frame');
-        if (frame) frame.src = '/app/#/admin/billing';
+        openBillingPage();
+        dropdown?.classList.add('hidden');
+      });
+      root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
+      root.querySelector('#cloud-referral-btn')?.addEventListener('click', (event) => copyReferralLink(event.currentTarget));
+      root.querySelector('#cloud-referral-menu-btn')?.addEventListener('click', (event) => {
+        copyReferralLink(event.currentTarget);
         dropdown?.classList.add('hidden');
       });
     }

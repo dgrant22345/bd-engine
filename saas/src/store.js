@@ -2,6 +2,7 @@ import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
+const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 
 const pastDate = (days) => {
   const d = new Date();
@@ -529,13 +530,19 @@ export function createStore() {
     async getDashboard(tenantId) {
       assertTenant(tenantId);
       const dashboardStartedAt = performance.now();
+      const timings = {};
+      const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, false); // Don't need full contact list for dashboard summary
+      timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
+      const shapeStartedAt = performance.now();
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
+      const tenantConfigs = configsForTenant(tenantId);
       const activeJobs = tenantJobs.filter((item) => item.active !== false);
       const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);
       const jobsImportedLast24h = activeJobs.filter((item) => daysSince(item.importedAt || item.retrievedAt) <= 1);
-      const unresolvedAccounts = tenantAccounts.filter((item) => item.status === 'new');
+      const resolvedConfigs = tenantConfigs.filter(isResolvedBoardConfig);
+      const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const newJobsToday = jobsImportedLast24h.slice(0, 50).map(dashboardJobSummary);
       const followUpAccounts = tenantAccounts
         .filter((item) => item.nextActionAt)
@@ -549,7 +556,7 @@ export function createStore() {
           jobsImportedLast24h: jobsImportedLast24h.length,
           jobsPostedLast24h: jobsPostedLast24h.length,
           newJobsLast24h: jobsPostedLast24h.length,
-          discoveredBoardCount: boardConfigs.length,
+          discoveredBoardCount: resolvedConfigs.length,
           needsResolutionCount: unresolvedAccounts.length,
         },
         todayQueue: tenantAccounts.slice(0, 50).map(dashboardAccountSummary),
@@ -564,16 +571,17 @@ export function createStore() {
           recommendedAction: item.recommendedAction,
           outreachStatus: item.outreachStatus,
         })),
-        recentlyDiscoveredBoards: boardConfigs.slice(0, 5).map((item) => ({
+        recentlyDiscoveredBoards: resolvedConfigs.slice(0, 5).map((item) => ({
           companyName: item.companyName,
           ats: item.ats,
           confidenceBand: item.confidenceBand,
           discoveredAt: pastDate(2),
         })),
       };
+      timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
       const dashboardElapsedMs = Math.round(performance.now() - dashboardStartedAt);
       if (dashboardElapsedMs > 500) {
-        console.warn(`Slow dashboard summary: saas/src/store.js getDashboard ${dashboardElapsedMs}ms`);
+        console.warn(`Slow dashboard summary: saas/src/store.js getDashboard ${dashboardElapsedMs}ms`, timings);
       }
       return dashboard;
     },
@@ -582,7 +590,8 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
       const tenantAccounts = accountsForTenant(tenantId);
-      const unresolvedAccounts = tenantAccounts.filter((item) => item.status === 'new');
+      const tenantConfigs = configsForTenant(tenantId);
+      const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const unresolvedDashboardAccounts = unresolvedAccounts
         .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
         .map(dashboardAccountSummary);
@@ -931,10 +940,10 @@ export function createStore() {
 
     getResolverReport(tenantId) {
       assertTenant(tenantId);
-      const tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
-      const resolved = tenantConfigs.filter((item) => item.discoveryStatus === 'resolved');
+      const tenantConfigs = configsForTenant(tenantId);
+      const resolved = tenantConfigs.filter(isResolvedBoardConfig);
       const medium = tenantConfigs.filter((item) => item.confidenceBand === 'medium');
-      const unresolved = tenantConfigs.filter((item) => item.confidenceBand === 'unresolved' || item.discoveryStatus === 'unresolved');
+      const unresolved = tenantConfigs.filter((item) => !isResolvedBoardConfig(item));
       return {
         summary: {
           totalCompanies: tenantConfigs.length,
@@ -974,18 +983,18 @@ export function createStore() {
 
     getResolverQueue(tenantId, band) {
       assertTenant(tenantId);
-      const items = boardConfigs
-        .filter((item) => item.tenantId === tenantId)
-        .filter((item) => band === 'medium' ? item.confidenceBand === 'medium' : item.confidenceBand === 'unresolved' || item.discoveryStatus === 'unresolved');
+      const items = configsForTenant(tenantId)
+        .filter((item) => band === 'medium' ? item.confidenceBand === 'medium' : !isResolvedBoardConfig(item));
       return paginate(items, { page: 1, pageSize: 10 });
     },
 
     getEnrichmentQueue(tenantId, query = {}) {
       assertTenant(tenantId);
+      const tenantConfigs = configsForTenant(tenantId);
       const candidates = accountsForTenant(tenantId).map((item) => ({
         ...item,
-        primaryConfigId: boardConfigs.find((config) => config.normalizedCompanyName === item.normalizedName)?.id || '',
-        configCount: boardConfigs.filter((config) => config.normalizedCompanyName === item.normalizedName).length,
+        primaryConfigId: tenantConfigs.find((config) => config.normalizedCompanyName === item.normalizedName)?.id || '',
+        configCount: tenantConfigs.filter((config) => config.normalizedCompanyName === item.normalizedName).length,
         canonicalDomain: item.canonicalDomain || item.domain,
         enrichmentStatus: item.enrichmentStatus || 'enriched',
         enrichmentConfidence: item.enrichmentConfidence || 'medium',
@@ -1078,15 +1087,15 @@ export function createStore() {
           normalizedCompanyName: item.normalizedName,
           atsType: 'unknown',
           ats: 'unknown',
-          boardId: normalizeKey(item.displayName).replace(/\s+/g, ''),
+          boardId: '',
           domain,
           careersUrl: domain ? `https://${domain.replace(/^https?:\/\//, '')}/careers` : '',
-          active: Boolean(domain),
-          discoveryStatus: domain ? 'resolved' : 'needs_review',
-          reviewStatus: domain ? 'approved' : 'pending',
-          confidenceBand: domain ? 'high' : 'medium',
+          active: false,
+          discoveryStatus: 'needs_review',
+          reviewStatus: 'pending',
+          confidenceBand: domain ? 'medium' : 'unresolved',
           source: 'launch_workflow',
-          lastImportStatus: 'ready',
+          lastImportStatus: 'not ready',
           createdAt: now(),
           updatedAt: now(),
         });
@@ -1114,15 +1123,22 @@ export function createStore() {
 
       let configsResolved = 0;
       for (const config of tenantConfigs.slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
-        if (config.confidenceBand === 'high' && config.discoveryStatus === 'resolved') continue;
-        if (config.domain || config.careersUrl || config.boardId) {
+        if (config.reviewStatus === 'rejected') continue;
+        if (hasSupportedBoardIdentity(config)) {
           config.discoveryStatus = 'resolved';
           config.reviewStatus = 'approved';
-          config.confidenceBand = config.domain || config.careersUrl ? 'high' : 'medium';
+          config.confidenceBand = 'high';
           config.active = true;
           config.lastImportStatus = 'ready';
           config.updatedAt = now();
           configsResolved++;
+        } else {
+          config.discoveryStatus = config.discoveryStatus === 'error' ? 'error' : 'needs_review';
+          config.reviewStatus = config.reviewStatus || 'pending';
+          config.confidenceBand = config.domain || config.careersUrl ? 'medium' : 'unresolved';
+          config.active = false;
+          config.lastImportStatus = 'not ready';
+          config.updatedAt = now();
         }
       }
 
@@ -1256,10 +1272,11 @@ export function createStore() {
       const warnings = [];
       const errors = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
-      const limit = Math.max(1, Math.min(200, Number(options.limit || 75)));
+      const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+      const requestedLimit = Math.max(1, Number(options.limit || 75));
+      const limit = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
       const onlyMissing = options.onlyMissing !== false && options.onlyMissing !== 'false';
       const forceRefresh = options.forceRefresh === true || options.forceRefresh === 'true';
-      const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
 
       const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, false);
@@ -1284,10 +1301,10 @@ export function createStore() {
           boardId: '',
           domain: item.domain || item.canonicalDomain || '',
           careersUrl: item.careersUrl || '',
-          active: true,
+          active: false,
           discoveryStatus: 'needs_review',
           reviewStatus: 'pending',
-          confidenceBand: 'medium',
+          confidenceBand: item.domain || item.canonicalDomain || item.careersUrl ? 'medium' : 'unresolved',
           source: 'ats_discovery',
           createdAt: now(),
           updatedAt: now(),
@@ -1299,11 +1316,10 @@ export function createStore() {
         createdConfigs++;
       }
 
-      let candidates = tenantConfigs.filter((item) => item.active !== false);
+      let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected');
       if (onlyMissing && !forceRefresh) {
         candidates = candidates.filter((item) => {
-          const atsType = normalizeAtsType(item.atsType || item.ats);
-          return !ATS_FETCHERS.has(atsType) || !getConfigBoardId(item) || item.discoveryStatus === 'needs_review' || item.discoveryStatus === 'unresolved';
+          return !isResolvedBoardConfig(item) || item.discoveryStatus === 'needs_review' || item.discoveryStatus === 'unresolved';
         });
       }
       candidates = candidates.slice(0, limit);
@@ -1455,23 +1471,27 @@ export function createStore() {
 
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = getTenantArray(jobsByTenant, tenantId);
-      let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId && item.active !== false);
-      if (jobBoardLimit !== -1 && tenantConfigs.length > jobBoardLimit) {
-        tenantConfigs = tenantConfigs.slice(0, jobBoardLimit);
+      const tenantConfigs = configsForTenant(tenantId);
+      const activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
+      const importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
+      let limitedImportConfigs = importReadyConfigs;
+      if (jobBoardLimit !== -1 && limitedImportConfigs.length > jobBoardLimit) {
+        limitedImportConfigs = limitedImportConfigs.slice(0, jobBoardLimit);
         warnings.push(`Only the first ${jobBoardLimit} active ATS configs were processed on the ${selectedPlan.displayName || selectedPlan.name || 'current'} plan.`);
       }
 
-      const activeConfigs = tenantConfigs.length;
-      const supportedConfigs = tenantConfigs
+      const activeConfigs = limitedImportConfigs.length;
+      const unsupportedCount = activeTenantConfigs.length - importReadyConfigs.length;
+      const needsResolutionConfigs = tenantConfigs.length - importReadyConfigs.length;
+      const supportedConfigs = limitedImportConfigs
         .map((config) => ({ config, atsType: normalizeAtsType(config.atsType || config.ats), boardId: getConfigBoardId(config) }))
-        .filter(({ atsType, boardId }) => ATS_FETCHERS.has(atsType) && boardId);
-      const unsupportedCount = tenantConfigs.length - supportedConfigs.length;
+        .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
       if (!tenantConfigs.length) {
         warnings.push('No active ATS configs were found yet. Run setup/workflow first so the app can discover job boards for your accounts.');
       } else if (!supportedConfigs.length) {
-        warnings.push('No supported ATS boards were ready to import. Add or approve configs with Greenhouse, Lever, or Ashby board IDs.');
+        warnings.push(`No supported ATS boards were ready to import. Add or approve configs with Greenhouse, Lever, or Ashby board IDs. ${needsResolutionConfigs} config${needsResolutionConfigs === 1 ? '' : 's'} still need ATS resolution.`);
       } else if (unsupportedCount > 0) {
-        warnings.push(`${unsupportedCount} active config${unsupportedCount === 1 ? '' : 's'} could not be fetched because the ATS type or board ID is missing/unsupported.`);
+        warnings.push(`${unsupportedCount} active config${unsupportedCount === 1 ? '' : 's'} could not be fetched because the ATS type or board ID is missing/unsupported. ${needsResolutionConfigs} total config${needsResolutionConfigs === 1 ? '' : 's'} still need ATS resolution.`);
       }
 
       const accountsByNormalizedName = new Map(tenantAccounts.map((item) => [normalizeKey(item.displayName || item.normalizedName), item]));
@@ -1490,12 +1510,14 @@ export function createStore() {
       const touchedAccountIds = new Set();
 
       const fetchStartedAt = performance.now();
-      const fetchedBoards = await Promise.allSettled(supportedConfigs.map(async ({ config, atsType, boardId }) => {
+      const fetchConcurrency = readPositiveInteger(options.fetchConcurrency, DEFAULT_ATS_FETCH_CONCURRENCY);
+      const fetchedBoards = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async ({ config, atsType, boardId }) => {
         const fetcher = ATS_FETCHERS.get(atsType);
         const response = await fetcher(config, boardId);
         return { config, atsType, jobs: response.jobs || [] };
-      }));
+      });
       timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
+      timings.fetchConcurrency = fetchConcurrency;
 
       const upsertStartedAt = performance.now();
       for (let index = 0; index < fetchedBoards.length; index++) {
@@ -1580,8 +1602,11 @@ export function createStore() {
       const activeTrackedJobs = tenantJobs.filter((item) => item.active !== false).length;
       const stats = {
         activeConfigs,
+        configRows: tenantConfigs.length,
         configs: supportedConfigs.length,
         unsupportedConfigs: unsupportedCount,
+        needsResolutionConfigs,
+        fetchConcurrency,
         fetched,
         canadaKept,
         filteredOutNonCanada,
@@ -2260,7 +2285,7 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
 
 function buildFilters(tenantId) {
   const tenantAccounts = accountsForTenant(tenantId);
-  const tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
+  const tenantConfigs = configsForTenant(tenantId);
   return {
     atsTypes: unique(tenantConfigs.map((item) => item.ats)),
     industries: unique(tenantAccounts.map((item) => item.industry).filter(Boolean)),
@@ -2309,6 +2334,10 @@ function contactsForTenant(tenantId) {
 function jobsForTenant(tenantId) {
   return (jobsByTenant.get(tenantId) || [])
     .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)));
+}
+
+function configsForTenant(tenantId) {
+  return configsByTenant.get(tenantId) || [];
 }
 
 function activitiesForTenant(tenantId) {
@@ -2409,6 +2438,11 @@ function countBy(items, field) {
   }));
 }
 
+function readPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -2428,6 +2462,10 @@ const ATS_FETCHERS = new Map([
   ['greenhouse', fetchGreenhouseJobs],
   ['lever', fetchLeverJobs],
   ['ashby', fetchAshbyJobs],
+  ['smartrecruiters', fetchSmartRecruitersJobs],
+  ['jobvite', fetchJobviteJobs],
+  ['workday', fetchWorkdayJobs],
+  ['bamboohr', fetchBamboohrJobs],
 ]);
 
 function normalizeAtsType(value) {
@@ -2435,6 +2473,10 @@ function normalizeAtsType(value) {
   if (normalized.includes('greenhouse')) return 'greenhouse';
   if (normalized.includes('lever')) return 'lever';
   if (normalized.includes('ashby')) return 'ashby';
+  if (normalized.includes('smartrecruiters')) return 'smartrecruiters';
+  if (normalized.includes('jobvite')) return 'jobvite';
+  if (normalized.includes('workday') || normalized.includes('myworkdayjobs')) return 'workday';
+  if (normalized.includes('bamboohr')) return 'bamboohr';
   return normalized;
 }
 
@@ -2448,7 +2490,87 @@ function getConfigBoardId(config = {}) {
   if (lever) return decodeURIComponent(lever[1]);
   const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
   if (ashby) return decodeURIComponent(ashby[1]);
+  const smartRecruiters = String(sourceUrl).match(/smartrecruiters\.com\/(?:v1\/companies\/)?([^/?#]+)(?:\/postings)?/i);
+  if (smartRecruiters) return decodeURIComponent(smartRecruiters[1]);
+  const jobvite = String(sourceUrl).match(/jobs\.jobvite\.com\/(?:api\/job-list\?company=)?([^/?#&]+)/i);
+  if (jobvite) return decodeURIComponent(jobvite[1]);
+  const workday = getWorkdayDescriptor(config);
+  if (workday) return `${workday.tenant}/${workday.site}`;
+  const bamboo = String(sourceUrl).match(/https?:\/\/([^./]+)\.bamboohr\.com/i);
+  if (bamboo) return decodeURIComponent(bamboo[1]);
   return '';
+}
+
+function hasSupportedBoardIdentity(config = {}) {
+  const atsType = normalizeAtsType(config.atsType || config.ats);
+  return ATS_FETCHERS.has(atsType) && Boolean(getConfigBoardId(config));
+}
+
+function isResolvedBoardConfig(config = {}) {
+  if (!hasSupportedBoardIdentity(config)) return false;
+  const status = normalizeKey(config.discoveryStatus || '');
+  const reviewStatus = normalizeKey(config.reviewStatus || '');
+  return (
+    ['resolved', 'mapped', 'discovered', 'manual'].includes(status) ||
+    reviewStatus === 'approved'
+  );
+}
+
+function isImportReadyConfig(config = {}) {
+  return config.active !== false && isResolvedBoardConfig(config);
+}
+
+function configMatchesAccount(config = {}, account = {}) {
+  if (config.accountId && account.id && config.accountId === account.id) return true;
+  const configName = normalizeKey(config.normalizedCompanyName || config.companyName || '');
+  const accountNames = [
+    account.normalizedName,
+    account.displayName,
+    ...(Array.isArray(account.aliases) ? account.aliases : []),
+  ].map((value) => normalizeKey(value)).filter(Boolean);
+  return Boolean(configName && accountNames.includes(configName));
+}
+
+function getAccountsNeedingResolution(tenantAccounts = [], tenantConfigs = []) {
+  return tenantAccounts.filter((item) => {
+    if (['client', 'paused'].includes(normalizeKey(item.status))) return false;
+    const hasDomain = Boolean(item.canonicalDomain || item.domain);
+    const hasCareersUrl = Boolean(item.careersUrl);
+    const hasResolvedBoard = tenantConfigs.some((config) => configMatchesAccount(config, item) && isResolvedBoardConfig(config));
+    return !hasDomain || !hasCareersUrl || !hasResolvedBoard;
+  });
+}
+
+function getWorkdayDescriptor(config = {}) {
+  const rawUrl = config.apiUrl || config.resolvedBoardUrl || config.careersUrl || config.sourceUrl || config.boardUrl || config.url || '';
+  if (!rawUrl) return null;
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const hostMatch = parsed.hostname.match(/^([^.]+)\.wd\d+\.myworkdayjobs\.com$/i);
+  if (!hostMatch) return null;
+  const tenant = hostMatch[1];
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  let site = '';
+  const cxsIndex = segments.findIndex((segment) => segment.toLowerCase() === 'cxs');
+  if (cxsIndex >= 0 && segments[cxsIndex + 2]) {
+    site = segments[cxsIndex + 2];
+  } else if (segments[1] && /^[a-z]{2}(?:-[a-z]{2})?$/i.test(segments[0])) {
+    site = segments[1];
+  } else if (segments[0]) {
+    site = segments[0];
+  }
+  if (!site) return null;
+  const baseUrl = `${parsed.protocol}//${parsed.hostname}`;
+  return {
+    tenant,
+    site,
+    apiUrl: `${baseUrl}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`,
+    resolvedBoardUrl: `${baseUrl}/${segments.slice(0, Math.max(1, segments.indexOf(site) + 1)).join('/')}`,
+  };
 }
 
 async function fetchGreenhouseJobs(config, boardId) {
@@ -2469,12 +2591,45 @@ async function fetchAshbyJobs(config, boardId) {
   return { jobs: Array.isArray(payload?.jobs) ? payload.jobs : [] };
 }
 
-async function fetchJson(url, timeoutMs = 15000) {
+async function fetchSmartRecruitersJobs(config, boardId) {
+  const url = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings?limit=100`;
+  const payload = await fetchJson(url);
+  const jobs = firstArray(payload?.content, payload?.postings, payload);
+  return { jobs };
+}
+
+async function fetchJobviteJobs(config, boardId) {
+  const url = config.apiUrl || `https://jobs.jobvite.com/api/job-list?company=${encodeURIComponent(boardId)}`;
+  const payload = await fetchJson(url);
+  return { jobs: firstArray(payload?.jobs, payload?.requisitions, payload) };
+}
+
+async function fetchWorkdayJobs(config) {
+  const descriptor = getWorkdayDescriptor(config);
+  if (!descriptor) return { jobs: [] };
+  const url = descriptor.apiUrl;
+  const payload = await fetchJson(url, 15000, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ appliedFacets: {}, limit: 100, offset: 0, searchText: '' }),
+  });
+  return { jobs: firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children) };
+}
+
+async function fetchBamboohrJobs(config, boardId) {
+  const url = config.apiUrl || `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
+  const content = await fetchText(url);
+  return { jobs: parseBamboohrJobs(content) };
+}
+
+async function fetchJson(url, timeoutMs = 15000, init = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
+      ...init,
       headers: { accept: 'application/json' },
+      ...(init.headers ? { headers: { accept: 'application/json', ...init.headers } } : {}),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -2484,6 +2639,68 @@ async function fetchJson(url, timeoutMs = 15000) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function fetchText(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'text/html,application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`ATS request failed with HTTP ${response.status}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function firstArray(...values) {
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+async function mapSettledWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), Math.max(1, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      try {
+        results[currentIndex] = {
+          status: 'fulfilled',
+          value: await mapper(items[currentIndex], currentIndex),
+        };
+      } catch (reason) {
+        results[currentIndex] = { status: 'rejected', reason };
+      }
+    }
+  }));
+  return results;
+}
+
+function parseBamboohrJobs(content) {
+  const text = String(content || '');
+  const jsonMatches = [
+    text.match(/"result"\s*:\s*(\[[\s\S]*?\])\s*[,}]/),
+    text.match(/"jobs"\s*:\s*(\[[\s\S]*?\])\s*[,}]/),
+  ];
+  for (const match of jsonMatches) {
+    if (!match?.[1]) continue;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Keep trying other embedded shapes.
+    }
+  }
+  return [];
 }
 
 async function discoverAtsBoard(config) {
@@ -2544,6 +2761,16 @@ async function probeAtsBoard(atsType, boardId) {
       apiUrl: `https://api.ashbyhq.com/posting-api/job-board/${encoded}`,
       resolvedBoardUrl: `https://jobs.ashbyhq.com/${encoded}`,
       readJobs: (payload) => payload?.jobs,
+    },
+    smartrecruiters: {
+      apiUrl: `https://api.smartrecruiters.com/v1/companies/${encoded}/postings?limit=1`,
+      resolvedBoardUrl: `https://careers.smartrecruiters.com/${encoded}`,
+      readJobs: (payload) => payload?.content || payload?.postings,
+    },
+    jobvite: {
+      apiUrl: `https://jobs.jobvite.com/api/job-list?company=${encoded}`,
+      resolvedBoardUrl: `https://jobs.jobvite.com/${encoded}`,
+      readJobs: (payload) => payload?.jobs || payload?.requisitions,
     },
   };
   const endpoint = endpoints[atsType];
@@ -2649,6 +2876,124 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       importedAt: retrievedAt,
       active: true,
       isNew: daysSince(raw.publishedAt || retrievedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'smartrecruiters') {
+    const title = raw.name || raw.title || '';
+    if (!title) return null;
+    const location = [raw.location?.city, raw.location?.region, raw.location?.country].filter(Boolean).join(', ') || raw.location || '';
+    const postedAt = raw.releasedDate || raw.createdOn || raw.updatedOn || retrievedAt;
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department?.label || raw.department?.name || raw.department || '',
+      employmentType: raw.typeOfEmployment?.label || raw.typeOfEmployment?.name || raw.typeOfEmployment || '',
+      atsType,
+      source: 'SmartRecruiters',
+      jobId: String(raw.id || raw.ref || title),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.ref || title, location),
+      jobUrl: raw.ref || raw.applyUrl || raw.jobAd?.publicUrl || '',
+      url: raw.ref || raw.applyUrl || raw.jobAd?.publicUrl || '',
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'jobvite') {
+    const title = raw.title || raw.name || '';
+    if (!title) return null;
+    const location = raw.location || raw.locationName || raw.jobLocation || raw.city || '';
+    const postedAt = raw.postedDate || raw.postedAt || raw.createdDate || retrievedAt;
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || raw.category || '',
+      employmentType: raw.jobType || raw.employmentType || '',
+      atsType,
+      source: 'Jobvite',
+      jobId: String(raw.id || raw.jobId || raw.requisitionId || title),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.jobId || raw.requisitionId || title, location),
+      jobUrl: raw.jobUrl || raw.url || raw.applyUrl || '',
+      url: raw.jobUrl || raw.url || raw.applyUrl || '',
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'workday') {
+    const title = raw.title || raw.jobTitle || '';
+    if (!title) return null;
+    const location = raw.locationsText || raw.location || raw.locationText || '';
+    const postedAt = raw.postedOn || raw.postedOnDate || raw.startDate || retrievedAt;
+    const descriptor = getWorkdayDescriptor(config);
+    const externalPath = raw.externalPath || raw.jobPostingUrl || raw.url || '';
+    const jobUrl = externalPath && descriptor?.resolvedBoardUrl
+      ? new URL(externalPath, descriptor.resolvedBoardUrl).toString()
+      : externalPath;
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.jobFamily || raw.department || firstString(raw.bulletFields) || '',
+      employmentType: raw.timeType || raw.workerSubType || raw.employmentType || '',
+      atsType,
+      source: 'Workday',
+      jobId: String(raw.externalPath || raw.id || raw.jobPostingId || title),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.externalPath || raw.id || raw.jobPostingId || title, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'bamboohr') {
+    const title = raw.title || raw.jobTitle || raw.name || '';
+    if (!title) return null;
+    const location = [raw.location?.city, raw.location?.state, raw.location?.country].filter(Boolean).join(', ') || raw.location || '';
+    const postedAt = raw.postedDate || raw.createdDate || raw.datePosted || retrievedAt;
+    const jobId = raw.id || raw.jobId || raw.requisitionId || title;
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || '',
+      employmentType: raw.employmentType || raw.type || '',
+      atsType,
+      source: 'BambooHR',
+      jobId: String(jobId),
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl: raw.url || raw.jobUrl || raw.applyUrl || '',
+      url: raw.url || raw.jobUrl || raw.applyUrl || '',
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
       isGta: isGtaLocation(location),
     };
   }

@@ -488,6 +488,17 @@ a:hover { text-decoration: underline; }
   margin-bottom: 48px;
 }
 
+.section-kicker {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
 .features {
   padding: 100px 48px;
   max-width: 1200px;
@@ -530,6 +541,70 @@ a:hover { text-decoration: underline; }
   font-size: 14px;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+/* ── Referrals ── */
+
+.referral-program {
+  width: min(100%, 1100px);
+  margin: 0 auto;
+  padding: 76px 48px;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) 1.15fr;
+  gap: 36px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.referral-copy h2 {
+  font-size: 34px;
+  line-height: 1.08;
+  font-weight: 800;
+  margin-bottom: 14px;
+}
+
+.referral-copy p,
+.referral-step p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.referral-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.referral-step {
+  min-height: 180px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(59, 130, 246, 0.05)),
+    rgba(17, 24, 39, 0.72);
+}
+
+.referral-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 14px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.referral-step strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
 }
 
 /* ── Pricing ── */
@@ -1053,8 +1128,62 @@ a:hover { text-decoration: underline; }
   color: var(--text-primary);
 }
 
+.cloud-trial-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 20px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(16, 185, 129, 0.08)),
+    rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid var(--border-strong);
+  flex-shrink: 0;
+  z-index: 900;
+}
+
+.cloud-trial-cta-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cloud-trial-cta-kicker {
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.cloud-trial-cta-copy strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.cloud-trial-cta-copy span:last-child {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cloud-trial-cta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cloud-referral-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .cloud-app-container {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   position: relative;
   background: #0b1020;
@@ -1062,7 +1191,7 @@ a:hover { text-decoration: underline; }
 
 .cloud-app-frame {
   width: 100%;
-  height: calc(100vh - 48px);
+  height: 100%;
   border: 0;
   display: block;
   background: #0b1020;
@@ -1143,9 +1272,16 @@ a:hover { text-decoration: underline; }
   .hero-visual { height: 360px; }
 
   .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .referral-program { grid-template-columns: 1fr; }
+  .referral-flow { grid-template-columns: 1fr; }
   .pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
   .pricing-card--popular { transform: none; }
   .pricing-card--popular:hover { transform: translateY(-2px); }
+  .cloud-trial-cta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .cloud-trial-cta-actions { justify-content: flex-start; }
 }
 
 @media (max-width: 640px) {
@@ -1161,11 +1297,21 @@ a:hover { text-decoration: underline; }
   .features-grid { grid-template-columns: 1fr; }
   .section-title { font-size: 26px; }
 
+  .referral-program { padding: 56px 16px; }
+  .referral-copy h2 { font-size: 28px; }
+
   .pricing { padding: 64px 16px; }
 
   .landing-nav { padding: 12px 16px; }
   .landing-nav-actions { gap: 8px; }
   .auth-card { padding: 28px 20px; }
+
+  .cloud-topbar { padding: 0 12px; }
+  .cloud-app-name,
+  .cloud-workspace { display: none; }
+  .cloud-trial-cta { padding: 12px; }
+  .cloud-referral-note { width: 100%; white-space: normal; }
+  .cloud-trial-cta-actions .btn { flex: 1 1 140px; }
 
   .trust-main { padding: 48px 16px 72px; }
   .trust-main h1 { font-size: 34px; }
