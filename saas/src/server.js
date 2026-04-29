@@ -167,13 +167,45 @@ function getEffectivePlanId(tenant, user) {
   return isInternalOwner(user) ? ownerPlanId : (tenant?.plan || 'trial');
 }
 
+function ensureInternalOwnerEntitlement(tenant, user) {
+  if (!tenant || !isInternalOwner(user)) return tenant;
+  if (tenant.plan === ownerPlanId && tenant.status === 'active') return tenant;
+  const updated = updateTenant(tenant.id, {
+    plan: ownerPlanId,
+    status: 'active',
+  }) || { ...tenant, plan: ownerPlanId, status: 'active' };
+  console.log(`Owner entitlement applied: ${user.email} -> ${tenant.id}`);
+  return updated;
+}
+
+function getEffectiveTenant(tenant, user) {
+  if (!tenant) return tenant;
+  if (!isInternalOwner(user)) return tenant;
+  return {
+    ...tenant,
+    plan: ownerPlanId,
+    status: 'active',
+    effectivePlan: ownerPlanId,
+  };
+}
+
+function getBillingTenantPayload(tenant, user) {
+  const effectiveTenant = getEffectiveTenant(tenant, user);
+  return {
+    id: effectiveTenant?.id || '',
+    name: effectiveTenant?.name || '',
+    plan: effectiveTenant?.plan || 'trial',
+    status: effectiveTenant?.status || '',
+  };
+}
+
 function getEffectiveMembershipRole(membership, user) {
   return isInternalOwner(user) ? 'owner' : (membership?.role || 'member');
 }
 
 function withEffectiveTenantRoles(tenants, user) {
   if (!isInternalOwner(user)) return tenants;
-  return (tenants || []).map((tenant) => ({ ...tenant, role: 'owner' }));
+  return (tenants || []).map((tenant) => ({ ...getEffectiveTenant(tenant, user), role: 'owner' }));
 }
 
 function getRequestOrigin(req) {
@@ -345,6 +377,7 @@ self.addEventListener('activate', (event) => {
     tenant = repair.tenant;
     tenantId = tenant.id;
     membership = getMembership(tenantId, user.id);
+    tenant = ensureInternalOwnerEntitlement(tenant, user);
     store.ensureTenant(tenant, user);
     await persistUserWorkspace(user, tenant);
     const { cookie } = createSession(user.id, tenantId);
@@ -356,8 +389,9 @@ self.addEventListener('activate', (event) => {
   }
 
   // Build session object compatible with existing frontend
+  tenant = ensureInternalOwnerEntitlement(tenant, user);
   const session = {
-    tenant: { ...tenant },
+    tenant: getEffectiveTenant(tenant, user),
     user: safeUser(user),
     membership: { role: getEffectiveMembershipRole(membership, user) },
   };
@@ -392,7 +426,7 @@ self.addEventListener('activate', (event) => {
       usage,
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
-      tenant: { id: tenant.id, name: tenant.name, plan: tenant.plan, status: tenant.status },
+      tenant: getBillingTenantPayload(tenant, user),
       referral: getReferralSummary(tenant, origin),
     });
   }
@@ -480,7 +514,7 @@ self.addEventListener('activate', (event) => {
         usage: getUsageSummary(tenantId, effectivePlanId),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
-        tenant: { plan: tenant.plan, status: tenant.status },
+        tenant: getBillingTenantPayload(tenant, user),
         referral: getReferralSummary(tenant, origin),
       },
     });
@@ -771,15 +805,17 @@ async function handleStripeBillingEvent(event) {
     const tenantId = object.client_reference_id || object.metadata?.tenantId || '';
     const planId = object.metadata?.planId || '';
     if (!tenantId || !planId) return { updated: false, reason: 'missing checkout metadata' };
+    const existingTenant = findTenantById(tenantId);
+    const resolvedPlanId = existingTenant?.plan === ownerPlanId ? ownerPlanId : planId;
     const tenant = updateTenant(tenantId, {
-      plan: planId,
+      plan: resolvedPlanId,
       status: 'active',
       stripeCustomerId: getStripeId(object.customer),
       stripeSubscriptionId: getStripeId(object.subscription),
     });
     const referral = await maybeGrantReferralCredit(tenant, object);
     const pendingReferralCredits = tenant ? await grantPendingReferralCreditsForReferrer(tenant) : [];
-    return { updated: Boolean(tenant), tenantId, planId, referral, pendingReferralCredits };
+    return { updated: Boolean(tenant), tenantId, planId: resolvedPlanId, referral, pendingReferralCredits };
   }
 
   if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created') {
@@ -788,12 +824,17 @@ async function handleStripeBillingEvent(event) {
     const priceId = object.items?.data?.[0]?.price?.id || '';
     const planId = object.metadata?.planId || getPlanByStripePriceId(priceId)?.id || '';
     if (!tenantId) return { updated: false, reason: 'workspace not found for subscription' };
+    const existingTenant = findTenantById(tenantId);
     const updates = {
-      status: object.status || 'active',
+      status: existingTenant?.plan === ownerPlanId ? 'active' : (object.status || 'active'),
       stripeCustomerId: customerId,
       stripeSubscriptionId: object.id || '',
     };
-    if (planId) updates.plan = planId;
+    if (existingTenant?.plan === ownerPlanId) {
+      updates.plan = ownerPlanId;
+    } else if (planId) {
+      updates.plan = planId;
+    }
     const tenant = updateTenant(tenantId, updates);
     return { updated: Boolean(tenant), tenantId, planId: planId || tenant?.plan || '' };
   }
@@ -802,6 +843,16 @@ async function handleStripeBillingEvent(event) {
     const customerId = getStripeId(object.customer);
     const tenantId = object.metadata?.tenantId || findTenantByStripeCustomerId(customerId)?.id || '';
     if (!tenantId) return { updated: false, reason: 'workspace not found for canceled subscription' };
+    const existingTenant = findTenantById(tenantId);
+    if (existingTenant?.plan === ownerPlanId) {
+      const tenant = updateTenant(tenantId, {
+        status: 'active',
+        plan: ownerPlanId,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: object.id || '',
+      });
+      return { updated: Boolean(tenant), tenantId, status: 'active', planId: ownerPlanId, ownerProtected: true };
+    }
     const tenant = updateTenant(tenantId, {
       status: 'canceled',
       stripeCustomerId: customerId,
@@ -902,6 +953,7 @@ async function handleSignup(req, res) {
     return sendJson(res, 409, { error: tenantResult.error });
   }
 
+  tenantResult.tenant = ensureInternalOwnerEntitlement(tenantResult.tenant, userResult.user);
   const tenantId = tenantResult.tenant.id;
   // Ensure the store also knows the persona
   store.ensureTenant(tenantResult.tenant, userResult.user);
@@ -912,8 +964,8 @@ async function handleSignup(req, res) {
 
   return sendJson(res, 201, {
     user: safeUser(userResult.user),
-    tenant: tenantResult.tenant || null,
-    tenants: tenantResult.tenants || [tenantResult.tenant],
+    tenant: getEffectiveTenant(tenantResult.tenant, userResult.user) || null,
+    tenants: withEffectiveTenantRoles(tenantResult.tenants || [tenantResult.tenant], userResult.user),
     persona: userPersona,
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
   });
@@ -945,6 +997,8 @@ async function handleLogin(req, res) {
     workspaceRecovered = true;
   }
 
+  primaryTenant = ensureInternalOwnerEntitlement(primaryTenant, result.user);
+  userTenants = findTenantsForUser(result.user.id);
   store.ensureTenant(primaryTenant, result.user);
   await persistUserWorkspace(result.user, primaryTenant);
   const persona = store.getPersona(primaryTenant.id);
@@ -953,8 +1007,8 @@ async function handleLogin(req, res) {
 
   return sendJson(res, 200, {
     user: safeUser(result.user),
-    tenant: primaryTenant,
-    tenants: userTenants,
+    tenant: getEffectiveTenant(primaryTenant, result.user),
+    tenants: withEffectiveTenantRoles(userTenants, result.user),
     persona,
     workspaceRecovered,
   });
@@ -991,12 +1045,16 @@ function handleMe(req, res) {
       tenant = repair.tenant;
       userTenants = repair.tenants || [tenant];
       membership = getMembership(tenant.id, user.id);
+      tenant = ensureInternalOwnerEntitlement(tenant, user);
+      userTenants = findTenantsForUser(user.id);
       store.ensureTenant(tenant, user);
       persistUserWorkspace(user, tenant).catch(() => {});
       const { cookie } = createSession(user.id, tenant.id);
       setSessionCookie(res, cookie);
     }
   } else {
+    tenant = ensureInternalOwnerEntitlement(tenant, user);
+    userTenants = findTenantsForUser(user.id);
     store.ensureTenant(tenant, user);
   }
 
@@ -1009,7 +1067,7 @@ function handleMe(req, res) {
   return sendJson(res, 200, {
     authenticated: true,
     user: safeUser(user),
-    tenant,
+    tenant: getEffectiveTenant(tenant, user),
     tenants: withEffectiveTenantRoles(userTenants, user),
     membership: membership ? { role: getEffectiveMembershipRole(membership, user) } : null,
     plan: plan ? { id: plan.id, name: plan.name, displayName: plan.displayName } : null,
@@ -1022,11 +1080,12 @@ function handleMe(req, res) {
 
 async function handleCreateTenant(req, res, user) {
   const { name, slug } = await readJson(req);
-  const result = createTenant({ name, slug, plan: 'trial', ownerUserId: user.id });
+  const result = createTenant({ name, slug, plan: isInternalOwner(user) ? ownerPlanId : 'trial', ownerUserId: user.id });
   if (result.error) {
     return sendJson(res, 409, { error: result.error });
   }
-  return sendJson(res, 201, { tenant: result.tenant });
+  const tenant = ensureInternalOwnerEntitlement(result.tenant, user);
+  return sendJson(res, 201, { tenant: getEffectiveTenant(tenant, user) });
 }
 
 // ── Static file serving ─────────────────────────────────────────────────────
