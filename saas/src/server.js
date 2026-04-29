@@ -760,7 +760,8 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
-    const job = store.startRevenuePipeline(tenantId);
+    const plan = getPlan(getEffectivePlanId(tenant, user));
+    const job = store.startRevenuePipeline(tenantId, { plan });
     return sendJson(res, 202, job);
   }
 

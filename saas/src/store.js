@@ -1941,7 +1941,7 @@ export function createStore() {
 
     // ── Revenue Pipeline ──────────────────────────────────────────────────
     
-    startRevenuePipeline(tenantId) {
+    startRevenuePipeline(tenantId, options = {}) {
       assertTenant(tenantId);
       const jobId = `pipe-${Date.now()}`;
       const job = {
@@ -1951,68 +1951,69 @@ export function createStore() {
         progress: 0,
         stage: 'starting',
         message: 'Initializing pipeline...',
+        progressMessage: 'Initializing pipeline...',
         startedAt: now(),
         updatedAt: now(),
+        recordsAffected: 0,
+        result: null,
       };
       backgroundJobs.set(jobId, job);
 
-      // Run in background
       (async () => {
+        const pipelineStartedAt = performance.now();
+        const timings = {};
         try {
           const update = (stage, progress, message) => {
             job.stage = stage;
             job.progress = progress;
             job.message = message;
+            job.progressMessage = message;
             job.status = 'running';
             job.updatedAt = now();
             console.log(`  Pipeline ${tenantId}: ${stage} (${progress}%) - ${message}`);
           };
 
-          // Stage 1: Enrichment (30%)
-          update('enrichment', 5, 'Enriching company data from internal signals...');
-          const accounts = accountsForTenant(tenantId);
-          let enriched = 0;
-          for (let i = 0; i < accounts.length; i++) {
-            // Simulated enrichment pass (real logic is elsewhere but we aggregate progress here)
-            if (i % 100 === 0) {
-              update('enrichment', Math.min(30, 5 + Math.floor((i / accounts.length) * 25)), `Enriched ${i}/${accounts.length} companies...`);
-              await new Promise(r => setImmediate(r));
-            }
-          }
-          update('enrichment', 30, 'Enrichment complete.');
+          update('loading', 5, 'Loading workspace data...');
+          const workflow = await this.runLaunchWorkflow(tenantId, {
+            ...options,
+            onProgress: (progress, stage, message) => update(stage, progress, message),
+          });
 
-          // Stage 2: Discovery (60%)
-          update('discovery', 35, 'Searching for new job boards...');
-          await new Promise(r => setTimeout(r, 1000)); // Simulate work
-          update('discovery', 60, 'Discovery complete.');
+          const cleanupStartedAt = performance.now();
+          update('cleanup', 98, 'Pruning jobs not seen within the retention window...');
+          const purgeResult = this.purgeStaleJobs(tenantId);
+          timings.cleanupMs = Math.round(performance.now() - cleanupStartedAt);
+          timings.workflowMs = workflow.timings?.totalMs || 0;
+          timings.totalMs = Math.round(performance.now() - pipelineStartedAt);
 
-          // Stage 3: Job Ingestion (90%)
-          update('ingestion', 65, 'Polling active boards for new jobs...');
-          const configs = boardConfigs.filter(c => c.tenantId === tenantId && c.active);
-          for (let i = 0; i < configs.length; i++) {
-            if (i % 5 === 0) {
-              update('ingestion', Math.min(90, 65 + Math.floor((i / configs.length) * 25)), `Polling board ${i}/${configs.length}...`);
-              await new Promise(r => setImmediate(r));
-            }
-          }
-          update('ingestion', 90, 'Job ingestion complete.');
-
-          // Stage 4: Scoring (95%)
-          update('scoring', 95, 'Recalculating target scores...');
-          await new Promise(r => setTimeout(r, 500));
-
-          // Stage 5: Cleanup (100%)
-          update('cleanup', 98, 'Purging stale data and optimizing database...');
-          this.purgeStaleJobs(tenantId);
-          
+          console.log(
+            `Pipeline ingestion complete: saas/src/store.js startRevenuePipeline ` +
+            `fetched=${workflow.stats?.jobsFetched || 0} kept=${workflow.stats?.jobsKept || 0} ` +
+            `activeTracked=${workflow.stats?.activeTrackedJobs || 0} removed=${purgeResult.removed} totalMs=${timings.totalMs}`
+          );
+           
           job.status = 'completed';
           job.progress = 100;
           job.message = 'Revenue pipeline completed successfully.';
+          job.progressMessage = job.message;
           job.finishedAt = now();
+          job.recordsAffected = workflow.stats?.jobsTouched || workflow.stats?.activeTrackedJobs || 0;
+          job.result = {
+            ...workflow,
+            cleanup: purgeResult,
+            timings: {
+              ...workflow.timings,
+              pipelineTotalMs: timings.totalMs,
+              cleanupMs: timings.cleanupMs,
+            },
+          };
         } catch (err) {
           job.status = 'failed';
           job.message = `Pipeline failed: ${err.message}`;
+          job.progressMessage = job.message;
           job.error = err.message;
+        } finally {
+          job.finishedAt = job.finishedAt || now();
         }
       })();
 
@@ -2021,24 +2022,43 @@ export function createStore() {
 
     purgeStaleJobs(tenantId) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
       const profile = getTenantProfile(tenantId);
       const retentionDays = Number(profile.settings.jobRetentionDays || 28);
       const threshold = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
       
       const tenantJobs = jobsByTenant.get(tenantId);
-      if (!tenantJobs) return;
+      if (!tenantJobs) return { removed: 0, remaining: 0, timings: { totalMs: Math.round(performance.now() - startedAt) } };
 
       const initialCount = tenantJobs.length;
       const filteredJobs = tenantJobs.filter(j => {
-        const postedAt = new Date(j.postedAt).getTime();
-        return postedAt > threshold;
+        const freshnessValue = j.retrievedAt || j.lastSeenAt || j.importedAt || j.updatedAt || j.createdAt || j.postedAt;
+        const freshnessTime = new Date(freshnessValue).getTime();
+        if (!Number.isFinite(freshnessTime)) return true;
+        return freshnessTime > threshold;
       });
 
       if (filteredJobs.length !== initialCount) {
         jobsByTenant.set(tenantId, filteredJobs);
+        const keptJobIds = new Set(filteredJobs.map((item) => item.id));
+        jobs = jobs.filter((item) => item.tenantId !== tenantId || keptJobIds.has(item.id));
         console.log(`[Purge] Removed ${initialCount - filteredJobs.length} jobs for ${tenantId} (Retention: ${retentionDays} days)`);
         persistTenant(tenantId);
       }
+      const totalMs = Math.round(performance.now() - startedAt);
+      if (totalMs > 250) {
+        console.warn(`Slow stale job purge: saas/src/store.js purgeStaleJobs ${totalMs}ms`, {
+          initialCount,
+          remaining: filteredJobs.length,
+          removed: initialCount - filteredJobs.length,
+        });
+      }
+      return {
+        removed: initialCount - filteredJobs.length,
+        remaining: filteredJobs.length,
+        retentionDays,
+        timings: { totalMs },
+      };
     },
 
     search(tenantId, query) {
