@@ -955,12 +955,55 @@ export function createStore() {
       return paginate(candidates, query);
     },
 
-    runLaunchWorkflow(tenantId, { plan } = {}) {
+    startLaunchWorkflow(tenantId, options = {}) {
       assertTenant(tenantId);
+      const jobId = `launch-workflow-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'launch-workflow',
+        status: 'queued',
+        summary: 'End-to-end launch workflow',
+        progressMessage: 'Queued launch workflow.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          job.progressMessage = 'Enriching accounts and preparing ATS configs...';
+          const result = await this.runLaunchWorkflow(tenantId, options);
+          job.status = 'completed';
+          job.progressMessage = 'Completed';
+          job.recordsAffected = result.stats?.jobsTouched || result.stats?.accountsProcessed || 0;
+          job.result = result;
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'Launch workflow failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
+    async runLaunchWorkflow(tenantId, { plan } = {}) {
+      assertTenant(tenantId);
+      const totalStartedAt = performance.now();
+      const timings = {};
       const selectedPlan = plan || { displayName: 'current', limits: {} };
       const planName = selectedPlan.displayName || selectedPlan.name || 'current';
       const accountLimit = Number(selectedPlan.limits?.accounts ?? -1);
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+      const loadStartedAt = performance.now();
+      await ensureDataLoaded(tenantId, true);
+      timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
       const tenantAccounts = accountsForTenant(tenantId).slice(0, accountLimit === -1 ? undefined : accountLimit);
       let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
       const warnings = [];
@@ -981,6 +1024,7 @@ export function createStore() {
         const config = normalizeConfigPatch({
           id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           tenantId,
+          accountId: item.id,
           companyName: item.displayName,
           normalizedCompanyName: item.normalizedName,
           atsType: 'unknown',
@@ -1004,6 +1048,7 @@ export function createStore() {
       }
 
       let enriched = 0;
+      const enrichStartedAt = performance.now();
       for (const item of tenantAccounts) {
         const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
         if (domain && !item.domain) item.domain = domain;
@@ -1014,6 +1059,7 @@ export function createStore() {
         item.updatedAt = now();
         enriched++;
       }
+      timings.enrichmentMs = Math.round(performance.now() - enrichStartedAt);
 
       let configsResolved = 0;
       for (const config of tenantConfigs.slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
@@ -1029,32 +1075,20 @@ export function createStore() {
         }
       }
 
-      let jobsTouched = 0;
-      for (const config of tenantConfigs.filter((item) => item.active).slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
-        const accountItem = tenantAccounts.find((item) => item.normalizedName === config.normalizedCompanyName);
-        if (!accountItem) continue;
-        const existingJobs = jobs.filter((jobItem) => jobItem.tenantId === tenantId && jobItem.accountId === accountItem.id);
-        if (!existingJobs.length) {
-          jobs.push(job({
-            id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            tenantId,
-            accountId: accountItem.id,
-            title: 'New hiring signal detected',
-            companyName: accountItem.displayName,
-            location: accountItem.location || 'Remote',
-            source: config.atsType || config.ats || 'ATS',
-            postedAt: now(),
-          }));
-          accountItem.jobCount = (accountItem.jobCount || 0) + 1;
-          accountItem.openRoleCount = (accountItem.openRoleCount || 0) + 1;
-          accountItem.jobsLast30Days = (accountItem.jobsLast30Days || 0) + 1;
-        }
-        config.lastImportStatus = 'success';
-        config.lastImportedAt = now();
-        jobsTouched += Math.max(1, existingJobs.length);
-      }
+      const discovery = await this.runAtsDiscovery(tenantId, {
+        plan: selectedPlan,
+        limit: jobBoardLimit === -1 ? 200 : Math.max(1, jobBoardLimit),
+        onlyMissing: true,
+      });
+      timings.discoveryMs = discovery.timings?.totalMs || 0;
+      warnings.push(...(discovery.warnings || []));
+
+      const importResult = await this.importLiveJobs(tenantId, { plan: selectedPlan });
+      timings.importMs = importResult.timings?.totalMs || 0;
+      warnings.push(...(importResult.warnings || []));
 
       let scoresRefreshed = 0;
+      const scoringStartedAt = performance.now();
       for (const item of tenantAccounts) {
         item.targetScore = Math.min(100, Math.round(
           (Number(item.connectionCount || 0) * 8) +
@@ -1068,19 +1102,28 @@ export function createStore() {
         item.updatedAt = now();
         scoresRefreshed++;
       }
+      timings.scoringMs = Math.round(performance.now() - scoringStartedAt);
 
       activities.unshift({
         id: `act-${Date.now()}`,
         tenantId,
         type: 'launch_workflow',
-        summary: `Launch workflow processed ${tenantAccounts.length} accounts on the ${planName} plan.`,
+        summary: `Launch workflow processed ${tenantAccounts.length} accounts, mapped ${discovery.stats?.mapped || 0} boards, and imported ${importResult.stats?.runImported || 0} jobs on the ${planName} plan.`,
         notes: warnings.join(' '),
         occurredAt: now(),
         createdAt: now(),
-        metadata: { plan: selectedPlan.id || 'unknown' },
+        metadata: {
+          plan: selectedPlan.id || 'unknown',
+          discovery: discovery.stats,
+          import: importResult.stats,
+        },
       });
 
       persistTenant(tenantId);
+      timings.totalMs = Math.round(performance.now() - totalStartedAt);
+      if (timings.totalMs > 15000) {
+        console.warn(`Slow launch workflow: saas/src/store.js runLaunchWorkflow ${timings.totalMs}ms`, timings);
+      }
 
       return {
         workflow: 'launch',
@@ -1090,11 +1133,19 @@ export function createStore() {
           configsCreated,
           configsResolved,
           enriched,
-          jobsTouched,
+          boardsChecked: discovery.stats?.checked || 0,
+          boardsMapped: discovery.stats?.mapped || 0,
+          boardsUnresolved: discovery.stats?.unresolved || 0,
+          jobsFetched: importResult.stats?.fetched || 0,
+          jobsKept: importResult.stats?.canadaKept || 0,
+          jobsTouched: importResult.stats?.runImported || 0,
+          activeTrackedJobs: importResult.stats?.imported || 0,
           scoresRefreshed,
         },
+        discovery: discovery.stats,
+        importRun: importResult.importRun,
         warnings,
-        timings: { totalMs: 1 },
+        timings,
       };
     },
 

@@ -5993,14 +5993,16 @@ async function runLaunchWorkflow(buttonEl) {
       body: JSON.stringify({}),
     });
     showToast('Launch workflow queued.', 'success');
-    const job = accepted.job || await watchBackgroundJob(accepted.jobId, { label: 'Launch workflow' });
+    const job = accepted.job?.status === 'completed'
+      ? accepted.job
+      : await watchBackgroundJob(accepted.jobId, { label: 'Launch workflow' });
     const result = job?.result || accepted || {};
     const stats = result.stats || {};
     const warnings = Array.isArray(result.warnings) && result.warnings.length
       ? ` ${result.warnings.join(' ')}`
       : '';
     window.bdLocalApi.setAlert(
-      `Launch workflow complete for ${result.plan?.displayName || 'current plan'}: processed ${formatNumber(stats.accountsProcessed || 0)} accounts, created ${formatNumber(stats.configsCreated || 0)} configs, resolved ${formatNumber(stats.configsResolved || 0)} configs, enriched ${formatNumber(stats.enriched || 0)} accounts, touched ${formatNumber(stats.jobsTouched || 0)} jobs, and refreshed ${formatNumber(stats.scoresRefreshed || 0)} scores.${warnings}`,
+      `Launch workflow complete for ${result.plan?.displayName || 'current plan'}: enriched ${formatNumber(stats.enriched || 0)} accounts, created ${formatNumber(stats.configsCreated || 0)} configs, mapped ${formatNumber(stats.boardsMapped || stats.configsResolved || 0)} boards, fetched ${formatNumber(stats.jobsFetched || 0)} jobs, kept ${formatNumber(stats.jobsKept || 0)} Canada jobs, updated ${formatNumber(stats.jobsTouched || 0)} tracked jobs, and refreshed ${formatNumber(stats.scoresRefreshed || 0)} scores.${warnings}`,
       appAlert
     );
     invalidateAppData();

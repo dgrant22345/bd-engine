@@ -689,9 +689,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/admin/run-workflow' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
-    const result = store.runLaunchWorkflow(tenantId, { plan });
-    const job = store.createCompletedJob('launch-workflow', result);
-    return sendJson(res, 202, { ...job, ...result });
+    return sendJson(res, 202, store.startLaunchWorkflow(tenantId, { plan }));
   }
 
   if (pathname === '/api/discovery/run' && req.method === 'POST') {
