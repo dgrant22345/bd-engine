@@ -528,21 +528,27 @@ export function createStore() {
 
     async getDashboard(tenantId) {
       assertTenant(tenantId);
+      const dashboardStartedAt = performance.now();
       await ensureDataLoaded(tenantId, false); // Don't need full contact list for dashboard summary
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
-      const newJobsLast24h = tenantJobs.filter((item) => daysSince(item.postedAt) <= 1);
+      const activeJobs = tenantJobs.filter((item) => item.active !== false);
+      const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);
+      const jobsImportedLast24h = activeJobs.filter((item) => daysSince(item.importedAt || item.retrievedAt) <= 1);
       const unresolvedAccounts = tenantAccounts.filter((item) => item.status === 'new');
-      const newJobsToday = newJobsLast24h.slice(0, 50).map(dashboardJobSummary);
+      const newJobsToday = jobsImportedLast24h.slice(0, 50).map(dashboardJobSummary);
       const followUpAccounts = tenantAccounts
         .filter((item) => item.nextActionAt)
         .slice(0, 25)
         .map(dashboardAccountSummary);
-      return {
+      const dashboard = {
         summary: {
           accountCount: tenantAccounts.length,
           hiringAccountCount: tenantAccounts.filter((item) => item.jobCount > 0).length,
-          newJobsLast24h: newJobsLast24h.length,
+          activeJobCount: activeJobs.length,
+          jobsImportedLast24h: jobsImportedLast24h.length,
+          jobsPostedLast24h: jobsPostedLast24h.length,
+          newJobsLast24h: jobsPostedLast24h.length,
           discoveredBoardCount: boardConfigs.length,
           needsResolutionCount: unresolvedAccounts.length,
         },
@@ -565,6 +571,11 @@ export function createStore() {
           discoveredAt: pastDate(2),
         })),
       };
+      const dashboardElapsedMs = Math.round(performance.now() - dashboardStartedAt);
+      if (dashboardElapsedMs > 500) {
+        console.warn(`Slow dashboard summary: saas/src/store.js getDashboard ${dashboardElapsedMs}ms`);
+      }
+      return dashboard;
     },
 
     async getDashboardExtended(tenantId) {
@@ -692,7 +703,35 @@ export function createStore() {
 
     findJobs(tenantId, query) {
       assertTenant(tenantId);
-      return paginate(filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']), query);
+      const queryStartedAt = performance.now();
+      let items = filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']);
+      if (query.ats) {
+        const ats = normalizeAtsType(query.ats);
+        items = items.filter((item) => normalizeAtsType(item.atsType || item.source) === ats);
+      }
+      if (query.active === 'true' || query.active === true) {
+        items = items.filter((item) => item.active !== false);
+      } else if (query.active === 'false' || query.active === false) {
+        items = items.filter((item) => item.active === false);
+      }
+      if (query.isNew === 'true' || query.isNew === true) {
+        items = items.filter((item) => item.isNew);
+      } else if (query.isNew === 'false' || query.isNew === false) {
+        items = items.filter((item) => !item.isNew);
+      }
+      const recencyDays = Number(query.recencyDays || 0);
+      if (recencyDays > 0) {
+        items = items.filter((item) => daysSince(item.postedAt) <= recencyDays);
+      }
+      if (query.sortBy === 'retrieved') {
+        items.sort((a, b) => String(b.retrievedAt || b.importedAt || '').localeCompare(String(a.retrievedAt || a.importedAt || '')));
+      }
+      const result = paginate(items, query);
+      const queryElapsedMs = Math.round(performance.now() - queryStartedAt);
+      if (queryElapsedMs > 250) {
+        console.warn(`Slow job query: saas/src/store.js findJobs ${queryElapsedMs}ms`);
+      }
+      return result;
     },
 
     findConfigs(tenantId, query) {

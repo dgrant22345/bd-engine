@@ -3638,8 +3638,8 @@ async function renderDashboardView() {
     },
     {
       label: 'Market motion',
-      value: `${formatNumber(dashboard.summary.newJobsLast24h || 0)} fresh jobs`,
-      description: `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards and ${formatNumber(coverageEvents)} visible events keep the feed current.`,
+      value: `${formatNumber(dashboard.summary.activeJobCount || 0)} tracked jobs`,
+      description: `${formatNumber(dashboard.summary.jobsImportedLast24h || 0)} imported in 24h; ${formatNumber(dashboard.summary.jobsPostedLast24h || 0)} posted in 24h.`,
       tone: 'success',
     },
     {
@@ -3668,12 +3668,12 @@ async function renderDashboardView() {
           <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
           <div class="button-row">
             ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">Open best account</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
-            <a class="ghost-button" href="#/jobs">Review fresh jobs</a>
+            <a class="ghost-button" href="#/jobs">Review imported jobs</a>
             <a class="ghost-button" href="#/accounts">Open accounts</a>
           </div>
           <div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
-            ${renderSignalChip('Fresh jobs', formatNumber(dashboard.summary.newJobsLast24h || 0), 'success')}
+            ${renderSignalChip('Tracked jobs', formatNumber(dashboard.summary.activeJobCount || 0), 'success')}
             ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
             ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
@@ -3741,9 +3741,10 @@ async function renderDashboardView() {
     ${dashSection('metrics', `<section class="metrics-grid">
       ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
-      ${renderMetricCard('New jobs, 24h', dashboard.summary.newJobsLast24h, 'Freshly imported postings in the last day')}
+      ${renderMetricCard('Tracked jobs', dashboard.summary.activeJobCount || 0, 'Active roles currently available for outreach context')}
+      ${renderMetricCard('Imported, 24h', dashboard.summary.jobsImportedLast24h || 0, 'Roles pulled into BD Engine in the last day')}
+      ${renderMetricCard('Posted, 24h', dashboard.summary.jobsPostedLast24h || 0, 'Roles whose ATS posted date is in the last day')}
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
-      ${renderMetricCard('Needs resolution', resolutionPressure, 'Accounts still missing trusted company identity or ATS resolution')}
     </section>`)}
 
     ${dashSection('playbook', extended.playbook.length ? `
@@ -3925,12 +3926,12 @@ async function renderDashboardView() {
       <div class="table-card">
         <div class="panel-header">
           <div>
-            <h3>New jobs today</h3>
-            <p class="muted small">Fresh roles worth using in outreach while the signal is still hot.</p>
+            <h3>Recently imported jobs</h3>
+            <p class="muted small">Roles pulled into BD Engine in the last 24 hours.</p>
           </div>
           <a class="ghost-button" href="#/jobs">Open jobs</a>
         </div>
-        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : '<div class="empty-state">No fresh jobs have landed in the last 24 hours.</div>'}
+        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : '<div class="empty-state">No jobs have been imported in the last 24 hours.</div>'}
       </div>
       <div class="panel-stack">
         <div class="chart-card">
@@ -4481,20 +4482,20 @@ async function renderJobsView() {
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('New this sync', formatNumber(result.items.filter((item) => item.isNew).length))}
+          ${renderMetricTile('Recent postings', formatNumber(result.items.filter((item) => item.isNew).length))}
           ${renderMetricTile('Page size', formatNumber(result.pageSize))}
         </div>
       </div>
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate the freshest demand signals by company, ATS, and recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
+      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate imported roles by company, ATS, and posting recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
         ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
-        ${renderField('New jobs', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>New this sync</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Existing</option></select>`)}
+        ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
         <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
@@ -4985,7 +4986,7 @@ function renderJobsTable(items, compact) {
           <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
           <td>${formatDate(item.postedAt)}</td>
           <td>${formatDate(item.retrievedAt || item.importedAt)}<div class="small muted">${escapeHtml(item.jobId || '')}</div></td>
-          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">New this sync</div>' : ''}</td>
+          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">Recent posting</div>' : ''}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
