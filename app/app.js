@@ -2821,6 +2821,7 @@ async function watchBackgroundJob(jobId, options = {}) {
   const label = options.label || 'Background job';
   while (true) {
     const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    updateBackgroundProgressPanel(job, label);
     try {
       const runtime = await loadRuntimeStatus(true);
       hydrateAdminRuntimePanels(runtime);
@@ -2850,8 +2851,32 @@ async function watchBackgroundJob(jobId, options = {}) {
       throw new Error(`${label} was cancelled.`);
     }
 
-    window.bdLocalApi.setAlert(`${label}: ${job.progressMessage || humanize(job.status)}`, appAlert);
+    const pct = Number.isFinite(Number(job.progress)) ? ` ${Math.round(Number(job.progress))}%` : '';
+    window.bdLocalApi.setAlert(`${label}${pct}: ${job.progressMessage || humanize(job.status)}`, appAlert);
     await sleep(2000);
+  }
+}
+
+function updateBackgroundProgressPanel(job, fallbackLabel = 'Background job') {
+  const container = document.getElementById('pipeline-progress-container');
+  if (!container || !job) return;
+  const rawProgress = Number(job.progress);
+  const progress = Number.isFinite(rawProgress)
+    ? Math.max(0, Math.min(100, Math.round(rawProgress)))
+    : (job.status === 'completed' ? 100 : 8);
+  const bar = container.querySelector('.pipeline-progress-bar-fill');
+  const label = container.querySelector('.pipeline-progress-label');
+  const stage = container.querySelector('.pipeline-progress-stage');
+  const eyebrow = container.querySelector('.pipeline-progress-copy .eyebrow');
+
+  container.classList.remove('hidden');
+  if (bar) bar.style.width = `${progress}%`;
+  if (label) label.textContent = `${progress}%`;
+  if (stage) stage.textContent = job.progressMessage || job.message || humanize(job.stage || job.status || 'Processing');
+  if (eyebrow) eyebrow.textContent = job.summary || fallbackLabel;
+
+  if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+    window.setTimeout(() => container.classList.add('hidden'), 4500);
   }
 }
 
@@ -5383,6 +5408,14 @@ function parseJobProgress(msg) {
   return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
 }
 
+function getJobProgress(job) {
+  const direct = Number(job?.progress);
+  if (Number.isFinite(direct)) {
+    return { pct: Math.max(0, Math.min(100, Math.round(direct))) };
+  }
+  return job?.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+}
+
 function getRuntimeJobs(runtime) {
   const seen = new Set();
   return [...(runtime?.activeJobs || []), ...(runtime?.recentJobs || [])].filter((job) => {
@@ -5419,9 +5452,9 @@ function renderIngestionHealthPanel(runtime) {
   const activeImport = liveImports.find((job) => ['queued', 'running'].includes(job.status));
   const lastImport = liveImports.find((job) => job.status === 'completed') || liveImports[0];
   const lastFailed = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
-  const progress = activeImport ? parseJobProgress(activeImport.progressMessage) : null;
+  const progress = activeImport ? getJobProgress(activeImport) : null;
   const activeLabel = activeImport
-    ? (progress ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : humanize(activeImport.status))
+    ? (progress?.current ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : (progress ? `${progress.pct}%` : humanize(activeImport.status)))
     : 'Idle';
   const activeMeta = activeImport
     ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
@@ -5476,7 +5509,7 @@ function renderBackgroundJobItem(job) {
     ? 'success'
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
-  const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+  const progress = getJobProgress(job);
   const hasRecordsAffected = job.recordsAffected !== undefined && job.recordsAffected !== null && job.recordsAffected !== '';
 
   return `

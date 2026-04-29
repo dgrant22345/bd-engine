@@ -967,19 +967,27 @@ export function createStore() {
         queuedAt: now(),
         startedAt: null,
         finishedAt: null,
+        progress: 0,
+        stage: 'queued',
         recordsAffected: 0,
         result: null,
       };
       backgroundJobs.set(jobId, job);
 
       setImmediate(async () => {
+        const updateProgress = (progress, stage, message) => {
+          job.progress = Math.max(0, Math.min(100, Math.round(progress)));
+          job.stage = stage;
+          job.progressMessage = message;
+          job.updatedAt = now();
+        };
         try {
           job.status = 'running';
           job.startedAt = now();
-          job.progressMessage = 'Enriching accounts and preparing ATS configs...';
-          const result = await this.runLaunchWorkflow(tenantId, options);
+          updateProgress(5, 'loading', 'Loading workspace data...');
+          const result = await this.runLaunchWorkflow(tenantId, { ...options, onProgress: updateProgress });
           job.status = 'completed';
-          job.progressMessage = 'Completed';
+          updateProgress(100, 'completed', 'Completed');
           job.recordsAffected = result.stats?.jobsTouched || result.stats?.accountsProcessed || 0;
           job.result = result;
         } catch (err) {
@@ -993,8 +1001,9 @@ export function createStore() {
       return { ok: true, jobId, job };
     },
 
-    async runLaunchWorkflow(tenantId, { plan } = {}) {
+    async runLaunchWorkflow(tenantId, { plan, onProgress } = {}) {
       assertTenant(tenantId);
+      const updateProgress = typeof onProgress === 'function' ? onProgress : () => {};
       const totalStartedAt = performance.now();
       const timings = {};
       const selectedPlan = plan || { displayName: 'current', limits: {} };
@@ -1004,6 +1013,7 @@ export function createStore() {
       const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, true);
       timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
+      updateProgress(12, 'loaded', 'Loaded workspace data.');
       const tenantAccounts = accountsForTenant(tenantId).slice(0, accountLimit === -1 ? undefined : accountLimit);
       let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
       const warnings = [];
@@ -1046,6 +1056,7 @@ export function createStore() {
         tenantConfigs = boardConfigs.filter((existing) => existing.tenantId === tenantId);
         configsCreated++;
       }
+      updateProgress(22, 'configs', `Prepared ${configsCreated} new ATS config${configsCreated === 1 ? '' : 's'}.`);
 
       let enriched = 0;
       const enrichStartedAt = performance.now();
@@ -1060,6 +1071,7 @@ export function createStore() {
         enriched++;
       }
       timings.enrichmentMs = Math.round(performance.now() - enrichStartedAt);
+      updateProgress(35, 'enrichment', `Enriched ${enriched}/${tenantAccounts.length} accounts.`);
 
       let configsResolved = 0;
       for (const config of tenantConfigs.slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit)) {
@@ -1075,6 +1087,7 @@ export function createStore() {
         }
       }
 
+      updateProgress(45, 'discovery', 'Discovering public ATS boards...');
       const discovery = await this.runAtsDiscovery(tenantId, {
         plan: selectedPlan,
         limit: jobBoardLimit === -1 ? 200 : Math.max(1, jobBoardLimit),
@@ -1082,10 +1095,13 @@ export function createStore() {
       });
       timings.discoveryMs = discovery.timings?.totalMs || 0;
       warnings.push(...(discovery.warnings || []));
+      updateProgress(68, 'discovery', `Mapped ${discovery.stats?.mapped || 0}/${discovery.stats?.checked || 0} ATS boards.`);
 
+      updateProgress(72, 'import', 'Importing live jobs from active ATS boards...');
       const importResult = await this.importLiveJobs(tenantId, { plan: selectedPlan });
       timings.importMs = importResult.timings?.totalMs || 0;
       warnings.push(...(importResult.warnings || []));
+      updateProgress(88, 'import', `Fetched ${importResult.stats?.fetched || 0} jobs; kept ${importResult.stats?.canadaKept || 0} Canada jobs.`);
 
       let scoresRefreshed = 0;
       const scoringStartedAt = performance.now();
@@ -1103,6 +1119,7 @@ export function createStore() {
         scoresRefreshed++;
       }
       timings.scoringMs = Math.round(performance.now() - scoringStartedAt);
+      updateProgress(95, 'scoring', `Refreshed ${scoresRefreshed} account scores.`);
 
       activities.unshift({
         id: `act-${Date.now()}`,
@@ -1161,6 +1178,8 @@ export function createStore() {
         queuedAt: now(),
         startedAt: null,
         finishedAt: null,
+        progress: 0,
+        stage: 'queued',
         recordsAffected: 0,
         result: null,
       };
@@ -1170,9 +1189,13 @@ export function createStore() {
         try {
           job.status = 'running';
           job.startedAt = now();
+          job.progress = 20;
+          job.stage = 'discovery';
           job.progressMessage = 'Mapping public ATS boards...';
           const result = await this.runAtsDiscovery(tenantId, options);
           job.status = 'completed';
+          job.progress = 100;
+          job.stage = 'completed';
           job.progressMessage = 'Completed';
           job.recordsAffected = result.stats?.mapped || result.stats?.discovered || 0;
           job.result = result;
@@ -1336,6 +1359,8 @@ export function createStore() {
         queuedAt: now(),
         startedAt: null,
         finishedAt: null,
+        progress: 0,
+        stage: 'queued',
         recordsAffected: 0,
         result: null,
       };
@@ -1345,6 +1370,8 @@ export function createStore() {
         try {
           job.status = 'running';
           job.startedAt = now();
+          job.progress = 25;
+          job.stage = 'import';
           job.progressMessage = 'Fetching active ATS boards...';
           const result = await this.importLiveJobs(tenantId, options);
           if (result.error) {
@@ -1353,6 +1380,8 @@ export function createStore() {
             job.result = result;
           } else {
             job.status = 'completed';
+            job.progress = 100;
+            job.stage = 'completed';
             job.progressMessage = 'Completed';
             job.recordsAffected = result.stats?.runImported || result.stats?.newJobs || result.stats?.updatedJobs || 0;
             job.result = {
