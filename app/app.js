@@ -4,7 +4,7 @@ const defaultAdminCollapsed = {
   'resolver-coverage': true,
   'runtime-status': true,
   'background-jobs': true,
-  'pipeline-ops': true,
+  'pipeline-ops': false,
   'scoring-settings': true,
   'automation-rules': true,
   'alert-thresholds': true,
@@ -3711,12 +3711,6 @@ async function renderDashboardView() {
       ` : ''}
     </section>`)}
 
-    ${dashSection('trust', `<section class="trust-strip">
-      ${renderTrustCard('Launch in 3 moves', 'Import, resolve, work', 'Seed accounts, run ATS discovery, then work the ranked queue.', 'Workbook, CSV, or manual entry', 'accent')}
-      ${renderTrustCard('Coverage snapshot', `${formatNumber(dashboard.summary.accountCount || 0)} tracked accounts`, 'Contacts, configs, and imported jobs stay visible in one model.', `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards found`, 'success')}
-      ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
-    </section>`)}
-
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('metrics', `<section class="metrics-grid">
@@ -4172,13 +4166,6 @@ async function renderAccountDetail(accountId) {
       </div>
     </section>
 
-    <section class="metrics-grid metrics-grid--compact">
-      ${renderMetricCard('Hiring spike', detail.account.hiringSpikeRatio || 0, `${formatNumber(detail.account.jobsLast30Days || 0)} jobs in 30d`)}
-      ${renderMetricCard('External recruiter likelihood', detail.account.externalRecruiterLikelihoodScore || 0, 'Higher suggests more outsourced hiring motion')}
-      ${renderMetricCard('Company growth signal', detail.account.companyGrowthSignalScore || 0, 'Momentum feeding the target score')}
-      ${renderMetricCard('Avg role seniority', detail.account.avgRoleSeniorityScore || 0, 'Typical level of the current openings')}
-    </section>
-
     <section class="action-zone">
       <div class="action-zone-col">
         <div class="detail-card">
@@ -4239,13 +4226,6 @@ async function renderAccountDetail(accountId) {
             <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
             <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
           </div>
-        </div>
-        <div class="micro-button-row">
-          <button class="micro-button micro-button--primary" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="cold" type="button">Balanced</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="talent_partner" type="button">Recruiter</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="hiring_manager" type="button">Hiring manager</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="executive" type="button">Executive</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="follow_up" type="button">Follow-up</button>
         </div>
         <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
       </div>
@@ -4553,73 +4533,10 @@ function openAdminSection(sectionId) {
   }
 }
 
-function renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive }) {
-  const unresolvedCount = summary.unresolvedCount || 0;
-  const activeConfigs = summary.activeCount || 0;
-  const enrichmentCount = enrichmentQueue?.total || 0;
-  return `
-    <section class="admin-command-strip" aria-label="Admin command strip">
-      <article class="command-card command-card--accent" style="border-left: 4px solid var(--accent); background: var(--accent-soft);">
-        <span class="command-card__step" style="background: var(--accent); color: white;">Run</span>
-        <div class="command-card__copy">
-          <strong>Global Pipeline</strong>
-          <span>End-to-end flow</span>
-          <small>Enrich, Discover, Ingest</small>
-        </div>
-        <button class="primary-button ghost-button--xs" type="button" data-action="run-pipeline">Start</button>
-      </article>
-      <article class="command-card command-card--warning">
-        <span class="command-card__step">1</span>
-        <div class="command-card__copy">
-          <strong>Review queue</strong>
-          <span>${formatNumber(reviewQueueCount)} config items</span>
-          <small>${formatNumber(enrichmentCount)} enrichment candidates</small>
-        </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="review-queues">Open</button>
-      </article>
-      <article class="command-card command-card--accent">
-        <span class="command-card__step">2</span>
-        <div class="command-card__copy">
-          <strong>Discover boards</strong>
-          <span>${formatNumber(unresolvedCount)} unresolved</span>
-          <small>Unresolved configs only</small>
-        </div>
-        <button class="secondary-button ghost-button--xs" type="button" data-action="run-discovery">Run</button>
-      </article>
-      <article class="command-card command-card--success">
-        <span class="command-card__step">3</span>
-        <div class="command-card__copy">
-          <strong>Import live jobs</strong>
-          <span>${formatNumber(activeConfigs)} active boards</span>
-          <small>${formatNumber(runtime.queuedJobs || 0)} jobs queued</small>
-        </div>
-        <button class="secondary-button ghost-button--xs" type="button" data-action="run-live-import">Import</button>
-      </article>
-      <article class="command-card ${rolloutActive ? 'command-card--accent' : (rolloutRemainingCount > 0 ? 'command-card--warning' : 'command-card--success')}">
-        <span class="command-card__step">4</span>
-        <div class="command-card__copy">
-          <strong>Score rollout</strong>
-          <span>${rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`}</span>
-          <small>Target intelligence fields</small>
-        </div>
-        <button class="primary-button ghost-button--xs" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutActive ? 'Monitor' : (rolloutRemainingCount > 0 ? 'Run' : 'Done')}</button>
-      </article>
-      <article class="command-card">
-        <span class="command-card__step">Ops</span>
-        <div class="command-card__copy">
-          <strong>Pipeline panel</strong>
-          <span>Advanced controls</span>
-          <small>Discovery, enrichment, sheets</small>
-        </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="pipeline-ops">Open</button>
-      </article>
-    </section>
-  `;
-}
-
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
   setViewTitle('Admin');
+  appState.adminCollapsed['pipeline-ops'] = false;
   const batchQuery = {};
   const cq = appState.configQuery;
   if (cq.page) batchQuery.configPage = cq.page;
@@ -4659,45 +4576,12 @@ async function renderAdminView() {
   const enrichmentQueue = batch.enrichmentQueue;
   const rolloutRemainingCount = Number(targetScoreRollout.remainingCount || 0);
   const rolloutActive = Boolean(targetScoreRollout.hasActiveJob);
-  const rolloutButtonLabel = rolloutActive ? 'Monitor rollout' : (rolloutRemainingCount > 0 ? 'Run rollout' : 'No rollout needed');
   const lastRun = stateBootstrap.settings?.lastPipelineRun || 0;
   const lastRunTime = lastRun ? new Date(lastRun).toLocaleString() : 'Never';
   const isStale = !lastRun || (Date.now() - lastRun > 24 * 60 * 60 * 1000);
-  
-  const rolloutHint = rolloutActive
-    ? (targetScoreRollout.activeJobProgressMessage || 'A rollout job is already draining the backlog in the background worker.')
-    : (rolloutRemainingCount > 0
-      ? 'Run partial batches through the worker so the remaining intelligence backfill does not block startup.'
-      : (isStale ? 'Revenue intelligence is stale. Run the global pipeline to refresh jobs and scores.' : 'The revenue pipeline is up to date.'));
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
   const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
-  const adminStory = [
-    {
-      label: 'Coverage',
-      value: `${formatNumber(summary.coveragePercent || 0)}%`,
-      description: `${formatNumber(summary.resolvedCount || 0)} resolved boards out of ${formatNumber(summary.totalCompanies || 0)} tracked companies.`,
-      tone: 'success',
-    },
-    {
-      label: 'Review queue',
-      value: `${formatNumber(reviewQueueCount)} items`,
-      description: 'Medium-confidence results and unresolved companies stay visible for operator review.',
-      tone: 'warning',
-    },
-    {
-      label: 'Runtime pulse',
-      value: `${formatNumber(runtime.runningJobs || 0)} running`,
-      description: `${formatNumber(runtime.queuedJobs || 0)} queued jobs are waiting for the worker.`,
-      tone: 'accent',
-    },
-    {
-      label: 'Score rollout',
-      value: rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`,
-      description: rolloutHint,
-      tone: rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'),
-    },
-  ];
   const billing = batch.billing || {};
   const referral = billing.referral || {};
   const referralLink = referral.link || '';
@@ -4751,36 +4635,8 @@ async function renderAdminView() {
             ${renderSignalChip('Last run', lastRunTime, isStale ? 'warning' : 'success')}
             ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
           </div>
-          <div class="story-strip">
-            ${adminStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
-          </div>
-        </div>
-        <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`)}
-          ${renderMetricTile('Resolved', formatNumber(summary.resolvedCount || 0))}
-          ${renderMetricTile('Enriched', `${formatNumber(enrichmentSummary.enrichmentCoveragePercent || 0)}%`)}
-          ${renderMetricTile('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)))}
-          ${renderMetricTile('Jobs running', formatNumber(runtime.runningJobs || 0))}
         </div>
       </div>
-      <div class="runtime-banner">
-        <div class="runtime-banner-copy">
-          <p class="eyebrow">Live pulse</p>
-          <h4>${runtime.workerRunning ? 'Worker online and draining the queue' : 'Worker idle and waiting for new work'}</h4>
-          <p class="small muted">${runtime.workerRunning ? `Worker PID ${runtime.workerPid || 'unknown'} is handling ${formatNumber(runtime.runningJobs || 0)} running job${(runtime.runningJobs || 0) === 1 ? '' : 's'} and ${formatNumber(runtime.queuedJobs || 0)} queued job${(runtime.queuedJobs || 0) === 1 ? '' : 's'}.` : 'No job processor is active yet. Queue a task to wake it up.'}</p>
-        </div>
-        <div class="runtime-banner-flags">
-          ${renderStatusPill(runtime.warmed ? 'Server warm' : 'Server starting', runtime.warmed ? 'success' : 'warning')}
-          ${renderStatusPill(runtime.workerRunning ? 'Queue draining' : 'Queue idle', runtime.workerRunning ? 'hot' : 'neutral')}
-          ${renderStatusPill(runtime.runningJobs > 0 ? `${formatNumber(runtime.runningJobs)} active` : 'No active jobs', runtime.runningJobs > 0 ? 'warm' : 'neutral')}
-        </div>
-      </div>
-    </section>
-
-    <section class="trust-strip trust-strip--admin">
-      ${renderTrustCard('Operator guide', 'One control surface', 'Run discovery, import, and review coverage without falling back to the spreadsheet.', `${formatNumber(runtime.queuedJobs || 0)} jobs queued`, 'accent')}
-      ${renderTrustCard('Coverage report', `${formatNumber(summary.coveragePercent || 0)}% board coverage`, 'See how much of the tracked universe is resolved and where review is still needed.', `${formatNumber(summary.resolvedCount || 0)} resolved boards`, 'success')}
-      ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
     </section>
 
     <div id="pipeline-progress-container" class="pipeline-progress hidden">
@@ -4795,8 +4651,6 @@ async function renderAdminView() {
         <div class="pipeline-progress-bar-fill" style="width: 0%;"></div>
       </div>
     </div>
-
-    ${renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive })}
 
     <section class="admin-grid">
       <div class="two-column">
@@ -4901,37 +4755,6 @@ async function renderAdminView() {
               <button class="primary-button" type="button" data-action="run-launch-workflow">Run launch workflow</button>
             </div>
             <div class="action-card">
-              <p class="eyebrow">Full pipeline</p>
-              <h4>Run BD Engine</h4>
-              <p class="small muted">Runs the legacy Google Sheets pipeline in one pass. Requires a Spreadsheet ID in the Google Sheets card.</p>
-              <button class="primary-button" data-action="run-full-engine">Run Full Engine</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Identity enrichment</p>
-              <h4>Enrich company inputs</h4>
-              <p class="small muted">Use the cheap local pass first, then run the deeper web verifier only for the accounts that still need stronger evidence.</p>
-              <div class="inline-field-stack">
-                <input id="enrichment-limit" type="number" min="1" value="50" placeholder="Companies to enrich">
-                <label class="field"><span class="small muted">Force refresh</span><select id="enrichment-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
-                <div class="button-row button-row--wrap">
-                  <button class="ghost-button" type="button" data-action="run-local-enrichment">Fast local enrich</button>
-                  <button class="secondary-button" type="button" data-action="run-enrichment">Deep verify</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Intelligence rollout</p>
-              <h4>Repair target scoring backlog</h4>
-              <p class="small muted">${formatNumber(rolloutRemainingCount)} accounts still need the new target score, trigger, sequence, or connection-graph intelligence fields. ${rolloutHint}</p>
-              <div class="inline-field-stack">
-                <input id="target-score-rollout-limit" type="number" min="1" max="500" value="${escapeAttr(String(targetScoreRollout.defaultLimit || 150))}" placeholder="Accounts per batch">
-                <label class="field"><span class="small muted">Batches</span><input id="target-score-rollout-batches" type="number" min="1" max="25" value="${escapeAttr(String(targetScoreRollout.defaultMaxBatches || 6))}"></label>
-                <div class="button-row">
-                  <button class="primary-button" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutButtonLabel}</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
               <p class="eyebrow">ATS discovery</p>
               <h4>Discover supported boards</h4>
               <p class="small muted">Runs the staged resolver: known mappings, hosted ATS probes, and careers-page detection with diagnostics and confidence bands.</p>
@@ -4949,29 +4772,6 @@ async function renderAdminView() {
               <h4>Run job import</h4>
               <p class="small muted">Fetches jobs from active ATS configs, upserts them, and marks closed roles inactive on repeat runs.</p>
               <button class="secondary-button" data-action="run-live-import">Run live import</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Config generation</p>
-              <h4>Rebuild job board configs</h4>
-              <p class="small muted">Seeds config rows from target accounts and preserves manual edits instead of guessing blindly.</p>
-              <button class="secondary-button" data-action="sync-configs">Rebuild configs</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Spreadsheet seed</p>
-              <h4>Reimport workbook</h4>
-              <p class="small muted">Reads setup, contacts, jobs, configs, and history from the legacy workbook when you need a reseed.</p>
-              <button class="primary-button" data-action="reseed-workbook" data-path="${escapeAttr(stateBootstrap.defaults.workbookPath)}">Reimport workbook</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Google Sheets</p>
-              <h4>Sync to live sheet</h4>
-              <p class="small muted">Pushes the current app state back to the live Google Sheet while you transition off the spreadsheet workflow.</p>
-              <div class="inline-field-stack">
-                <input id="google-sheet-id" value="${escapeAttr(stateBootstrap.defaults.spreadsheetId || '')}" placeholder="Spreadsheet ID">
-                <div class="button-row">
-                  <button class="primary-button" type="button" data-action="sync-google-sheets">Sync Google Sheet</button>
-                </div>
-              </div>
             </div>
             <div class="action-card">
               <p class="eyebrow">LinkedIn import</p>
@@ -5009,26 +4809,6 @@ async function renderAdminView() {
           </div>
         ${renderCollapsibleEnd()}
 
-        ${renderCollapsibleStart('scoring-settings', 'Scoring settings', 'These map directly to the old Setup controls.')}
-          <form id="settings-form" class="settings-grid">
-            ${renderField('Min company connections', `<input name="minCompanyConnections" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minCompanyConnections)}">`)}
-            ${renderField('Min jobs posted', `<input name="minJobsPosted" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minJobsPosted)}">`)}
-            ${renderField('Contact priority threshold', `<input name="contactPriorityThreshold" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.contactPriorityThreshold)}">`)}
-            ${renderField('Max companies to review', `<input name="maxCompaniesToReview" type="number" min="1" value="${escapeAttr(stateBootstrap.settings.maxCompaniesToReview)}">`)}
-            ${renderField('Geography focus', `<input name="geographyFocus" value="${escapeAttr(stateBootstrap.settings.geographyFocus)}">`)}
-            ${renderField('GTA priority', `<select name="gtaPriority"><option value="true" ${selected(String(stateBootstrap.settings.gtaPriority), 'true')}>Enabled</option><option value="false" ${selected(String(stateBootstrap.settings.gtaPriority), 'false')}>Disabled</option></select>`)}
-            ${renderField('Job retention (days)', `<input name="jobRetentionDays" type="number" min="1" value="${escapeAttr(stateBootstrap.settings.jobRetentionDays || 28)}">`)}
-            <div><button class="primary-button" type="submit">Save settings</button></div>
-          </form>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('automation-rules', 'Automation Rules', 'Define rules that auto-apply when pipeline conditions are met.')}
-          ${renderAutomationRulesPanel()}
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('alert-thresholds', 'Alert Thresholds', 'Customize when smart alerts trigger on your pipeline.')}
-          ${renderAlertThresholdsPanel()}
-        ${renderCollapsibleEnd()}
       </div>
 
       <div class="two-column">
