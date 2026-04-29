@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f1728">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
-  <link rel="stylesheet" href="/styles.css?v=20260425-v0-polish-setup-bg-7">
+  <link rel="stylesheet" href="/styles.css?v=20260429-large-load-1">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -32,7 +32,15 @@
       </nav>
       <div class="sidebar-footnote">
         <span class="dot"></span>
-        <span id="workspace-name">Loading workspace</span>
+        <div class="workspace-footnote-copy">
+          <span id="workspace-name">Loading workspace</span>
+          <div id="workspace-load-warning" class="workspace-load-warning hidden" role="status" aria-live="polite">
+            <span id="workspace-load-message">Large first run detected. Preparing your workspace can take a few minutes.</span>
+            <div class="workspace-load-progress" aria-hidden="true">
+              <span id="workspace-load-progress-bar"></span>
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -67,8 +75,8 @@
   <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="/local-api.js?v=20260425-v0-polish-setup-bg-7"></script>
-  <script src="/app.js?v=20260425-v0-polish-setup-bg-7"></script>
+  <script src="/local-api.js?v=20260429-large-load-1"></script>
+  <script src="/app.js?v=20260429-large-load-1"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').then((registration) => registration.update()).catch(() => {});

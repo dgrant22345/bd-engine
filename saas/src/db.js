@@ -332,6 +332,53 @@ export async function dbLoadTenantData(tenantId, includeContacts = true) {
   }
 }
 
+export async function dbGetTenantDataStats(tenantId) {
+  if (!dbReady) return null;
+  const startedAt = Date.now();
+  try {
+    const result = await pool.query(
+      `SELECT
+         CASE WHEN jsonb_typeof(accounts) = 'array' THEN jsonb_array_length(accounts) ELSE 0 END AS account_count,
+         CASE WHEN jsonb_typeof(contacts) = 'array' THEN jsonb_array_length(contacts) ELSE 0 END AS contact_count,
+         CASE WHEN jsonb_typeof(jobs) = 'array' THEN jsonb_array_length(jobs) ELSE 0 END AS job_count,
+         CASE WHEN jsonb_typeof(configs) = 'array' THEN jsonb_array_length(configs) ELSE 0 END AS config_count,
+         CASE WHEN jsonb_typeof(activities) = 'array' THEN jsonb_array_length(activities) ELSE 0 END AS activity_count,
+         updated_at
+       FROM tenant_data
+       WHERE tenant_id = $1`,
+      [tenantId]
+    );
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs > 250) {
+      console.warn(`Slow tenant data stats: saas/src/db.js dbGetTenantDataStats ${elapsedMs}ms`);
+    }
+    if (result.rows.length === 0) {
+      return {
+        accountCount: 0,
+        contactCount: 0,
+        jobCount: 0,
+        configCount: 0,
+        activityCount: 0,
+        updatedAt: '',
+        queryMs: elapsedMs,
+      };
+    }
+    const row = result.rows[0];
+    return {
+      accountCount: Number(row.account_count || 0),
+      contactCount: Number(row.contact_count || 0),
+      jobCount: Number(row.job_count || 0),
+      configCount: Number(row.config_count || 0),
+      activityCount: Number(row.activity_count || 0),
+      updatedAt: row.updated_at || '',
+      queryMs: elapsedMs,
+    };
+  } catch (err) {
+    console.error('DB: Failed to load tenant data stats:', err.message);
+    return null;
+  }
+}
+
 export async function dbLoadAllTenantData() {
   if (!dbReady) return new Map();
   try {

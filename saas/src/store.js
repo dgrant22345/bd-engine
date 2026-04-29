@@ -3,6 +3,7 @@ import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
+const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
 
 const pastDate = (days) => {
   const d = new Date();
@@ -377,6 +378,43 @@ function persistTenant(tenantId) {
 }
 
 const loadedTenants = new Map(); // tenantId -> { core: boolean, contacts: boolean }
+const LARGE_WORKSPACE_LOAD_THRESHOLDS = Object.freeze({
+  accounts: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_ACCOUNTS, 500),
+  contacts: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_CONTACTS, 1000),
+  jobs: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_JOBS, 1500),
+  configs: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_CONFIGS, 500),
+  total: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_TOTAL, 2500),
+});
+
+function countTenantWorkspaceItems(tenantId) {
+  return {
+    accountCount: accountsForTenant(tenantId).length,
+    contactCount: contactsForTenant(tenantId).length,
+    jobCount: jobsForTenant(tenantId).length,
+    configCount: configsForTenant(tenantId).length,
+    activityCount: getTenantArray(activitiesByTenant, tenantId).length,
+  };
+}
+
+function normalizeWorkspaceLoadCounts(stats = {}) {
+  const counts = {
+    accounts: Number(stats.accountCount || 0),
+    contacts: Number(stats.contactCount || 0),
+    jobs: Number(stats.jobCount || 0),
+    configs: Number(stats.configCount || 0),
+    activities: Number(stats.activityCount || 0),
+  };
+  counts.total = counts.accounts + counts.contacts + counts.jobs + counts.configs + counts.activities;
+  return counts;
+}
+
+function isLargeWorkspaceDataset(counts) {
+  return counts.accounts >= LARGE_WORKSPACE_LOAD_THRESHOLDS.accounts
+    || counts.contacts >= LARGE_WORKSPACE_LOAD_THRESHOLDS.contacts
+    || counts.jobs >= LARGE_WORKSPACE_LOAD_THRESHOLDS.jobs
+    || counts.configs >= LARGE_WORKSPACE_LOAD_THRESHOLDS.configs
+    || counts.total >= LARGE_WORKSPACE_LOAD_THRESHOLDS.total;
+}
 
 async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (!isDbEnabled()) return;
@@ -386,12 +424,16 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (status.core && (!needsContacts || status.contacts)) return;
 
   const start = Date.now();
+  const timings = {};
   console.log(`  Store: Loading data for ${tenantId} (needsContacts: ${needsContacts})`);
 
   const { dbLoadTenantData } = await import('./db.js');
+  const dbStartedAt = Date.now();
   const data = await dbLoadTenantData(tenantId, needsContacts);
+  timings.dbLoadMs = Date.now() - dbStartedAt;
   
   if (data) {
+    const mergeStartedAt = Date.now();
     if (data.accounts.length > 0 || !status.core) {
       const tenantAccts = data.accounts || [];
       tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
@@ -432,10 +474,18 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
 
       status.contacts = true;
     }
+    timings.mergeMs = Date.now() - mergeStartedAt;
   }
   
   loadedTenants.set(tenantId, status);
-  console.log(`  Store: Data loaded for ${tenantId} in ${Date.now() - start}ms`);
+  const elapsedMs = Date.now() - start;
+  console.log(`  Store: Data loaded for ${tenantId} in ${elapsedMs}ms`, timings);
+  if (elapsedMs > 1000) {
+    console.warn(`Slow tenant data load: saas/src/store.js ensureDataLoaded ${elapsedMs}ms`, {
+      ...timings,
+      needsContacts,
+    });
+  }
 }
 
 export function createStore() {
@@ -472,9 +522,52 @@ export function createStore() {
       };
     },
 
+    async getWorkspaceLoadHint(tenantId) {
+      assertTenant(tenantId);
+      const startedAt = performance.now();
+      const status = loadedTenants.get(tenantId) || { core: false, contacts: false };
+      let stats = null;
+      let source = 'memory';
+      if (isDbEnabled()) {
+        const { dbGetTenantDataStats } = await import('./db.js');
+        stats = await dbGetTenantDataStats(tenantId);
+        source = 'database';
+      }
+      const counts = normalizeWorkspaceLoadCounts(stats || countTenantWorkspaceItems(tenantId));
+      const isLargeDataset = isLargeWorkspaceDataset(counts);
+      const firstLoadPending = !status.core && counts.total > 0;
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      const payload = {
+        tenantId,
+        counts,
+        thresholds: { ...LARGE_WORKSPACE_LOAD_THRESHOLDS },
+        loaded: {
+          core: Boolean(status.core),
+          contacts: Boolean(status.contacts),
+        },
+        firstLoadPending,
+        isLargeDataset,
+        shouldShowProgress: Boolean(firstLoadPending && isLargeDataset),
+        source,
+        timings: {
+          totalMs: elapsedMs,
+          statsQueryMs: stats?.queryMs || 0,
+        },
+      };
+      if (elapsedMs > 150) {
+        console.warn(`Slow workspace load hint: saas/src/store.js getWorkspaceLoadHint ${elapsedMs}ms`, payload.timings);
+      }
+      return payload;
+    },
+
     async getSetupStatus(tenantId) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
+      const timings = {};
+      const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId);
+      timings.loadMs = Math.round(performance.now() - loadStartedAt);
+      const shapeStartedAt = performance.now();
       const profile = getTenantProfile(tenantId);
       const hasWorkspaceData = accountsForTenant(tenantId).length > 0 || jobsForTenant(tenantId).length > 0;
       if (!profile.settings.setupComplete && hasWorkspaceData) {
@@ -483,7 +576,7 @@ export function createStore() {
         persistTenant(tenantId);
       }
       const setupComplete = Boolean(profile.settings.setupComplete);
-      return {
+      const payload = {
         requiresSetup: !setupComplete,
         setupComplete,
         licensingEnabled: false,
@@ -491,6 +584,12 @@ export function createStore() {
         persona: this.getPersona(tenantId),
         user: profile.settings.user,
       };
+      timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 500) {
+        console.warn(`Slow setup status: saas/src/store.js getSetupStatus ${elapsedMs}ms`, timings);
+      }
+      return payload;
     },
 
     getRuntimeStatus() {
@@ -510,9 +609,14 @@ export function createStore() {
 
     async getBootstrap(tenantId, { includeFilters = false, session = null } = {}) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
+      const timings = {};
+      const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, false); // Don't need contacts for bootstrap
+      timings.loadMs = Math.round(performance.now() - loadStartedAt);
+      const shapeStartedAt = performance.now();
       const profile = getTenantProfile(tenantId);
-      return {
+      const payload = {
         workspace: { ...profile.workspace },
         settings: { ...profile.settings },
         persona: profile.persona || 'bd',
@@ -525,6 +629,15 @@ export function createStore() {
         session: session || this.getSession(),
         ...(includeFilters ? { filters: buildFilters(tenantId) } : {}),
       };
+      timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 500) {
+        console.warn(`Slow bootstrap: saas/src/store.js getBootstrap ${elapsedMs}ms`, {
+          ...timings,
+          includeFilters,
+        });
+      }
+      return payload;
     },
 
     async getDashboard(tenantId) {
@@ -1143,9 +1256,12 @@ export function createStore() {
       }
 
       updateProgress(45, 'discovery', 'Discovering public ATS boards...');
+      const launchDiscoveryLimit = jobBoardLimit === -1
+        ? Math.max(1, tenantConfigs.length || tenantAccounts.length)
+        : Math.max(1, jobBoardLimit);
       const discovery = await this.runAtsDiscovery(tenantId, {
         plan: selectedPlan,
-        limit: jobBoardLimit === -1 ? 200 : Math.max(1, jobBoardLimit),
+        limit: launchDiscoveryLimit,
         onlyMissing: true,
       });
       timings.discoveryMs = discovery.timings?.totalMs || 0;
@@ -1273,8 +1389,7 @@ export function createStore() {
       const errors = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
-      const requestedLimit = Math.max(1, Number(options.limit || 75));
-      const limit = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
+      const requestedLimitOption = Number(options.limit || 0);
       const onlyMissing = options.onlyMissing !== false && options.onlyMissing !== 'false';
       const forceRefresh = options.forceRefresh === true || options.forceRefresh === 'true';
 
@@ -1316,6 +1431,11 @@ export function createStore() {
         createdConfigs++;
       }
 
+      const defaultLimit = jobBoardLimit === -1
+        ? Math.max(1, tenantConfigs.length || tenantAccounts.length)
+        : Math.min(75, Math.max(1, jobBoardLimit));
+      const requestedLimit = requestedLimitOption > 0 ? Math.floor(requestedLimitOption) : defaultLimit;
+      const limit = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
       let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected');
       if (onlyMissing && !forceRefresh) {
         candidates = candidates.filter((item) => {
@@ -1329,10 +1449,29 @@ export function createStore() {
       let highConfidence = 0;
       let unresolved = 0;
       const discoveryStartedAt = performance.now();
-      for (const config of candidates) {
+      const discoveryConcurrency = readPositiveInteger(options.discoveryConcurrency || options.concurrency, DEFAULT_ATS_DISCOVERY_CONCURRENCY);
+      const discoveredBoards = await mapSettledWithConcurrency(candidates, discoveryConcurrency, async (config) => {
+        const match = await discoverAtsBoard(config);
+        return { config, match };
+      });
+      for (let index = 0; index < discoveredBoards.length; index++) {
+        const config = candidates[index];
+        const settled = discoveredBoards[index];
         checked++;
+        if (settled.status === 'rejected') {
+          const message = settled.reason?.message || 'Discovery failed';
+          errors.push({ configId: config.id, companyName: config.companyName, error: message });
+          config.discoveryStatus = 'error';
+          config.discoveryMethod = 'public_ats_probe';
+          config.lastDiscoveryError = message;
+          config.lastDiscoveryCheckedAt = now();
+          config.updatedAt = now();
+          unresolved++;
+          continue;
+        }
+
+        const match = settled.value?.match;
         try {
-          const match = await discoverAtsBoard(config);
           if (match) {
             Object.assign(config, {
               atsType: match.atsType,
@@ -1371,6 +1510,7 @@ export function createStore() {
         }
       }
       timings.discoveryMs = Math.round(performance.now() - discoveryStartedAt);
+      timings.discoveryConcurrency = discoveryConcurrency;
 
       const persistStartedAt = performance.now();
       if (createdConfigs || checked) persistTenant(tenantId);
@@ -1381,7 +1521,7 @@ export function createStore() {
         console.warn(`Slow ATS discovery: saas/src/store.js runAtsDiscovery ${timings.totalMs}ms`, timings);
       }
       if (!mapped && checked) {
-        warnings.push('No public Greenhouse, Lever, or Ashby boards were matched. Add a board ID manually for any company you know uses one.');
+        warnings.push('No public supported ATS boards were matched. Add a board ID manually for any company you know uses Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite, Workday, or BambooHR.');
       }
 
       const stats = {
@@ -1391,6 +1531,8 @@ export function createStore() {
         highConfidence,
         unresolved,
         configsCreated: createdConfigs,
+        candidateCount: candidates.length,
+        discoveryConcurrency,
         errors: errors.length,
       };
       return {

@@ -485,6 +485,10 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, await store.getSetupStatus(tenantId));
   }
 
+  if (pathname === '/api/workspace/load-hint') {
+    return sendJson(res, 200, await store.getWorkspaceLoadHint(tenantId));
+  }
+
   if (pathname === '/api/runtime/status') {
     return sendJson(res, 200, store.getRuntimeStatus());
   }

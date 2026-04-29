@@ -95,6 +95,11 @@ const appState = {
   setupResult: null,
   setupImportJobId: '',
   setupProgressMessage: '',
+  workspaceLoadHint: null,
+  workspaceLoadProgressTimer: null,
+  workspaceLoadProgressKey: '',
+  workspaceLoadProgressVisible: false,
+  workspaceLoadProgressValue: 0,
   setupDraft: {
     workspaceName: '',
     userName: '',
@@ -108,6 +113,10 @@ const appState = {
 const viewTitle = document.getElementById('view-title');
 const appRoot = document.getElementById('app');
 const workspaceName = document.getElementById('workspace-name');
+const workspaceFootnote = document.querySelector('.sidebar-footnote');
+const workspaceLoadWarning = document.getElementById('workspace-load-warning');
+const workspaceLoadMessage = document.getElementById('workspace-load-message');
+const workspaceLoadProgressBar = document.getElementById('workspace-load-progress-bar');
 const searchInput = document.getElementById('global-search-input');
 const searchResults = document.getElementById('search-results');
 const appAlert = document.getElementById('app-alert');
@@ -1526,11 +1535,111 @@ window.addEventListener('error', (event) => {
 
 init();
 
+function getWorkspaceLoadProgressKey(hint = appState.workspaceLoadHint) {
+  return `bd_large_workspace_load_seen:${hint?.tenantId || 'current'}`;
+}
+
+function shouldShowWorkspaceLoadProgress(hint) {
+  if (!hint?.shouldShowProgress || !hint?.isLargeDataset) return false;
+  const key = getWorkspaceLoadProgressKey(hint);
+  try {
+    return sessionStorage.getItem(key) !== 'done';
+  } catch {
+    return true;
+  }
+}
+
+function describeWorkspaceLoadSize(hint = {}) {
+  const counts = hint.counts || {};
+  const parts = [
+    ['contacts', counts.contacts],
+    ['accounts', counts.accounts],
+    ['jobs', counts.jobs],
+    ['ATS boards', counts.configs],
+  ]
+    .filter(([, value]) => Number(value || 0) > 0)
+    .map(([label, value]) => `${formatNumber(value)} ${label}`);
+  return parts.slice(0, 2).join(' and ') || 'a large dataset';
+}
+
+async function loadWorkspaceLoadHint() {
+  const startedAt = performance.now();
+  const hint = await api('/api/workspace/load-hint', { skipCache: true });
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  appState.workspaceLoadHint = hint;
+  if (elapsedMs > 250) {
+    console.info(`Slow workspace load hint: app/app.js loadWorkspaceLoadHint ${elapsedMs}ms`);
+  }
+  return hint;
+}
+
+function startWorkspaceLoadProgress(hint) {
+  if (!shouldShowWorkspaceLoadProgress(hint) || appState.workspaceLoadProgressVisible) return false;
+  appState.workspaceLoadProgressKey = getWorkspaceLoadProgressKey(hint);
+  appState.workspaceLoadProgressVisible = true;
+  appState.workspaceLoadProgressValue = 8;
+  workspaceFootnote?.classList.add('is-loading-large');
+  workspaceLoadWarning?.classList.remove('hidden');
+  updateWorkspaceLoadProgress(8, `Large first run detected: ${describeWorkspaceLoadSize(hint)}. This can take a few minutes; keep this tab open.`);
+  clearInterval(appState.workspaceLoadProgressTimer);
+  appState.workspaceLoadProgressTimer = window.setInterval(() => {
+    if (!appState.workspaceLoadProgressVisible) {
+      clearInterval(appState.workspaceLoadProgressTimer);
+      return;
+    }
+    const current = appState.workspaceLoadProgressValue;
+    const increment = current < 45 ? 4 : current < 75 ? 2 : 0.75;
+    updateWorkspaceLoadProgress(Math.min(92, current + increment));
+  }, 1800);
+  return true;
+}
+
+function updateWorkspaceLoadProgress(value, message = '') {
+  if (!appState.workspaceLoadProgressVisible) return;
+  const nextValue = Math.max(appState.workspaceLoadProgressValue || 0, Math.min(100, Math.round(value)));
+  appState.workspaceLoadProgressValue = nextValue;
+  if (workspaceLoadProgressBar) workspaceLoadProgressBar.style.width = `${nextValue}%`;
+  if (message && workspaceLoadMessage) workspaceLoadMessage.textContent = message;
+}
+
+function hideWorkspaceLoadProgress({ markSeen = false } = {}) {
+  clearInterval(appState.workspaceLoadProgressTimer);
+  appState.workspaceLoadProgressTimer = null;
+  appState.workspaceLoadProgressVisible = false;
+  appState.workspaceLoadProgressValue = 0;
+  workspaceFootnote?.classList.remove('is-loading-large');
+  workspaceLoadWarning?.classList.add('hidden');
+  if (workspaceLoadProgressBar) workspaceLoadProgressBar.style.width = '0%';
+  if (markSeen && appState.workspaceLoadProgressKey) {
+    try {
+      sessionStorage.setItem(appState.workspaceLoadProgressKey, 'done');
+    } catch {
+      // Session storage is a hint only; the server-side first-load guard is authoritative.
+    }
+  }
+}
+
+function finishWorkspaceLoadProgress() {
+  if (!appState.workspaceLoadProgressVisible) return;
+  updateWorkspaceLoadProgress(100, 'Workspace ready.');
+  window.setTimeout(() => hideWorkspaceLoadProgress({ markSeen: true }), 900);
+}
+
 async function init() {
   bindEvents();
   window.bdLocalApi.setAlert('', appAlert);
   trackAppVisit().catch(() => {});
   renderLoadingState('Dashboard', 'Building your operating view...');
+  let initializationActive = true;
+  const loadHintPromise = loadWorkspaceLoadHint()
+    .then((hint) => {
+      if (initializationActive) startWorkspaceLoadProgress(hint);
+      return hint;
+    })
+    .catch((error) => {
+      console.info('Workspace load hint unavailable.', error);
+      return null;
+    });
   
   // Set a timer to show a "long setup" warning if things are taking a while
   const longLoadTimer = setTimeout(() => {
@@ -1540,32 +1649,50 @@ async function init() {
   }, 5000);
 
   try {
+    await Promise.race([loadHintPromise, sleep(250)]);
+    updateWorkspaceLoadProgress(18, 'Large first run: checking setup status for a large workspace...');
     const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
+      initializationActive = false;
       clearTimeout(longLoadTimer);
+      hideWorkspaceLoadProgress();
       location.hash = '#/setup';
       return;
     }
     if (initialRoot === 'setup') {
+      initializationActive = false;
       clearTimeout(longLoadTimer);
+      hideWorkspaceLoadProgress();
       await renderRoute();
       return;
     }
     if (routeNeedsBootstrapFilters(initialRoot)) {
+      updateWorkspaceLoadProgress(46, 'Large first run: loading workspace snapshot and filters...');
       await loadBootstrap(true, { includeFilters: true });
       clearTimeout(longLoadTimer);
+      updateWorkspaceLoadProgress(86, 'Large first run: rendering workspace...');
       await renderRoute();
+      initializationActive = false;
+      finishWorkspaceLoadProgress();
     } else {
       clearTimeout(longLoadTimer);
       await renderRoute();
+      updateWorkspaceLoadProgress(72, 'Large first run: dashboard is ready. Finishing workspace details...');
       loadBootstrap(false).catch((error) => {
+        initializationActive = false;
+        hideWorkspaceLoadProgress();
         console.warn('Bootstrap hydration failed in background.', error);
         window.bdLocalApi.setAlert('Background data refresh failed. Some filters may be stale.', appAlert);
         return null;
+      }).then(() => {
+        initializationActive = false;
+        finishWorkspaceLoadProgress();
       });
     }
   } catch (error) {
+    initializationActive = false;
+    hideWorkspaceLoadProgress();
     if (isBillingRequiredError(error)) {
       clearTimeout(longLoadTimer);
       await renderBillingRequiredView(error);
@@ -3443,6 +3570,19 @@ async function handleSetupCsvFile(file) {
   await renderSetupWizard();
   showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
 }
+async function postConnectionsCsvFile(file, options = {}) {
+  const params = new URLSearchParams();
+  params.set('dryRun', options.dryRun ? 'true' : 'false');
+  params.set('useEmptyState', options.useEmptyState ? 'true' : 'false');
+  params.set('fileName', options.fileName || file?.name || 'Connections.csv');
+  const endpoint = options.preview ? '/api/import/connections-csv/preview' : '/api/import/connections-csv';
+  return api(`${endpoint}?${params.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/csv;charset=utf-8' },
+    body: file,
+  });
+}
+
 async function previewSetupCsv() {
   if (!appState.setupCsvFile) {
     showToast('Choose Connections.csv first.', 'warning');
@@ -3454,16 +3594,11 @@ async function previewSetupCsv() {
   await renderSetupWizard();
 
   try {
-    const formData = new FormData();
-    formData.append(
-      'connectionsCsv',
-      appState.setupCsvFile,
-      appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv'
-    );
-
-    appState.setupPreview = await api('/api/import/connections-csv/preview', {
-      method: 'POST',
-      body: formData,
+    appState.setupPreview = await postConnectionsCsvFile(appState.setupCsvFile, {
+      dryRun: true,
+      preview: true,
+      useEmptyState: true,
+      fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
     });
 
     showToast('Preview ready.', 'success');
@@ -3492,25 +3627,15 @@ async function completeSetupWizard() {
     : 'Saving setup...';
 
   try {
-    const formData = new FormData();
-    formData.append('workspaceName', draft.workspaceName);
-    formData.append('userName', draft.userName);
-    formData.append('userEmail', draft.userEmail);
-    formData.append('owners', JSON.stringify(parseSetupOwners(draft.ownersText)));
-    formData.append('licenseKey', draft.licenseKey || '');
-    formData.append('csvFileName', appState.setupCsvFileName || '');
-
-    if (appState.setupCsvFile) {
-      formData.append(
-        'connectionsCsv',
-        appState.setupCsvFile,
-        appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv'
-      );
-    }
-
     const result = await api('/api/setup/complete', {
       method: 'POST',
-      body: formData,
+      body: JSON.stringify({
+        workspaceName: draft.workspaceName,
+        userName: draft.userName,
+        userEmail: draft.userEmail,
+        owners: parseSetupOwners(draft.ownersText),
+        licenseKey: draft.licenseKey || '',
+      }),
     });
 
     appState.setupResult = result;
@@ -3518,16 +3643,20 @@ async function completeSetupWizard() {
     appState.setupStep = getSetupSteps().length;
     invalidateAppData();
 
-    if (result.jobId) {
-      appState.setupImportJobId = result.jobId;
-      appState.setupProgressMessage = 'Import queued. Starting the background worker...';
-      await renderSetupWizard();
-
-      const job = await watchSetupImportJob(result.jobId);
-      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
+    if (appState.setupCsvFile) {
+      const accepted = await postConnectionsCsvFile(appState.setupCsvFile, {
+        dryRun: false,
+        useEmptyState: false,
+        fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
+      });
+      const jobId = accepted.jobId || accepted.job?.id;
+      const stats = accepted.stats || {};
+      appState.setupImportJobId = jobId || '';
 
       appState.setupResult = {
         ...result,
+        importQueued: Boolean(jobId),
+        jobId,
         stats: {
           ...stats,
           imported: stats.imported || 0,
@@ -3537,10 +3666,23 @@ async function completeSetupWizard() {
         },
       };
 
-      appState.setupProgressMessage = 'Import complete.';
+      appState.setupProgressMessage = jobId
+        ? 'Import queued. You can start using BD Engine while contacts import in the background.'
+        : 'Import request accepted.';
       appState.setupCsvFile = null;
       appState.setupCsvContent = '';
-      showToast('Setup complete. LinkedIn connections imported.', 'success');
+      showToast(jobId ? 'Setup complete. LinkedIn connections import is running in the background.' : 'Setup complete.', 'success');
+      if (jobId) {
+        void watchBackgroundJob(jobId, { label: 'Connections import', refreshRoute: false }).then((job) => {
+          const result = job?.result || {};
+          const finalStats = result.stats || result.importRun?.stats || {};
+          const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || []);
+          showToast(`Connections import complete: ${formatConnectionsImportStats(finalStats)}.${warnings}`, 'success', 8000);
+          invalidateAppData();
+        }).catch((err) => {
+          window.bdLocalApi.setAlert(`Connections import failed: ${err.message || err}`, appAlert);
+        });
+      }
     } else {
       appState.setupProgressMessage = '';
       appState.setupCsvFile = null;
@@ -3579,18 +3721,30 @@ async function watchSetupImportJob(jobId) {
   }
 }
 
-async function renderDashboardView() {
+function getDashboardActiveJobCount(summary = {}) {
+  return Number(summary.activeJobCount ?? summary.jobCount ?? 0);
+}
+
+function getDashboardImported24h(summary = {}) {
+  return Number(summary.jobsImportedLast24h ?? summary.newJobsLast24h ?? 0);
+}
+
+function getDashboardPosted24h(summary = {}) {
+  return Number(summary.jobsPostedLast24h ?? summary.newJobsLast24h ?? 0);
+}
+
+async function renderDashboardView(options = {}) {
   const dashboardStartedAt = performance.now();
-  renderLoadingState('Dashboard', "Building today's hiring radar...");
+  if (!options.skipLoading) {
+    renderLoadingState('Dashboard', "Building today's hiring radar...");
+  }
   setViewTitle('Dashboard');
-  const [dashboardPayload, tasksPayload, extendedPayload] = await Promise.all([
-    api('/api/dashboard', { skipCache: true }),
-    api('/api/tasks', { skipCache: true }),
-    api('/api/dashboard/extended', { skipCache: true }).catch((e) => {
-      console.warn('Extended dashboard data unavailable:', e);
-      return null;
-    }),
+  const shouldHydrateExtended = !options.extendedPayload;
+  const [dashboardPayload, tasksPayload] = await Promise.all([
+    options.dashboardPayload ? Promise.resolve(options.dashboardPayload) : api('/api/dashboard', { skipCache: true }),
+    options.tasksPayload ? Promise.resolve(options.tasksPayload) : api('/api/tasks', { skipCache: true }).catch(() => ({ items: [] })),
   ]);
+  const extendedPayload = options.extendedPayload || null;
   const dashboard = dashboardPayload || {};
   const tasks = tasksPayload || {};
   const taskList = (Array.isArray(tasks.items) ? tasks.items : []).slice(0, DASHBOARD_RENDER_LIMITS.tasks);
@@ -3628,6 +3782,9 @@ async function renderDashboardView() {
     ? dashboard.needsResolution
     : (Array.isArray(extended.resolutionQueue) ? extended.resolutionQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
   const resolutionPressure = dashboard.summary.needsResolutionCount || resolutionQueue.length || 0;
+  const activeJobCount = getDashboardActiveJobCount(dashboard.summary);
+  const jobsImportedLast24h = getDashboardImported24h(dashboard.summary);
+  const jobsPostedLast24h = getDashboardPosted24h(dashboard.summary);
   const analyticsQueue = dashboard.todayQueue.slice(0, DASHBOARD_RENDER_LIMITS.analytics);
   const dashboardStory = [
     {
@@ -3638,8 +3795,8 @@ async function renderDashboardView() {
     },
     {
       label: 'Market motion',
-      value: `${formatNumber(dashboard.summary.activeJobCount || 0)} tracked jobs`,
-      description: `${formatNumber(dashboard.summary.jobsImportedLast24h || 0)} imported in 24h; ${formatNumber(dashboard.summary.jobsPostedLast24h || 0)} posted in 24h.`,
+      value: `${formatNumber(activeJobCount)} tracked jobs`,
+      description: `${formatNumber(jobsImportedLast24h)} imported in 24h; ${formatNumber(jobsPostedLast24h)} posted in 24h.`,
       tone: 'success',
     },
     {
@@ -3673,7 +3830,7 @@ async function renderDashboardView() {
           </div>
           <div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
-            ${renderSignalChip('Tracked jobs', formatNumber(dashboard.summary.activeJobCount || 0), 'success')}
+            ${renderSignalChip('Tracked jobs', formatNumber(activeJobCount), 'success')}
             ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
             ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
@@ -3739,11 +3896,11 @@ async function renderDashboardView() {
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('metrics', `<section class="metrics-grid">
-      ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
+      ${renderMetricCard('Companies in workspace', dashboard.summary.accountCount, 'Imported company universe; use Accounts filters for the working list')}
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
-      ${renderMetricCard('Tracked jobs', dashboard.summary.activeJobCount || 0, 'Active roles currently available for outreach context')}
-      ${renderMetricCard('Imported, 24h', dashboard.summary.jobsImportedLast24h || 0, 'Roles pulled into BD Engine in the last day')}
-      ${renderMetricCard('Posted, 24h', dashboard.summary.jobsPostedLast24h || 0, 'Roles whose ATS posted date is in the last day')}
+      ${renderMetricCard('Tracked jobs', activeJobCount, 'Active roles currently available for outreach context')}
+      ${renderMetricCard('Imported, 24h', jobsImportedLast24h, 'Roles pulled into BD Engine in the last day')}
+      ${renderMetricCard('Posted, 24h', jobsPostedLast24h, 'Roles whose ATS posted date is in the last day')}
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
     </section>`)}
 
@@ -3982,6 +4139,22 @@ async function renderDashboardView() {
   wireDashboardCustomizer();
   const elapsedMs = Math.round(performance.now() - dashboardStartedAt);
   console.info(`BD Engine dashboard render: ${elapsedMs}ms (${dashboard.todayQueue.length} accounts, ${resolutionQueue.length}/${resolutionPressure} resolution rows)`);
+  if (shouldHydrateExtended) {
+    const routeAtRequest = location.hash || '#/dashboard';
+    window.setTimeout(() => {
+      api('/api/dashboard/extended', { skipCache: true }).then((payload) => {
+        if (!payload || getRouteRoot(routeAtRequest) !== 'dashboard' || getRouteRoot() !== 'dashboard') return;
+        void renderDashboardView({
+          dashboardPayload,
+          tasksPayload,
+          extendedPayload: payload,
+          skipLoading: true,
+        });
+      }).catch((e) => {
+        console.warn('Extended dashboard data unavailable:', e);
+      });
+    }, 0);
+  }
   maybeStartPendingProductTour();
 }
 
@@ -4607,8 +4780,16 @@ async function renderAdminView() {
   const isStale = !lastRun || (Date.now() - lastRun > 24 * 60 * 60 * 1000);
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
+  const operationalCompanyCount = summary.operationalTotalCompanies ?? summary.totalCompanies ?? 0;
+  const operationalResolvedCount = summary.operationalResolvedCount ?? summary.resolvedCount ?? 0;
+  const operationalCoveragePercent = summary.operationalCoveragePercent ?? summary.coveragePercent ?? 0;
+  const operationalUnresolvedCount = Math.max(0, Number(operationalCompanyCount || 0) - Number(operationalResolvedCount || 0));
   const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
   const billing = batch.billing || {};
+  const planJobBoardLimit = Number(billing.plan?.limits?.jobBoards ?? 75);
+  const discoveryLimitDefault = planJobBoardLimit === -1
+    ? Math.max(1, operationalUnresolvedCount || operationalCompanyCount || 1000)
+    : Math.min(75, Math.max(1, planJobBoardLimit));
   const referral = billing.referral || {};
   const referralLink = referral.link || '';
   const analytics = batch.analytics || {};
@@ -4693,7 +4874,7 @@ async function renderAdminView() {
               <h4>Discover supported boards</h4>
               <p class="small muted">Use this when you only need to remap ATS boards without re-running imports and scoring.</p>
               <div class="inline-field-stack">
-                <input id="discovery-limit" type="number" min="1" value="75" placeholder="Rows to check">
+                <input id="discovery-limit" type="number" min="1" value="${escapeAttr(discoveryLimitDefault)}" placeholder="Rows to check">
                 <label class="field"><span class="small muted">Only unresolved configs</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
                 <label class="field"><span class="small muted">Force refresh</span><select id="discovery-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
                 <div class="button-row">
@@ -4812,12 +4993,14 @@ async function renderAdminView() {
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.')}
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the company universe.')}
           <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Tracked companies', summary.totalCompanies || 0, 'Board config rows in the resolver')}
-            ${renderMetricCard('Resolved boards', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total coverage`)}
+            ${renderMetricCard('Actionable companies', operationalCompanyCount, `${formatNumber(operationalCoveragePercent)}% have resolved boards`)}
+            ${renderMetricCard('Need resolver work', operationalUnresolvedCount, 'Actionable companies still missing a resolved board')}
+            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, 'All imported company records with ATS resolution state')}
+            ${renderMetricCard('Resolved rows', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total resolver rows`)}
             ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
-            ${renderMetricCard('Unresolved', summary.unresolvedCount || 0, 'Still missing strong ATS evidence')}
+            ${renderMetricCard('Unresolved rows', summary.unresolvedCount || 0, 'Imported rows still missing strong ATS evidence')}
           </div>
           <div class="inline-split">
             <div>
@@ -5696,12 +5879,17 @@ async function runLiveImport(buttonEl) {
     const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
     showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
-    const run = job?.result?.importRun || {};
-    const stats = run?.stats || {};
+    const result = job?.result || {};
+    const run = result.importRun || {};
+    const stats = result.stats || run?.stats || {};
     const warnings = run?.warnings || job?.result?.warnings || [];
+    const changedJobs = result.changedJobCount ?? result.counts?.changedJobs;
+    const changedText = Number.isFinite(Number(changedJobs))
+      ? ` Changed ${formatNumber(changedJobs)} job row${Number(changedJobs) === 1 ? '' : 's'} this run;`
+      : '';
     const status = run?.status === 'completed_with_errors'
-      ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs. ${formatNumber(stats.errors || 0)} configs errored.`
-      : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.`;
+      ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.${changedText} ${formatNumber(stats.errors || 0)} configs errored.`
+      : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.${changedText}`;
     window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
   });
 }
@@ -6049,26 +6237,27 @@ async function runConnectionsCsvImport(dryRun) {
     }
 
     const uploadSummary = `${file.name} (${formatFileSize(file.size || 0)})`;
-    const formData = new FormData();
-    formData.append('connectionsCsv', file, file.name || 'Connections.csv');
-    formData.append('fileName', file.name || 'Connections.csv');
-    formData.append('dryRun', dryRun ? 'true' : 'false');
-    formData.append('useEmptyState', dryRun ? 'true' : 'false');
-
-    const run = await api('/api/import/linkedin-csv', {
-      method: 'POST',
-      body: formData,
+    const run = await postConnectionsCsvFile(file, {
+      dryRun,
+      useEmptyState: dryRun,
+      fileName: file.name || 'Connections.csv',
     });
     if (!dryRun) {
-      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
+      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; you can keep working while it runs.`;
       showToast(queuedMessage, 'success', 9000);
       window.bdLocalApi.setAlert(queuedMessage, appAlert);
-      const job = run.job || await watchBackgroundJob(run.jobId, { label: 'Connections import' });
-      const result = job?.result || run || {};
-      const stats = result.stats || result.importRun?.stats || {};
-      const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || run.warnings);
-      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${warnings}`;
-      window.bdLocalApi.setAlert(message, appAlert);
+      if (run.jobId) {
+        void watchBackgroundJob(run.jobId, { label: 'Connections import', refreshRoute: false }).then((job) => {
+          const result = job?.result || run || {};
+          const stats = result.stats || result.importRun?.stats || {};
+          const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || run.warnings);
+          const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${warnings}`;
+          invalidateAppData();
+          window.bdLocalApi.setAlert(message, appAlert);
+        }).catch((err) => {
+          window.bdLocalApi.setAlert(`Connections import failed: ${err.message || err}`, appAlert);
+        });
+      }
       return;
     }
     const stats = run?.stats || {};
