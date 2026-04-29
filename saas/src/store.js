@@ -4,6 +4,7 @@ const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
+const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
 
 const pastDate = (days) => {
   const d = new Date();
@@ -558,6 +559,77 @@ export function createStore() {
         console.warn(`Slow workspace load hint: saas/src/store.js getWorkspaceLoadHint ${elapsedMs}ms`, payload.timings);
       }
       return payload;
+    },
+
+    async getIngestionDiagnostics(tenantId) {
+      assertTenant(tenantId);
+      const startedAt = performance.now();
+      const timings = {};
+      const loadStartedAt = performance.now();
+      await ensureDataLoaded(tenantId, false);
+      timings.loadMs = Math.round(performance.now() - loadStartedAt);
+
+      const tenantAccounts = accountsForTenant(tenantId);
+      const tenantConfigs = configsForTenant(tenantId);
+      const tenantJobs = jobsForTenant(tenantId);
+      const activeConfigs = tenantConfigs.filter((item) => item.active !== false);
+      const importReadyConfigs = activeConfigs.filter(isImportReadyConfig);
+      const supportedConfigs = importReadyConfigs
+        .map((config) => ({ config, atsType: normalizeAtsType(config.atsType || config.ats), boardId: getConfigBoardId(config) }))
+        .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
+      const linkedCareerConfigs = tenantConfigs.filter((config) => detectAtsTypeFromUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.apiUrl || config.url || ''));
+      const latestLaunch = activitiesForTenant(tenantId).find((item) => item.type === 'launch_workflow') || null;
+      const latestImport = activitiesForTenant(tenantId).find((item) => item.type === 'live_job_import') || null;
+
+      timings.totalMs = Math.round(performance.now() - startedAt);
+      if (timings.totalMs > 500) {
+        console.warn(`Slow ingestion diagnostics: saas/src/store.js getIngestionDiagnostics ${timings.totalMs}ms`, timings);
+      }
+
+      return {
+        counts: {
+          accounts: tenantAccounts.length,
+          jobs: tenantJobs.length,
+          activeJobs: tenantJobs.filter((item) => item.active !== false).length,
+          configs: tenantConfigs.length,
+          activeConfigs: activeConfigs.length,
+          importReadyConfigs: importReadyConfigs.length,
+          supportedImportReadyConfigs: supportedConfigs.length,
+          needsResolutionConfigs: tenantConfigs.length - importReadyConfigs.length,
+          linkedCareerConfigs: linkedCareerConfigs.length,
+        },
+        byAtsType: countValues(tenantConfigs.map((config) => normalizeAtsType(config.atsType || config.ats) || 'unknown')),
+        byDiscoveryStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.discoveryStatus || 'missing'))),
+        byReviewStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.reviewStatus || 'missing'))),
+        byImportStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.lastImportStatus || 'never'))),
+        sampleNeedsResolution: tenantConfigs
+          .filter((config) => !isImportReadyConfig(config))
+          .slice(0, 10)
+          .map((config) => ({
+            companyName: config.companyName,
+            atsType: config.atsType || config.ats || 'unknown',
+            domain: config.domain || '',
+            careersUrl: config.careersUrl || '',
+            discoveryStatus: config.discoveryStatus || '',
+            reviewStatus: config.reviewStatus || '',
+            active: config.active !== false,
+            lastImportStatus: config.lastImportStatus || '',
+            lastDiscoveryError: config.lastDiscoveryError || '',
+          })),
+        latestLaunch: latestLaunch ? {
+          summary: latestLaunch.summary || '',
+          occurredAt: latestLaunch.occurredAt || '',
+          metadata: latestLaunch.metadata || {},
+          notes: latestLaunch.notes || '',
+        } : null,
+        latestImport: latestImport ? {
+          summary: latestImport.summary || '',
+          occurredAt: latestImport.occurredAt || '',
+          metadata: latestImport.metadata || {},
+          notes: latestImport.notes || '',
+        } : null,
+        timings,
+      };
     },
 
     async getSetupStatus(tenantId) {
@@ -1292,7 +1364,7 @@ export function createStore() {
       timings.scoringMs = Math.round(performance.now() - scoringStartedAt);
       updateProgress(95, 'scoring', `Refreshed ${scoresRefreshed} account scores.`);
 
-      activities.unshift({
+      const launchActivity = {
         id: `act-${Date.now()}`,
         tenantId,
         type: 'launch_workflow',
@@ -1305,7 +1377,9 @@ export function createStore() {
           discovery: discovery.stats,
           import: importResult.stats,
         },
-      });
+      };
+      activities.unshift(launchActivity);
+      getTenantArray(activitiesByTenant, tenantId).unshift(launchActivity);
 
       persistTenant(tenantId);
       timings.totalMs = Math.round(performance.now() - totalStartedAt);
@@ -1765,6 +1839,22 @@ export function createStore() {
         warnings,
         errors,
       };
+
+      activities.unshift({
+        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        tenantId,
+        type: 'live_job_import',
+        summary: `Live job import fetched ${fetched} jobs across ${supportedConfigs.length} import-ready ATS configs and kept ${canadaKept} Canada jobs.`,
+        notes: warnings.join(' '),
+        occurredAt: now(),
+        createdAt: now(),
+        metadata: {
+          import: stats,
+          errors,
+        },
+      });
+      getTenantArray(activitiesByTenant, tenantId).unshift(activities[0]);
+      persistTenant(tenantId);
 
       return {
         ok: true,
@@ -2567,6 +2657,14 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
 }
 
+function countValues(values = []) {
+  return values.reduce((acc, value) => {
+    const key = String(value || 'unknown');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
 function countBy(items, field) {
   const counts = new Map();
   for (const item of items) {
@@ -2622,14 +2720,31 @@ function normalizeAtsType(value) {
   return normalized;
 }
 
+function detectAtsTypeFromUrl(value) {
+  const url = String(value || '').toLowerCase();
+  if (!url) return '';
+  if (url.includes('greenhouse.io')) return 'greenhouse';
+  if (url.includes('lever.co')) return 'lever';
+  if (url.includes('ashbyhq.com')) return 'ashby';
+  if (url.includes('smartrecruiters.com')) return 'smartrecruiters';
+  if (url.includes('jobvite.com')) return 'jobvite';
+  if (url.includes('myworkdayjobs.com')) return 'workday';
+  if (url.includes('bamboohr.com')) return 'bamboohr';
+  return '';
+}
+
 function getConfigBoardId(config = {}) {
   const direct = config.boardId || config.board_id || config.slug || config.boardSlug || '';
   if (direct) return String(direct).trim();
   const sourceUrl = config.sourceUrl || config.boardUrl || config.careersUrl || config.url || config.apiUrl || '';
   const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
   if (greenhouse) return decodeURIComponent(greenhouse[1]);
+  const greenhouseBoard = String(sourceUrl).match(/boards\.greenhouse\.io\/([^/?#]+)/i);
+  if (greenhouseBoard) return decodeURIComponent(greenhouseBoard[1]);
   const lever = String(sourceUrl).match(/lever\.co\/(?:v0\/)?postings\/([^/?#]+)/i);
   if (lever) return decodeURIComponent(lever[1]);
+  const leverBoard = String(sourceUrl).match(/jobs\.lever\.co\/([^/?#]+)/i);
+  if (leverBoard) return decodeURIComponent(leverBoard[1]);
   const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
   if (ashby) return decodeURIComponent(ashby[1]);
   const smartRecruiters = String(sourceUrl).match(/smartrecruiters\.com\/(?:v1\/companies\/)?([^/?#]+)(?:\/postings)?/i);
@@ -2788,7 +2903,10 @@ async function fetchText(url, timeoutMs = 15000) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { accept: 'text/html,application/json' },
+      headers: {
+        accept: 'text/html,application/json',
+        'user-agent': 'Mozilla/5.0 (compatible; BD-Engine/1.0; +https://bd-engine-production.up.railway.app/)',
+      },
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -2867,6 +2985,8 @@ async function discoverAtsBoard(config) {
       }
     }
   }
+  const linkedBoard = await discoverAtsBoardFromCareersPages(config);
+  if (linkedBoard) return linkedBoard;
   return null;
 }
 
@@ -2884,6 +3004,119 @@ function buildBoardCandidates(config) {
   add(normalizeKey(config.companyName).replace(/[^a-z0-9]/g, ''));
   add(normalizeKey(config.companyName).replace(/\b(inc|incorporated|corp|corporation|ltd|llc|co|company|technologies|technology|systems|solutions|group)\b/g, '').replace(/[^a-z0-9]/g, ''));
   return candidates.filter((value) => value.length >= 2);
+}
+
+async function discoverAtsBoardFromCareersPages(config) {
+  const urls = buildCareerPageUrls(config);
+  for (const url of urls) {
+    try {
+      const html = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
+      const atsLinks = extractAtsLinks(html, url);
+      for (const atsUrl of atsLinks) {
+        const result = await probeAtsUrl(config, atsUrl);
+        if (result) return result;
+      }
+    } catch {
+      // Many company careers pages block bots or time out; continue with the next candidate URL.
+    }
+  }
+  return null;
+}
+
+function buildCareerPageUrls(config = {}) {
+  const urls = [];
+  const add = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    try {
+      const parsed = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+      parsed.hash = '';
+      const normalized = parsed.toString();
+      if (!urls.includes(normalized)) urls.push(normalized);
+    } catch {
+      // Ignore malformed URLs.
+    }
+  };
+  add(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
+  const domain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  if (domain) {
+    add(`https://${domain}/careers`);
+    add(`https://${domain}/jobs`);
+    add(`https://${domain}/careers/jobs`);
+  }
+  return urls.slice(0, 4);
+}
+
+function extractAtsLinks(content, baseUrl = '') {
+  const text = String(content || '').replace(/&amp;/g, '&');
+  const candidates = [];
+  const add = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    try {
+      const parsed = new URL(raw, baseUrl || undefined);
+      parsed.hash = '';
+      const normalized = parsed.toString();
+      if (detectAtsTypeFromUrl(normalized) && !candidates.includes(normalized)) candidates.push(normalized);
+    } catch {
+      // Ignore malformed extracted values.
+    }
+  };
+  for (const match of text.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)) add(match[0]);
+  for (const match of text.matchAll(/\b(?:href|src|data-url)=["']([^"']+)["']/gi)) add(match[1]);
+  return candidates.slice(0, 12);
+}
+
+async function probeAtsUrl(config, atsUrl) {
+  const atsType = detectAtsTypeFromUrl(atsUrl);
+  if (!ATS_FETCHERS.has(atsType)) return null;
+  const tempConfig = {
+    ...config,
+    atsType,
+    ats: atsType,
+    sourceUrl: atsUrl,
+    boardUrl: atsUrl,
+    careersUrl: atsUrl,
+    resolvedBoardUrl: atsUrl,
+  };
+  const boardId = getConfigBoardId(tempConfig);
+  if (!boardId) return null;
+  if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite'].includes(atsType)) {
+    const probed = await probeAtsBoard(atsType, boardId);
+    if (probed) {
+      return {
+        atsType,
+        boardId,
+        apiUrl: probed.apiUrl,
+        resolvedBoardUrl: probed.resolvedBoardUrl,
+        jobCount: probed.jobCount,
+        method: 'careers_page_link',
+      };
+    }
+  }
+  if (atsType === 'workday') {
+    const descriptor = getWorkdayDescriptor(tempConfig);
+    if (!descriptor) return null;
+    return {
+      atsType,
+      boardId,
+      apiUrl: descriptor.apiUrl,
+      resolvedBoardUrl: descriptor.resolvedBoardUrl,
+      jobCount: 0,
+      method: 'careers_page_link',
+    };
+  }
+  if (atsType === 'bamboohr') {
+    return {
+      atsType,
+      boardId,
+      apiUrl: atsUrl,
+      resolvedBoardUrl: atsUrl,
+      jobCount: 0,
+      method: 'careers_page_link',
+    };
+  }
+  return null;
 }
 
 async function probeAtsBoard(atsType, boardId) {

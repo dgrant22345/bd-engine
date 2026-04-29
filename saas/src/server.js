@@ -489,6 +489,10 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, await store.getWorkspaceLoadHint(tenantId));
   }
 
+  if (pathname === '/api/ingestion/diagnostics') {
+    return sendJson(res, 200, await store.getIngestionDiagnostics(tenantId));
+  }
+
   if (pathname === '/api/runtime/status') {
     return sendJson(res, 200, store.getRuntimeStatus());
   }
