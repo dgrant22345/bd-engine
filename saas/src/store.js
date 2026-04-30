@@ -6,6 +6,8 @@ const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FET
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
 const DEFAULT_ATS_MAX_PAGES = readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 10);
+const DEFAULT_IMPORT_DISCOVERY_LIMIT = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_LIMIT, 250);
+const DEFAULT_IMPORT_DISCOVERY_MIN_READY = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_MIN_READY, 100);
 const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'boardUrl', 'careersUrl', 'url'];
 
 const pastDate = (days) => {
@@ -1351,7 +1353,7 @@ export function createStore() {
       updateProgress(68, 'discovery', `Mapped ${discovery.stats?.mapped || 0}/${discovery.stats?.checked || 0} ATS boards.`);
 
       updateProgress(72, 'import', 'Importing live jobs from active ATS boards...');
-      const importResult = await this.importLiveJobs(tenantId, { plan: selectedPlan });
+      const importResult = await this.importLiveJobs(tenantId, { plan: selectedPlan, autoDiscover: false });
       timings.importMs = importResult.timings?.totalMs || 0;
       warnings.push(...(importResult.warnings || []));
       updateProgress(88, 'import', `Fetched ${importResult.stats?.fetched || 0} jobs; kept ${importResult.stats?.canadaKept || 0} Canada jobs.`);
@@ -1533,7 +1535,9 @@ export function createStore() {
           return !isResolvedBoardConfig(item) || item.discoveryStatus === 'needs_review' || item.discoveryStatus === 'unresolved';
         });
       }
-      candidates = candidates.slice(0, limit);
+      const prioritizeStartedAt = performance.now();
+      candidates = prioritizeDiscoveryCandidates(candidates).slice(0, limit);
+      timings.candidatePrioritizationMs = Math.round(performance.now() - prioritizeStartedAt);
 
       let checked = 0;
       let mapped = directResolved;
@@ -1715,8 +1719,39 @@ export function createStore() {
       timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
       if (directResolvedConfigs) persistTenant(tenantId);
 
-      const activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
-      const importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
+      let activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
+      let importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
+      let autoDiscoveryStats = null;
+      const autoDiscoverEnabled = options.autoDiscover !== false && options.autoDiscover !== 'false';
+      const autoDiscoveryLimit = readPositiveInteger(options.autoDiscoveryLimit, DEFAULT_IMPORT_DISCOVERY_LIMIT);
+      const autoDiscoveryMinReady = readPositiveInteger(options.autoDiscoveryMinReady, DEFAULT_IMPORT_DISCOVERY_MIN_READY);
+      const autoDiscoveryNeeded = autoDiscoverEnabled
+        && autoDiscoveryLimit > 0
+        && activeTenantConfigs.length > importReadyConfigs.length
+        && importReadyConfigs.length < autoDiscoveryMinReady;
+      if (autoDiscoveryNeeded) {
+        const autoDiscoveryStartedAt = performance.now();
+        const discovery = await this.runAtsDiscovery(tenantId, {
+          plan: selectedPlan,
+          onlyMissing: true,
+          limit: autoDiscoveryLimit,
+          discoveryConcurrency: options.discoveryConcurrency || options.concurrency,
+        });
+        timings.autoDiscoveryMs = Math.round(performance.now() - autoDiscoveryStartedAt);
+        autoDiscoveryStats = discovery.stats || {};
+        if (discovery.warnings?.length) warnings.push(...discovery.warnings);
+
+        const postDiscoveryRepairStartedAt = performance.now();
+        let postDiscoveryDirectResolved = 0;
+        for (const config of tenantConfigs) {
+          if (repairKnownAtsIdentity(config, { approveDirect: true })) postDiscoveryDirectResolved++;
+        }
+        timings.postDiscoveryIdentityRepairMs = Math.round(performance.now() - postDiscoveryRepairStartedAt);
+        directResolvedConfigs += postDiscoveryDirectResolved;
+
+        activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
+        importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
+      }
       let limitedImportConfigs = importReadyConfigs;
       if (jobBoardLimit !== -1 && limitedImportConfigs.length > jobBoardLimit) {
         limitedImportConfigs = limitedImportConfigs.slice(0, jobBoardLimit);
@@ -1851,6 +1886,11 @@ export function createStore() {
         needsResolutionConfigs,
         fetchConcurrency,
         directResolvedConfigs,
+        autoDiscoveryLimit,
+        autoDiscoveryChecked: autoDiscoveryStats?.checked || 0,
+        autoDiscoveryMapped: autoDiscoveryStats?.mapped || 0,
+        autoDiscoveryDirectResolved: autoDiscoveryStats?.directResolved || 0,
+        autoDiscoveryUnresolved: autoDiscoveryStats?.unresolved || 0,
         importReadyConfigs: importReadyConfigs.length,
         supportedConfigs: supportedConfigs.length,
         fetched,
@@ -2800,6 +2840,24 @@ function getConfigAtsType(config = {}) {
   const explicit = normalizeAtsType(config.atsType || config.ats);
   if (ATS_FETCHERS.has(explicit)) return explicit;
   return detectAtsTypeFromUrl(getConfigAtsUrl(config));
+}
+
+function prioritizeDiscoveryCandidates(configs = []) {
+  return [...configs].sort((a, b) => getDiscoveryCandidateScore(b) - getDiscoveryCandidateScore(a));
+}
+
+function getDiscoveryCandidateScore(config = {}) {
+  let score = 0;
+  if (getConfigAtsUrl(config)) score += 1000;
+  if (config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url) score += 500;
+  if (config.domain || config.canonicalDomain) score += 150;
+  if (!config.lastDiscoveryCheckedAt) score += 80;
+  const status = normalizeKey(config.discoveryStatus || '');
+  if (status === 'needs_review') score += 50;
+  if (status === 'unresolved') score += 25;
+  if (status === 'error') score -= 100;
+  if (config.active === false) score -= 25;
+  return score;
 }
 
 function getConfigBoardId(config = {}) {

@@ -5898,7 +5898,10 @@ async function reseedWorkbook(path) {
 
 async function runLiveImport(buttonEl) {
   await withButtonState(buttonEl || '[data-action="run-live-import"]', 'Running import...', async () => {
-    const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
+    const accepted = await api('/api/import/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ autoDiscover: true, autoDiscoveryLimit: 300 }),
+    });
     showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
     const result = job?.result || {};
@@ -5910,7 +5913,10 @@ async function runLiveImport(buttonEl) {
     const changedText = changedJobs !== null
       ? ` ${formatNumber(changedJobs)} material job row${changedJobs === 1 ? '' : 's'} changed this run;`
       : '';
-    const baseStatus = `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
+    const discoveryText = Number(stats.autoDiscoveryChecked || 0) > 0
+      ? `Auto-discovered ${formatNumber(stats.autoDiscoveryMapped || 0)} of ${formatNumber(stats.autoDiscoveryChecked || 0)} ATS configs before import. `
+      : '';
+    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
     const status = run?.status === 'completed_with_errors'
       ? `${baseStatus} ${formatNumber(stats.errors || 0)} configs errored.`
       : baseStatus;

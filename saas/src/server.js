@@ -756,7 +756,8 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/import/jobs' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
-    return sendJson(res, 202, store.startLiveJobImport(tenantId, { plan }));
+    const body = await readJson(req);
+    return sendJson(res, 202, store.startLiveJobImport(tenantId, { ...body, plan }));
   }
 
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
