@@ -5587,6 +5587,27 @@ function getRuntimeJobs(runtime) {
   });
 }
 
+function getLiveImportTrackedJobCount(job = {}, result = {}) {
+  const stats = result.stats || result.importRun?.stats || {};
+  const candidates = [
+    result.activeJobCount,
+    stats.imported,
+    result.importRun?.stats?.imported,
+    job.recordsAffected,
+  ];
+  const value = candidates.find((item) => Number.isFinite(Number(item)));
+  return Number(value || 0);
+}
+
+function getLiveImportChangedJobCount(result = {}) {
+  const candidates = [
+    result.changedJobCount,
+    result.counts?.changedJobs,
+  ];
+  const value = candidates.find((item) => Number.isFinite(Number(item)));
+  return value === undefined ? null : Number(value);
+}
+
 function getRuntimeJobDuration(job) {
   if (!job) return '';
   const started = Date.parse(job.startedAt || job.queuedAt || '');
@@ -5622,7 +5643,7 @@ function renderIngestionHealthPanel(runtime) {
     ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
     : 'No live import is currently active';
   const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
-  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} records` : 'No records yet';
+  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} active jobs tracked` : 'No jobs tracked yet';
   const lastMeta = lastImport
     ? `${lastDuration || humanize(lastImport.status)} · ${lastRecords}`
     : 'No completed imports found';
@@ -5673,6 +5694,7 @@ function renderBackgroundJobItem(job) {
 
   const progress = getJobProgress(job);
   const hasRecordsAffected = job.recordsAffected !== undefined && job.recordsAffected !== null && job.recordsAffected !== '';
+  const recordsLabel = job.type === 'live-job-import' ? 'active jobs tracked' : 'records';
 
   return `
     <article class="timeline-item job-card job-card--${escapeAttr(job.status || 'queued')}">
@@ -5689,7 +5711,7 @@ function renderBackgroundJobItem(job) {
       ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
-        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
+        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} ${recordsLabel}` : ''}</span>
         ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       ${job.errorMessage ? `<p class="small muted">${escapeHtml(job.errorMessage)}</p>` : ''}
@@ -5883,13 +5905,15 @@ async function runLiveImport(buttonEl) {
     const run = result.importRun || {};
     const stats = result.stats || run?.stats || {};
     const warnings = run?.warnings || job?.result?.warnings || [];
-    const changedJobs = result.changedJobCount ?? result.counts?.changedJobs;
-    const changedText = Number.isFinite(Number(changedJobs))
-      ? ` Changed ${formatNumber(changedJobs)} job row${Number(changedJobs) === 1 ? '' : 's'} this run;`
+    const activeJobCount = getLiveImportTrackedJobCount(job, result);
+    const changedJobs = getLiveImportChangedJobCount(result);
+    const changedText = changedJobs !== null
+      ? ` ${formatNumber(changedJobs)} material job row${changedJobs === 1 ? '' : 's'} changed this run;`
       : '';
+    const baseStatus = `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
     const status = run?.status === 'completed_with_errors'
-      ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.${changedText} ${formatNumber(stats.errors || 0)} configs errored.`
-      : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.${changedText}`;
+      ? `${baseStatus} ${formatNumber(stats.errors || 0)} configs errored.`
+      : baseStatus;
     window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
   });
 }

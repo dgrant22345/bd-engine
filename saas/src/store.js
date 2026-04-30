@@ -345,6 +345,14 @@ tasks.forEach(t => getTenantArray(tasksByTenant, t.tenantId).push(t));
 
 const backgroundJobs = new Map();
 
+function getTrackedJobCountFromResult(result = {}) {
+  return Number(result.stats?.activeTrackedJobs || result.stats?.imported || result.importRun?.stats?.imported || 0);
+}
+
+function getTouchedJobCountFromResult(result = {}) {
+  return Number(result.stats?.jobsTouched || result.stats?.runImported || result.stats?.newJobs || result.stats?.updatedJobs || 0);
+}
+
 // ── Debounced persistence ────────────────────────────────────────────────────
 
 const pendingSaves = new Map();
@@ -1221,7 +1229,7 @@ export function createStore() {
           const result = await this.runLaunchWorkflow(tenantId, { ...options, onProgress: updateProgress });
           job.status = 'completed';
           updateProgress(100, 'completed', 'Completed');
-          job.recordsAffected = result.stats?.jobsTouched || result.stats?.accountsProcessed || 0;
+          job.recordsAffected = getTrackedJobCountFromResult(result) || getTouchedJobCountFromResult(result) || result.stats?.accountsProcessed || 0;
           job.result = result;
         } catch (err) {
           job.status = 'failed';
@@ -1368,7 +1376,7 @@ export function createStore() {
         id: `act-${Date.now()}`,
         tenantId,
         type: 'launch_workflow',
-        summary: `Launch workflow processed ${tenantAccounts.length} accounts, mapped ${discovery.stats?.mapped || 0} boards, and imported ${importResult.stats?.runImported || 0} jobs on the ${planName} plan.`,
+        summary: `Launch workflow processed ${tenantAccounts.length} accounts, mapped ${discovery.stats?.mapped || 0} boards, and is tracking ${importResult.stats?.imported || 0} active jobs on the ${planName} plan.`,
         notes: warnings.join(' '),
         occurredAt: now(),
         createdAt: now(),
@@ -1654,7 +1662,7 @@ export function createStore() {
             job.progress = 100;
             job.stage = 'completed';
             job.progressMessage = 'Completed';
-            job.recordsAffected = result.stats?.runImported || result.stats?.newJobs || result.stats?.updatedJobs || 0;
+            job.recordsAffected = getTrackedJobCountFromResult(result) || getTouchedJobCountFromResult(result);
             job.result = {
               stats: result.stats,
               importRun: result.importRun,
@@ -1876,7 +1884,7 @@ export function createStore() {
         queuedAt: now(),
         startedAt: now(),
         finishedAt: now(),
-        recordsAffected: result.count || result.accountCount || 0,
+        recordsAffected: getTrackedJobCountFromResult(result) || result.count || result.accountCount || 0,
         result,
       };
       backgroundJobs.set(job.id, job);
@@ -1997,7 +2005,7 @@ export function createStore() {
           job.message = 'Revenue pipeline completed successfully.';
           job.progressMessage = job.message;
           job.finishedAt = now();
-          job.recordsAffected = workflow.stats?.jobsTouched || workflow.stats?.activeTrackedJobs || 0;
+          job.recordsAffected = getTrackedJobCountFromResult(workflow) || getTouchedJobCountFromResult(workflow);
           job.result = {
             ...workflow,
             cleanup: purgeResult,
