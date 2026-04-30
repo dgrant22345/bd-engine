@@ -5,6 +5,8 @@ const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
+const DEFAULT_ATS_MAX_PAGES = readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 10);
+const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'boardUrl', 'careersUrl', 'url'];
 
 const pastDate = (days) => {
   const d = new Date();
@@ -583,7 +585,7 @@ export function createStore() {
       const activeConfigs = tenantConfigs.filter((item) => item.active !== false);
       const importReadyConfigs = activeConfigs.filter(isImportReadyConfig);
       const supportedConfigs = importReadyConfigs
-        .map((config) => ({ config, atsType: normalizeAtsType(config.atsType || config.ats), boardId: getConfigBoardId(config) }))
+        .map((config) => ({ config, atsType: getConfigAtsType(config), boardId: getConfigBoardId(config) }))
         .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
       const linkedCareerConfigs = tenantConfigs.filter((config) => detectAtsTypeFromUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.apiUrl || config.url || ''));
       const latestLaunch = activitiesForTenant(tenantId).find((item) => item.type === 'launch_workflow') || null;
@@ -606,7 +608,7 @@ export function createStore() {
           needsResolutionConfigs: tenantConfigs.length - importReadyConfigs.length,
           linkedCareerConfigs: linkedCareerConfigs.length,
         },
-        byAtsType: countValues(tenantConfigs.map((config) => normalizeAtsType(config.atsType || config.ats) || 'unknown')),
+        byAtsType: countValues(tenantConfigs.map((config) => getConfigAtsType(config) || 'unknown')),
         byDiscoveryStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.discoveryStatus || 'missing'))),
         byReviewStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.reviewStatus || 'missing'))),
         byImportStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.lastImportStatus || 'never'))),
@@ -1513,6 +1515,13 @@ export function createStore() {
         createdConfigs++;
       }
 
+      const identityRepairStartedAt = performance.now();
+      let directResolved = 0;
+      for (const config of tenantConfigs) {
+        if (repairKnownAtsIdentity(config, { approveDirect: true })) directResolved++;
+      }
+      timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
+
       const defaultLimit = jobBoardLimit === -1
         ? Math.max(1, tenantConfigs.length || tenantAccounts.length)
         : Math.min(75, Math.max(1, jobBoardLimit));
@@ -1527,8 +1536,8 @@ export function createStore() {
       candidates = candidates.slice(0, limit);
 
       let checked = 0;
-      let mapped = 0;
-      let highConfidence = 0;
+      let mapped = directResolved;
+      let highConfidence = directResolved;
       let unresolved = 0;
       const discoveryStartedAt = performance.now();
       const discoveryConcurrency = readPositiveInteger(options.discoveryConcurrency || options.concurrency, DEFAULT_ATS_DISCOVERY_CONCURRENCY);
@@ -1595,7 +1604,7 @@ export function createStore() {
       timings.discoveryConcurrency = discoveryConcurrency;
 
       const persistStartedAt = performance.now();
-      if (createdConfigs || checked) persistTenant(tenantId);
+      if (createdConfigs || directResolved || checked) persistTenant(tenantId);
       timings.persistQueuedMs = Math.round(performance.now() - persistStartedAt);
       timings.totalMs = Math.round(performance.now() - totalStartedAt);
 
@@ -1612,6 +1621,7 @@ export function createStore() {
         discovered: mapped,
         highConfidence,
         unresolved,
+        directResolved,
         configsCreated: createdConfigs,
         candidateCount: candidates.length,
         discoveryConcurrency,
@@ -1696,6 +1706,15 @@ export function createStore() {
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = getTenantArray(jobsByTenant, tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+
+      const identityRepairStartedAt = performance.now();
+      let directResolvedConfigs = 0;
+      for (const config of tenantConfigs) {
+        if (repairKnownAtsIdentity(config, { approveDirect: true })) directResolvedConfigs++;
+      }
+      timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
+      if (directResolvedConfigs) persistTenant(tenantId);
+
       const activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
       const importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
       let limitedImportConfigs = importReadyConfigs;
@@ -1708,7 +1727,7 @@ export function createStore() {
       const unsupportedCount = activeTenantConfigs.length - importReadyConfigs.length;
       const needsResolutionConfigs = tenantConfigs.length - importReadyConfigs.length;
       const supportedConfigs = limitedImportConfigs
-        .map((config) => ({ config, atsType: normalizeAtsType(config.atsType || config.ats), boardId: getConfigBoardId(config) }))
+        .map((config) => ({ config, atsType: getConfigAtsType(config), boardId: getConfigBoardId(config) }))
         .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
       if (!tenantConfigs.length) {
         warnings.push('No active ATS configs were found yet. Run setup/workflow first so the app can discover job boards for your accounts.');
@@ -1831,6 +1850,9 @@ export function createStore() {
         unsupportedConfigs: unsupportedCount,
         needsResolutionConfigs,
         fetchConcurrency,
+        directResolvedConfigs,
+        importReadyConfigs: importReadyConfigs.length,
+        supportedConfigs: supportedConfigs.length,
         fetched,
         canadaKept,
         filteredOutNonCanada,
@@ -2761,33 +2783,122 @@ function detectAtsTypeFromUrl(value) {
   return '';
 }
 
+function getConfigUrlCandidates(config = {}) {
+  const urls = [];
+  for (const field of CONFIG_ATS_URL_FIELDS) {
+    const value = String(config[field] || '').trim();
+    if (value && !urls.includes(value)) urls.push(value);
+  }
+  return urls;
+}
+
+function getConfigAtsUrl(config = {}) {
+  return getConfigUrlCandidates(config).find((value) => detectAtsTypeFromUrl(value)) || '';
+}
+
+function getConfigAtsType(config = {}) {
+  const explicit = normalizeAtsType(config.atsType || config.ats);
+  if (ATS_FETCHERS.has(explicit)) return explicit;
+  return detectAtsTypeFromUrl(getConfigAtsUrl(config));
+}
+
 function getConfigBoardId(config = {}) {
   const direct = config.boardId || config.board_id || config.slug || config.boardSlug || '';
   if (direct) return String(direct).trim();
-  const sourceUrl = config.sourceUrl || config.boardUrl || config.careersUrl || config.url || config.apiUrl || '';
-  const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
-  if (greenhouse) return decodeURIComponent(greenhouse[1]);
-  const greenhouseBoard = String(sourceUrl).match(/boards\.greenhouse\.io\/([^/?#]+)/i);
-  if (greenhouseBoard) return decodeURIComponent(greenhouseBoard[1]);
-  const lever = String(sourceUrl).match(/lever\.co\/(?:v0\/)?postings\/([^/?#]+)/i);
-  if (lever) return decodeURIComponent(lever[1]);
-  const leverBoard = String(sourceUrl).match(/jobs\.lever\.co\/([^/?#]+)/i);
-  if (leverBoard) return decodeURIComponent(leverBoard[1]);
-  const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
-  if (ashby) return decodeURIComponent(ashby[1]);
-  const smartRecruiters = String(sourceUrl).match(/smartrecruiters\.com\/(?:v1\/companies\/)?([^/?#]+)(?:\/postings)?/i);
-  if (smartRecruiters) return decodeURIComponent(smartRecruiters[1]);
-  const jobvite = String(sourceUrl).match(/jobs\.jobvite\.com\/(?:api\/job-list\?company=)?([^/?#&]+)/i);
-  if (jobvite) return decodeURIComponent(jobvite[1]);
+  for (const sourceUrl of getConfigUrlCandidates(config)) {
+    const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
+    if (greenhouse) return decodeURIComponent(greenhouse[1]);
+    const greenhouseBoard = String(sourceUrl).match(/boards\.greenhouse\.io\/([^/?#]+)/i);
+    if (greenhouseBoard && greenhouseBoard[1].toLowerCase() !== 'embed') return decodeURIComponent(greenhouseBoard[1]);
+    const greenhouseEmbed = parseUrlSearchParam(sourceUrl, 'for');
+    if (String(sourceUrl).match(/boards\.greenhouse\.io\/embed\/job_board/i) && greenhouseEmbed) return greenhouseEmbed;
+    const lever = String(sourceUrl).match(/lever\.co\/(?:v0\/)?postings\/([^/?#]+)/i);
+    if (lever) return decodeURIComponent(lever[1]);
+    const leverBoard = String(sourceUrl).match(/jobs\.lever\.co\/(?:embed\/)?([^/?#]+)/i);
+    if (leverBoard && leverBoard[1].toLowerCase() !== 'embed') return decodeURIComponent(leverBoard[1]);
+    const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
+    if (ashby) return decodeURIComponent(ashby[1]);
+    const smartRecruiters = String(sourceUrl).match(/smartrecruiters\.com\/(?:v1\/companies\/)?([^/?#]+)(?:\/postings)?/i);
+    if (smartRecruiters && !['jobs', 'careers', 'www', 'api'].includes(smartRecruiters[1].toLowerCase())) return decodeURIComponent(smartRecruiters[1]);
+    const jobviteApi = String(sourceUrl).match(/jobs\.jobvite\.com\/api\/job-list\?company=([^/?#&]+)/i);
+    if (jobviteApi) return decodeURIComponent(jobviteApi[1]);
+    const jobvite = String(sourceUrl).match(/jobs\.jobvite\.com\/([^/?#&]+)/i);
+    if (jobvite && !['api', 'careers'].includes(jobvite[1].toLowerCase())) return decodeURIComponent(jobvite[1]);
+  }
   const workday = getWorkdayDescriptor(config);
   if (workday) return `${workday.tenant}/${workday.site}`;
-  const bamboo = String(sourceUrl).match(/https?:\/\/([^./]+)\.bamboohr\.com/i);
-  if (bamboo) return decodeURIComponent(bamboo[1]);
+  for (const sourceUrl of getConfigUrlCandidates(config)) {
+    const bamboo = String(sourceUrl).match(/https?:\/\/([^./]+)\.bamboohr\.com/i);
+    if (bamboo) return decodeURIComponent(bamboo[1]);
+  }
   return '';
 }
 
+function parseUrlSearchParam(value, name) {
+  try {
+    const parsed = new URL(String(value || '').startsWith('http') ? value : `https://${value}`);
+    return parsed.searchParams.get(name) || '';
+  } catch {
+    return '';
+  }
+}
+
+function repairKnownAtsIdentity(config = {}, options = {}) {
+  const atsType = getConfigAtsType(config);
+  const boardId = getConfigBoardId(config);
+  if (!ATS_FETCHERS.has(atsType) || !boardId) return false;
+  const directAtsUrl = getConfigAtsUrl(config);
+  const canApprove = options.approveDirect && Boolean(directAtsUrl);
+  let changed = false;
+
+  if (normalizeAtsType(config.atsType || '') !== atsType) {
+    config.atsType = atsType;
+    changed = true;
+  }
+  if (normalizeAtsType(config.ats || '') !== atsType) {
+    config.ats = atsType;
+    changed = true;
+  }
+  if (String(config.boardId || '').trim() !== boardId) {
+    config.boardId = boardId;
+    changed = true;
+  }
+  if (directAtsUrl && !config.resolvedBoardUrl) {
+    config.resolvedBoardUrl = directAtsUrl;
+    changed = true;
+  }
+  if (canApprove) {
+    if (!['resolved', 'mapped', 'discovered', 'manual'].includes(normalizeKey(config.discoveryStatus || ''))) {
+      config.discoveryStatus = 'resolved';
+      changed = true;
+    }
+    if (normalizeKey(config.reviewStatus || '') !== 'approved') {
+      config.reviewStatus = 'approved';
+      changed = true;
+    }
+    if (config.active === false) {
+      config.active = true;
+      changed = true;
+    }
+    if (config.confidenceBand !== 'high') {
+      config.confidenceBand = 'high';
+      changed = true;
+    }
+    if (!config.discoveryMethod || config.discoveryMethod === 'public_ats_probe') {
+      config.discoveryMethod = 'direct_ats_url';
+      changed = true;
+    }
+    if (!config.lastImportStatus || ['not ready', 'unresolved'].includes(normalizeKey(config.lastImportStatus))) {
+      config.lastImportStatus = 'ready';
+      changed = true;
+    }
+  }
+  if (changed) config.updatedAt = now();
+  return changed;
+}
+
 function hasSupportedBoardIdentity(config = {}) {
-  const atsType = normalizeAtsType(config.atsType || config.ats);
+  const atsType = getConfigAtsType(config);
   return ATS_FETCHERS.has(atsType) && Boolean(getConfigBoardId(config));
 }
 
@@ -2877,9 +2988,16 @@ async function fetchAshbyJobs(config, boardId) {
 }
 
 async function fetchSmartRecruitersJobs(config, boardId) {
-  const url = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings?limit=100`;
-  const payload = await fetchJson(url);
-  const jobs = firstArray(payload?.content, payload?.postings, payload);
+  const pageSize = 100;
+  const baseUrl = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings`;
+  const jobs = [];
+  for (let page = 0; page < DEFAULT_ATS_MAX_PAGES; page++) {
+    const url = setUrlSearchParams(baseUrl, { limit: pageSize, offset: page * pageSize });
+    const payload = await fetchJson(url);
+    const pageJobs = firstArray(payload?.content, payload?.postings, payload);
+    jobs.push(...pageJobs);
+    if (pageJobs.length < pageSize) break;
+  }
   return { jobs };
 }
 
@@ -2893,12 +3011,19 @@ async function fetchWorkdayJobs(config) {
   const descriptor = getWorkdayDescriptor(config);
   if (!descriptor) return { jobs: [] };
   const url = descriptor.apiUrl;
-  const payload = await fetchJson(url, 15000, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ appliedFacets: {}, limit: 100, offset: 0, searchText: '' }),
-  });
-  return { jobs: firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children) };
+  const pageSize = 100;
+  const jobs = [];
+  for (let page = 0; page < DEFAULT_ATS_MAX_PAGES; page++) {
+    const payload = await fetchJson(url, 15000, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ appliedFacets: {}, limit: pageSize, offset: page * pageSize, searchText: '' }),
+    });
+    const pageJobs = firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children);
+    jobs.push(...pageJobs);
+    if (pageJobs.length < pageSize) break;
+  }
+  return { jobs };
 }
 
 async function fetchBamboohrJobs(config, boardId) {
@@ -2953,6 +3078,12 @@ function firstArray(...values) {
   return [];
 }
 
+function setUrlSearchParams(value, params = {}) {
+  const parsed = new URL(value);
+  for (const [key, nextValue] of Object.entries(params)) parsed.searchParams.set(key, String(nextValue));
+  return parsed.toString();
+}
+
 async function mapSettledWithConcurrency(items, concurrency, mapper) {
   const results = new Array(items.length);
   let nextIndex = 0;
@@ -2992,11 +3123,14 @@ function parseBamboohrJobs(content) {
 }
 
 async function discoverAtsBoard(config) {
-  const knownAtsType = normalizeAtsType(config.atsType || config.ats);
+  const knownAtsType = getConfigAtsType(config);
   const atsTypes = ATS_FETCHERS.has(knownAtsType)
     ? [knownAtsType, ...[...ATS_FETCHERS.keys()].filter((item) => item !== knownAtsType)]
     : [...ATS_FETCHERS.keys()];
   const candidates = buildBoardCandidates(config);
+
+  const linkedBoard = await discoverAtsBoardFromCareersPages(config);
+  if (linkedBoard) return linkedBoard;
 
   for (const boardId of candidates) {
     for (const atsType of atsTypes) {
@@ -3013,8 +3147,6 @@ async function discoverAtsBoard(config) {
       }
     }
   }
-  const linkedBoard = await discoverAtsBoardFromCareersPages(config);
-  if (linkedBoard) return linkedBoard;
   return null;
 }
 
