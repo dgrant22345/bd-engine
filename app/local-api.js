@@ -51,10 +51,15 @@
     const fetchPromise = (async () => {
       let response;
       try {
+        const headers = new Headers(options.headers || {});
+        if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+          headers.set('Content-Type', 'application/json');
+        }
+
         response = await fetch(path, {
-          headers: { 'Content-Type': 'application/json' },
-          cache: 'no-store',
           ...options,
+          headers,
+          cache: 'no-store',
         });
       } catch (error) {
         throw new Error(getNetworkErrorMessage(path, error));
@@ -62,13 +67,19 @@
 
       if (!response.ok) {
         let message = `Request failed: ${response.status}`;
+        let payload = null;
         try {
-          const payload = await response.json();
+          payload = await response.json();
           message = payload.error || payload.details || message;
         } catch (_error) {
           // Ignore non-JSON error bodies.
         }
-        throw new Error(message);
+        const error = new Error(message);
+        error.status = response.status;
+        if (payload && typeof payload === 'object') {
+          Object.assign(error, payload);
+        }
+        throw error;
       }
 
       return response.status === 204 ? null : await response.json();
@@ -85,7 +96,7 @@
       } else if (method !== 'GET') {
         invalidateCache();
       }
-      return cloneValue(payload);
+      return useCache ? cloneValue(payload) : payload;
     } finally {
       if (useCache) {
         inflightRequests.delete(cacheKey);

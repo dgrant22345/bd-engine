@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260425-v0-polish-setup-bg-7';
+const ASSET_VERSION = '20260430-live-jobs-auto-discovery-1';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

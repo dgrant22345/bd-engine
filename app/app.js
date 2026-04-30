@@ -4,12 +4,22 @@ const defaultAdminCollapsed = {
   'resolver-coverage': true,
   'runtime-status': true,
   'background-jobs': true,
-  'pipeline-ops': true,
+  'pipeline-ops': false,
   'scoring-settings': true,
   'automation-rules': true,
   'alert-thresholds': true,
   'ats-config-form': true,
   'ats-config-records': true,
+};
+
+const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
+const DASHBOARD_RENDER_LIMITS = {
+  todayQueue: 50,
+  followUps: 10,
+  resolution: 8,
+  recentJobs: 12,
+  tasks: 6,
+  analytics: 40,
 };
 
 function readJsonSetting(key, fallback) {
@@ -65,6 +75,8 @@ const appState = {
   stageTimestamps: JSON.parse(localStorage.getItem('bd_stage_ts') || '{}'),
   // Phase 6: Commercial-grade features
   onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
+  postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
+  tourActive: false,
   dashboardLayout: JSON.parse(localStorage.getItem('bd_dash_layout') || 'null'),
   dashboardCollapsed: JSON.parse(localStorage.getItem('bd_dash_collapsed') || '{}'),
   customFields: JSON.parse(localStorage.getItem('bd_custom_fields') || '[]'),
@@ -73,15 +85,21 @@ const appState = {
   alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
   bulkLastClickIdx: null,
   duplicateCache: null,
+  persona: 'bd',
   setupStatus: null,
   setupStep: 1,
   setupBusy: false,
-  setupCsvContent: '',
+  setupCsvFile: null, setupCsvContent: '',
   setupCsvFileName: '',
   setupPreview: null,
   setupResult: null,
   setupImportJobId: '',
   setupProgressMessage: '',
+  workspaceLoadHint: null,
+  workspaceLoadProgressTimer: null,
+  workspaceLoadProgressKey: '',
+  workspaceLoadProgressVisible: false,
+  workspaceLoadProgressValue: 0,
   setupDraft: {
     workspaceName: '',
     userName: '',
@@ -89,11 +107,16 @@ const appState = {
     ownersText: '',
     licenseKey: '',
   },
+  taskQuery: { page: 1, pageSize: 50, status: 'pending' },
 };
 
 const viewTitle = document.getElementById('view-title');
 const appRoot = document.getElementById('app');
 const workspaceName = document.getElementById('workspace-name');
+const workspaceFootnote = document.querySelector('.sidebar-footnote');
+const workspaceLoadWarning = document.getElementById('workspace-load-warning');
+const workspaceLoadMessage = document.getElementById('workspace-load-message');
+const workspaceLoadProgressBar = document.getElementById('workspace-load-progress-bar');
 const searchInput = document.getElementById('global-search-input');
 const searchResults = document.getElementById('search-results');
 const appAlert = document.getElementById('app-alert');
@@ -237,8 +260,9 @@ document.querySelectorAll('.nav a').forEach(a => {
 const cmdActions = [
   { id: 'nav-dashboard', label: 'Go to Dashboard', icon: '&#9632;', key: 'G D', action: () => { location.hash = '#/dashboard'; } },
   { id: 'nav-accounts', label: 'Go to Accounts', icon: '&#9632;', key: 'G A', action: () => { location.hash = '#/accounts'; } },
-  { id: 'nav-contacts', label: 'Go to Contacts', icon: '&#9632;', key: 'G C', action: () => { location.hash = '#/contacts'; } },
   { id: 'nav-jobs', label: 'Go to Jobs', icon: '&#9632;', key: 'G J', action: () => { location.hash = '#/jobs'; } },
+  { id: 'nav-contacts', label: 'Go to Contacts', icon: '&#9632;', key: 'G C', action: () => { location.hash = '#/contacts'; } },
+  { id: 'nav-tasks', label: 'Go to Tasks', icon: '&#9632;', key: 'G T', action: () => { location.hash = '#/tasks'; } },
   { id: 'nav-admin', label: 'Go to Admin', icon: '&#9632;', key: 'G X', action: () => { location.hash = '#/admin'; } },
   { id: 'toggle-theme', label: 'Toggle theme', icon: '&#9789;', key: '', action: cycleTheme },
   { id: 'refresh', label: 'Refresh data', icon: '&#8635;', key: '', action: () => refreshBootstrapButton?.click() },
@@ -1498,6 +1522,10 @@ function renderDashboardCharts(accounts) {
 
 window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
+  if (isBillingRequiredError(event.reason)) {
+    renderBillingRequiredView(event.reason);
+    return;
+  }
   window.bdLocalApi.handleError(event.reason, appAlert);
 });
 
@@ -1507,37 +1535,184 @@ window.addEventListener('error', (event) => {
 
 init();
 
+function getWorkspaceLoadProgressKey(hint = appState.workspaceLoadHint) {
+  return `bd_large_workspace_load_seen:${hint?.tenantId || 'current'}`;
+}
+
+function shouldShowWorkspaceLoadProgress(hint) {
+  if (!hint?.shouldShowProgress || !hint?.isLargeDataset) return false;
+  const key = getWorkspaceLoadProgressKey(hint);
+  try {
+    return sessionStorage.getItem(key) !== 'done';
+  } catch {
+    return true;
+  }
+}
+
+function describeWorkspaceLoadSize(hint = {}) {
+  const counts = hint.counts || {};
+  const parts = [
+    ['contacts', counts.contacts],
+    ['accounts', counts.accounts],
+    ['jobs', counts.jobs],
+    ['ATS boards', counts.configs],
+  ]
+    .filter(([, value]) => Number(value || 0) > 0)
+    .map(([label, value]) => `${formatNumber(value)} ${label}`);
+  return parts.slice(0, 2).join(' and ') || 'a large dataset';
+}
+
+async function loadWorkspaceLoadHint() {
+  const startedAt = performance.now();
+  const hint = await api('/api/workspace/load-hint', { skipCache: true });
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  appState.workspaceLoadHint = hint;
+  if (elapsedMs > 250) {
+    console.info(`Slow workspace load hint: app/app.js loadWorkspaceLoadHint ${elapsedMs}ms`);
+  }
+  return hint;
+}
+
+function startWorkspaceLoadProgress(hint) {
+  if (!shouldShowWorkspaceLoadProgress(hint) || appState.workspaceLoadProgressVisible) return false;
+  appState.workspaceLoadProgressKey = getWorkspaceLoadProgressKey(hint);
+  appState.workspaceLoadProgressVisible = true;
+  appState.workspaceLoadProgressValue = 8;
+  workspaceFootnote?.classList.add('is-loading-large');
+  workspaceLoadWarning?.classList.remove('hidden');
+  updateWorkspaceLoadProgress(8, `Large first run detected: ${describeWorkspaceLoadSize(hint)}. This can take a few minutes; keep this tab open.`);
+  clearInterval(appState.workspaceLoadProgressTimer);
+  appState.workspaceLoadProgressTimer = window.setInterval(() => {
+    if (!appState.workspaceLoadProgressVisible) {
+      clearInterval(appState.workspaceLoadProgressTimer);
+      return;
+    }
+    const current = appState.workspaceLoadProgressValue;
+    const increment = current < 45 ? 4 : current < 75 ? 2 : 0.75;
+    updateWorkspaceLoadProgress(Math.min(92, current + increment));
+  }, 1800);
+  return true;
+}
+
+function updateWorkspaceLoadProgress(value, message = '') {
+  if (!appState.workspaceLoadProgressVisible) return;
+  const nextValue = Math.max(appState.workspaceLoadProgressValue || 0, Math.min(100, Math.round(value)));
+  appState.workspaceLoadProgressValue = nextValue;
+  if (workspaceLoadProgressBar) workspaceLoadProgressBar.style.width = `${nextValue}%`;
+  if (message && workspaceLoadMessage) workspaceLoadMessage.textContent = message;
+}
+
+function hideWorkspaceLoadProgress({ markSeen = false } = {}) {
+  clearInterval(appState.workspaceLoadProgressTimer);
+  appState.workspaceLoadProgressTimer = null;
+  appState.workspaceLoadProgressVisible = false;
+  appState.workspaceLoadProgressValue = 0;
+  workspaceFootnote?.classList.remove('is-loading-large');
+  workspaceLoadWarning?.classList.add('hidden');
+  if (workspaceLoadProgressBar) workspaceLoadProgressBar.style.width = '0%';
+  if (markSeen && appState.workspaceLoadProgressKey) {
+    try {
+      sessionStorage.setItem(appState.workspaceLoadProgressKey, 'done');
+    } catch {
+      // Session storage is a hint only; the server-side first-load guard is authoritative.
+    }
+  }
+}
+
+function finishWorkspaceLoadProgress() {
+  if (!appState.workspaceLoadProgressVisible) return;
+  updateWorkspaceLoadProgress(100, 'Workspace ready.');
+  window.setTimeout(() => hideWorkspaceLoadProgress({ markSeen: true }), 900);
+}
+
 async function init() {
   bindEvents();
   window.bdLocalApi.setAlert('', appAlert);
-  renderLoadingState('Dashboard', 'Loading your operating view...');
+  trackAppVisit().catch(() => {});
+  renderLoadingState('Dashboard', 'Building your operating view...');
+  let initializationActive = true;
+  const loadHintPromise = loadWorkspaceLoadHint()
+    .then((hint) => {
+      if (initializationActive) startWorkspaceLoadProgress(hint);
+      return hint;
+    })
+    .catch((error) => {
+      console.info('Workspace load hint unavailable.', error);
+      return null;
+    });
+  
+  // Set a timer to show a "long setup" warning if things are taking a while
+  const longLoadTimer = setTimeout(() => {
+    if (appState.activeView === 'dashboard' && !appState.bootstrap) {
+      renderLoadingState('Dashboard', 'First-time setup is taking longer than expected. We are still processing your data...');
+    }
+  }, 5000);
+
   try {
+    await Promise.race([loadHintPromise, sleep(250)]);
+    updateWorkspaceLoadProgress(18, 'Large first run: checking setup status for a large workspace...');
     const setupStatus = await loadSetupStatus(true);
     const initialRoot = getRouteRoot();
     if (setupStatus?.requiresSetup && initialRoot !== 'setup') {
+      initializationActive = false;
+      clearTimeout(longLoadTimer);
+      hideWorkspaceLoadProgress();
       location.hash = '#/setup';
+      return;
+    }
+    if (initialRoot === 'setup') {
+      initializationActive = false;
+      clearTimeout(longLoadTimer);
+      hideWorkspaceLoadProgress();
       await renderRoute();
       return;
     }
     if (routeNeedsBootstrapFilters(initialRoot)) {
+      updateWorkspaceLoadProgress(46, 'Large first run: loading workspace snapshot and filters...');
       await loadBootstrap(true, { includeFilters: true });
+      clearTimeout(longLoadTimer);
+      updateWorkspaceLoadProgress(86, 'Large first run: rendering workspace...');
       await renderRoute();
+      initializationActive = false;
+      finishWorkspaceLoadProgress();
     } else {
+      clearTimeout(longLoadTimer);
       await renderRoute();
+      updateWorkspaceLoadProgress(72, 'Large first run: dashboard is ready. Finishing workspace details...');
       loadBootstrap(false).catch((error) => {
+        initializationActive = false;
+        hideWorkspaceLoadProgress();
         console.warn('Bootstrap hydration failed in background.', error);
         window.bdLocalApi.setAlert('Background data refresh failed. Some filters may be stale.', appAlert);
         return null;
+      }).then(() => {
+        initializationActive = false;
+        finishWorkspaceLoadProgress();
       });
     }
   } catch (error) {
+    initializationActive = false;
+    hideWorkspaceLoadProgress();
+    if (isBillingRequiredError(error)) {
+      clearTimeout(longLoadTimer);
+      await renderBillingRequiredView(error);
+      return;
+    }
     window.bdLocalApi.handleError(error, appAlert);
     appRoot.innerHTML = `<div class="empty-state">Unable to load the BD Engine data. ${escapeHtml(error.message || String(error))}</div>`;
   }
 }
 
 function bindEvents() {
-  window.addEventListener('hashchange', () => renderRoute());
+  window.addEventListener('hashchange', () => {
+    renderRoute().catch((error) => {
+      if (isBillingRequiredError(error)) {
+        renderBillingRequiredView(error);
+        return;
+      }
+      window.bdLocalApi.handleError(error, appAlert);
+    });
+  });
   document.addEventListener('keydown', (e) => {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
@@ -1589,7 +1764,7 @@ function bindEvents() {
     const now = Date.now();
     if (appState.lastKey === 'g' && now - appState.lastKeyTime < 800) {
       appState.lastKey = '';
-      const navMap = { d: '#/dashboard', a: '#/accounts', c: '#/contacts', j: '#/jobs', x: '#/admin' };
+      const navMap = { d: '#/dashboard', a: '#/accounts', c: '#/contacts', t: '#/tasks', j: '#/jobs', x: '#/admin' };
       if (navMap[e.key]) { e.preventDefault(); location.hash = navMap[e.key]; return; }
     }
     appState.lastKey = e.key;
@@ -1679,6 +1854,14 @@ function bindEvents() {
     }
 
     const actionName = action.dataset.action;
+    if (actionName === 'next-tour-step') {
+      nextTourStep();
+      return;
+    }
+    if (actionName === 'end-tour') {
+      endTour();
+      return;
+    }
     if (actionName === 'setup-browse-csv') {
       document.getElementById('setup-csv-file')?.click();
       return;
@@ -1690,6 +1873,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-skip-import') {
+        appState.setupCsvFile = null;
       appState.setupCsvContent = '';
       appState.setupCsvFileName = '';
       appState.setupPreview = null;
@@ -1705,6 +1889,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-open-dashboard') {
+      queuePostSetupTour();
       invalidateAppData();
       await loadBootstrap(true, { includeFilters: true });
       location.hash = '#/dashboard';
@@ -1822,6 +2007,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-pipeline') {
+      await runRevenuePipeline(action);
+      return;
+    }
+
     if (actionName === 'run-discovery') {
       await runDiscovery(action);
       return;
@@ -1852,6 +2042,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'run-launch-workflow') {
+      await runLaunchWorkflow(action);
+      return;
+    }
+
     if (actionName === 'dry-run-connections-csv') {
       await runConnectionsCsvImport(true);
       return;
@@ -1859,6 +2054,64 @@ function bindEvents() {
 
     if (actionName === 'import-connections-csv') {
       await runConnectionsCsvImport(false);
+      return;
+    }
+
+    if (actionName === 'billing-checkout') {
+      const planId = document.getElementById('billing-plan-select')?.value;
+      if (!planId) return;
+      action.disabled = true;
+      action.textContent = 'Redirecting...';
+      try {
+        const result = await api('/api/billing/checkout', {
+          method: 'POST',
+          body: JSON.stringify({ planId }),
+        });
+        if (result.url) {
+          (window.top || window).location.href = result.url;
+        } else {
+          showToast(result.error || 'Failed to initialize checkout', 'error');
+          action.disabled = false;
+          action.textContent = 'Subscribe via Stripe';
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        action.disabled = false;
+        action.textContent = 'Subscribe via Stripe';
+      }
+      return;
+    }
+
+    if (actionName === 'billing-portal') {
+      action.disabled = true;
+      action.textContent = 'Opening...';
+      try {
+        const result = await api('/api/billing/portal', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        if (result.url) {
+          (window.top || window).location.href = result.url;
+        } else {
+          showToast(result.error || 'Failed to open billing portal', 'error');
+          action.disabled = false;
+          action.textContent = 'Manage billing';
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        action.disabled = false;
+        action.textContent = 'Manage billing';
+      }
+      return;
+    }
+
+    if (actionName === 'copy-referral-link') {
+      const link = action.dataset.referralLink || document.getElementById('referral-link')?.value || '';
+      if (!link) return;
+      const originalText = action.textContent;
+      await navigator.clipboard.writeText(link);
+      action.textContent = 'Copied!';
+      setTimeout(() => { action.textContent = originalText; }, 1400);
       return;
     }
 
@@ -1920,6 +2173,18 @@ function bindEvents() {
 
     if (actionName === 'log-generated-outreach') {
       await logGeneratedOutreach(action);
+      return;
+    }
+
+    if (actionName === 'filter-tasks') {
+      appState.taskQuery.status = action.dataset.status;
+      appState.taskQuery.page = 1;
+      await renderTasksView();
+      return;
+    }
+
+    if (actionName === 'complete-task') {
+      await completeTask(action.dataset.id);
       return;
     }
 
@@ -2270,6 +2535,7 @@ function bindEvents() {
 
 async function loadBootstrap(force, options = {}) {
   appState.bootstrap = await window.bdLocalApi.loadBootstrap(appState, force, options);
+  if (appState.bootstrap?.persona) appState.persona = normalizeAppPersona(appState.bootstrap.persona);
   workspaceName.textContent = appState.bootstrap?.workspace?.name || 'BD Engine Workspace';
   window.bdLocalApi.setAlert('', appAlert);
   return appState.bootstrap;
@@ -2279,16 +2545,52 @@ async function api(path, options = {}) {
   return window.bdLocalApi.api(appState, path, options);
 }
 
+function getVisitorId() {
+  const key = 'bd_visitor_id';
+  let visitorId = localStorage.getItem(key);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID ? crypto.randomUUID() : `visitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(key, visitorId);
+  }
+  return visitorId;
+}
+
+async function trackAppVisit() {
+  const payload = {
+    visitorId: getVisitorId(),
+    eventType: 'pageview',
+    path: `${window.location.pathname}${window.location.hash || ''}`,
+    referrer: document.referrer || '',
+    source: document.referrer ? 'referrer' : 'direct',
+  };
+  await fetch('/api/analytics/visit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+    keepalive: true,
+  });
+}
+
 async function loadSetupStatus(force = false) {
   if (appState.setupStatus && !force) {
     return appState.setupStatus;
   }
   appState.setupStatus = await api('/api/setup/status', { skipCache: true });
+  if (appState.setupStatus?.persona) appState.persona = normalizeAppPersona(appState.setupStatus.persona);
   if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
     const existingName = appState.setupStatus.workspace.name;
     appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
   }
   return appState.setupStatus;
+}
+
+function normalizeAppPersona(value) {
+  return value === 'jobseeker' ? 'jobseeker' : 'bd';
+}
+
+function isJobSeekerPersona() {
+  return normalizeAppPersona(appState.persona || appState.bootstrap?.persona || appState.setupStatus?.persona) === 'jobseeker';
 }
 
 function getFormValues(form) {
@@ -2646,6 +2948,7 @@ async function watchBackgroundJob(jobId, options = {}) {
   const label = options.label || 'Background job';
   while (true) {
     const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    updateBackgroundProgressPanel(job, label);
     try {
       const runtime = await loadRuntimeStatus(true);
       hydrateAdminRuntimePanels(runtime);
@@ -2675,19 +2978,54 @@ async function watchBackgroundJob(jobId, options = {}) {
       throw new Error(`${label} was cancelled.`);
     }
 
-    window.bdLocalApi.setAlert(`${label}: ${job.progressMessage || humanize(job.status)}`, appAlert);
+    const pct = Number.isFinite(Number(job.progress)) ? ` ${Math.round(Number(job.progress))}%` : '';
+    window.bdLocalApi.setAlert(`${label}${pct}: ${job.progressMessage || humanize(job.status)}`, appAlert);
     await sleep(2000);
+  }
+}
+
+function updateBackgroundProgressPanel(job, fallbackLabel = 'Background job') {
+  const container = document.getElementById('pipeline-progress-container');
+  if (!container || !job) return;
+  const rawProgress = Number(job.progress);
+  const progress = Number.isFinite(rawProgress)
+    ? Math.max(0, Math.min(100, Math.round(rawProgress)))
+    : (job.status === 'completed' ? 100 : 8);
+  const bar = container.querySelector('.pipeline-progress-bar-fill');
+  const label = container.querySelector('.pipeline-progress-label');
+  const stage = container.querySelector('.pipeline-progress-stage');
+  const eyebrow = container.querySelector('.pipeline-progress-copy .eyebrow');
+
+  container.classList.remove('hidden');
+  if (bar) bar.style.width = `${progress}%`;
+  if (label) label.textContent = `${progress}%`;
+  if (stage) stage.textContent = job.progressMessage || job.message || humanize(job.stage || job.status || 'Processing');
+  if (eyebrow) eyebrow.textContent = job.summary || fallbackLabel;
+
+  if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+    window.setTimeout(() => container.classList.add('hidden'), 4500);
   }
 }
 
 function renderLoadingState(title, subtitle) {
   setViewTitle(title);
+  const isFirstSetup = appState.setupStatus?.requiresSetup || appState.setupBusy;
   appRoot.innerHTML = `
     <section class="hero-card loading-shell">
       <div class="loading-copy">
-        <p class="eyebrow">Loading view</p>
+        <p class="eyebrow">Operating view</p>
         <h3>${escapeHtml(title)}</h3>
         <p class="subtitle small">${escapeHtml(subtitle || 'Fetching the latest hiring and account signals...')}</p>
+        
+        ${isFirstSetup ? `
+          <div class="setup-warning-box">
+            <div class="small"><strong>First-time setup in progress.</strong> This may take up to 2-3 minutes while we process your LinkedIn network and build your hiring radar.</div>
+            <div class="progress-container">
+              <div class="progress-bar-fill" id="setup-progress-bar" style="width: 15%"></div>
+            </div>
+            <div class="progress-label small muted" id="setup-progress-text">Initializing workspace...</div>
+          </div>
+        ` : ''}
       </div>
       <div class="loading-grid">
         <span class="skeleton skeleton-pill"></span>
@@ -2701,6 +3039,72 @@ function renderLoadingState(title, subtitle) {
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
+    </section>
+  `;
+  
+  if (isFirstSetup) {
+    // Simulate some progress movement if it's stuck on the loader
+    let progress = 15;
+    const interval = setInterval(() => {
+      const bar = document.getElementById('setup-progress-bar');
+      const text = document.getElementById('setup-progress-text');
+      if (!bar) {
+        clearInterval(interval);
+        return;
+      }
+      progress = Math.min(95, progress + Math.random() * 2);
+      bar.style.width = `${progress}%`;
+      if (progress > 80) text.textContent = 'Finalizing hiring signals...';
+      else if (progress > 60) text.textContent = 'Resolving company ATS boards...';
+      else if (progress > 40) text.textContent = 'Analyzing job activity...';
+      else if (progress > 25) text.textContent = 'Parsing LinkedIn connections...';
+    }, 3000);
+  }
+}
+
+function isBillingRequiredError(error) {
+  return Boolean(error && (error.status === 402 || error.billingRequired || error.code === 'billing_required'));
+}
+
+async function renderBillingRequiredView(error = {}) {
+  setViewTitle('Billing required');
+  activateNav('');
+  renderBreadcrumbs(null);
+  window.bdLocalApi.setAlert('', appAlert);
+
+  let billing = null;
+  try {
+    billing = await api('/api/billing', { skipCache: true });
+  } catch (_billingError) {
+    billing = null;
+  }
+
+  const stripeStatus = billing?.stripe || {};
+  const stripeReady = Boolean(stripeStatus.checkoutReady);
+  const selectedPlanId = billing?.plan?.id === 'sales' ? 'sales' : 'jobseeker';
+  const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
+  const stripeBillingMessage = stripeReady
+    ? 'Checkout is ready.'
+    : 'Live checkout is not enabled yet. Ask the BD Engine owner to finish Stripe live-mode setup.';
+
+  appRoot.innerHTML = `
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Billing required</p>
+        <h2>Choose a plan to continue</h2>
+        <p class="subtitle">${escapeHtml(message)}</p>
+        <p class="small muted">${escapeHtml(stripeBillingMessage)}</p>
+        <div class="inline-field-stack" style="max-width: 420px;">
+          <select id="billing-plan-select">
+            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
+            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
+          </select>
+          <div class="button-row">
+            <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
+            ${billing?.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
+          </div>
+        </div>
+      </div>
     </section>
   `;
 }
@@ -2734,7 +3138,6 @@ async function renderRoute() {
   if (root === 'setup') {
     if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
       location.hash = '#/dashboard';
-      await renderDashboardView();
       return;
     }
     activateNav('');
@@ -2745,9 +3148,6 @@ async function renderRoute() {
 
   if (appState.setupStatus?.requiresSetup) {
     location.hash = '#/setup';
-    activateNav('');
-    renderBreadcrumbs(null);
-    await renderSetupWizard();
     return;
   }
 
@@ -2776,6 +3176,13 @@ async function renderRoute() {
     return;
   }
 
+  if (root === 'tasks') {
+    activateNav('tasks');
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Tasks' }]);
+    await renderTasksView();
+    return;
+  }
+
   if (root === 'jobs') {
     activateNav('jobs');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Jobs' }]);
@@ -2787,6 +3194,9 @@ async function renderRoute() {
     activateNav('admin');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Admin' }]);
     await renderAdminView();
+    if (parts[1] === 'billing') {
+      openAdminSection('billing-subscription');
+    }
     scheduleRuntimePoll();
     return;
   }
@@ -2858,7 +3268,14 @@ async function renderSetupWizard() {
   const steps = getSetupSteps();
   const current = getCurrentSetupStep();
   const draft = appState.setupDraft;
-  const setupTitle = current.key === 'launch' ? 'Setup complete' : 'First-run setup';
+  const jobSeeker = isJobSeekerPersona();
+  const setupTitle = current.key === 'launch'
+    ? 'Setup complete'
+    : jobSeeker ? 'Job search setup' : 'First-run setup';
+  const setupEyebrow = jobSeeker ? 'Job search workspace' : 'BD Engine local setup';
+  const setupIntro = jobSeeker
+    ? 'Create your search workspace, bring in your LinkedIn connections, and start mapping target companies from your own network.'
+    : 'Create your workspace, bring in your LinkedIn connections, and start from your own data.';
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -2868,9 +3285,9 @@ async function renderSetupWizard() {
       <div class="setup-card">
         <div class="setup-header">
           <div>
-            <p class="eyebrow">BD Engine local setup</p>
+            <p class="eyebrow">${escapeHtml(setupEyebrow)}</p>
             <h2 id="setup-title">${escapeHtml(setupTitle)}</h2>
-            <p class="muted">Create your workspace, bring in your LinkedIn connections, and start from your own data.</p>
+            <p class="muted">${escapeHtml(setupIntro)}</p>
           </div>
           <ol class="setup-steps" aria-label="Setup progress">
             ${steps.map((step, index) => `
@@ -2891,18 +3308,23 @@ async function renderSetupWizard() {
 
 function renderSetupStepContent(stepKey) {
   const draft = appState.setupDraft;
+  const jobSeeker = isJobSeekerPersona();
   if (stepKey === 'profile') {
+    const defaultName = draft.userName || appState.user?.name || '';
+    const defaultEmail = draft.userEmail || appState.user?.email || '';
+    const workspaceLabel = jobSeeker ? 'Search workspace name' : 'Workspace or company name';
+    const workspacePlaceholder = jobSeeker ? 'My Job Search 2026' : 'Your company or team';
     return `
       <form id="setup-profile-form" class="setup-form">
         <div class="setup-grid">
-          <label>Workspace or company name
-            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="Your company or team" />
+          <label>${escapeHtml(workspaceLabel)}
+            <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="${escapeAttr(workspacePlaceholder)}" />
           </label>
           <label>Your name
-            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(draft.userName)}" placeholder="Full name" />
+            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(defaultName)}" placeholder="Full name" />
           </label>
           <label>Your email
-            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(draft.userEmail)}" placeholder="you@example.com" />
+            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(defaultEmail)}" placeholder="you@example.com" />
           </label>
         </div>
         <div class="button-row">
@@ -2913,12 +3335,16 @@ function renderSetupStepContent(stepKey) {
   }
 
   if (stepKey === 'team') {
+    const rosterLabel = jobSeeker ? 'Optional collaborators or coaches' : 'Optional team or owner roster';
+    const rosterHelp = jobSeeker
+      ? 'Leave this blank if you are running the search yourself. You can add collaborators later.'
+      : 'Leave this blank if you are the only owner. You can add or edit owners later.';
     return `
       <form id="setup-team-form" class="setup-form">
-        <label>Optional team or owner roster
+        <label>${escapeHtml(rosterLabel)}
           <textarea id="setup-owners-text" name="ownersText" rows="7" placeholder="One person per line, for example: Name, email@example.com">${escapeHtml(draft.ownersText)}</textarea>
         </label>
-        <p class="muted small">Leave this blank if you are the only owner. You can add or edit owners later.</p>
+        <p class="muted small">${escapeHtml(rosterHelp)}</p>
         <div class="button-row">
           <button class="secondary-button" type="button" data-action="setup-back">Back</button>
           <button class="primary-button" type="submit">Continue</button>
@@ -2943,13 +3369,33 @@ function renderSetupStepContent(stepKey) {
   }
 
   if (stepKey === 'import') {
-    const hasCsv = Boolean(appState.setupCsvContent);
+    const hasCsv = Boolean(appState.setupCsvFile);
+    const importTitle = jobSeeker ? 'Import LinkedIn Connections.csv' : 'Import LinkedIn Connections.csv';
+    const importCopyHtml = jobSeeker
+      ? 'Upload your LinkedIn <code>Connections.csv</code> to map people you know to target companies and open roles.'
+      : 'From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.';
     return `
       <div class="setup-form">
         <div class="setup-import-copy">
-          <h3>Import LinkedIn Connections.csv</h3>
-          <p class="muted">From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.</p>
+          <h3>${escapeHtml(importTitle)}</h3>
+          <p class="muted">${importCopyHtml}</p>
         </div>
+        
+        <div class="onboarding-guide onboarding-guide--setup">
+          <p class="onboarding-guide__title">How to get your Connections.csv:</p>
+          <ol class="onboarding-guide__list">
+            <li>Go to <strong>Settings & Privacy</strong> on LinkedIn.</li>
+            <li>Click <strong>Data privacy</strong> in the sidebar.</li>
+            <li>Select <strong>Get a copy of your data</strong>.</li>
+            <li>Choose <strong>"Want something in particular?"</strong> and check <strong>Connections</strong>.</li>
+            <li>Click <strong>Request archive</strong>. LinkedIn will email you a link usually within <strong>10–15 minutes</strong>.</li>
+          </ol>
+          <div class="onboarding-guide__note">
+            <span class="toast-icon">&#8505;</span>
+            <span>Once you receive the zip from LinkedIn, look for the <code>Connections.csv</code> file inside.</span>
+          </div>
+        </div>
+
         <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
           <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
@@ -2974,16 +3420,20 @@ function renderSetupStepContent(stepKey) {
     return `
       <div class="setup-success">
         ${renderSetupProgress('Importing LinkedIn connections', appState.setupProgressMessage || 'This can take a few minutes for a large LinkedIn export.')}
-        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving accounts, and avoiding duplicates.</p>
+        <p class="muted">You can leave this window open. BD Engine is saving contacts, deriving ${jobSeeker ? 'companies' : 'accounts'}, and avoiding duplicates.</p>
       </div>
     `;
   }
 
+  const successTitle = jobSeeker ? 'Your job search workspace is ready' : 'Your workspace is ready';
+  const successCopy = jobSeeker
+    ? 'BD Engine will now open your job search dashboard using your own network and target-company data.'
+    : 'BD Engine will now open your dashboard using the local data stored on this computer.';
   return `
     <div class="setup-success">
       <div class="setup-success-mark" aria-hidden="true">OK</div>
-      <h3>Your workspace is ready</h3>
-      <p class="muted">BD Engine will now open your dashboard using the local data stored on this computer.</p>
+      <h3>${escapeHtml(successTitle)}</h3>
+      <p class="muted">${escapeHtml(successCopy)}</p>
       <div class="setup-summary-grid">
         <div><strong>${formatNumber(stats.imported || 0)}</strong><span>Imported</span></div>
         <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updated</span></div>
@@ -3106,31 +3556,58 @@ function formatCsvUploadSummary(file, csvContent = '') {
 async function handleSetupCsvFile(file) {
   if (!file) return;
   persistSetupDraftFromDom();
+
   if (!file.name.toLowerCase().endsWith('.csv')) {
     showToast('Please choose the Connections.csv file from LinkedIn.', 'warning');
+    return;
   }
-  appState.setupCsvContent = await readTextFile(file);
+
+  appState.setupCsvFile = file;
+  appState.setupCsvContent = '';
   appState.setupCsvFileName = file.name;
   appState.setupPreview = null;
+
   await renderSetupWizard();
+  showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
+}
+async function postConnectionsCsvFile(file, options = {}) {
+  const params = new URLSearchParams();
+  params.set('dryRun', options.dryRun ? 'true' : 'false');
+  params.set('useEmptyState', options.useEmptyState ? 'true' : 'false');
+  params.set('fileName', options.fileName || file?.name || 'Connections.csv');
+  const endpoint = options.preview ? '/api/import/connections-csv/preview' : '/api/import/connections-csv';
+  return api(`${endpoint}?${params.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/csv;charset=utf-8' },
+    body: file,
+  });
 }
 
 async function previewSetupCsv() {
-  persistSetupDraftFromDom();
-  if (!appState.setupCsvContent) {
-    showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+  if (!appState.setupCsvFile) {
+    showToast('Choose Connections.csv first.', 'warning');
     return;
   }
 
   appState.setupBusy = true;
+  appState.setupProgressMessage = 'Checking CSV format and previewing matches...';
+  await renderSetupWizard();
+
   try {
-    appState.setupPreview = await api('/api/import/connections-csv/preview', {
-      method: 'POST',
-      body: JSON.stringify({ csvContent: appState.setupCsvContent, useEmptyState: false }),
+    appState.setupPreview = await postConnectionsCsvFile(appState.setupCsvFile, {
+      dryRun: true,
+      preview: true,
+      useEmptyState: true,
+      fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
     });
-    showToast('CSV preview is ready.', 'success');
+
+    showToast('Preview ready.', 'success');
+  } catch (error) {
+    appState.setupPreview = null;
+    showToast(`Preview failed: ${error.message || error}`, 'error', 8000);
   } finally {
     appState.setupBusy = false;
+    appState.setupProgressMessage = '';
     await renderSetupWizard();
   }
 }
@@ -3138,17 +3615,17 @@ async function previewSetupCsv() {
 async function completeSetupWizard() {
   persistSetupDraftFromDom();
   const draft = appState.setupDraft;
+
   if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
-    appState.setupStep = 1;
-    await renderSetupWizard();
-    showToast('Workspace, name, and email are required.', 'warning');
+    showToast('Workspace, name, and email are required before finishing setup.', 'warning');
     return;
   }
 
   appState.setupBusy = true;
-  appState.setupProgressMessage = appState.setupCsvContent
+  appState.setupProgressMessage = appState.setupCsvFile
     ? 'Saving setup and queuing your LinkedIn connections import...'
     : 'Saving setup...';
+
   try {
     const result = await api('/api/setup/complete', {
       method: 'POST',
@@ -3157,24 +3634,29 @@ async function completeSetupWizard() {
         userName: draft.userName,
         userEmail: draft.userEmail,
         owners: parseSetupOwners(draft.ownersText),
-        licenseKey: draft.licenseKey,
-        csvContent: appState.setupCsvContent,
-        csvFileName: appState.setupCsvFileName,
+        licenseKey: draft.licenseKey || '',
       }),
     });
+
     appState.setupResult = result;
     appState.setupStatus = result.status;
     appState.setupStep = getSetupSteps().length;
     invalidateAppData();
 
-    if (result.jobId) {
-      appState.setupImportJobId = result.jobId;
-      appState.setupProgressMessage = 'Import queued. Starting the background worker...';
-      await renderSetupWizard();
-      const job = await watchSetupImportJob(result.jobId);
-      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
+    if (appState.setupCsvFile) {
+      const accepted = await postConnectionsCsvFile(appState.setupCsvFile, {
+        dryRun: false,
+        useEmptyState: false,
+        fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
+      });
+      const jobId = accepted.jobId || accepted.job?.id;
+      const stats = accepted.stats || {};
+      appState.setupImportJobId = jobId || '';
+
       appState.setupResult = {
         ...result,
+        importQueued: Boolean(jobId),
+        jobId,
         stats: {
           ...stats,
           imported: stats.imported || 0,
@@ -3183,10 +3665,28 @@ async function completeSetupWizard() {
           failed: stats.failed || 0,
         },
       };
-      appState.setupProgressMessage = 'Import complete.';
-      showToast('Setup complete. LinkedIn connections imported.', 'success');
+
+      appState.setupProgressMessage = jobId
+        ? 'Import queued. You can start using BD Engine while contacts import in the background.'
+        : 'Import request accepted.';
+      appState.setupCsvFile = null;
+      appState.setupCsvContent = '';
+      showToast(jobId ? 'Setup complete. LinkedIn connections import is running in the background.' : 'Setup complete.', 'success');
+      if (jobId) {
+        void watchBackgroundJob(jobId, { label: 'Connections import', refreshRoute: false }).then((job) => {
+          const result = job?.result || {};
+          const finalStats = result.stats || result.importRun?.stats || {};
+          const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || []);
+          showToast(`Connections import complete: ${formatConnectionsImportStats(finalStats)}.${warnings}`, 'success', 8000);
+          invalidateAppData();
+        }).catch((err) => {
+          window.bdLocalApi.setAlert(`Connections import failed: ${err.message || err}`, appAlert);
+        });
+      }
     } else {
       appState.setupProgressMessage = '';
+      appState.setupCsvFile = null;
+      appState.setupCsvContent = '';
       showToast('Setup complete.', 'success');
     }
   } catch (error) {
@@ -3203,8 +3703,7 @@ async function completeSetupWizard() {
 async function watchSetupImportJob(jobId) {
   while (true) {
     const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
-    const message = job.progressMessage || humanize(job.status || 'running');
-    appState.setupProgressMessage = message;
+    appState.setupProgressMessage = job.progressMessage || job.message || humanize(job.status || 'running');
     await renderSetupWizard();
 
     if (job.status === 'completed') {
@@ -3222,18 +3721,58 @@ async function watchSetupImportJob(jobId) {
   }
 }
 
-async function renderDashboardView() {
-  renderLoadingState('Dashboard', "Building today's hiring radar...");
+function getDashboardActiveJobCount(summary = {}) {
+  return Number(summary.activeJobCount ?? summary.jobCount ?? 0);
+}
+
+function getDashboardImported24h(summary = {}) {
+  return Number(summary.jobsImportedLast24h ?? summary.newJobsLast24h ?? 0);
+}
+
+function getDashboardPosted24h(summary = {}) {
+  return Number(summary.jobsPostedLast24h ?? summary.newJobsLast24h ?? 0);
+}
+
+async function renderDashboardView(options = {}) {
+  const dashboardStartedAt = performance.now();
+  if (!options.skipLoading) {
+    renderLoadingState('Dashboard', "Building today's hiring radar...");
+  }
   setViewTitle('Dashboard');
-  const dashboard = await api('/api/dashboard');
-  if (!dashboard.todayQueue) dashboard.todayQueue = [];
-  if (!dashboard.followUpAccounts) dashboard.followUpAccounts = [];
-  if (!dashboard.newJobsToday) dashboard.newJobsToday = [];
-  if (!dashboard.recommendedActions) dashboard.recommendedActions = [];
-  if (!dashboard.recentlyDiscoveredBoards) dashboard.recentlyDiscoveredBoards = [];
-  if (!dashboard.summary) dashboard.summary = {};
-  let extended = { playbook: [], overdueFollowUps: [], staleAccounts: [], activityFeed: [], enrichmentFunnel: {}, alertQueue: [], sequenceQueue: [], introQueue: [] };
-  try { extended = await api('/api/dashboard/extended'); } catch(e) { console.warn('Extended dashboard data unavailable:', e); }
+  const shouldHydrateExtended = !options.extendedPayload;
+  const [dashboardPayload, tasksPayload] = await Promise.all([
+    options.dashboardPayload ? Promise.resolve(options.dashboardPayload) : api('/api/dashboard', { skipCache: true }),
+    options.tasksPayload ? Promise.resolve(options.tasksPayload) : api('/api/tasks', { skipCache: true }).catch(() => ({ items: [] })),
+  ]);
+  const extendedPayload = options.extendedPayload || null;
+  const dashboard = dashboardPayload || {};
+  const tasks = tasksPayload || {};
+  const taskList = (Array.isArray(tasks.items) ? tasks.items : []).slice(0, DASHBOARD_RENDER_LIMITS.tasks);
+  dashboard.todayQueue = (Array.isArray(dashboard.todayQueue) ? dashboard.todayQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.todayQueue);
+  dashboard.followUpAccounts = (Array.isArray(dashboard.followUpAccounts) ? dashboard.followUpAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  dashboard.newJobsToday = (Array.isArray(dashboard.newJobsToday) ? dashboard.newJobsToday : []).slice(0, DASHBOARD_RENDER_LIMITS.recentJobs);
+  dashboard.recommendedActions = Array.isArray(dashboard.recommendedActions) ? dashboard.recommendedActions : [];
+  dashboard.recentlyDiscoveredBoards = Array.isArray(dashboard.recentlyDiscoveredBoards) ? dashboard.recentlyDiscoveredBoards : [];
+  dashboard.needsResolution = (Array.isArray(dashboard.needsResolution) ? dashboard.needsResolution : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
+  dashboard.summary = dashboard.summary || {};
+  const extended = {
+    playbook: [],
+    overdueFollowUps: [],
+    staleAccounts: [],
+    activityFeed: [],
+    enrichmentFunnel: {},
+    alertQueue: [],
+    sequenceQueue: [],
+    introQueue: [],
+    ...(extendedPayload || {}),
+  };
+  extended.playbook = (Array.isArray(extended.playbook) ? extended.playbook : []).slice(0, 5);
+  extended.overdueFollowUps = (Array.isArray(extended.overdueFollowUps) ? extended.overdueFollowUps : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.staleAccounts = (Array.isArray(extended.staleAccounts) ? extended.staleAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.activityFeed = (Array.isArray(extended.activityFeed) ? extended.activityFeed : []).slice(0, 10);
+  extended.alertQueue = (Array.isArray(extended.alertQueue) ? extended.alertQueue : []).slice(0, 3);
+  extended.sequenceQueue = (Array.isArray(extended.sequenceQueue) ? extended.sequenceQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
+  extended.introQueue = (Array.isArray(extended.introQueue) ? extended.introQueue : []).slice(0, 3);
   const topCompany = dashboard.todayQueue[0];
   const networkLeadersList = Array.isArray(dashboard.networkLeaders) ? dashboard.networkLeaders : [];
   const maxNetwork = Math.max(1, ...networkLeadersList.map((item) => item.connectionCount || 0));
@@ -3241,8 +3780,12 @@ async function renderDashboardView() {
   const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
   const resolutionQueue = (dashboard.needsResolution && dashboard.needsResolution.length)
     ? dashboard.needsResolution
-    : (extended.resolutionQueue || []);
+    : (Array.isArray(extended.resolutionQueue) ? extended.resolutionQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
   const resolutionPressure = dashboard.summary.needsResolutionCount || resolutionQueue.length || 0;
+  const activeJobCount = getDashboardActiveJobCount(dashboard.summary);
+  const jobsImportedLast24h = getDashboardImported24h(dashboard.summary);
+  const jobsPostedLast24h = getDashboardPosted24h(dashboard.summary);
+  const analyticsQueue = dashboard.todayQueue.slice(0, DASHBOARD_RENDER_LIMITS.analytics);
   const dashboardStory = [
     {
       label: 'Priority lane',
@@ -3252,8 +3795,8 @@ async function renderDashboardView() {
     },
     {
       label: 'Market motion',
-      value: `${formatNumber(dashboard.summary.newJobsLast24h || 0)} fresh jobs`,
-      description: `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards and ${formatNumber(coverageEvents)} visible events keep the feed current.`,
+      value: `${formatNumber(activeJobCount)} tracked jobs`,
+      description: `${formatNumber(jobsImportedLast24h)} imported in 24h; ${formatNumber(jobsPostedLast24h)} posted in 24h.`,
       tone: 'success',
     },
     {
@@ -3273,7 +3816,6 @@ async function renderDashboardView() {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
-    ${renderOnboardingTour()}
     <div class="dash-toolbar">${renderDashboardCustomizer()}<button class="ghost-button ghost-button--xs" data-action="export-pdf">Export PDF</button></div>
     ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
       <div class="hero-layout">
@@ -3283,12 +3825,12 @@ async function renderDashboardView() {
           <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
           <div class="button-row">
             ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">Open best account</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
-            <a class="ghost-button" href="#/jobs">Review fresh jobs</a>
+            <a class="ghost-button" href="#/jobs">Review imported jobs</a>
             <a class="ghost-button" href="#/accounts">Open accounts</a>
           </div>
           <div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
-            ${renderSignalChip('Fresh jobs', formatNumber(dashboard.summary.newJobsLast24h || 0), 'success')}
+            ${renderSignalChip('Tracked jobs', formatNumber(activeJobCount), 'success')}
             ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
             ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
@@ -3304,6 +3846,30 @@ async function renderDashboardView() {
           ${renderMetricTile('Engagement', topCompany ? formatNumber(topCompany.engagementScore || 0) : '0')}
         </div>
       </div>
+
+      ${taskList.length ? `
+      <div class="tasks-panel dashboard-panel">
+        <div class="panel-header">
+          <div>
+            <h3>Pending Tasks & Reminders</h3>
+            <p class="muted small">Your automated follow-up queue.</p>
+          </div>
+          <span class="badge badge--warning">${taskList.length} tasks</span>
+        </div>
+        <div class="task-list">
+          ${taskList.map(task => `
+            <div class="task-item" id="task-${task.id}">
+              <div class="task-info">
+                <div class="task-summary">${escapeHtml(task.summary)}</div>
+                <div class="task-meta">Due ${formatDate(task.dueDate)}</div>
+              </div>
+              <button class="ghost-button ghost-button--xs" data-action="complete-task" data-id="${task.id}">Mark Done</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
+
       ${topCompany ? `
         <div class="spotlight-card">
           <div class="panel-header">
@@ -3327,20 +3893,15 @@ async function renderDashboardView() {
       ` : ''}
     </section>`)}
 
-    ${dashSection('trust', `<section class="trust-strip">
-      ${renderTrustCard('Launch in 3 moves', 'Import, resolve, work', 'Seed accounts, run ATS discovery, then work the ranked queue.', 'Workbook, CSV, or manual entry', 'accent')}
-      ${renderTrustCard('Coverage snapshot', `${formatNumber(dashboard.summary.accountCount || 0)} tracked accounts`, 'Contacts, configs, and imported jobs stay visible in one model.', `${formatNumber(dashboard.summary.discoveredBoardCount || 0)} ATS boards found`, 'success')}
-      ${renderTrustCard('Audit trail', `${formatNumber(coverageEvents)} visible events`, 'Recent actions, imports, and board discovery remain reviewable.', `${formatNumber(dashboard.summary.newJobsLast24h || 0)} new jobs in 24h`, 'warning')}
-    </section>`)}
-
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('metrics', `<section class="metrics-grid">
-      ${renderMetricCard('Accounts tracked', dashboard.summary.accountCount, 'Target accounts with contacts, configs, or imported jobs')}
+      ${renderMetricCard('Companies in workspace', dashboard.summary.accountCount, 'Imported company universe; use Accounts filters for the working list')}
       ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
-      ${renderMetricCard('New jobs, 24h', dashboard.summary.newJobsLast24h, 'Freshly imported postings in the last day')}
+      ${renderMetricCard('Tracked jobs', activeJobCount, 'Active roles currently available for outreach context')}
+      ${renderMetricCard('Imported, 24h', jobsImportedLast24h, 'Roles pulled into BD Engine in the last day')}
+      ${renderMetricCard('Posted, 24h', jobsPostedLast24h, 'Roles whose ATS posted date is in the last day')}
       ${renderMetricCard('ATS boards found', dashboard.summary.discoveredBoardCount || 0, 'Mapped or discovered supported job boards')}
-      ${renderMetricCard('Needs resolution', resolutionPressure, 'Accounts still missing trusted company identity or ATS resolution')}
     </section>`)}
 
     ${dashSection('playbook', extended.playbook.length ? `
@@ -3446,7 +4007,7 @@ async function renderDashboardView() {
     ` : '')}
 
     ${dashSection('queue', `<section class="dashboard-grid">
-      <div class="table-card emphasis-card">
+      <div class="table-card emphasis-card" data-tour="today-queue">
         <div class="panel-header">
           <div>
             <h3>Today queue</h3>
@@ -3522,12 +4083,12 @@ async function renderDashboardView() {
       <div class="table-card">
         <div class="panel-header">
           <div>
-            <h3>New jobs today</h3>
-            <p class="muted small">Fresh roles worth using in outreach while the signal is still hot.</p>
+            <h3>Recently imported jobs</h3>
+            <p class="muted small">Roles pulled into BD Engine in the last 24 hours.</p>
           </div>
           <a class="ghost-button" href="#/jobs">Open jobs</a>
         </div>
-        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : '<div class="empty-state">No fresh jobs have landed in the last 24 hours.</div>'}
+        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : '<div class="empty-state">No jobs have been imported in the last 24 hours.</div>'}
       </div>
       <div class="panel-stack">
         <div class="chart-card">
@@ -3559,14 +4120,14 @@ async function renderDashboardView() {
         </div>
       </div>
     </section>`)}
-    ${dashSection('heatmap', renderPipelineHeatmap(dashboard.todayQueue))}
-    ${dashSection('smart-alerts', renderSmartAlerts(detectSmartAlerts(dashboard.todayQueue)))}
-    ${dashSection('velocity', renderDealVelocity(dashboard.todayQueue))}
-    ${dashSection('leaderboard', renderTeamLeaderboard(dashboard.todayQueue))}
-    ${dashSection('data-quality', renderDataQualityPanel(dashboard.todayQueue))}
+    ${dashSection('heatmap', renderPipelineHeatmap(analyticsQueue))}
+    ${dashSection('smart-alerts', renderSmartAlerts(detectSmartAlerts(analyticsQueue)))}
+    ${dashSection('velocity', renderDealVelocity(analyticsQueue))}
+    ${dashSection('leaderboard', renderTeamLeaderboard(analyticsQueue))}
+    ${dashSection('data-quality', renderDataQualityPanel(analyticsQueue))}
     ${dashSection('duplicates', renderDuplicatePanel(dupeGroups))}
-    ${dashSection('sales-cycle', renderSalesCycleAnalytics(dashboard.todayQueue))}
-    ${dashSection('charts', renderDashboardCharts(dashboard.todayQueue))}
+    ${dashSection('sales-cycle', renderSalesCycleAnalytics(analyticsQueue))}
+    ${dashSection('charts', renderDashboardCharts(analyticsQueue))}
   `;
   // Record score history for sparklines
   (dashboard.todayQueue || []).forEach(a => recordScoreHistory(a.id, getTargetScore(a)));
@@ -3576,8 +4137,25 @@ async function renderDashboardView() {
   }
   // Wire dashboard customizer
   wireDashboardCustomizer();
-  // Wire onboarding
-  wireOnboarding();
+  const elapsedMs = Math.round(performance.now() - dashboardStartedAt);
+  console.info(`BD Engine dashboard render: ${elapsedMs}ms (${dashboard.todayQueue.length} accounts, ${resolutionQueue.length}/${resolutionPressure} resolution rows)`);
+  if (shouldHydrateExtended) {
+    const routeAtRequest = location.hash || '#/dashboard';
+    window.setTimeout(() => {
+      api('/api/dashboard/extended', { skipCache: true }).then((payload) => {
+        if (!payload || getRouteRoot(routeAtRequest) !== 'dashboard' || getRouteRoot() !== 'dashboard') return;
+        void renderDashboardView({
+          dashboardPayload,
+          tasksPayload,
+          extendedPayload: payload,
+          skipLoading: true,
+        });
+      }).catch((e) => {
+        console.warn('Extended dashboard data unavailable:', e);
+      });
+    }, 0);
+  }
+  maybeStartPendingProductTour();
 }
 
 async function renderAccountsView() {
@@ -3787,13 +4365,6 @@ async function renderAccountDetail(accountId) {
       </div>
     </section>
 
-    <section class="metrics-grid metrics-grid--compact">
-      ${renderMetricCard('Hiring spike', detail.account.hiringSpikeRatio || 0, `${formatNumber(detail.account.jobsLast30Days || 0)} jobs in 30d`)}
-      ${renderMetricCard('External recruiter likelihood', detail.account.externalRecruiterLikelihoodScore || 0, 'Higher suggests more outsourced hiring motion')}
-      ${renderMetricCard('Company growth signal', detail.account.companyGrowthSignalScore || 0, 'Momentum feeding the target score')}
-      ${renderMetricCard('Avg role seniority', detail.account.avgRoleSeniorityScore || 0, 'Typical level of the current openings')}
-    </section>
-
     <section class="action-zone">
       <div class="action-zone-col">
         <div class="detail-card">
@@ -3829,25 +4400,31 @@ async function renderAccountDetail(accountId) {
               : '<option value="">No contacts</option>'}
           </select>
           <select id="outreach-template-select" class="inline-select">
-            <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
-            <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
-            <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
-            <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
-            <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
-            <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
-            <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
+            <optgroup label="Sales & Business Development">
+              <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
+              <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
+              <option value="hiring_manager" ${selected(suggestedOutreachTemplate, 'hiring_manager')}>Hiring manager note</option>
+              <option value="executive" ${selected(suggestedOutreachTemplate, 'executive')}>Executive note</option>
+              <option value="warm_intro" ${selected(suggestedOutreachTemplate, 'warm_intro')}>Warm intro</option>
+              <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
+              <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
+            </optgroup>
+            <optgroup label="Job Seeker & Networking">
+              <option value="job_intro" ${selected(suggestedOutreachTemplate, 'job_intro')}>Intro to Hiring Manager</option>
+              <option value="job_networking" ${selected(suggestedOutreachTemplate, 'job_networking')}>Networking / Coffee Chat</option>
+              <option value="job_referral" ${selected(suggestedOutreachTemplate, 'job_referral')}>Ask for Referral</option>
+            </optgroup>
+          </select>
+          <select id="outreach-job-select" class="inline-select">
+            <option value="">General inquiry (No specific job)</option>
+            ${detail.jobs.length
+              ? detail.jobs.map((j) => `<option value="${escapeAttr(j.id)}">${escapeHtml(j.title)}</option>`).join('')
+              : ''}
           </select>
           <div class="button-row">
             <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
             <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
           </div>
-        </div>
-        <div class="micro-button-row">
-          <button class="micro-button micro-button--primary" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="cold" type="button">Balanced</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="talent_partner" type="button">Recruiter</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="hiring_manager" type="button">Hiring manager</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="executive" type="button">Executive</button>
-          <button class="micro-button" data-action="generate-outreach-template" data-id="${detail.account.id}" data-template="follow_up" type="button">Follow-up</button>
         </div>
         <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
       </div>
@@ -3871,6 +4448,13 @@ async function renderAccountDetail(accountId) {
             <input name="summary" placeholder="Quick note..." class="compact-input">
             <select name="type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
             <select name="pipelineStage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
+            <select name="followUpDays" class="compact-select">
+              <option value="">No reminder</option>
+              <option value="3">Follow up in 3 days</option>
+              <option value="7">Follow up in 1 week</option>
+              <option value="14">Follow up in 2 weeks</option>
+              <option value="30">Follow up in 1 month</option>
+            </select>
             <button class="secondary-button compact-btn" type="submit">Log</button>
           </form>
           <div class="timeline" style="max-height:400px;overflow-y:auto;">
@@ -4071,20 +4655,20 @@ async function renderJobsView() {
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('New this sync', formatNumber(result.items.filter((item) => item.isNew).length))}
+          ${renderMetricTile('Recent postings', formatNumber(result.items.filter((item) => item.isNew).length))}
           ${renderMetricTile('Page size', formatNumber(result.pageSize))}
         </div>
       </div>
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate the freshest demand signals by company, ATS, and recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
+      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate imported roles by company, ATS, and posting recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
         ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
-        ${renderField('New jobs', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>New this sync</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Existing</option></select>`)}
+        ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
         <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
@@ -4148,64 +4732,10 @@ function openAdminSection(sectionId) {
   }
 }
 
-function renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive }) {
-  const unresolvedCount = summary.unresolvedCount || 0;
-  const activeConfigs = summary.activeCount || 0;
-  const enrichmentCount = enrichmentQueue?.total || 0;
-  return `
-    <section class="admin-command-strip" aria-label="Admin command strip">
-      <article class="command-card command-card--warning">
-        <span class="command-card__step">1</span>
-        <div class="command-card__copy">
-          <strong>Review queue</strong>
-          <span>${formatNumber(reviewQueueCount)} config items</span>
-          <small>${formatNumber(enrichmentCount)} enrichment candidates</small>
-        </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="review-queues">Open</button>
-      </article>
-      <article class="command-card command-card--accent">
-        <span class="command-card__step">2</span>
-        <div class="command-card__copy">
-          <strong>Discover boards</strong>
-          <span>${formatNumber(unresolvedCount)} unresolved</span>
-          <small>Unresolved configs only</small>
-        </div>
-        <button class="secondary-button ghost-button--xs" type="button" data-action="run-discovery">Run</button>
-      </article>
-      <article class="command-card command-card--success">
-        <span class="command-card__step">3</span>
-        <div class="command-card__copy">
-          <strong>Import live jobs</strong>
-          <span>${formatNumber(activeConfigs)} active boards</span>
-          <small>${formatNumber(runtime.queuedJobs || 0)} jobs queued</small>
-        </div>
-        <button class="secondary-button ghost-button--xs" type="button" data-action="run-live-import">Import</button>
-      </article>
-      <article class="command-card ${rolloutActive ? 'command-card--accent' : (rolloutRemainingCount > 0 ? 'command-card--warning' : 'command-card--success')}">
-        <span class="command-card__step">4</span>
-        <div class="command-card__copy">
-          <strong>Score rollout</strong>
-          <span>${rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`}</span>
-          <small>Target intelligence fields</small>
-        </div>
-        <button class="primary-button ghost-button--xs" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutActive ? 'Monitor' : (rolloutRemainingCount > 0 ? 'Run' : 'Done')}</button>
-      </article>
-      <article class="command-card">
-        <span class="command-card__step">Ops</span>
-        <div class="command-card__copy">
-          <strong>Pipeline panel</strong>
-          <span>Advanced controls</span>
-          <small>Discovery, enrichment, sheets</small>
-        </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="open-admin-section" data-section-id="pipeline-ops">Open</button>
-      </article>
-    </section>
-  `;
-}
-
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
   setViewTitle('Admin');
+  appState.adminCollapsed['pipeline-ops'] = false;
   const batchQuery = {};
   const cq = appState.configQuery;
   if (cq.page) batchQuery.configPage = cq.page;
@@ -4245,41 +4775,57 @@ async function renderAdminView() {
   const enrichmentQueue = batch.enrichmentQueue;
   const rolloutRemainingCount = Number(targetScoreRollout.remainingCount || 0);
   const rolloutActive = Boolean(targetScoreRollout.hasActiveJob);
-  const rolloutButtonLabel = rolloutActive ? 'Monitor rollout' : (rolloutRemainingCount > 0 ? 'Run rollout' : 'No rollout needed');
-  const rolloutHint = rolloutActive
-    ? (targetScoreRollout.activeJobProgressMessage || 'A rollout job is already draining the backlog in the background worker.')
-    : (rolloutRemainingCount > 0
-      ? 'Run partial batches through the worker so the remaining intelligence backfill does not block startup.'
-      : 'The target-score intelligence backlog is fully caught up.');
+  const lastRun = stateBootstrap.settings?.lastPipelineRun || 0;
+  const lastRunTime = lastRun ? new Date(lastRun).toLocaleString() : 'Never';
+  const isStale = !lastRun || (Date.now() - lastRun > 24 * 60 * 60 * 1000);
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
+  const operationalCompanyCount = summary.operationalTotalCompanies ?? summary.totalCompanies ?? 0;
+  const operationalResolvedCount = summary.operationalResolvedCount ?? summary.resolvedCount ?? 0;
+  const operationalCoveragePercent = summary.operationalCoveragePercent ?? summary.coveragePercent ?? 0;
+  const operationalUnresolvedCount = Math.max(0, Number(operationalCompanyCount || 0) - Number(operationalResolvedCount || 0));
   const reviewQueueCount = (summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0);
-  const adminStory = [
-    {
-      label: 'Coverage',
-      value: `${formatNumber(summary.coveragePercent || 0)}%`,
-      description: `${formatNumber(summary.resolvedCount || 0)} resolved boards out of ${formatNumber(summary.totalCompanies || 0)} tracked companies.`,
-      tone: 'success',
-    },
-    {
-      label: 'Review queue',
-      value: `${formatNumber(reviewQueueCount)} items`,
-      description: 'Medium-confidence results and unresolved companies stay visible for operator review.',
-      tone: 'warning',
-    },
-    {
-      label: 'Runtime pulse',
-      value: `${formatNumber(runtime.runningJobs || 0)} running`,
-      description: `${formatNumber(runtime.queuedJobs || 0)} queued jobs are waiting for the worker.`,
-      tone: 'accent',
-    },
-    {
-      label: 'Score rollout',
-      value: rolloutActive ? 'Worker active' : `${formatNumber(rolloutRemainingCount)} pending`,
-      description: rolloutHint,
-      tone: rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'),
-    },
-  ];
+  const billing = batch.billing || {};
+  const planJobBoardLimit = Number(billing.plan?.limits?.jobBoards ?? 75);
+  const discoveryLimitDefault = planJobBoardLimit === -1
+    ? Math.max(1, operationalUnresolvedCount || operationalCompanyCount || 1000)
+    : Math.min(75, Math.max(1, planJobBoardLimit));
+  const referral = billing.referral || {};
+  const referralLink = referral.link || '';
+  const analytics = batch.analytics || {};
+  const canViewSiteAnalytics = Boolean(batch.canViewSiteAnalytics && batch.analytics);
+  const stripeStatus = billing.stripe || {};
+  const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
+  const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
+  const stripeMissing = Array.isArray(stripeStatus.missing) && stripeStatus.missing.length
+    ? stripeStatus.missing.join(', ')
+    : '';
+  const stripeBillingMessage = stripeCommercialReady
+    ? 'Stripe live checkout is ready.'
+    : (stripeReady
+      ? `Stripe checkout is configured in ${stripeStatus.mode || 'unknown'} mode. Use live Stripe keys before launch.`
+      : (stripeStatus.ready && stripeStatus.mode === 'test'
+        ? 'Stripe is in test mode, so public paid checkout is disabled until live keys are set.'
+        : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`));
+  const siteAnalyticsSection = canViewSiteAnalytics ? `
+        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
+          <div class="metrics-grid metrics-grid--compact">
+            ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
+            ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
+            ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
+          </div>
+          <div class="inline-split">
+            <div>
+              <p class="eyebrow">Top sources</p>
+              ${renderMiniStatList((analytics.topSources || []).map((item) => ({ label: item.source || 'direct', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+            <div>
+              <p class="eyebrow">Top pages</p>
+              ${renderMiniStatList((analytics.topPaths || []).map((item) => ({ label: item.path || '/', value: `${formatNumber(item.visitors || 0)} visitors` })))}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+` : '';
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -4293,44 +4839,138 @@ async function renderAdminView() {
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
             ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
             ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
+            ${renderSignalChip('Last run', lastRunTime, isStale ? 'warning' : 'success')}
             ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
           </div>
-          <div class="story-strip">
-            ${adminStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
-          </div>
         </div>
-        <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`)}
-          ${renderMetricTile('Resolved', formatNumber(summary.resolvedCount || 0))}
-          ${renderMetricTile('Enriched', `${formatNumber(enrichmentSummary.enrichmentCoveragePercent || 0)}%`)}
-          ${renderMetricTile('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)))}
-          ${renderMetricTile('Jobs running', formatNumber(runtime.runningJobs || 0))}
-        </div>
-      </div>
-      <div class="runtime-banner">
-        <div class="runtime-banner-copy">
-          <p class="eyebrow">Live pulse</p>
-          <h4>${runtime.workerRunning ? 'Worker online and draining the queue' : 'Worker idle and waiting for new work'}</h4>
-          <p class="small muted">${runtime.workerRunning ? `Worker PID ${runtime.workerPid || 'unknown'} is handling ${formatNumber(runtime.runningJobs || 0)} running job${(runtime.runningJobs || 0) === 1 ? '' : 's'} and ${formatNumber(runtime.queuedJobs || 0)} queued job${(runtime.queuedJobs || 0) === 1 ? '' : 's'}.` : 'No job processor is active yet. Queue a task to wake it up.'}</p>
-        </div>
-        <div class="runtime-banner-flags">
-          ${renderStatusPill(runtime.warmed ? 'Server warm' : 'Server starting', runtime.warmed ? 'success' : 'warning')}
-          ${renderStatusPill(runtime.workerRunning ? 'Queue draining' : 'Queue idle', runtime.workerRunning ? 'hot' : 'neutral')}
-          ${renderStatusPill(runtime.runningJobs > 0 ? `${formatNumber(runtime.runningJobs)} active` : 'No active jobs', runtime.runningJobs > 0 ? 'warm' : 'neutral')}
+        <div class="action-card action-card--featured">
+          <p class="eyebrow">Most used</p>
+          <h4>Run everything</h4>
+          <p class="small muted">Enriches accounts, discovers ATS boards, imports jobs, and refreshes scores in one background run.</p>
+          <button class="primary-button" type="button" data-action="run-launch-workflow">Run everything</button>
         </div>
       </div>
     </section>
 
-    <section class="trust-strip trust-strip--admin">
-      ${renderTrustCard('Operator guide', 'One control surface', 'Run discovery, import, and review coverage without falling back to the spreadsheet.', `${formatNumber(runtime.queuedJobs || 0)} jobs queued`, 'accent')}
-      ${renderTrustCard('Coverage report', `${formatNumber(summary.coveragePercent || 0)}% board coverage`, 'See how much of the tracked universe is resolved and where review is still needed.', `${formatNumber(summary.resolvedCount || 0)} resolved boards`, 'success')}
-      ${renderTrustCard('Review queue', `${formatNumber(reviewQueueCount)} items to inspect`, 'Medium-confidence and unresolved configs stay visible instead of disappearing into logs.', `${formatNumber(enrichmentQueue.total || 0)} enrichment candidates`, 'warning')}
-    </section>
-
-    ${renderAdminCommandStrip({ summary, runtime, reviewQueueCount, enrichmentQueue, rolloutRemainingCount, rolloutActive })}
+    <div id="pipeline-progress-container" class="pipeline-progress hidden">
+      <div class="pipeline-progress-header">
+        <div class="pipeline-progress-copy">
+          <p class="eyebrow">Revenue Pipeline</p>
+          <h4 class="pipeline-progress-stage">Starting...</h4>
+        </div>
+        <div class="pipeline-progress-label">0%</div>
+      </div>
+      <div class="pipeline-progress-bar">
+        <div class="pipeline-progress-bar-fill" style="width: 0%;"></div>
+      </div>
+    </div>
 
     <section class="admin-grid">
       <div class="two-column">
+        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Most used workflow actions, from full automation to targeted refreshes.')}
+          <div class="actions-grid">
+            <div class="action-card">
+              <p class="eyebrow">Next most used</p>
+              <h4>Discover supported boards</h4>
+              <p class="small muted">Use this when you only need to remap ATS boards without re-running imports and scoring.</p>
+              <div class="inline-field-stack">
+                <input id="discovery-limit" type="number" min="1" value="${escapeAttr(discoveryLimitDefault)}" placeholder="Rows to check">
+                <label class="field"><span class="small muted">Only unresolved configs</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
+                <label class="field"><span class="small muted">Force refresh</span><select id="discovery-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
+                <div class="button-row">
+                  <button class="secondary-button" type="button" data-action="run-discovery">Run discovery</button>
+                </div>
+              </div>
+            </div>
+            <div class="action-card">
+              <p class="eyebrow">Frequent refresh</p>
+              <h4>Import live jobs</h4>
+              <p class="small muted">Fetches jobs from active ATS configs and updates tracked roles.</p>
+              <button class="secondary-button" data-action="run-live-import">Run live import</button>
+            </div>
+            <div class="action-card">
+              <p class="eyebrow">Setup and reseed</p>
+              <h4>Connections CSV</h4>
+              <p class="small muted">Validate or import a LinkedIn Connections.csv file.</p>
+              <div class="inline-field-stack">
+                <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
+                <input type="file" id="connections-csv-file" accept=".csv">
+                <div class="button-row">
+                  <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
+                  <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
+          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('billing-subscription', 'Billing & Subscription', 'Manage your plan and checkout.')}
+          <div class="settings-grid">
+            <div class="action-card">
+              <p class="eyebrow">Current Plan: ${escapeHtml(billing.plan?.name || 'Trial')}</p>
+              <h4>Upgrade your workspace</h4>
+              <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}${stripeReady && stripeMissing ? ` Missing optional plans: ${escapeHtml(stripeMissing)}` : ''}</p>
+              <div class="inline-field-stack">
+                <select id="billing-plan-select">
+                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
+                  <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
+                </select>
+                <div class="button-row">
+                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
+                  ${billing.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
+                </div>
+              </div>
+            </div>
+            <div class="action-card">
+              <p class="eyebrow">Referral credit</p>
+              <h4>Give $5, get $5</h4>
+              <p class="small muted">Share your referral link. When a referred user becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
+              <div class="inline-field-stack">
+                <input id="referral-link" readonly value="${escapeAttr(referralLink || 'Referral link will appear after your workspace finishes loading.')}">
+                <div class="button-row">
+                  <button class="secondary-button" type="button" data-action="copy-referral-link" data-referral-link="${escapeAttr(referralLink)}"${referralLink ? '' : ' disabled'}>Copy referral link</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+      </div>
+
+      <div class="two-column">
+        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
+          <form id="configs-filter-form" class="filter-grid filter-grid--compact">
+            ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
+            ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters?.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
+            ${renderField('Discovery', `<select name="discoveryStatus"><option value="">All</option>${(stateBootstrap.filters?.configDiscoveryStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.discoveryStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters?.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters?.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
+            ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
+            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
+          </form>
+          ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
+          ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
+          <div class="panel-stack">
+            <div>
+              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
+              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : '<div class="empty-state empty-state--compact">No medium-confidence configs need review right now.</div>'}
+            </div>
+            <div>
+              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
+              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+      </div>
+
+      <div class="two-column">
+        ${siteAnalyticsSection}
+        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
+          <div id="runtime-status-panel"></div>
+        ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}
@@ -4348,31 +4988,19 @@ async function renderAdminView() {
               ${renderMiniStatList((enrichmentReport.topUnresolvedReasons || []).map((item) => ({ label: item.reason, value: formatNumber(item.count) })))}
             </div>
           </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Resolution coverage by enrichment</p>
-              ${renderMiniStatList((enrichmentReport.resolutionByEnrichmentPresence || []).map((item) => ({ label: `${humanize(item.enrichmentPresence)} (${formatNumber(item.totalCompanies)})`, value: `${formatNumber(item.coveragePercent)}%` })))}
-            </div>
-            <div>
-              <p class="eyebrow">Enrichment sources</p>
-              ${renderMiniStatList((enrichmentReport.bySource || []).slice(0, 6).map((item) => ({ label: humanize(item.source), value: formatNumber(item.count) })))}
-            </div>
-          </div>
         ${renderCollapsibleEnd()}
-
         ${renderCollapsibleStart('enrichment-queue', 'Enrichment review queue', `Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.`)}
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the tracked company set.')}
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the company universe.')}
           <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Tracked companies', summary.totalCompanies || 0, 'Board config rows in the resolver')}
-            ${renderMetricCard('Resolved boards', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total coverage`)}
+            ${renderMetricCard('Actionable companies', operationalCompanyCount, `${formatNumber(operationalCoveragePercent)}% have resolved boards`)}
+            ${renderMetricCard('Need resolver work', operationalUnresolvedCount, 'Actionable companies still missing a resolved board')}
+            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, 'All imported company records with ATS resolution state')}
+            ${renderMetricCard('Resolved rows', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total resolver rows`)}
             ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
-            ${renderMetricCard('Unresolved', summary.unresolvedCount || 0, 'Still missing strong ATS evidence')}
+            ${renderMetricCard('Unresolved rows', summary.unresolvedCount || 0, 'Imported rows still missing strong ATS evidence')}
           </div>
           <div class="inline-split">
             <div>
@@ -4385,144 +5013,6 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
-          <div class="panel-stack">
-            <div>
-              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
-              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : '<div class="empty-state empty-state--compact">No medium-confidence configs need review right now.</div>'}
-            </div>
-            <div>
-              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
-              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
-          <div id="runtime-status-panel"></div>
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
-          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
-        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Run discovery, import jobs, or reseed the app without touching the spreadsheet manually.')}
-          <div class="actions-grid">
-            <div class="action-card">
-              <p class="eyebrow">Full pipeline</p>
-              <h4>Run BD Engine</h4>
-              <p class="small muted">Runs the legacy Google Sheets pipeline in one pass. Requires a Spreadsheet ID in the Google Sheets card.</p>
-              <button class="primary-button" data-action="run-full-engine">Run Full Engine</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Identity enrichment</p>
-              <h4>Enrich company inputs</h4>
-              <p class="small muted">Use the cheap local pass first, then run the deeper web verifier only for the accounts that still need stronger evidence.</p>
-              <div class="inline-field-stack">
-                <input id="enrichment-limit" type="number" min="1" value="50" placeholder="Companies to enrich">
-                <label class="field"><span class="small muted">Force refresh</span><select id="enrichment-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
-                <div class="button-row button-row--wrap">
-                  <button class="ghost-button" type="button" data-action="run-local-enrichment">Fast local enrich</button>
-                  <button class="secondary-button" type="button" data-action="run-enrichment">Deep verify</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Intelligence rollout</p>
-              <h4>Repair target scoring backlog</h4>
-              <p class="small muted">${formatNumber(rolloutRemainingCount)} accounts still need the new target score, trigger, sequence, or connection-graph intelligence fields. ${rolloutHint}</p>
-              <div class="inline-field-stack">
-                <input id="target-score-rollout-limit" type="number" min="1" max="500" value="${escapeAttr(String(targetScoreRollout.defaultLimit || 150))}" placeholder="Accounts per batch">
-                <label class="field"><span class="small muted">Batches</span><input id="target-score-rollout-batches" type="number" min="1" max="25" value="${escapeAttr(String(targetScoreRollout.defaultMaxBatches || 6))}"></label>
-                <div class="button-row">
-                  <button class="primary-button" type="button" data-action="run-target-score-rollout"${(!rolloutActive && rolloutRemainingCount <= 0) ? ' disabled' : ''}>${rolloutButtonLabel}</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">ATS discovery</p>
-              <h4>Discover supported boards</h4>
-              <p class="small muted">Runs the staged resolver: known mappings, hosted ATS probes, and careers-page detection with diagnostics and confidence bands.</p>
-              <div class="inline-field-stack">
-                <input id="discovery-limit" type="number" min="1" value="75" placeholder="Rows to check">
-                <label class="field"><span class="small muted">Only unresolved configs</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
-                <label class="field"><span class="small muted">Force refresh</span><select id="discovery-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
-                <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="run-discovery">Run discovery</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Live ATS sync</p>
-              <h4>Run job import</h4>
-              <p class="small muted">Fetches jobs from active ATS configs, upserts them, and marks closed roles inactive on repeat runs.</p>
-              <button class="secondary-button" data-action="run-live-import">Run live import</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Config generation</p>
-              <h4>Rebuild job board configs</h4>
-              <p class="small muted">Seeds config rows from target accounts and preserves manual edits instead of guessing blindly.</p>
-              <button class="secondary-button" data-action="sync-configs">Rebuild configs</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Spreadsheet seed</p>
-              <h4>Reimport workbook</h4>
-              <p class="small muted">Reads setup, contacts, jobs, configs, and history from the legacy workbook when you need a reseed.</p>
-              <button class="primary-button" data-action="reseed-workbook" data-path="${escapeAttr(stateBootstrap.defaults.workbookPath)}">Reimport workbook</button>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">Google Sheets</p>
-              <h4>Sync to live sheet</h4>
-              <p class="small muted">Pushes the current app state back to the live Google Sheet while you transition off the spreadsheet workflow.</p>
-              <div class="inline-field-stack">
-                <input id="google-sheet-id" value="${escapeAttr(stateBootstrap.defaults.spreadsheetId || '')}" placeholder="Spreadsheet ID">
-                <div class="button-row">
-                  <button class="primary-button" type="button" data-action="sync-google-sheets">Sync Google Sheet</button>
-                </div>
-              </div>
-            </div>
-            <div class="action-card">
-              <p class="eyebrow">LinkedIn import</p>
-              <h4>Connections CSV</h4>
-              <p class="small muted">Validate or import a LinkedIn Connections.csv file. Dry run stays in memory and does not modify local state.</p>
-              <div class="inline-field-stack">
-                <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
-                <input type="file" id="connections-csv-file" accept=".csv">
-                <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
-                  <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('scoring-settings', 'Scoring settings', 'These map directly to the old Setup controls.')}
-          <form id="settings-form" class="settings-grid">
-            ${renderField('Min company connections', `<input name="minCompanyConnections" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minCompanyConnections)}">`)}
-            ${renderField('Min jobs posted', `<input name="minJobsPosted" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.minJobsPosted)}">`)}
-            ${renderField('Contact priority threshold', `<input name="contactPriorityThreshold" type="number" min="0" value="${escapeAttr(stateBootstrap.settings.contactPriorityThreshold)}">`)}
-            ${renderField('Max companies to review', `<input name="maxCompaniesToReview" type="number" min="1" value="${escapeAttr(stateBootstrap.settings.maxCompaniesToReview)}">`)}
-            ${renderField('Geography focus', `<input name="geographyFocus" value="${escapeAttr(stateBootstrap.settings.geographyFocus)}">`)}
-            ${renderField('GTA priority', `<select name="gtaPriority"><option value="true" ${selected(String(stateBootstrap.settings.gtaPriority), 'true')}>Enabled</option><option value="false" ${selected(String(stateBootstrap.settings.gtaPriority), 'false')}>Disabled</option></select>`)}
-            <div><button class="primary-button" type="submit">Save settings</button></div>
-          </form>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('automation-rules', 'Automation Rules', 'Define rules that auto-apply when pipeline conditions are met.')}
-          ${renderAutomationRulesPanel()}
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('alert-thresholds', 'Alert Thresholds', 'Customize when smart alerts trigger on your pipeline.')}
-          ${renderAlertThresholdsPanel()}
-        ${renderCollapsibleEnd()}
-      </div>
-
-      <div class="two-column">
         ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Admin-managed job board records replace hardcoded spreadsheet helpers.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <form id="config-form" class="detail-form">
@@ -4536,20 +5026,6 @@ async function renderAdminView() {
             <div class="field" style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes" rows="4"></textarea></div>
             <div><button class="primary-button" type="submit">${appState.configEditingId ? 'Save config' : 'Create config'}</button></div>
           </form>
-        ${renderCollapsibleEnd()}
-
-        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
-          <form id="configs-filter-form" class="filter-grid filter-grid--compact">
-            ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
-            ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
-            ${renderField('Discovery', `<select name="discoveryStatus"><option value="">All</option>${(stateBootstrap.filters.configDiscoveryStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.discoveryStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
-            ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
-            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
-          </form>
-          ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
-          ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
         ${renderCollapsibleEnd()}
       </div>
     </section>
@@ -4693,7 +5169,7 @@ function renderJobsTable(items, compact) {
           <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
           <td>${formatDate(item.postedAt)}</td>
           <td>${formatDate(item.retrievedAt || item.importedAt)}<div class="small muted">${escapeHtml(item.jobId || '')}</div></td>
-          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">New this sync</div>' : ''}</td>
+          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">Recent posting</div>' : ''}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -5094,6 +5570,14 @@ function parseJobProgress(msg) {
   return { current, total, pct: Math.min(100, Math.round((current / total) * 100)) };
 }
 
+function getJobProgress(job) {
+  const direct = Number(job?.progress);
+  if (Number.isFinite(direct)) {
+    return { pct: Math.max(0, Math.min(100, Math.round(direct))) };
+  }
+  return job?.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+}
+
 function getRuntimeJobs(runtime) {
   const seen = new Set();
   return [...(runtime?.activeJobs || []), ...(runtime?.recentJobs || [])].filter((job) => {
@@ -5101,6 +5585,27 @@ function getRuntimeJobs(runtime) {
     seen.add(job.id);
     return true;
   });
+}
+
+function getLiveImportTrackedJobCount(job = {}, result = {}) {
+  const stats = result.stats || result.importRun?.stats || {};
+  const candidates = [
+    result.activeJobCount,
+    stats.imported,
+    result.importRun?.stats?.imported,
+    job.recordsAffected,
+  ];
+  const value = candidates.find((item) => Number.isFinite(Number(item)));
+  return Number(value || 0);
+}
+
+function getLiveImportChangedJobCount(result = {}) {
+  const candidates = [
+    result.changedJobCount,
+    result.counts?.changedJobs,
+  ];
+  const value = candidates.find((item) => Number.isFinite(Number(item)));
+  return value === undefined ? null : Number(value);
 }
 
 function getRuntimeJobDuration(job) {
@@ -5130,15 +5635,15 @@ function renderIngestionHealthPanel(runtime) {
   const activeImport = liveImports.find((job) => ['queued', 'running'].includes(job.status));
   const lastImport = liveImports.find((job) => job.status === 'completed') || liveImports[0];
   const lastFailed = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
-  const progress = activeImport ? parseJobProgress(activeImport.progressMessage) : null;
+  const progress = activeImport ? getJobProgress(activeImport) : null;
   const activeLabel = activeImport
-    ? (progress ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : humanize(activeImport.status))
+    ? (progress?.current ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : (progress ? `${progress.pct}%` : humanize(activeImport.status)))
     : 'Idle';
   const activeMeta = activeImport
     ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
     : 'No live import is currently active';
   const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
-  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} records` : 'No records yet';
+  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} active jobs tracked` : 'No jobs tracked yet';
   const lastMeta = lastImport
     ? `${lastDuration || humanize(lastImport.status)} · ${lastRecords}`
     : 'No completed imports found';
@@ -5187,8 +5692,9 @@ function renderBackgroundJobItem(job) {
     ? 'success'
     : (job.status === 'failed' ? 'danger' : 'neutral');
 
-  const progress = job.status === 'running' ? parseJobProgress(job.progressMessage) : null;
+  const progress = getJobProgress(job);
   const hasRecordsAffected = job.recordsAffected !== undefined && job.recordsAffected !== null && job.recordsAffected !== '';
+  const recordsLabel = job.type === 'live-job-import' ? 'active jobs tracked' : 'records';
 
   return `
     <article class="timeline-item job-card job-card--${escapeAttr(job.status || 'queued')}">
@@ -5205,7 +5711,7 @@ function renderBackgroundJobItem(job) {
       ${progress ? `<div class="spark-bar job-progress-bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
-        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} records` : ''}</span>
+        <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} ${recordsLabel}` : ''}</span>
         ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       ${job.errorMessage ? `<p class="small muted">${escapeHtml(job.errorMessage)}</p>` : ''}
@@ -5215,6 +5721,21 @@ function renderBackgroundJobItem(job) {
 
 function formatConnectionsImportStats(stats = {}) {
   return `${formatNumber(stats.imported || 0)} imported, ${formatNumber(stats.updated || 0)} updated, ${formatNumber(stats.skipped || 0)} skipped, ${formatNumber(stats.failed || 0)} failed`;
+}
+
+function formatConnectionsImportWarnings(warnings = []) {
+  return Array.isArray(warnings) && warnings.length ? ` Warnings: ${warnings.join(' ')}` : '';
+}
+
+function formatConnectionsImportError(error) {
+  const parts = [error?.message || String(error || 'Import failed.')];
+  if (Array.isArray(error?.expectedHeaders) && error.expectedHeaders.length) {
+    parts.push(`Expected headers include: ${error.expectedHeaders.join(', ')}.`);
+  }
+  if (Array.isArray(error?.warnings) && error.warnings.length) {
+    parts.push(error.warnings.join(' '));
+  }
+  return parts.filter(Boolean).join(' ');
 }
 
 function renderTimelineItem(item) {
@@ -5377,15 +5898,29 @@ async function reseedWorkbook(path) {
 
 async function runLiveImport(buttonEl) {
   await withButtonState(buttonEl || '[data-action="run-live-import"]', 'Running import...', async () => {
-    const accepted = await api('/api/import/jobs', { method: 'POST', body: JSON.stringify({}) });
+    const accepted = await api('/api/import/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ autoDiscover: true, autoDiscoveryLimit: 300 }),
+    });
     showToast('Live ATS import queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Live ATS import' });
-    const run = job?.result?.importRun || {};
-    const stats = run?.stats || {};
+    const result = job?.result || {};
+    const run = result.importRun || {};
+    const stats = result.stats || run?.stats || {};
+    const warnings = run?.warnings || job?.result?.warnings || [];
+    const activeJobCount = getLiveImportTrackedJobCount(job, result);
+    const changedJobs = getLiveImportChangedJobCount(result);
+    const changedText = changedJobs !== null
+      ? ` ${formatNumber(changedJobs)} material job row${changedJobs === 1 ? '' : 's'} changed this run;`
+      : '';
+    const discoveryText = Number(stats.autoDiscoveryChecked || 0) > 0
+      ? `Auto-discovered ${formatNumber(stats.autoDiscoveryMapped || 0)} of ${formatNumber(stats.autoDiscoveryChecked || 0)} ATS configs before import. `
+      : '';
+    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
     const status = run?.status === 'completed_with_errors'
-      ? `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs. ${formatNumber(stats.errors || 0)} configs errored.`
-      : `Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and ended with ${formatNumber(stats.imported || 0)} active tracked jobs.`;
-    window.bdLocalApi.setAlert(status, appAlert);
+      ? `${baseStatus} ${formatNumber(stats.errors || 0)} configs errored.`
+      : baseStatus;
+    window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
   });
 }
 
@@ -5401,11 +5936,51 @@ async function runDiscovery(buttonEl) {
     showToast('ATS discovery queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'ATS discovery' });
     const stats = job?.result?.stats || {};
+    const warnings = job?.result?.warnings || [];
     window.bdLocalApi.setAlert(
-      `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.`,
+      `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.${warnings.length ? ` ${warnings[0]}` : ''}`,
       appAlert
     );
   });
+}
+
+async function runRevenuePipeline(buttonEl) {
+  try {
+    const job = await api('/api/admin/pipeline/start', { method: 'POST' });
+    showToast('Revenue pipeline started.', 'success');
+    await watchPipelineProgress(job.id);
+  } catch (err) {
+    showToast('Failed to start pipeline: ' + err.message, 'error');
+  }
+}
+
+async function watchPipelineProgress(jobId) {
+  const container = document.getElementById('pipeline-progress-container');
+  if (!container) return;
+  container.classList.remove('hidden');
+  
+  while (true) {
+    const job = await api(`/api/admin/pipeline/status/${jobId}`, { skipCache: true });
+    const bar = container.querySelector('.pipeline-progress-bar-fill');
+    const label = container.querySelector('.pipeline-progress-label');
+    const stage = container.querySelector('.pipeline-progress-stage');
+    
+    if (bar) bar.style.width = `${job.progress}%`;
+    if (label) label.textContent = `${job.progress}%`;
+    if (stage) stage.textContent = job.message || job.stage || 'Processing...';
+
+    if (job.status === 'completed' || job.status === 'failed') {
+      if (job.status === 'completed') {
+        showToast('Revenue pipeline completed successfully.', 'success');
+      } else {
+        showToast('Revenue pipeline failed: ' + job.message, 'error');
+      }
+      setTimeout(() => container.classList.add('hidden'), 5000);
+      renderAdminView(); // Refresh data
+      break;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
 }
 
 async function runLocalEnrichment() {
@@ -5639,6 +6214,38 @@ async function runFullBdEngine() {
   }
 }
 
+async function runLaunchWorkflow(buttonEl) {
+  const button = buttonEl || document.querySelector('[data-action="run-launch-workflow"]');
+  if (button) { button.disabled = true; button.textContent = 'Running workflow...'; }
+  try {
+    const accepted = await api('/api/admin/run-workflow', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    showToast('Launch workflow queued.', 'success');
+    const job = accepted.job?.status === 'completed'
+      ? accepted.job
+      : await watchBackgroundJob(accepted.jobId, { label: 'Launch workflow' });
+    const result = job?.result || accepted || {};
+    const stats = result.stats || {};
+    const warnings = Array.isArray(result.warnings) && result.warnings.length
+      ? ` ${result.warnings.join(' ')}`
+      : '';
+    window.bdLocalApi.setAlert(
+      `Launch workflow complete for ${result.plan?.displayName || 'current plan'}: enriched ${formatNumber(stats.enriched || 0)} accounts, created ${formatNumber(stats.configsCreated || 0)} configs, mapped ${formatNumber(stats.boardsMapped || stats.configsResolved || 0)} boards, fetched ${formatNumber(stats.jobsFetched || 0)} jobs, kept ${formatNumber(stats.jobsKept || 0)} Canada jobs, updated ${formatNumber(stats.jobsTouched || 0)} tracked jobs, and refreshed ${formatNumber(stats.scoresRefreshed || 0)} scores.${warnings}`,
+      appAlert
+    );
+    invalidateAppData();
+    await renderAdminView();
+  } catch (error) {
+    const message = `Launch workflow failed: ${error.message || error}`;
+    showToast(message, 'error', 9000);
+    window.bdLocalApi.setAlert(message, appAlert);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Run launch workflow'; }
+  }
+}
+
 function getConnectionsCsvPath() {
   const input = document.getElementById('connections-csv-path');
   return (input?.value || appState.bootstrap?.defaults?.connectionsCsvPath || '').trim();
@@ -5659,29 +6266,35 @@ async function runConnectionsCsvImport(dryRun) {
       return;
     }
 
-    const csvContent = await readTextFile(file);
-    const requestPayload = { csvContent, fileName: file.name, dryRun, useEmptyState: dryRun };
-    const uploadSummary = formatCsvUploadSummary(file, csvContent);
-
-    const run = await api('/api/import/connections-csv', {
-      method: 'POST',
-      body: JSON.stringify(requestPayload),
+    const uploadSummary = `${file.name} (${formatFileSize(file.size || 0)})`;
+    const run = await postConnectionsCsvFile(file, {
+      dryRun,
+      useEmptyState: dryRun,
+      fileName: file.name || 'Connections.csv',
     });
     if (!dryRun) {
-      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; keep this tab open to watch progress.`;
+      const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; you can keep working while it runs.`;
       showToast(queuedMessage, 'success', 9000);
       window.bdLocalApi.setAlert(queuedMessage, appAlert);
-      const job = await watchBackgroundJob(run.jobId, { label: 'Connections import' });
-      const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
-      const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
-      window.bdLocalApi.setAlert(message, appAlert);
+      if (run.jobId) {
+        void watchBackgroundJob(run.jobId, { label: 'Connections import', refreshRoute: false }).then((job) => {
+          const result = job?.result || run || {};
+          const stats = result.stats || result.importRun?.stats || {};
+          const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || run.warnings);
+          const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${warnings}`;
+          invalidateAppData();
+          window.bdLocalApi.setAlert(message, appAlert);
+        }).catch((err) => {
+          window.bdLocalApi.setAlert(`Connections import failed: ${err.message || err}`, appAlert);
+        });
+      }
       return;
     }
     const stats = run?.stats || {};
-    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.`;
+    const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${formatConnectionsImportWarnings(run?.warnings)}`;
     window.bdLocalApi.setAlert(message, appAlert);
   } catch (error) {
-    const message = `Connections import failed: ${error.message || error}`;
+    const message = `Connections import failed: ${formatConnectionsImportError(error)}`;
     showToast(message, 'error', 9000);
     window.bdLocalApi.setAlert(message, appAlert);
   } finally {
@@ -5882,6 +6495,9 @@ function getOutreachTemplateMeta(template) {
 }
 
 function getSuggestedOutreachTemplate(detail) {
+  if (isJobSeekerPersona()) {
+    return detail?.jobs?.length ? 'job_intro' : 'job_networking';
+  }
   const account = detail?.account || {};
   const contact = detail?.contacts?.[0] || {};
   const title = String(contact.title || account.topContactTitle || '').toLowerCase();
@@ -6029,7 +6645,8 @@ async function logGeneratedOutreach(buttonEl) {
   const account = detail.account;
   const contact = getSelectedOutreachContact();
   const contactLabel = contact.name || 'selected contact';
-  const followUpAt = getFutureDateInput(7);
+  const followUpDays = parseInt(document.getElementById('outreach-followup-days')?.value || '7', 10);
+  const followUpAt = getFutureDateInput(followUpDays);
   const today = getFutureDateInput(0);
   const summary = `Sent email + LinkedIn outreach to ${contactLabel}`;
   const notes = buildOutreachLogNotes(outreach, contact, followUpAt);
@@ -6234,6 +6851,11 @@ function renderGeneratedOutreach(outreach) {
         ${outreach.sequenceGuidance ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Sequence context</span><p>${escapeHtml(outreach.sequenceGuidance)}</p></div>` : ''}
         ${outreach.companySnippet ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Company context</span><p>${escapeHtml(outreach.companySnippet)}</p></div>` : ''}
         <div class="button-row outreach-piece-actions">
+          <select id="outreach-followup-days" class="inline-select inline-select--sm" style="width: auto; margin-right: 8px;">
+            <option value="3">3 days</option>
+            <option value="7" selected>1 week</option>
+            <option value="14">2 weeks</option>
+          </select>
           <button class="primary-button" data-action="log-generated-outreach" type="button">Log sent + follow-up</button>
           <span class="small muted">Use after sending the email draft and LinkedIn message.</span>
         </div>
@@ -6370,6 +6992,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
         contactName,
         contactTitle,
         template: document.getElementById('outreach-template-select')?.value || 'cold',
+        jobId: document.getElementById('outreach-job-select')?.value || '',
         includeVariants,
       }),
     });
@@ -6579,4 +7202,177 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+/* -- Product Tour Logic -- */
+const tourSteps = [
+  { title: 'Your workspace is ready', copy: 'Here is the quick tour: dashboard first, then accounts, jobs, tasks, and admin controls.', target: null },
+  { title: 'Read the operating pulse', copy: 'These chips summarize today’s account queue, fresh roles, follow-up pressure, and identity work.', target: '.hero-signal-strip' },
+  { title: 'Work the ranked queue', copy: 'Start here when you want the highest-priority companies and the next move for each one.', target: '[data-tour="today-queue"]' },
+  { title: 'Open the source lists', copy: 'Accounts, Contacts, Jobs, and Tasks are your day-to-day work tabs once setup is complete.', target: '[data-route="accounts"]' },
+  { title: 'Tune the engine', copy: 'Admin holds imports, ATS discovery, enrichment, scoring settings, and background-job controls.', target: '[data-route="admin"]' }
+];
+
+let currentTourStep = 0;
+
+function queuePostSetupTour() {
+  appState.postSetupTourPending = true;
+  appState.onboardingDone = false;
+  localStorage.setItem(POST_SETUP_TOUR_PENDING_KEY, 'true');
+  localStorage.removeItem('bd_onboarding_done');
+}
+
+function maybeStartPendingProductTour() {
+  if (!appState.postSetupTourPending || appState.onboardingDone || appState.tourActive || getRouteRoot() !== 'dashboard') return;
+  appState.postSetupTourPending = false;
+  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
+  window.setTimeout(() => startProductTour(), 250);
+}
+
+function startProductTour() {
+  if (appState.onboardingDone || appState.tourActive) return;
+  currentTourStep = 0;
+  appState.tourActive = true;
+  renderTourStep();
+}
+
+function renderTourStep() {
+  const step = tourSteps[currentTourStep];
+  if (!step) return endTour();
+
+  const existing = document.querySelector('.tour-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'tour-overlay';
+  overlay.innerHTML = `
+    <div class="tour-card">
+      <p class="tour-step-indicator">Step ${currentTourStep + 1} of ${tourSteps.length}</p>
+      <h3 class="tour-title">${step.title}</h3>
+      <p class="tour-copy">${step.copy}</p>
+      <div class="tour-actions">
+        <button class="ghost-button" data-action="end-tour">Skip tour</button>
+        <button class="primary-button" data-action="next-tour-step">${currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  if (step.target) {
+    const targetEl = document.querySelector(step.target);
+    if (targetEl) {
+      const rect = targetEl.getBoundingClientRect();
+      const highlight = document.createElement('div');
+      highlight.className = 'tour-highlight';
+      highlight.style.top = `${rect.top - 8 + window.scrollY}px`;
+      highlight.style.left = `${rect.left - 8 + window.scrollX}px`;
+      highlight.style.width = `${rect.width + 16}px`;
+      highlight.style.height = `${rect.height + 16}px`;
+      overlay.appendChild(highlight);
+      targetEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+    }
+  }
+}
+
+function nextTourStep() {
+  currentTourStep++;
+  if (currentTourStep >= tourSteps.length) {
+    endTour();
+  } else {
+    renderTourStep();
+  }
+}
+
+function endTour() {
+  const overlay = document.querySelector('.tour-overlay');
+  if (overlay) overlay.remove();
+  appState.tourActive = false;
+  appState.postSetupTourPending = false;
+  appState.onboardingDone = true;
+  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
+  localStorage.setItem('bd_onboarding_done', 'true');
+  showToast('Tour complete.', 'success');
+}
+
+async function renderTasksView() {
+  renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
+  try {
+    const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    setViewTitle('Tasks & Reminders');
+
+    const overdue = tasks.items.filter(t => new Date(t.dueDate) < new Date() && t.status === 'pending');
+    const today = tasks.items.filter(t => isToday(t.dueDate) && t.status === 'pending');
+    const upcoming = tasks.items.filter(t => new Date(t.dueDate) > new Date() && !isToday(t.dueDate) && t.status === 'pending');
+    const completed = tasks.items.filter(t => t.status === 'completed');
+
+    appRoot.innerHTML = `
+      <section class="tasks-view">
+        <div class="tasks-header">
+          <div class="tasks-tabs">
+            <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" data-action="filter-tasks" data-status="pending">Pending</button>
+            <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" data-action="filter-tasks" data-status="completed">Completed</button>
+          </div>
+        </div>
+
+        <div class="tasks-content">
+          ${appState.taskQuery.status === 'pending' ? `
+            ${renderTaskSection('Overdue', overdue, 'error')}
+            ${renderTaskSection('Today', today, 'warning')}
+            ${renderTaskSection('Upcoming', upcoming, 'success')}
+            ${!overdue.length && !today.length && !upcoming.length ? '<div class="empty-state">No pending tasks! Time to generate some outreach.</div>' : ''}
+          ` : `
+            ${renderTaskSection('Completed', completed, 'neutral')}
+            ${!completed.length ? '<div class="empty-state">No completed tasks yet.</div>' : ''}
+          `}
+        </div>
+      </section>
+    `;
+  } catch (error) {
+    appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${error.message}</div>`;
+  }
+}
+
+function renderTaskSection(title, tasks, tone) {
+  if (!tasks.length) return '';
+  return `
+    <div class="task-section">
+      <h4 class="task-section-title task-section-title--${tone}">${title} (${tasks.length})</h4>
+      <div class="task-list">
+        ${tasks.map(renderTaskItem).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderTaskItem(task) {
+  return `
+    <article class="task-item">
+      <div class="task-item-main">
+        <div class="task-item-info">
+          <strong>${escapeHtml(task.summary)}</strong>
+          <div class="small muted">Due ${formatDate(task.dueDate)}</div>
+        </div>
+        <div class="task-item-actions">
+          ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
+          ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+async function completeTask(taskId) {
+  try {
+    await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
+    showToast('Task completed!', 'success');
+    invalidateAppData();
+    await renderTasksView();
+  } catch (error) {
+    showToast('Failed to complete task: ' + error.message, 'error');
+  }
+}
+
+function isToday(dateStr) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
 }
