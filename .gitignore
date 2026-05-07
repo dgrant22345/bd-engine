@@ -16,6 +16,7 @@ data_backup_before_reseed/
 data/background-worker.pid
 data/server.pid
 data/diagnostic.txt
+saas/node_modules/
 
 # Distribution / packaging artifacts
 dist/
