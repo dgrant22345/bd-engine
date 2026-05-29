@@ -437,19 +437,185 @@ function Initialize-DataStore {
         Write-JsonFile -Path $map.Settings -Data (New-DefaultSettings)
     }
 
+    # Load seed if needed
+    $seedConfigs = $null
+    $seedCompanies = $null
+    $seedFile = Join-Path (Get-DataRoot) 'seed-job-boards-config.json'
+    
+    $hasCompanies = $false
+    if (Test-Path $map.Companies) {
+        try {
+            $existingCompanies = Read-JsonFile -Path $map.Companies -Default $null
+            if ($existingCompanies -and $existingCompanies.Count -gt 0) {
+                $hasCompanies = $true
+            }
+        } catch {}
+    }
+    $hasBoardConfigs = $false
+    if (Test-Path $map.BoardConfigs) {
+        try {
+            $existingConfigs = Read-JsonFile -Path $map.BoardConfigs -Default $null
+            if ($existingConfigs -and $existingConfigs.Count -gt 0) {
+                $hasBoardConfigs = $true
+            }
+        } catch {}
+    }
+
+    if ((-not $hasCompanies -or -not $hasBoardConfigs) -and (Test-Path -LiteralPath $seedFile)) {
+        try {
+            $rawSeed = Get-Content -LiteralPath $seedFile -Raw | ConvertFrom-Json
+            if ($rawSeed -and $rawSeed.Count -gt 1) {
+                $headers = @($rawSeed[0])
+                $rows = @($rawSeed | Select-Object -Skip 1)
+                
+                $parsedConfigs = New-Object System.Collections.ArrayList
+                $parsedCompanies = New-Object System.Collections.ArrayList
+                $seenCompanyKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+                
+                $modulePath = Join-Path $PSScriptRoot 'BdEngine.Domain.psm1'
+                if (Test-Path $modulePath) {
+                    Import-Module $modulePath -DisableNameChecking -ErrorAction SilentlyContinue
+                }
+                
+                foreach ($row in $rows) {
+                    $record = [ordered]@{}
+                    for ($i = 0; $i -lt $headers.Count; $i++) {
+                        $header = [string]$headers[$i]
+                        if ($header) {
+                            $record[$header] = if ($i -lt $row.Count) { [string]$row[$i] } else { '' }
+                        }
+                    }
+                    
+                    $rawCompanyName = [string]$record['Company']
+                    if (-not $rawCompanyName) { continue }
+                    
+                    $companyName = if (Get-Command Get-CanonicalCompanyDisplayName -ErrorAction SilentlyContinue) { Get-CanonicalCompanyDisplayName $rawCompanyName } else { $rawCompanyName }
+                    $key = if (Get-Command Get-CanonicalCompanyKey -ErrorAction SilentlyContinue) { Get-CanonicalCompanyKey $rawCompanyName } else { $rawCompanyName.ToLowerInvariant().Replace(' ', '') }
+                    if (-not $key) { continue }
+                    
+                    $notes = [string]$record['Notes']
+                    $active = if ($record['Active'] -eq 'FALSE') { $false } else { $true }
+                    
+                    $configId = if (Get-Command New-DeterministicId -ErrorAction SilentlyContinue) { New-DeterministicId -Prefix 'cfgsheet' -Seed $key } else { "cfg-$([Guid]::NewGuid().ToString())" }
+                    $companyId = if (Get-Command New-DeterministicId -ErrorAction SilentlyContinue) { New-DeterministicId -Prefix 'acctlive' -Seed $key } else { "acct-$([Guid]::NewGuid().ToString())" }
+                    
+                    $config = [ordered]@{
+                        id = $configId
+                        workspaceId = 'workspace-default'
+                        accountId = $companyId
+                        companyName = $companyName
+                        normalizedCompanyName = $key
+                        atsType = [string]$record['ATS_Type']
+                        boardId = [string]$record['Board_ID']
+                        domain = [string]$record['Domain']
+                        careersUrl = [string]$record['Careers_URL']
+                        source = [string]$record['Source']
+                        notes = $notes
+                        active = $active
+                        supportedImport = if ($record['ATS_Type'] -in @('greenhouse', 'lever', 'ashby', 'smartrecruiters')) { $true } else { $false }
+                        lastCheckedAt = if ($record['Last_Checked']) { $record['Last_Checked'] } else { $null }
+                        discoveryStatus = if ($record['Discovery_Status']) { $record['Discovery_Status'] } else { 'unresolved' }
+                        discoveryMethod = if ($record['Discovery_Method']) { $record['Discovery_Method'] } else { 'repair_seed' }
+                        confidenceScore = if ($record['ATS_Type'] -in @('greenhouse', 'lever', 'ashby', 'smartrecruiters')) { 100 } else { 0 }
+                        confidenceBand = if ($record['ATS_Type'] -in @('greenhouse', 'lever', 'ashby', 'smartrecruiters')) { 'high' } else { 'unresolved' }
+                        evidenceSummary = 'Seeded from seed-job-boards-config.json'
+                        reviewStatus = 'approved'
+                        lastImportAt = $null
+                        lastImportStatus = ''
+                    }
+                    [void]$parsedConfigs.Add($config)
+                    
+                    if (-not $seenCompanyKeys.Contains($key)) {
+                        [void]$seenCompanyKeys.Add($key)
+                        
+                        $company = [ordered]@{
+                            id = $companyId
+                            workspaceId = 'workspace-default'
+                            normalizedName = $key
+                            displayName = $companyName
+                            connectionCount = 3
+                            careersUrl = [string]$record['Careers_URL']
+                            targetScore = 100
+                            dailyScore = 0
+                            industry = ''
+                            location = ''
+                            status = 'new'
+                            outreachStatus = 'not_started'
+                            priorityTier = 'Tier 3'
+                            priority = 'medium'
+                            owner = ''
+                            domain = [string]$record['Domain']
+                            notes = ''
+                            tags = @()
+                            seniorContactCount = 0
+                            talentContactCount = 0
+                            buyerTitleCount = 0
+                            networkStrength = 'Cold'
+                            jobCount = 0
+                            openRoleCount = 0
+                            newRoleCount7d = 0
+                            staleRoleCount30d = 0
+                            departmentFocus = ''
+                            departmentFocusCount = 0
+                            departmentConcentration = 0
+                            hiringSpikeScore = 0
+                            followUpScore = 0
+                            scoreBreakdown = @{}
+                            lastJobPostedAt = $null
+                            hiringStatus = 'No active jobs'
+                            lastContactedAt = $null
+                            daysSinceContact = $null
+                            staleFlag = ''
+                            canonicalDomain = [string]$record['Domain']
+                            linkedinCompanySlug = ''
+                            aliases = @()
+                            enrichmentStatus = 'completed'
+                            enrichmentSource = 'seed'
+                            enrichmentConfidence = 'verified'
+                            enrichmentConfidenceScore = 100
+                            enrichmentNotes = ''
+                            enrichmentEvidence = ''
+                            enrichmentFailureReason = ''
+                            enrichmentAttemptedUrls = @()
+                            enrichmentHttpSummary = @()
+                            nextEnrichmentAttemptAt = $null
+                            lastEnrichedAt = $null
+                            lastVerifiedAt = $null
+                            atsTypes = @([string]$record['ATS_Type'])
+                            topContactName = ''
+                            topContactTitle = ''
+                            recommendedAction = ''
+                            outreachDraft = ''
+                            nextAction = ''
+                            nextActionAt = $null
+                        }
+                        [void]$parsedCompanies.Add($company)
+                    }
+                }
+                
+                $seedConfigs = @($parsedConfigs)
+                $seedCompanies = @($parsedCompanies)
+            }
+        } catch {
+            Write-Warning "Failed to parse seed-job-boards-config.json: $_"
+        }
+    }
+
     foreach ($collectionName in 'Companies', 'Contacts', 'Jobs', 'BoardConfigs', 'Activities', 'ImportRuns') {
         $path = $map[$collectionName]
-        if (-not (Test-Path $path)) {
-            Write-JsonFile -Path $path -Data (,([object[]]@()))
+        if (-not (Test-Path $path) -or ((Get-Item $path).Length -le 5)) {
+            if ($collectionName -eq 'BoardConfigs' -and $seedConfigs) {
+                Write-JsonFile -Path $path -Data $seedConfigs
+            } elseif ($collectionName -eq 'Companies' -and $seedCompanies) {
+                Write-JsonFile -Path $path -Data $seedCompanies
+            } else {
+                Write-JsonFile -Path $path -Data (,([object[]]@()))
+            }
         }
     }
 
     if (Test-AppStoreUsesSqlite) {
-        $dbPath = Get-BdSqliteDatabasePath
-        $seedState = $null
-        if (-not (Test-Path -LiteralPath $dbPath)) {
-            $seedState = Get-JsonAppStateInternal
-        }
+        $seedState = Get-JsonAppStateInternal
         Initialize-BdSqliteStore -State $seedState
     }
 }

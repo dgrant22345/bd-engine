@@ -7,7 +7,6 @@ $projectRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (R
 Set-Location $projectRoot
 
 Import-Module (Join-Path $projectRoot 'server/Modules/BdEngine.Domain.psm1') -Force -DisableNameChecking
-Import-Module (Join-Path $projectRoot 'server/Modules/BdEngine.Data.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $projectRoot 'server/Modules/BdEngine.SqliteStore.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $projectRoot 'server/Modules/BdEngine.State.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $projectRoot 'server/Modules/BdEngine.JobImport.psm1') -Force -DisableNameChecking

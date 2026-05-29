@@ -1,5 +1,5 @@
 param(
-    [int]$Port = 8173,
+    [int]$Port = $(if ($env:PORT) { [int]$env:PORT } else { 8173 }),
     [switch]$OpenBrowser
 )
 
@@ -1322,7 +1322,7 @@ if (Test-AppStoreUsesSqlite) {
     $script:ServerWarmedAt = (Get-Date).ToString('o')
 }
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
 $listener.Start()
 $prefix = "http://localhost:$Port/"
 Write-ServerLog "BD Engine app listening at $prefix"

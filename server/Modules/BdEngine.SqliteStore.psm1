@@ -24,6 +24,11 @@ function Test-BdSqliteStoreEnabled {
         return $false
     }
 
+    $isWin = ($env:OS -like "*Windows*") -or ($IsWindows -eq $true)
+    if (-not $isWin) {
+        return $false
+    }
+
     $dllPath = Join-Path (Get-BdSqliteVendorRoot) 'System.Data.SQLite.dll'
     return (Test-Path -LiteralPath $dllPath)
 }
@@ -2187,10 +2192,15 @@ function Initialize-BdSqliteStore {
     $connection = Open-BdSqliteConnection
     try {
         Initialize-BdSqliteSchema -Connection $connection
-        if (Test-BdSqliteHasData -Connection $connection) {
+        $hasData = Test-BdSqliteHasData -Connection $connection
+        if ($hasData) {
             [void](Get-BdSqliteDataRevision -Connection $connection)
+            $boardConfigsCount = [int](ConvertTo-BdSqliteNumber (Invoke-BdSqliteScalar -Connection $connection -Sql 'SELECT COUNT(*) FROM board_configs;'))
+            if ($boardConfigsCount -eq 0) {
+                $hasData = $false
+            }
         }
-        if ($State -and -not (Test-BdSqliteHasData -Connection $connection)) {
+        if ($State -and -not $hasData) {
             Save-BdSqliteState -State $State
         }
     } finally {

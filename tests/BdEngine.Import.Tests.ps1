@@ -8,15 +8,15 @@
     Requires Pester 5+. Install with: Install-Module Pester -Force
 #>
 
-BeforeAll {
-    # Import the module under test
-    $ModulePath = Join-Path $PSScriptRoot '..\server\Modules\BdEngine.Import.psm1'
-    Import-Module $ModulePath -Force -DisableNameChecking
-}
-
 Describe 'BdEngine.Import Module' -Tag 'Module' {
+    BeforeAll {
+        # Import the module under test
+        $script:ModulePath = Join-Path $PSScriptRoot '..\server\Modules\BdEngine.Import.psm1'
+        Import-Module $script:ModulePath -Force -DisableNameChecking
+    }
+
     It 'Module imports without errors' {
-        { Import-Module $ModulePath -Force -DisableNameChecking } | Should -Not -Throw
+        { Import-Module $script:ModulePath -Force -DisableNameChecking } | Should -Not -Throw
     }
 
     It 'Exports expected functions' {
