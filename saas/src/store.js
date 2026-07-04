@@ -40,7 +40,9 @@ const seedUser = {
 
 function account(input) {
   return {
-    id: `acct-${Math.random().toString(36).slice(2, 6)}`,
+    // Timestamp + 8 random chars: the old 4-char suffix only had 1.68M values,
+    // which statistically guarantees duplicate ids at 10k+ records.
+    id: `acct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     tenantId: seedTenant.id,
     normalizedName: input.displayName ? normalizeKey(input.displayName) : '',
     displayName: '',
@@ -81,7 +83,7 @@ function account(input) {
 
 function contact(input) {
   return {
-    id: `ct-${Math.random().toString(36).slice(2, 6)}`,
+    id: `ct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     tenantId: seedTenant.id,
     createdAt: now(),
     updatedAt: now(),
@@ -93,7 +95,7 @@ function contact(input) {
 
 function job(input) {
   return {
-    id: `job-${Math.random().toString(36).slice(2, 6)}`,
+    id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     tenantId: seedTenant.id,
     active: true,
     atsType: input.atsType || input.source || 'unknown',
@@ -361,33 +363,52 @@ function getTouchedJobCountFromResult(result = {}) {
 
 const pendingSaves = new Map();
 
+function saveTenantNow(tenantId) {
+  const profile = tenantProfiles.get(tenantId);
+  const status = loadedTenants.get(tenantId) || {};
+
+  // Only persist fields that have actually been loaded/initialized
+  const data = {
+    settings: profile ? { ...profile.settings, persona: profile.persona } : undefined
+  };
+
+  if (status.core) {
+    data.accounts = accountsByTenant.get(tenantId);
+    data.jobs = jobsByTenant.get(tenantId);
+    data.configs = configsByTenant.get(tenantId);
+    data.activities = activitiesByTenant.get(tenantId);
+    data.tasks = tasksByTenant.get(tenantId);
+  }
+
+  if (status.contacts) {
+    data.contacts = contactsByTenant.get(tenantId);
+  }
+
+  return dbSaveTenantData(tenantId, data);
+}
+
 function persistTenant(tenantId) {
   if (!isDbEnabled()) return;
   if (pendingSaves.has(tenantId)) clearTimeout(pendingSaves.get(tenantId));
   pendingSaves.set(tenantId, setTimeout(() => {
     pendingSaves.delete(tenantId);
-    const profile = tenantProfiles.get(tenantId);
-    const status = loadedTenants.get(tenantId) || {};
-    
-    // Only persist fields that have actually been loaded/initialized
-    const data = {
-      settings: profile ? { ...profile.settings, persona: profile.persona } : undefined
-    };
-
-    if (status.core) {
-      data.accounts = accountsByTenant.get(tenantId);
-      data.jobs = jobsByTenant.get(tenantId);
-      data.configs = configsByTenant.get(tenantId);
-      data.activities = activitiesByTenant.get(tenantId);
-      data.tasks = tasksByTenant.get(tenantId);
-    }
-
-    if (status.contacts) {
-      data.contacts = contactsByTenant.get(tenantId);
-    }
-
-    dbSaveTenantData(tenantId, data).catch(err => console.error('Persist error:', err.message));
+    saveTenantNow(tenantId).catch(err => console.error('Persist error:', err.message));
   }, 500));
+}
+
+// Debounced writes still pending at shutdown would otherwise be dropped on
+// every deploy/restart, silently losing up to 500ms of mutations (including
+// whole CSV imports, which queue exactly one save).
+export async function flushPendingSaves() {
+  const tenantIds = [...pendingSaves.keys()];
+  for (const tenantId of tenantIds) {
+    clearTimeout(pendingSaves.get(tenantId));
+    pendingSaves.delete(tenantId);
+  }
+  await Promise.all(tenantIds.map((tenantId) =>
+    saveTenantNow(tenantId).catch(err => console.error('Flush persist error:', tenantId, err.message))
+  ));
+  return tenantIds.length;
 }
 
 const loadedTenants = new Map(); // tenantId -> { core: boolean, contacts: boolean }
@@ -509,6 +530,7 @@ export function createStore() {
       // We no longer pre-load all tenant_data (lazy load now).
       console.log('  Store: Lazy loading enabled for tenant data');
     },
+    flushPendingSaves,
     ensureTenant(tenant, user = {}) {
       return ensureTenantProfile(tenant?.id || tenant, tenant, user);
     },
@@ -729,7 +751,9 @@ export function createStore() {
       const dashboardStartedAt = performance.now();
       const timings = {};
       const loadStartedAt = performance.now();
-      await ensureDataLoaded(tenantId, false); // Don't need full contact list for dashboard summary
+      // Contacts are needed for networkLeaders; without them the widget was
+      // silently empty until some other endpoint happened to load contacts.
+      await ensureDataLoaded(tenantId, true);
       timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
       const tenantAccounts = accountsForTenant(tenantId);
@@ -785,7 +809,7 @@ export function createStore() {
 
     async getDashboardExtended(tenantId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId, false);
+      await ensureDataLoaded(tenantId, true); // introQueue reads contacts
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
       const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
@@ -809,7 +833,7 @@ export function createStore() {
           .filter((item) => item.tenantId === tenantId && item.status === 'open')
           .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
           .map((item) => {
-            const itemAccount = accountById(item.accountId);
+            const itemAccount = accountById(item.accountId, tenantId);
             return {
               accountId: item.accountId,
               displayName: itemAccount?.displayName || 'Account',
@@ -848,19 +872,20 @@ export function createStore() {
       if (loadElapsedMs > 500) {
         console.warn(`Slow account detail load: saas/src/store.js getAccountDetail ${loadElapsedMs}ms`);
       }
-      const item = accountById(accountId);
+      const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
       const accountContacts = contacts.filter((contactItem) => contactItem.tenantId === tenantId && contactItem.accountId === accountId);
       const accountJobs = jobs.filter((jobItem) => jobItem.tenantId === tenantId && jobItem.accountId === accountId);
       const accountActivities = activities.filter((activity) => activity.tenantId === tenantId && activity.accountId === accountId);
+      const accountConfigs = boardConfigs.filter((config) => config.tenantId === tenantId && config.normalizedCompanyName === item.normalizedName);
       return {
         account: item,
         contacts: accountContacts,
         jobs: accountJobs,
         activity: accountActivities,
         activities: accountActivities,
-        configs: boardConfigs.filter((config) => config.normalizedCompanyName === item.normalizedName),
-        config: boardConfigs.find((config) => config.normalizedCompanyName === item.normalizedName) || null,
+        configs: accountConfigs,
+        config: accountConfigs[0] || null,
       };
     },
 
@@ -882,7 +907,7 @@ export function createStore() {
     async patchAccount(tenantId, accountId, patch) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
-      const item = accountById(accountId);
+      const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
       Object.assign(item, pickPatch(patch, ['status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt', 'owner']));
       item.updatedAt = now();
@@ -1044,7 +1069,11 @@ export function createStore() {
         metadata: payload.metadata || {},
       };
       activities.unshift(activity);
-      const itemAccount = activity.accountId ? accountById(activity.accountId) : null;
+      // Also write to the tenant map: findActivities reads and persistTenant
+      // saves ONLY the tenant maps, so global-only writes were invisible in
+      // the UI and silently dropped on restart.
+      getTenantArray(activitiesByTenant, tenantId).unshift(activity);
+      const itemAccount = activity.accountId ? accountById(activity.accountId, tenantId) : null;
       if (itemAccount) {
         itemAccount.lastContactedAt = activity.occurredAt;
         if (activity.pipelineStage) itemAccount.outreachStatus = activity.pipelineStage;
@@ -1065,6 +1094,7 @@ export function createStore() {
             createdAt: now(),
           };
           tasks.push(task);
+          getTenantArray(tasksByTenant, tenantId).push(task);
         }
       }
 
@@ -1268,9 +1298,9 @@ export function createStore() {
       }
 
       let configsCreated = 0;
+      const existingWorkflowConfigNames = new Set(tenantConfigs.map((config) => config.normalizedCompanyName));
       for (const item of tenantAccounts) {
-        const alreadyExists = tenantConfigs.some((config) => config.normalizedCompanyName === item.normalizedName);
-        if (alreadyExists) continue;
+        if (existingWorkflowConfigNames.has(item.normalizedName)) continue;
         if (jobBoardLimit !== -1 && tenantConfigs.length >= jobBoardLimit) {
           warnings.push(`ATS config creation stopped at the ${jobBoardLimit} board limit for the ${planName} plan.`);
           break;
@@ -1298,7 +1328,8 @@ export function createStore() {
         });
         boardConfigs.unshift(config);
         getTenantArray(configsByTenant, tenantId).unshift(config);
-        tenantConfigs = boardConfigs.filter((existing) => existing.tenantId === tenantId);
+        tenantConfigs.unshift(config);
+        existingWorkflowConfigNames.add(config.normalizedCompanyName);
         configsCreated++;
       }
       updateProgress(22, 'configs', `Prepared ${configsCreated} new ATS config${configsCreated === 1 ? '' : 's'}.`);
@@ -2654,7 +2685,9 @@ function contactsForTenant(tenantId) {
 }
 
 function jobsForTenant(tenantId) {
-  return (jobsByTenant.get(tenantId) || [])
+  // Sort a copy: sorting the stored array in place mutates persisted order on
+  // every read and races with concurrent iteration.
+  return [...(jobsByTenant.get(tenantId) || [])]
     .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)));
 }
 
@@ -2663,16 +2696,22 @@ function configsForTenant(tenantId) {
 }
 
 function activitiesForTenant(tenantId) {
-  return (activitiesByTenant.get(tenantId) || [])
+  return [...(activitiesByTenant.get(tenantId) || [])]
     .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
 }
 
 function tasksForTenant(tenantId) {
-  return (tasksByTenant.get(tenantId) || [])
+  return [...(tasksByTenant.get(tenantId) || [])]
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 }
 
-function accountById(accountId) {
+function accountById(accountId, tenantId) {
+  // Prefer the tenant-scoped array: the global array spans all tenants, so an
+  // id collision with another tenant's record would shadow the right account.
+  if (tenantId) {
+    const scoped = (accountsByTenant.get(tenantId) || []).find((item) => item.id === accountId);
+    if (scoped) return scoped;
+  }
   return accounts.find((item) => item.id === accountId);
 }
 
@@ -2986,12 +3025,33 @@ function configMatchesAccount(config = {}, account = {}) {
 }
 
 function getAccountsNeedingResolution(tenantAccounts = [], tenantConfigs = []) {
+  // Index resolved configs once (O(C)) so the account pass is O(A); the naive
+  // per-account tenantConfigs.some() scan is O(A*C) which at 12k x 12k blocks
+  // the event loop for ~16s.
+  const resolvedConfigNames = new Set();
+  const resolvedConfigAccountIds = new Set();
+  for (const config of tenantConfigs) {
+    if (!isResolvedBoardConfig(config)) continue;
+    if (config.accountId) resolvedConfigAccountIds.add(config.accountId);
+    const configName = normalizeKey(config.normalizedCompanyName || config.companyName || '');
+    if (configName) resolvedConfigNames.add(configName);
+  }
   return tenantAccounts.filter((item) => {
     if (['client', 'paused'].includes(normalizeKey(item.status))) return false;
     const hasDomain = Boolean(item.canonicalDomain || item.domain);
     const hasCareersUrl = Boolean(item.careersUrl);
-    const hasResolvedBoard = tenantConfigs.some((config) => configMatchesAccount(config, item) && isResolvedBoardConfig(config));
-    return !hasDomain || !hasCareersUrl || !hasResolvedBoard;
+    if (!hasDomain || !hasCareersUrl) return true;
+    if (item.id && resolvedConfigAccountIds.has(item.id)) return false;
+    const accountNames = [
+      item.normalizedName,
+      item.displayName,
+      ...(Array.isArray(item.aliases) ? item.aliases : []),
+    ];
+    const hasResolvedBoard = accountNames.some((value) => {
+      const key = normalizeKey(value);
+      return key && resolvedConfigNames.has(key);
+    });
+    return !hasResolvedBoard;
   });
 }
 

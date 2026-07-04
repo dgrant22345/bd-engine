@@ -96,13 +96,17 @@ export function extractSession(req) {
   return getSession(sessionId);
 }
 
+// Behind Railway's TLS proxy the cookie must not be sent over plain HTTP;
+// local dev (no RAILWAY_ENVIRONMENT, non-production) stays on http://localhost.
+const SECURE_COOKIE = (process.env.RAILWAY_ENVIRONMENT || process.env.BD_CLOUD_ENV === 'production' || process.env.NODE_ENV === 'production') ? '; Secure' : '';
+
 export function setSessionCookie(res, cookie) {
   const maxAge = 7 * 24 * 60 * 60; // 7 days
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(cookie)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(cookie)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${SECURE_COOKIE}`);
 }
 
 export function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${SECURE_COOKIE}`);
 }
 
 // ── Password hashing (dev stub — use bcrypt/argon2 in production) ───────────

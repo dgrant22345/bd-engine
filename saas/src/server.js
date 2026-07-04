@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
+import { gzipSync, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
@@ -64,6 +65,7 @@ async function startServer() {
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
+    res.bdAcceptsGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
     // CORS for dev
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
@@ -106,6 +108,12 @@ async function startServer() {
     process.on(signal, async () => {
       console.log(`\n  Received ${signal}, shutting down...`);
       server.close();
+      try {
+        const flushed = await store.flushPendingSaves();
+        if (flushed) console.log(`  Flushed ${flushed} pending tenant save(s) before shutdown`);
+      } catch (err) {
+        console.error('  Failed to flush pending saves:', err.message);
+      }
       await closeDb();
       process.exit(0);
     });
@@ -122,7 +130,7 @@ function startPeriodicPipelineRunner() {
     tenants.forEach(tenant => {
       try {
         console.log(`[Scheduler] Auto-starting pipeline for ${tenant.id}`);
-        store.startRevenuePipeline(tenant.id);
+        store.startRevenuePipeline(tenant.id, { plan: getPlan(tenant.plan) });
       } catch (err) {
         console.error(`[Scheduler] Failed to auto-start pipeline for ${tenant.id}:`, err.message);
       }
@@ -1149,10 +1157,15 @@ function serveStaticOrSPA(pathname, req, res) {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
+let cachedAppIndexHtml = null;
+
 function getAppIndexHtml() {
+  // The file only changes on deploy (= process restart), so cache the
+  // read + regex rewrite instead of doing it on every /app request.
+  if (cachedAppIndexHtml) return cachedAppIndexHtml;
   const appIndex = join(appDir, 'index.html');
   const html = readFileSync(appIndex, 'utf8');
-  return html
+  cachedAppIndexHtml = html
     .replace(/href="\/styles\.css/g, 'href="/app/styles.css')
     .replace(/href="\/manifest\.json/g, 'href="/app/manifest.json')
     .replace(/href="\/icons\//g, 'href="/app/icons/')
@@ -1161,6 +1174,7 @@ function getAppIndexHtml() {
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
     .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?navigator\.serviceWorker\.register\('\/sw\.js'\)[\s\S]*?\}\s*<\/script>/, '')
     .replace(/<script src="\/app\/local-api\.js/g, '<script src="/persona-labels.js"></script>\n  <script src="/app/local-api.js');
+  return cachedAppIndexHtml;
 }
 
 function tryStaticFile(baseDir, pathname) {
@@ -1172,11 +1186,21 @@ function tryStaticFile(baseDir, pathname) {
   return filePath;
 }
 
+const COMPRESSIBLE_MIME = /^(text\/|application\/(json|javascript|xml))|image\/svg\+xml/;
+
 function streamFile(filePath, res) {
-  res.writeHead(200, {
-    'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream',
+  const contentType = mimeTypes[extname(filePath)] || 'application/octet-stream';
+  const headers = {
+    'Content-Type': contentType,
     'Cache-Control': 'no-store',
-  });
+    'Vary': 'Accept-Encoding',
+  };
+  if (res.bdAcceptsGzip && COMPRESSIBLE_MIME.test(contentType)) {
+    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
+    createReadStream(filePath).pipe(createGzip()).pipe(res);
+    return;
+  }
+  res.writeHead(200, headers);
   createReadStream(filePath).pipe(res);
 }
 
@@ -1240,28 +1264,39 @@ function getHealthPayload(includeDetails = false) {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+const GZIP_MIN_BYTES = 1024;
+
+function sendCompressible(res, status, headers, body) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  if (res.bdAcceptsGzip && buffer.length >= GZIP_MIN_BYTES) {
+    const compressed = gzipSync(buffer);
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
+    res.end(compressed);
+    return;
+  }
+  res.writeHead(status, { ...headers, 'Vary': 'Accept-Encoding' });
+  res.end(buffer);
+}
+
 function sendHtml(res, body) {
-  res.writeHead(200, {
+  sendCompressible(res, 200, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
-  });
-  res.end(body);
+  }, body);
 }
 
 function sendJavaScript(res, body) {
-  res.writeHead(200, {
+  sendCompressible(res, 200, {
     'Content-Type': 'text/javascript; charset=utf-8',
     'Cache-Control': 'no-store',
-  });
-  res.end(body);
+  }, body);
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, {
+  sendCompressible(res, status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-  });
-  res.end(JSON.stringify(body));
+  }, JSON.stringify(body));
 }
 
 async function readJson(req) {

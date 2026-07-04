@@ -90,6 +90,7 @@ export async function initDb() {
         jobs JSONB NOT NULL DEFAULT '[]',
         configs JSONB NOT NULL DEFAULT '[]',
         activities JSONB NOT NULL DEFAULT '[]',
+        tasks JSONB NOT NULL DEFAULT '[]',
         settings JSONB NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL DEFAULT ''
       );
@@ -115,6 +116,7 @@ export async function initDb() {
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referred_by_tenant_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credited_at TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credit_transaction_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenant_data ADD COLUMN IF NOT EXISTS tasks JSONB NOT NULL DEFAULT '[]';
       CREATE UNIQUE INDEX IF NOT EXISTS tenants_referral_code_idx ON tenants (referral_code) WHERE referral_code <> '';
       CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
       CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
@@ -281,14 +283,15 @@ export async function dbSaveTenantData(tenantId, data) {
     const s = (v) => (v === undefined || v === null) ? null : JSON.stringify(v);
 
     await pool.query(
-      `INSERT INTO tenant_data (tenant_id, accounts, contacts, jobs, configs, activities, settings, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO tenant_data (tenant_id, accounts, contacts, jobs, configs, activities, tasks, settings, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (tenant_id) DO UPDATE SET
          accounts = COALESCE(EXCLUDED.accounts, tenant_data.accounts),
          contacts = COALESCE(EXCLUDED.contacts, tenant_data.contacts),
          jobs = COALESCE(EXCLUDED.jobs, tenant_data.jobs),
          configs = COALESCE(EXCLUDED.configs, tenant_data.configs),
          activities = COALESCE(EXCLUDED.activities, tenant_data.activities),
+         tasks = COALESCE(EXCLUDED.tasks, tenant_data.tasks),
          settings = COALESCE(EXCLUDED.settings, tenant_data.settings),
          updated_at = EXCLUDED.updated_at`,
       [
@@ -298,6 +301,7 @@ export async function dbSaveTenantData(tenantId, data) {
         s(data.jobs),
         s(data.configs),
         s(data.activities),
+        s(data.tasks),
         s(data.settings),
         new Date().toISOString(),
       ]
@@ -310,10 +314,10 @@ export async function dbSaveTenantData(tenantId, data) {
 export async function dbLoadTenantData(tenantId, includeContacts = true) {
   if (!dbReady) return null;
   try {
-    const columns = includeContacts 
-      ? 'accounts, contacts, jobs, configs, activities, settings, updated_at'
-      : 'accounts, jobs, configs, activities, settings, updated_at';
-    
+    const columns = includeContacts
+      ? 'accounts, contacts, jobs, configs, activities, tasks, settings, updated_at'
+      : 'accounts, jobs, configs, activities, tasks, settings, updated_at';
+
     const result = await pool.query(`SELECT ${columns} FROM tenant_data WHERE tenant_id = $1`, [tenantId]);
     if (result.rows.length === 0) return null;
     const r = result.rows[0];
@@ -323,6 +327,7 @@ export async function dbLoadTenantData(tenantId, includeContacts = true) {
       jobs: r.jobs || [],
       configs: r.configs || [],
       activities: r.activities || [],
+      tasks: r.tasks || [],
       settings: r.settings || {},
       updated_at: r.updated_at,
     };
