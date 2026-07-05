@@ -15,8 +15,9 @@
 </head>
 <body>
   <div class="page-noise" aria-hidden="true"></div>
+  <a class="skip-link" href="#app-main">Skip to main content</a>
   <div class="shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="workspace-navigation" aria-label="Workspace navigation">
       <div class="brand-card">
         <p class="eyebrow">Commercial BD platform</p>
         <h1>BD Engine</h1>
@@ -44,17 +45,17 @@
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main" id="app-main" tabindex="-1">
       <header class="topbar">
         <div>
           <p class="eyebrow">Commercial revenue operating system</p>
           <h2 id="view-title">Dashboard</h2>
         </div>
         <div class="topbar-tools">
-          <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation">&#9776;</button>
+          <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation">&#9776;</button>
           <label class="search-shell" for="global-search-input">
             <span>Search companies, contacts, jobs <kbd class="kbd">Ctrl+K</kbd></span>
-            <input id="global-search-input" type="search" placeholder="Type a company, person, or role">
+            <input id="global-search-input" type="search" placeholder="Type a company, person, or role" autocomplete="off" aria-controls="search-results" aria-expanded="false">
           </label>
           <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
             <span class="theme-toggle-icon" id="theme-icon">&#9789;</span>
@@ -64,16 +65,16 @@
         </div>
       </header>
 
-      <div id="breadcrumbs" class="breadcrumbs"></div>
-      <div id="app-alert" class="app-alert hidden"></div>
-      <div id="search-results" class="search-results hidden"></div>
+      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb"></nav>
+      <div id="app-alert" class="app-alert hidden" role="status" aria-live="polite"></div>
+      <div id="search-results" class="search-results hidden" role="region" aria-label="Search results" aria-live="polite" aria-busy="false"></div>
       <div id="app" class="view-root"></div>
     </main>
   </div>
 
-  <div id="mobile-nav-backdrop" class="mobile-nav-backdrop"></div>
+  <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" aria-hidden="true"></div>
   <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
-  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-relevant="additions"></div>
 
   <script src="/local-api.js?v=20260506-active-job-count-1"></script>
   <script src="/app.js?v=20260506-active-job-count-1"></script>

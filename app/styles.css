@@ -95,6 +95,29 @@ a {
   color: inherit;
 }
 
+.skip-link {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10000;
+  transform: translateY(-160%);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--surface-ink);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+  transition: transform 140ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.main:focus {
+  outline: none;
+}
+
 .shell {
   position: relative;
   display: grid;
@@ -3915,8 +3938,8 @@ a {
 /* ── Inline editing ── */
 [data-inline-edit] { cursor: default; position: relative; }
 [data-inline-edit]:hover::after {
-  content: '✎'; position: absolute; top: 2px; right: 4px;
-  font-size: 0.65rem; color: var(--muted); opacity: 0.6;
+  content: 'Edit'; position: absolute; top: 2px; right: 4px;
+  font-size: 0.62rem; color: var(--muted); opacity: 0.7;
 }
 .inline-edit-input {
   width: 100%; padding: 4px 8px; border: 2px solid var(--accent);

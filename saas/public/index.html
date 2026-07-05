@@ -298,7 +298,7 @@
 
           <section class="hero">
             <div class="hero-content">
-              <div class="hero-badge">✨ Now in cloud beta</div>
+              <div class="hero-badge">Cloud beta</div>
               <h1 class="hero-title">
                 Growth intelligence<br>
                 <span class="hero-gradient">for Sales & Job Seekers</span>
@@ -351,32 +351,32 @@
             <h2 class="section-title">Everything you need to close more business — or land your next role</h2>
             <div class="features-grid">
               <div class="feature-card">
-                <div class="feature-icon">📊</div>
+                <div class="feature-icon" aria-hidden="true">PI</div>
                 <h3>Pipeline Intelligence</h3>
                 <p>See your entire pipeline at a glance. Target scores, hiring velocity, and relationship coverage — automatically ranked for sales quotas and job hunts.</p>
               </div>
               <div class="feature-card">
-                <div class="feature-icon">🎯</div>
+                <div class="feature-icon" aria-hidden="true">HS</div>
                 <h3>Hiring Signals</h3>
                 <p>Track ATS activity across Greenhouse, Lever, Ashby, and 20+ platforms. Know when accounts are hiring before the competition.</p>
               </div>
               <div class="feature-card">
-                <div class="feature-icon">✉️</div>
+                <div class="feature-icon" aria-hidden="true">SO</div>
                 <h3>Smart Outreach</h3>
                 <p>Generate personalized email and LinkedIn drafts based on live hiring data. Perfect for cold sales pitches or breaking into a target company as a candidate.</p>
               </div>
               <div class="feature-card">
-                <div class="feature-icon">👥</div>
+                <div class="feature-icon" aria-hidden="true">NI</div>
                 <h3>Network Intelligence</h3>
                 <p>Import your LinkedIn connections and map relationship coverage across every target account to easily find warm referrals.</p>
               </div>
               <div class="feature-card">
-                <div class="feature-icon">🔄</div>
+                <div class="feature-icon" aria-hidden="true">ATS</div>
                 <h3>ATS Discovery</h3>
                 <p>Automatically discover and resolve ATS job boards for your target companies. No manual configuration required.</p>
               </div>
               <div class="feature-card">
-                <div class="feature-icon">📈</div>
+                <div class="feature-icon" aria-hidden="true">TA</div>
                 <h3>Team Analytics</h3>
                 <p>Track outreach velocity, pipeline coverage, and team performance. Leaderboards, deal velocity, and data quality scores.</p>
               </div>
@@ -630,15 +630,15 @@
               <h2>Welcome back</h2>
               <p>Log in to your BD Engine Cloud account</p>
             </div>
-            ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
+            ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="login-form" class="auth-form">
               <div class="form-group">
                 <label for="login-email">Email</label>
-                <input type="email" id="login-email" placeholder="you@company.com" required autofocus>
+                <input type="email" id="login-email" placeholder="you@company.com" autocomplete="email" required autofocus>
               </div>
               <div class="form-group">
                 <label for="login-password">Password</label>
-                <input type="password" id="login-password" placeholder="••••••••" required minlength="6">
+                <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required minlength="6">
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Logging in...' : 'Log in'}
@@ -646,7 +646,7 @@
             </form>
             <div class="auth-footer">
               <p>Don't have an account? <button class="link-btn" id="goto-signup">Sign up free</button></p>
-              <button class="link-btn" id="goto-landing">← Back to home</button>
+              <button class="link-btn" id="goto-landing">Back to home</button>
             </div>
           </div>
         </div>`;
@@ -673,19 +673,19 @@
               <h2>Create your account</h2>
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
-            ${state.referralCode ? `<div class="auth-error" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
-            ${state.error ? `<div class="auth-error">${escapeHtml(state.error)}</div>` : ''}
+            ${state.referralCode ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
+            ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">
                 <label>I'm using BD Engine for</label>
-                <div class="persona-toggle" id="persona-toggle">
-                  <button type="button" class="persona-option active" data-persona="bd">
-                    <span class="persona-icon">💼</span>
+                <div class="persona-toggle" id="persona-toggle" aria-label="Choose your BD Engine workspace type">
+                  <button type="button" class="persona-option active" data-persona="bd" aria-pressed="true">
+                    <span class="persona-icon" aria-hidden="true">BD</span>
                     <span class="persona-label">Sales / BD</span>
                     <span class="persona-desc">Win new clients &amp; grow revenue</span>
                   </button>
-                  <button type="button" class="persona-option" data-persona="jobseeker">
-                    <span class="persona-icon">🎯</span>
+                  <button type="button" class="persona-option" data-persona="jobseeker" aria-pressed="false">
+                    <span class="persona-icon" aria-hidden="true">JS</span>
                     <span class="persona-label">Job Search</span>
                     <span class="persona-desc">Track companies &amp; land roles</span>
                   </button>
@@ -693,19 +693,19 @@
               </div>
               <div class="form-group">
                 <label for="signup-name">Full name</label>
-                <input type="text" id="signup-name" placeholder="Jane Smith" required autofocus>
+                <input type="text" id="signup-name" placeholder="Jane Smith" autocomplete="name" required autofocus>
               </div>
               <div class="form-group">
                 <label for="signup-email">Email</label>
-                <input type="email" id="signup-email" placeholder="jane@company.com" required>
+                <input type="email" id="signup-email" placeholder="jane@company.com" autocomplete="email" required>
               </div>
               <div class="form-group">
                 <label for="signup-password">Password</label>
-                <input type="password" id="signup-password" placeholder="Min. 6 characters" required minlength="6">
+                <input type="password" id="signup-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6">
               </div>
               <div class="form-group">
                 <label for="signup-workspace" id="workspace-label">Workspace name</label>
-                <input type="text" id="signup-workspace" placeholder="My Company">
+                <input type="text" id="signup-workspace" placeholder="My Company" autocomplete="organization">
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Creating account...' : 'Create account'}
@@ -713,7 +713,7 @@
             </form>
             <div class="auth-footer">
               <p>Already have an account? <button class="link-btn" id="goto-login">Log in</button></p>
-              <button class="link-btn" id="goto-landing">← Back to home</button>
+              <button class="link-btn" id="goto-landing">Back to home</button>
             </div>
           </div>
         </div>`;
@@ -722,8 +722,11 @@
       let selectedPersona = 'bd';
       root.querySelectorAll('.persona-option').forEach(btn => {
         btn.addEventListener('click', () => {
-          root.querySelectorAll('.persona-option').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
+          root.querySelectorAll('.persona-option').forEach(b => {
+            const active = b === btn;
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-pressed', active ? 'true' : 'false');
+          });
           selectedPersona = btn.dataset.persona;
           // Update workspace label based on persona
           const wsLabel = root.querySelector('#workspace-label');
@@ -795,18 +798,18 @@
             <div class="cloud-topbar-right">
               <span class="cloud-workspace">${escapeHtml(state.tenant?.name || 'Workspace')}</span>
               <div class="cloud-user-menu" id="cloud-user-menu">
-                <button class="cloud-avatar" id="cloud-avatar-btn">
+                <button class="cloud-avatar" id="cloud-avatar-btn" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false">
                   ${(state.user?.name || 'U').charAt(0).toUpperCase()}
                 </button>
-                <div class="cloud-user-dropdown hidden" id="cloud-user-dropdown">
+                <div class="cloud-user-dropdown hidden" id="cloud-user-dropdown" role="menu">
                   <div class="cloud-user-info">
                     <strong>${escapeHtml(state.user?.name || '')}</strong>
                     <span>${escapeHtml(state.user?.email || '')}</span>
                   </div>
                   <hr>
-                  <button class="cloud-menu-item" id="cloud-billing-btn">💳 Billing & Plan</button>
-                  <button class="cloud-menu-item" id="cloud-referral-menu-btn">Referral Program</button>
-                  <button class="cloud-menu-item" id="cloud-logout-btn">🚪 Log out</button>
+                  <button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>
+                  <button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>
+                  <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
               </div>
             </div>
@@ -820,20 +823,24 @@
       // Wire user menu
       const avatarBtn = root.querySelector('#cloud-avatar-btn');
       const dropdown = root.querySelector('#cloud-user-dropdown');
-      avatarBtn?.addEventListener('click', () => dropdown?.classList.toggle('hidden'));
+      const setUserMenuOpen = (open) => {
+        dropdown?.classList.toggle('hidden', !open);
+        avatarBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      avatarBtn?.addEventListener('click', () => setUserMenuOpen(dropdown?.classList.contains('hidden')));
       document.addEventListener('click', (e) => {
-        if (!e.target.closest('#cloud-user-menu')) dropdown?.classList.add('hidden');
+        if (!e.target.closest('#cloud-user-menu')) setUserMenuOpen(false);
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
         openBillingPage();
-        dropdown?.classList.add('hidden');
+        setUserMenuOpen(false);
       });
       root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
       root.querySelector('#cloud-referral-btn')?.addEventListener('click', (event) => copyReferralLink(event.currentTarget));
       root.querySelector('#cloud-referral-menu-btn')?.addEventListener('click', (event) => {
         copyReferralLink(event.currentTarget);
-        dropdown?.classList.add('hidden');
+        setUserMenuOpen(false);
       });
     }
 

@@ -242,12 +242,18 @@ function openMobileNav() {
   appState.mobileNavOpen = true;
   document.querySelector('.sidebar')?.classList.add('mobile-open');
   mobileNavBackdrop?.classList.add('open');
+  mobileNavBackdrop?.setAttribute('aria-hidden', 'false');
+  hamburgerBtn?.setAttribute('aria-expanded', 'true');
+  hamburgerBtn?.setAttribute('aria-label', 'Close navigation');
 }
 
 function closeMobileNav() {
   appState.mobileNavOpen = false;
   document.querySelector('.sidebar')?.classList.remove('mobile-open');
   mobileNavBackdrop?.classList.remove('open');
+  mobileNavBackdrop?.setAttribute('aria-hidden', 'true');
+  hamburgerBtn?.setAttribute('aria-expanded', 'false');
+  hamburgerBtn?.setAttribute('aria-label', 'Open navigation');
 }
 
 if (hamburgerBtn) hamburgerBtn.addEventListener('click', openMobileNav);
@@ -1812,8 +1818,7 @@ function bindEvents() {
     clearTimeout(appState.searchTimer);
     const value = searchInput.value.trim();
     if (value.length < 2) {
-      searchResults.classList.add('hidden');
-      searchResults.innerHTML = '';
+      hideSearchResults();
       return;
     }
     appState.searchTimer = setTimeout(() => runSearch(value), 220);
@@ -1849,7 +1854,7 @@ function bindEvents() {
     const action = event.target.closest('[data-action]');
     if (!action) {
       if (!event.target.closest('#search-results') && event.target !== searchInput) {
-        searchResults.classList.add('hidden');
+        hideSearchResults({ keepContent: true });
       }
       return;
     }
@@ -7146,18 +7151,40 @@ async function archiveAccount(accountId) {
 }
 
 async function runSearch(value) {
-  const results = await api(`/api/search${buildQuery({ q: value })}`);
   searchResults.classList.remove('hidden');
-  searchResults.innerHTML = `
+  searchResults.setAttribute('aria-busy', 'true');
+  searchInput?.setAttribute('aria-expanded', 'true');
+  try {
+    const results = await api(`/api/search${buildQuery({ q: value })}`);
+    if (searchInput?.value.trim() !== value) {
+      searchResults.setAttribute('aria-busy', 'false');
+      return;
+    }
+    const total = (results.accounts?.length || 0) + (results.contacts?.length || 0) + (results.jobs?.length || 0);
+    searchResults.classList.remove('hidden');
+    searchResults.setAttribute('aria-busy', 'false');
+    searchResults.innerHTML = `
+    ${total ? '' : `<div class="empty-state empty-state--compact">No matches for "${escapeHtml(value)}". Try a company, person, or role name.</div>`}
     ${renderSearchGroup('Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(getTargetScore(item))} target score · ${formatNumber(item.hiringVelocity || 0)} hiring velocity · ${formatNumber(item.engagementScore || 0)} engagement`)}
     ${renderSearchGroup('Contacts', results.contacts, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.companyName || '')} · ${formatNumber(item.priorityScore)} score`)}
     ${renderSearchGroup('Jobs', results.jobs, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/jobs', (item) => escapeHtml(item.title), (item) => `${escapeHtml(item.companyName || '')} · ${formatDate(item.postedAt)}`)}
-  `;
+    `;
+  } catch (error) {
+    searchResults.setAttribute('aria-busy', 'false');
+    searchResults.innerHTML = '<div class="empty-state empty-state--compact">Search is unavailable right now. Try again in a moment.</div>';
+  }
+}
+
+function hideSearchResults({ keepContent = false } = {}) {
+  searchResults.classList.add('hidden');
+  searchResults.setAttribute('aria-busy', 'false');
+  searchInput?.setAttribute('aria-expanded', 'false');
+  if (!keepContent) searchResults.innerHTML = '';
 }
 
 function renderSearchGroup(label, items, hrefBuilder, titleBuilder, metaBuilder) {
   if (!items || !items.length) return '';
-  return `<section class="search-group"><p class="eyebrow">${escapeHtml(label)}</p>${items.map((item) => `<a class="search-item" href="${hrefBuilder(item)}"><strong>${titleBuilder(item)}</strong><span class="small muted">${metaBuilder(item)}</span></a>`).join('')}</section>`;
+  return `<section class="search-group" aria-label="${escapeAttr(label)}"><p class="eyebrow">${escapeHtml(label)}</p>${items.map((item) => `<a class="search-item" href="${escapeAttr(hrefBuilder(item))}"><strong>${titleBuilder(item)}</strong><span class="small muted">${metaBuilder(item)}</span></a>`).join('')}</section>`;
 }
 
 function toneForNetwork(value) {

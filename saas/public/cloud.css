@@ -253,6 +253,16 @@ a:hover { text-decoration: underline; }
 
 .link-btn:hover { color: var(--accent); }
 
+.btn:focus-visible,
+.nav-link:focus-visible,
+.link-btn:focus-visible,
+.persona-option:focus-visible,
+.cloud-avatar:focus-visible,
+.cloud-menu-item:focus-visible {
+  outline: 3px solid rgba(129, 140, 248, 0.45);
+  outline-offset: 3px;
+}
+
 /* ── Hero ── */
 
 .hero {
@@ -527,7 +537,19 @@ a:hover { text-decoration: underline; }
 }
 
 .feature-icon {
-  font-size: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent-hover);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   margin-bottom: 16px;
 }
 
@@ -1212,7 +1234,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  min-height: 96px;
   padding: 16px 12px;
   background: var(--bg-input);
   border: 2px solid var(--border-strong);
@@ -1237,8 +1261,20 @@ a:hover { text-decoration: underline; }
 }
 
 .persona-icon {
-  font-size: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(129, 140, 248, 0.36);
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.16);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
   line-height: 1;
+  letter-spacing: 0.08em;
 }
 
 .persona-label {
@@ -1254,6 +1290,17 @@ a:hover { text-decoration: underline; }
 
 .persona-option.active .persona-desc {
   color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
