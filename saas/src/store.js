@@ -1741,6 +1741,7 @@ export function createStore() {
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = getTenantArray(jobsByTenant, tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+      const geographyFilter = parseGeographyFocus(getTenantProfile(tenantId)?.settings?.geographyFocus);
 
       const identityRepairStartedAt = performance.now();
       let directResolvedConfigs = 0;
@@ -1851,7 +1852,7 @@ export function createStore() {
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
           if (!normalizedJob) continue;
-          if (!isCanadaJob(normalizedJob, accountItem)) {
+          if (!jobMatchesGeography(normalizedJob, accountItem, geographyFilter)) {
             filteredOutNonCanada++;
             continue;
           }
@@ -3682,7 +3683,26 @@ function getJobNaturalKey(item) {
   ].map((part) => normalizeKey(part)).join('|');
 }
 
-function isCanadaJob(item, accountItem = null) {
+const CANADA_LOCATION_RE = /\b(canada|remote canada|canadian|ontario|on\b|toronto|gta|mississauga|ottawa|waterloo|kitchener|hamilton|london,?\s*on|british columbia|bc\b|vancouver|victoria|alberta|ab\b|calgary|edmonton|quebec|qc\b|montreal|montr[eé]al|nova scotia|ns\b|halifax|manitoba|mb\b|winnipeg|saskatchewan|sk\b|regina|saskatoon|new brunswick|nb\b|newfoundland|nl\b|prince edward island|pei\b|yukon|northwest territories|nunavut)\b/i;
+const US_LOCATION_RE = /\b(us|usa|u\.s\.a?|united states|america|california|ca\b|new york|ny\b|texas|tx\b|washington|wa\b|massachusetts|ma\b|florida|fl\b|illinois|il\b|georgia|colorado|arizona|virginia|seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles)\b/i;
+
+// The tenant's geographyFocus setting (e.g. "Canada + US", "Canada", "US",
+// "Global") controls which job locations survive import. Defaults to Canada+US
+// to match the seeded default; unrecognized values are treated as permissive so
+// we never silently drop everything.
+function parseGeographyFocus(geographyFocus) {
+  const g = String(geographyFocus || '').toLowerCase().trim();
+  if (!g) return { canada: true, us: true, other: false };
+  if (/global|anywhere|worldwide|international|\ball\b|every/.test(g)) {
+    return { canada: true, us: true, other: true };
+  }
+  const us = /\b(us|usa|u\.s\.a?|united states|america)\b/.test(g);
+  const canada = /canad/.test(g);
+  if (!us && !canada) return { canada: true, us: true, other: true };
+  return { canada, us, other: false };
+}
+
+function classifyJobRegion(item, accountItem = null) {
   const text = [
     item.location,
     item.country,
@@ -3690,14 +3710,24 @@ function isCanadaJob(item, accountItem = null) {
     item.office,
     !item.location && accountItem?.location,
   ].filter(Boolean).join(' ').toLowerCase();
-  if (!text.trim()) return true;
-  if (/\b(canada|remote canada|canadian|ontario|on\b|toronto|gta|mississauga|ottawa|waterloo|kitchener|hamilton|london,?\s*on|british columbia|bc\b|vancouver|victoria|alberta|ab\b|calgary|edmonton|quebec|qc\b|montreal|montr[eé]al|nova scotia|ns\b|halifax|manitoba|mb\b|winnipeg|saskatchewan|sk\b|regina|saskatoon|new brunswick|nb\b|newfoundland|nl\b|prince edward island|pei\b|yukon|northwest territories|nunavut)\b/i.test(text)) {
-    return true;
+  if (!text.trim()) return 'unknown';
+  if (CANADA_LOCATION_RE.test(text)) return 'canada';
+  if (US_LOCATION_RE.test(text)) return 'us';
+  if (/remote/i.test(text)) return 'remote';
+  return 'other';
+}
+
+function jobMatchesGeography(item, accountItem, allow) {
+  const allowed = allow || { canada: true, us: true, other: false };
+  if (allowed.canada && allowed.us && allowed.other) return true;
+  switch (classifyJobRegion(item, accountItem)) {
+    case 'canada': return allowed.canada;
+    case 'us': return allowed.us;
+    case 'remote': return allowed.canada || allowed.us || allowed.other;
+    case 'other': return allowed.other;
+    case 'unknown': return true; // location unknown — keep rather than silently drop
+    default: return true;
   }
-  if (/\b(us|usa|united states|california|ca\b|new york|ny\b|texas|tx\b|washington|wa\b|massachusetts|ma\b|florida|fl\b|illinois|il\b)\b/i.test(text)) {
-    return false;
-  }
-  return /remote/i.test(text);
 }
 
 function isGtaLocation(location) {
