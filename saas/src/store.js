@@ -7,6 +7,7 @@ const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
 const DEFAULT_ATS_MAX_PAGES = readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 10);
 const DEFAULT_IMPORT_DISCOVERY_LIMIT = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_LIMIT, 250);
+const DEFAULT_ATS_MAX_DISCOVERY_BATCH = readPositiveInteger(process.env.BD_ATS_MAX_DISCOVERY_BATCH, 150);
 const DEFAULT_IMPORT_DISCOVERY_MIN_READY = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_MIN_READY, 100);
 const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'boardUrl', 'careersUrl', 'url'];
 
@@ -1322,7 +1323,7 @@ export function createStore() {
           warnings.push(`ATS config creation stopped at the ${jobBoardLimit} board limit for the ${planName} plan.`);
           break;
         }
-        const domain = item.domain || item.canonicalDomain || '';
+        const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
         const config = normalizeConfigPatch({
           id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           tenantId,
@@ -1539,6 +1540,7 @@ export function createStore() {
         if (createdConfigs + tenantConfigs.length >= (jobBoardLimit === -1 ? Infinity : jobBoardLimit)) break;
         const normalizedName = normalizeKey(item.normalizedName || item.displayName);
         if (!normalizedName || existingConfigNames.has(normalizedName)) continue;
+        const inferredDomain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
         const config = normalizeConfigPatch({
           id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           tenantId,
@@ -1548,12 +1550,12 @@ export function createStore() {
           atsType: 'unknown',
           ats: 'unknown',
           boardId: '',
-          domain: item.domain || item.canonicalDomain || '',
+          domain: inferredDomain,
           careersUrl: item.careersUrl || '',
           active: false,
           discoveryStatus: 'needs_review',
           reviewStatus: 'pending',
-          confidenceBand: item.domain || item.canonicalDomain || item.careersUrl ? 'medium' : 'unresolved',
+          confidenceBand: inferredDomain || item.careersUrl ? 'medium' : 'unresolved',
           source: 'ats_discovery',
           createdAt: now(),
           updatedAt: now(),
@@ -1572,11 +1574,16 @@ export function createStore() {
       }
       timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
 
+      // Hard cap on configs probed per run. Domain-guessing scrapes several
+      // careers URLs per company, so an unlimited plan (12k+ configs) would
+      // otherwise fan out to ~100k external fetches in a single run. Callers
+      // chew through the backlog by running discovery repeatedly.
       const defaultLimit = jobBoardLimit === -1
-        ? Math.max(1, tenantConfigs.length || tenantAccounts.length)
+        ? DEFAULT_ATS_MAX_DISCOVERY_BATCH
         : Math.min(75, Math.max(1, jobBoardLimit));
       const requestedLimit = requestedLimitOption > 0 ? Math.floor(requestedLimitOption) : defaultLimit;
-      const limit = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
+      const cappedByPlan = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
+      const limit = Math.min(cappedByPlan, DEFAULT_ATS_MAX_DISCOVERY_BATCH);
       let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected');
       if (onlyMissing && !forceRefresh) {
         candidates = candidates.filter((item) => {
@@ -3319,6 +3326,18 @@ async function discoverAtsBoardFromCareersPages(config) {
   return null;
 }
 
+// Turn a company name into plausible domains to try when no domain is known.
+// Most LinkedIn-imported accounts have no domain/email, so this is the only way
+// to reach their careers page and detect the ATS. Skips names too short/generic
+// to yield a meaningful domain.
+function guessDomainsFromName(companyName) {
+  const slug = normalizeKey(companyName)
+    .replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|the|a|of|and)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  if (slug.length < 3) return [];
+  return [`${slug}.com`, `${slug}.ca`, `${slug}.io`];
+}
+
 function buildCareerPageUrls(config = {}) {
   const urls = [];
   const add = (value) => {
@@ -3334,13 +3353,15 @@ function buildCareerPageUrls(config = {}) {
     }
   };
   add(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
-  const domain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
-  if (domain) {
+  const knownDomain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  const domains = knownDomain ? [knownDomain] : guessDomainsFromName(config.companyName);
+  for (const domain of domains) {
     add(`https://${domain}/careers`);
     add(`https://${domain}/jobs`);
-    add(`https://${domain}/careers/jobs`);
   }
-  return urls.slice(0, 4);
+  // Known domain gets a deeper crawl; guessed domains are capped so a batch of
+  // unresolved companies does not explode into hundreds of blind fetches.
+  return urls.slice(0, knownDomain ? 5 : 7);
 }
 
 function extractAtsLinks(content, baseUrl = '') {
