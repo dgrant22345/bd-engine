@@ -2932,6 +2932,9 @@ function getConfigBoardId(config = {}) {
     if (greenhouse) return decodeURIComponent(greenhouse[1]);
     const greenhouseBoard = String(sourceUrl).match(/boards\.greenhouse\.io\/([^/?#]+)/i);
     if (greenhouseBoard && greenhouseBoard[1].toLowerCase() !== 'embed') return decodeURIComponent(greenhouseBoard[1]);
+    // Newer Greenhouse-hosted boards live at job-boards.greenhouse.io/{token}.
+    const greenhouseJobBoards = String(sourceUrl).match(/job-boards\.greenhouse\.io\/([^/?#]+)/i);
+    if (greenhouseJobBoards && greenhouseJobBoards[1].toLowerCase() !== 'embed') return decodeURIComponent(greenhouseJobBoards[1]);
     const greenhouseEmbed = parseUrlSearchParam(sourceUrl, 'for');
     if (String(sourceUrl).match(/boards\.greenhouse\.io\/embed\/job_board/i) && greenhouseEmbed) return greenhouseEmbed;
     const lever = String(sourceUrl).match(/lever\.co\/(?:v0\/)?postings\/([^/?#]+)/i);
@@ -3355,13 +3358,19 @@ function buildCareerPageUrls(config = {}) {
   add(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
   const knownDomain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
   const domains = knownDomain ? [knownDomain] : guessDomainsFromName(config.companyName);
+  // Companies host careers on both paths (/careers) and subdomains
+  // (careers.co, jobs.co) — measured that ~half of loadable sites hid the ATS
+  // because only the paths were tried. Subdomains first since they more often
+  // point straight at the ATS.
   for (const domain of domains) {
+    add(`https://careers.${domain}`);
     add(`https://${domain}/careers`);
+    add(`https://jobs.${domain}`);
     add(`https://${domain}/jobs`);
   }
   // Known domain gets a deeper crawl; guessed domains are capped so a batch of
   // unresolved companies does not explode into hundreds of blind fetches.
-  return urls.slice(0, knownDomain ? 5 : 7);
+  return urls.slice(0, knownDomain ? 6 : 9);
 }
 
 function extractAtsLinks(content, baseUrl = '') {
