@@ -599,8 +599,12 @@ function summarizeAnalyticsGroup(groupMap, key) {
 // ── Shutdown ────────────────────────────────────────────────────────────────
 
 export async function closeDb() {
-  if (pool) {
-    await pool.end();
+  // Idempotent: a second signal (e.g. double Ctrl+C) must not double-end the pool.
+  const p = pool;
+  pool = null;
+  dbReady = false;
+  if (p) {
+    await p.end();
     console.log('  DB: PostgreSQL connection closed');
   }
 }

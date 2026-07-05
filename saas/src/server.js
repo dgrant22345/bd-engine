@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
-import { gzipSync, createGzip } from 'node:zlib';
+import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
@@ -65,7 +65,7 @@ async function startServer() {
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
-    res.bdAcceptsGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
+    res.bdAcceptsGzip = acceptsGzip(req);
     // CORS for dev
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
@@ -103,18 +103,32 @@ async function startServer() {
     startPeriodicPipelineRunner();
   });
 
-  // Graceful shutdown
+  // Graceful shutdown. Order matters: wait for in-flight requests to finish
+  // BEFORE flushing, or a mutation completing after the flush re-queues a
+  // debounced save that never fires. Re-entrancy guard so a second signal
+  // can't double-close the pool or exit mid-flush.
+  let shuttingDown = false;
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       console.log(`\n  Received ${signal}, shutting down...`);
-      server.close();
       try {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 8000);
+          server.close(() => { clearTimeout(timer); resolve(); });
+          server.closeIdleConnections?.();
+        });
         const flushed = await store.flushPendingSaves();
         if (flushed) console.log(`  Flushed ${flushed} pending tenant save(s) before shutdown`);
       } catch (err) {
-        console.error('  Failed to flush pending saves:', err.message);
+        console.error('  Shutdown flush error:', err.message);
       }
-      await closeDb();
+      try {
+        await closeDb();
+      } catch (err) {
+        console.error('  DB close error:', err.message);
+      }
       process.exit(0);
     });
   }
@@ -800,7 +814,7 @@ self.addEventListener('activate', (event) => {
   const logMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/log-outreach$/);
   if (logMatch && req.method === 'POST') {
     const payload = await readJson(req);
-    const result = store.logOutreach(tenantId, user.id, {
+    const result = store.addActivity(tenantId, user.id, {
       ...payload,
       contactId: logMatch[1],
     });
@@ -1197,7 +1211,7 @@ function streamFile(filePath, res) {
   };
   if (res.bdAcceptsGzip && COMPRESSIBLE_MIME.test(contentType)) {
     res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
-    createReadStream(filePath).pipe(createGzip()).pipe(res);
+    createReadStream(filePath).pipe(createGzip(GZIP_OPTIONS)).pipe(res);
     return;
   }
   res.writeHead(200, headers);
@@ -1265,13 +1279,34 @@ function getHealthPayload(includeDetails = false) {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const GZIP_MIN_BYTES = 1024;
+// Level 1 is ~3x faster than the default on JSON with only a small ratio loss;
+// compression runs on the libuv threadpool so it never blocks the event loop.
+const GZIP_OPTIONS = { level: 1 };
+
+function acceptsGzip(req) {
+  // Honor q-values: "gzip;q=0, identity" explicitly refuses gzip (RFC 9110).
+  const header = String(req.headers['accept-encoding'] || '');
+  return header.split(',').some((part) => {
+    const [encoding, ...params] = part.trim().split(';');
+    if (!/^(x-)?gzip$|^\*$/i.test(encoding.trim())) return false;
+    return !params.some((p) => /^\s*q\s*=\s*0(\.0{0,3})?\s*$/i.test(p));
+  });
+}
 
 function sendCompressible(res, status, headers, body) {
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (res.bdAcceptsGzip && buffer.length >= GZIP_MIN_BYTES) {
-    const compressed = gzipSync(buffer);
-    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
-    res.end(compressed);
+    gzip(buffer, GZIP_OPTIONS, (err, compressed) => {
+      if (err || res.headersSent) {
+        if (!res.headersSent) {
+          res.writeHead(status, { ...headers, 'Vary': 'Accept-Encoding' });
+          res.end(buffer);
+        }
+        return;
+      }
+      res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
+      res.end(compressed);
+    });
     return;
   }
   res.writeHead(status, { ...headers, 'Vary': 'Accept-Encoding' });
