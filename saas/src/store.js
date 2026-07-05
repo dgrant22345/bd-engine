@@ -177,6 +177,250 @@ function dashboardJobSummary(item) {
   };
 }
 
+function buildPersonaActionPlan(persona, accountItem = {}, context = {}) {
+  const normalizedPersona = normalizePersona(persona);
+  const isJobSeeker = normalizedPersona === 'jobseeker';
+  const accountJobs = [...(context.jobs || [])]
+    .filter((item) => item?.active !== false)
+    .sort((a, b) => String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')));
+  const accountContacts = [...(context.contacts || [])]
+    .sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0));
+  const accountConfigs = context.configs || [];
+  const newestJob = accountJobs[0] || null;
+  const topContact = accountContacts[0] || null;
+  const score = Number(accountItem.targetScore || accountItem.dailyScore || 0);
+  const resolvedBoards = accountConfigs.filter(isResolvedBoardConfig).length;
+  const companyName = accountItem.displayName || accountItem.companyName || 'this company';
+  const items = [];
+  const addItem = (item) => {
+    if (!item?.title) return;
+    items.push({
+      id: item.id || `action-${items.length + 1}`,
+      type: item.type || 'next_step',
+      title: item.title,
+      description: item.description || '',
+      tone: item.tone || 'neutral',
+      cta: item.cta || 'Open',
+      template: item.template || '',
+      jobId: item.jobId || '',
+      href: item.href || '',
+      metricLabel: item.metricLabel || '',
+      metricValue: item.metricValue ?? '',
+      accountId: accountItem.id || accountItem.accountId || '',
+      companyName,
+    });
+  };
+
+  if (isJobSeeker) {
+    addItem(newestJob ? {
+      id: 'apply-role',
+      type: 'application',
+      title: `Apply to ${newestJob.title}`,
+      description: `Use the live role at ${companyName} as the anchor for your application and outreach.`,
+      tone: newestJob.isNew ? 'success' : 'accent',
+      cta: 'Open role',
+      template: 'job_intro',
+      jobId: newestJob.id,
+      href: newestJob.jobUrl || newestJob.url || '',
+      metricLabel: 'Open roles',
+      metricValue: accountJobs.length,
+    } : {
+      id: 'watch-roles',
+      type: 'role_watch',
+      title: 'Keep role discovery fresh',
+      description: `${companyName} has no imported active roles yet. Run discovery/import or verify the careers page before prioritizing an application.`,
+      tone: resolvedBoards ? 'warning' : 'neutral',
+      cta: resolvedBoards ? 'Import jobs' : 'Review board',
+      metricLabel: 'ATS boards',
+      metricValue: resolvedBoards,
+    });
+    addItem(topContact ? {
+      id: 'warm-referral',
+      type: 'referral',
+      title: `Ask ${topContact.fullName} for context`,
+      description: 'Use the warm contact path for a referral, team context, or hiring-manager intro.',
+      tone: 'success',
+      cta: 'Draft referral ask',
+      template: 'job_referral',
+      jobId: newestJob?.id || '',
+      metricLabel: 'Contact score',
+      metricValue: topContact.priorityScore || accountItem.relationshipStrengthScore || 0,
+    } : {
+      id: 'map-contact',
+      type: 'network',
+      title: 'Map a warm contact',
+      description: 'Import LinkedIn connections or add a hiring contact before sending a cold application follow-up.',
+      tone: 'warning',
+      cta: 'Add contact',
+      metricLabel: 'Contacts',
+      metricValue: accountContacts.length,
+    });
+    addItem({
+      id: 'company-research',
+      type: 'research',
+      title: 'Build a company-specific angle',
+      description: accountItem.targetScoreExplanation || accountItem.recommendedAction || `Review roles, team language, and recent hiring at ${companyName}.`,
+      tone: score >= 70 ? 'accent' : 'neutral',
+      cta: 'Review company',
+      metricLabel: 'Fit score',
+      metricValue: score,
+    });
+    if (accountItem.nextAction) {
+      addItem({
+        id: 'follow-up',
+        type: 'follow_up',
+        title: accountItem.nextAction,
+        description: accountItem.nextActionAt ? `Due ${accountItem.nextActionAt}.` : 'Already queued as the next move.',
+        tone: accountItem.isOverdue ? 'danger' : 'warning',
+        cta: 'Work next move',
+        template: newestJob ? 'job_networking' : '',
+        jobId: newestJob?.id || '',
+        metricLabel: 'Due',
+        metricValue: accountItem.nextActionAt ? String(accountItem.nextActionAt).slice(0, 10) : '',
+      });
+    }
+    return {
+      persona: normalizedPersona,
+      title: 'Job search action plan',
+      summary: newestJob
+        ? `Turn ${companyName}'s live hiring signal into an application, referral ask, and follow-up.`
+        : `Get ${companyName} ready for job-search outreach by refreshing roles and mapping a contact.`,
+      items: items.slice(0, 4),
+    };
+  }
+
+  addItem(topContact ? {
+    id: 'message-contact',
+    type: 'outreach',
+    title: `Message ${topContact.fullName}`,
+    description: accountJobs.length
+      ? `Lead with ${accountJobs.length} active role${accountJobs.length === 1 ? '' : 's'} and ask where hiring bandwidth is tight.`
+      : 'Lead with a lightweight check-in and confirm whether hiring support is relevant.',
+    tone: 'success',
+    cta: 'Draft sales note',
+    template: topContact.isTalentLeader ? 'talent_partner' : 'cold',
+    jobId: newestJob?.id || '',
+    metricLabel: 'Contact score',
+    metricValue: topContact.priorityScore || accountItem.relationshipStrengthScore || 0,
+  } : {
+    id: 'map-buyer',
+    type: 'contact_gap',
+    title: 'Map a buyer or talent leader',
+    description: 'This account needs a stronger contact path before outreach will be credible.',
+    tone: 'warning',
+    cta: 'Review contacts',
+    metricLabel: 'Contacts',
+    metricValue: accountContacts.length,
+  });
+  addItem(accountJobs.length ? {
+    id: 'hiring-trigger',
+    type: 'hiring_signal',
+    title: `Use ${accountJobs.length} active hiring signal${accountJobs.length === 1 ? '' : 's'}`,
+    description: newestJob ? `Anchor the pitch on "${newestJob.title}" and adjacent demand.` : 'Use active roles as the reason to reach out now.',
+    tone: accountItem.hiringVelocity >= 50 ? 'accent' : 'neutral',
+    cta: 'Review roles',
+    template: 'hiring_manager',
+    jobId: newestJob?.id || '',
+    metricLabel: 'Velocity',
+    metricValue: accountItem.hiringVelocity || 0,
+  } : {
+    id: 'refresh-hiring',
+    type: 'coverage',
+    title: 'Refresh hiring coverage',
+    description: resolvedBoards ? 'Run a live import to confirm whether this account is hiring now.' : 'Resolve the careers or ATS board before scoring this account too heavily.',
+    tone: resolvedBoards ? 'warning' : 'neutral',
+    cta: resolvedBoards ? 'Import jobs' : 'Resolve ATS',
+    metricLabel: 'ATS boards',
+    metricValue: resolvedBoards,
+  });
+  addItem({
+    id: 'qualify-account',
+    type: 'qualification',
+    title: score >= 75 ? 'Qualify for active sequence' : 'Decide whether to nurture or pause',
+    description: accountItem.targetScoreExplanation || accountItem.recommendedAction || 'Use score drivers, role demand, and network coverage to choose the next lane.',
+    tone: score >= 75 ? 'accent' : 'neutral',
+    cta: 'Review score',
+    metricLabel: 'Target score',
+    metricValue: score,
+  });
+  if (accountItem.nextAction) {
+    addItem({
+      id: 'follow-up',
+      type: 'follow_up',
+      title: accountItem.nextAction,
+      description: accountItem.nextActionAt ? `Due ${accountItem.nextActionAt}.` : 'Already queued as the next move.',
+      tone: accountItem.isOverdue ? 'danger' : 'warning',
+      cta: 'Work next move',
+      template: 'follow_up',
+      jobId: newestJob?.id || '',
+      metricLabel: 'Due',
+      metricValue: accountItem.nextActionAt ? String(accountItem.nextActionAt).slice(0, 10) : '',
+    });
+  }
+
+  return {
+    persona: normalizedPersona,
+    title: 'Sales action plan',
+    summary: accountJobs.length
+      ? `Use ${companyName}'s hiring demand and warmest contact to create a timely sales motion.`
+      : `Tighten ${companyName}'s coverage before spending high-effort outreach.`,
+    items: items.slice(0, 4),
+  };
+}
+
+function buildDashboardActionPlan(persona, tenantAccounts = [], tenantJobs = [], tenantContacts = [], tenantConfigs = []) {
+  const normalizedPersona = normalizePersona(persona);
+  const jobsByAccountId = groupBy(tenantJobs.filter((item) => item.active !== false), 'accountId');
+  const contactsByAccountId = groupBy(tenantContacts, 'accountId');
+  const configsByAccountName = groupBy(tenantConfigs, (config) => normalizeKey(config.normalizedCompanyName || config.companyName));
+  const candidates = tenantAccounts
+    .slice(0, 8)
+    .map((accountItem) => {
+      const plan = buildPersonaActionPlan(normalizedPersona, accountItem, {
+        jobs: jobsByAccountId.get(accountItem.id) || [],
+        contacts: contactsByAccountId.get(accountItem.id) || [],
+        configs: configsByAccountName.get(normalizeKey(accountItem.normalizedName || accountItem.displayName)) || [],
+      });
+      const primary = plan.items[0] || null;
+      if (!primary) return null;
+      return {
+        ...primary,
+        accountId: accountItem.id,
+        companyName: accountItem.displayName,
+        targetScore: accountItem.targetScore || accountItem.dailyScore || 0,
+        openRoleCount: accountItem.openRoleCount || accountItem.jobCount || 0,
+        relationshipStrengthScore: accountItem.relationshipStrengthScore || 0,
+      };
+    })
+    .filter(Boolean);
+
+  const topAccount = tenantAccounts[0] || null;
+  return {
+    persona: normalizedPersona,
+    title: normalizedPersona === 'jobseeker' ? 'Job-search focus plan' : 'Sales focus plan',
+    summary: normalizedPersona === 'jobseeker'
+      ? 'Prioritize roles with live hiring signals, then turn the warmest contact into a referral path.'
+      : 'Prioritize accounts with fresh hiring demand, then turn the warmest contact into timely outreach.',
+    primaryAccountId: topAccount?.id || '',
+    primaryCompany: topAccount?.displayName || '',
+    items: candidates.slice(0, 5),
+  };
+}
+
+function groupBy(items = [], keyOrGetter) {
+  const getter = typeof keyOrGetter === 'function'
+    ? keyOrGetter
+    : (item) => item?.[keyOrGetter];
+  const grouped = new Map();
+  for (const item of items) {
+    const key = getter(item) || '';
+    if (!key) continue;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(item);
+  }
+  return grouped;
+}
+
 function dashboardContactSummary(item) {
   return {
     id: item.id,
@@ -776,6 +1020,8 @@ export function createStore() {
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+      const tenantContacts = contactsForTenant(tenantId);
+      const persona = this.getPersona(tenantId);
       const activeJobs = tenantJobs.filter((item) => item.active !== false);
       const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);
       const jobsImportedLast24h = activeJobs.filter((item) => daysSince(item.importedAt || item.retrievedAt) <= 1);
@@ -800,8 +1046,9 @@ export function createStore() {
         todayQueue: tenantAccounts.slice(0, 50).map(dashboardAccountSummary),
         followUpAccounts,
         newJobsToday,
-        networkLeaders: contactsForTenant(tenantId).slice(0, 5).map(dashboardContactSummary),
+        networkLeaders: tenantContacts.slice(0, 5).map(dashboardContactSummary),
         needsResolution: unresolvedAccounts.slice(0, 5).map(dashboardAccountSummary),
+        actionPlan: buildDashboardActionPlan(persona, tenantAccounts, activeJobs, tenantContacts, tenantConfigs),
         recommendedActions: tenantAccounts.slice(0, 5).map((item) => ({
           accountId: item.id,
           company: item.displayName,
@@ -895,6 +1142,7 @@ export function createStore() {
       const accountJobs = jobs.filter((jobItem) => jobItem.tenantId === tenantId && jobItem.accountId === accountId);
       const accountActivities = activities.filter((activity) => activity.tenantId === tenantId && activity.accountId === accountId);
       const accountConfigs = boardConfigs.filter((config) => config.tenantId === tenantId && config.normalizedCompanyName === item.normalizedName);
+      const persona = this.getPersona(tenantId);
       return {
         account: item,
         contacts: accountContacts,
@@ -903,6 +1151,11 @@ export function createStore() {
         activities: accountActivities,
         configs: accountConfigs,
         config: accountConfigs[0] || null,
+        actionPlan: buildPersonaActionPlan(persona, item, {
+          contacts: accountContacts,
+          jobs: accountJobs,
+          configs: accountConfigs,
+        }),
       };
     },
 

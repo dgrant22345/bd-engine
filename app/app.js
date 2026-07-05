@@ -1357,6 +1357,7 @@ function getDashboardSections() {
   return [
     { id: 'hero', label: 'Hero card', required: true },
     { id: 'trust', label: 'Trust strip' },
+    { id: 'action-plan', label: 'Persona action plan' },
     { id: 'metrics', label: 'Metrics grid' },
     { id: 'playbook', label: "Today's playbook" },
     { id: 'alerts-bar', label: 'Alert bar' },
@@ -2142,9 +2143,14 @@ function bindEvents() {
     }
 
     if (actionName === 'generate-outreach-template') {
+      setOutreachModalOpen(true);
       const templateSelect = document.getElementById('outreach-template-select');
       if (templateSelect && action.dataset.template) {
         templateSelect.value = action.dataset.template;
+      }
+      const jobSelect = document.getElementById('outreach-job-select');
+      if (jobSelect && action.dataset.jobId) {
+        jobSelect.value = action.dataset.jobId;
       }
       syncOutreachComposerState();
       await generateSmartOutreach(action.dataset.id, action);
@@ -2852,6 +2858,96 @@ function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolut
         <a class="ghost-button ghost-button--xs" href="#/admin">${boardsFound ? 'Review' : 'Discover'}</a>
       </article>
     </section>
+  `;
+}
+
+function getPersonaUiCopy(persona = appState.persona) {
+  const normalized = normalizeAppPersona(persona);
+  if (normalized === 'jobseeker') {
+    return {
+      persona: 'jobseeker',
+      accountSingular: 'company',
+      accountPlural: 'companies',
+      contactPlural: 'hiring contacts',
+      jobsLabel: 'open roles',
+      bestAccountCta: 'Open best company',
+      openAccountsCta: 'Open companies',
+      reviewJobsCta: 'Review open roles',
+      spotlightTitle: 'Why this company is leading',
+      spotlightSubtitle: 'Fit score, live roles, and warm-contact paths point here first.',
+      queueTitle: 'Today company queue',
+      queueSubtitle: 'The companies most worth working today, ranked for your job search.',
+      actionEmpty: 'No job-search actions are ready yet. Import roles or add contacts to build a plan.',
+    };
+  }
+  return {
+    persona: 'bd',
+    accountSingular: 'account',
+    accountPlural: 'accounts',
+    contactPlural: 'contacts',
+    jobsLabel: 'jobs',
+    bestAccountCta: 'Open best account',
+    openAccountsCta: 'Open accounts',
+    reviewJobsCta: 'Review imported jobs',
+    spotlightTitle: 'Why this account is leading',
+    spotlightSubtitle: 'Target score, hiring velocity, and engagement all point here first.',
+    queueTitle: 'Today queue',
+    queueSubtitle: 'The accounts most worth touching today, ranked for immediate action.',
+    actionEmpty: 'No sales actions are ready yet. Import contacts or refresh jobs to build a plan.',
+  };
+}
+
+function renderPersonaActionPlan(plan = {}, options = {}) {
+  const items = Array.isArray(plan.items) ? plan.items : [];
+  const copy = getPersonaUiCopy(plan.persona);
+  const detail = Boolean(options.detail);
+  const sectionClass = detail ? 'persona-action-plan persona-action-plan--detail' : 'persona-action-plan';
+  return `
+    <section class="detail-card ${sectionClass}">
+      <div class="panel-header">
+        <div>
+          <h3>${escapeHtml(plan.title || (copy.persona === 'jobseeker' ? 'Job-search action plan' : 'Sales action plan'))}</h3>
+          <p class="muted small">${escapeHtml(plan.summary || copy.actionEmpty)}</p>
+        </div>
+        ${plan.primaryCompany ? renderStatusPill(plan.primaryCompany, 'accent') : ''}
+      </div>
+      ${items.length ? `<div class="persona-action-grid">${items.map((item) => renderPersonaActionCard(item, { detail })).join('')}</div>` : `<div class="empty-state empty-state--compact">${escapeHtml(copy.actionEmpty)}</div>`}
+    </section>
+  `;
+}
+
+function renderPersonaActionCard(item = {}, options = {}) {
+  const detail = Boolean(options.detail);
+  const tone = item.tone || 'neutral';
+  const metric = item.metricLabel
+    ? `<div class="persona-action-metric"><span>${escapeHtml(item.metricLabel)}</span><strong>${escapeHtml(String(item.metricValue ?? ''))}</strong></div>`
+    : '';
+  const accountId = item.accountId || appState.accountDetail?.account?.id || '';
+  const openAccountButton = accountId
+    ? `<button class="ghost-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">Open</button>`
+    : '';
+  const externalButton = item.href
+    ? `<a class="ghost-button ghost-button--xs" href="${escapeAttr(item.href)}" target="_blank" rel="noreferrer">${escapeHtml(item.cta || 'Open link')}</a>`
+    : '';
+  const templateButton = detail && item.template && accountId
+    ? `<button class="primary-button ghost-button--xs" type="button" data-action="generate-outreach-template" data-id="${escapeAttr(accountId)}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}">${escapeHtml(item.cta || 'Draft note')}</button>`
+    : '';
+  const dashboardCta = !detail && item.template && accountId
+    ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">${escapeHtml(item.cta || 'Open')}</button>`
+    : '';
+  const actions = [templateButton, externalButton, dashboardCta || openAccountButton].filter(Boolean).join('');
+
+  return `
+    <article class="persona-action-card persona-action-card--${escapeAttr(tone)}">
+      <div class="persona-action-topline">
+        ${renderStatusPill(item.type || 'next step', tone)}
+        ${metric}
+      </div>
+      <h4>${escapeHtml(item.title || '')}</h4>
+      <p>${escapeHtml(item.description || '')}</p>
+      ${item.companyName && !detail ? `<div class="small muted">${escapeHtml(item.companyName)}${item.targetScore !== undefined ? ` - ${formatNumber(item.targetScore)} score` : ''}</div>` : ''}
+      ${actions ? `<div class="button-row button-row--wrap persona-action-actions">${actions}</div>` : ''}
+    </article>
   `;
 }
 
@@ -3758,7 +3854,9 @@ async function renderDashboardView(options = {}) {
   dashboard.recommendedActions = Array.isArray(dashboard.recommendedActions) ? dashboard.recommendedActions : [];
   dashboard.recentlyDiscoveredBoards = Array.isArray(dashboard.recentlyDiscoveredBoards) ? dashboard.recentlyDiscoveredBoards : [];
   dashboard.needsResolution = (Array.isArray(dashboard.needsResolution) ? dashboard.needsResolution : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
+  dashboard.actionPlan = dashboard.actionPlan && typeof dashboard.actionPlan === 'object' ? dashboard.actionPlan : {};
   dashboard.summary = dashboard.summary || {};
+  const personaCopy = getPersonaUiCopy(dashboard.actionPlan.persona || appState.persona);
   const extended = {
     playbook: [],
     overdueFollowUps: [],
@@ -3828,9 +3926,9 @@ async function renderDashboardView(options = {}) {
           <h3>${topCompany ? escapeHtml(topCompany.displayName) : 'No companies match today\'s target-score thresholds yet'}</h3>
           <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
           <div class="button-row">
-            ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">Open best account</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
-            <a class="ghost-button" href="#/jobs">Review imported jobs</a>
-            <a class="ghost-button" href="#/accounts">Open accounts</a>
+            ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">${escapeHtml(personaCopy.bestAccountCta)}</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
+            <a class="ghost-button" href="#/jobs">${escapeHtml(personaCopy.reviewJobsCta)}</a>
+            <a class="ghost-button" href="#/accounts">${escapeHtml(personaCopy.openAccountsCta)}</a>
           </div>
           <div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
@@ -3878,8 +3976,8 @@ async function renderDashboardView(options = {}) {
         <div class="spotlight-card">
           <div class="panel-header">
             <div>
-              <h3>Why this account is leading</h3>
-              <p class="muted small">Target score, hiring velocity, and engagement all point here first.</p>
+              <h3>${escapeHtml(personaCopy.spotlightTitle)}</h3>
+              <p class="muted small">${escapeHtml(personaCopy.spotlightSubtitle)}</p>
             </div>
             ${renderStatusPill(topCompany.hiringStatus || 'No active jobs', topCompany.jobCount > 0 ? 'success' : 'neutral')}
           </div>
@@ -3899,9 +3997,11 @@ async function renderDashboardView(options = {}) {
 
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
+    ${dashSection('action-plan', renderPersonaActionPlan(dashboard.actionPlan))}
+
     ${dashSection('metrics', `<section class="metrics-grid">
-      ${renderMetricCard('Companies in workspace', dashboard.summary.accountCount, 'Imported company universe; use Accounts filters for the working list')}
-      ${renderMetricCard('Hiring accounts', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
+      ${renderMetricCard('Companies in workspace', dashboard.summary.accountCount, `Imported company universe; use ${personaCopy.accountPlural} filters for the working list`)}
+      ${renderMetricCard('Hiring companies', dashboard.summary.hiringAccountCount, 'Companies with active normalized roles')}
       ${renderMetricCard('Tracked jobs', activeJobCount, 'Active roles currently available for outreach context')}
       ${renderMetricCard('Imported, 24h', jobsImportedLast24h, 'Roles pulled into BD Engine in the last day')}
       ${renderMetricCard('Posted, 24h', jobsPostedLast24h, 'Roles whose ATS posted date is in the last day')}
@@ -4014,10 +4114,10 @@ async function renderDashboardView(options = {}) {
       <div class="table-card emphasis-card" data-tour="today-queue">
         <div class="panel-header">
           <div>
-            <h3>Today queue</h3>
-            <p class="muted small">The companies most worth touching today, ranked for immediate action.</p>
+            <h3>${escapeHtml(personaCopy.queueTitle)}</h3>
+            <p class="muted small">${escapeHtml(personaCopy.queueSubtitle)}</p>
           </div>
-          <a class="ghost-button" href="#/accounts">See all accounts</a>
+          <a class="ghost-button" href="#/accounts">See all ${escapeHtml(personaCopy.accountPlural)}</a>
         </div>
         ${dashboard.todayQueue.length ? renderTodayQueueTable(dashboard.todayQueue) : '<div class="empty-state">No companies match the current settings thresholds.</div>'}
       </div>
@@ -4324,6 +4424,8 @@ async function renderAccountDetail(accountId) {
   const triggerAlerts = detail.account.triggerAlerts || [];
   const sequenceState = detail.account.sequenceState || { status: 'idle', nextStepLabel: 'Email', nextStepAt: null, adaptiveTimingReason: '', steps: [] };
   const suggestedOutreachTemplate = getSuggestedOutreachTemplate(detail);
+  const accountActionPlan = detail.actionPlan && typeof detail.actionPlan === 'object' ? detail.actionPlan : {};
+  const personaCopy = getPersonaUiCopy(accountActionPlan.persona || appState.persona);
 
   // Fetch hiring velocity in background (non-blocking)
   let hiringVelocity = [];
@@ -4338,7 +4440,7 @@ async function renderAccountDetail(accountId) {
     <section class="hero-card hero-card--dashboard">
       <div class="panel-header">
         <div>
-          <p class="eyebrow">Account detail</p>
+          <p class="eyebrow">${personaCopy.accountSingular === 'company' ? 'Company detail' : 'Account detail'}</p>
           <h3>${escapeHtml(detail.account.displayName)}</h3>
           <p class="subtitle">${escapeHtml(targetScoreExplanation)}</p>
           <div class="button-row">
@@ -4371,6 +4473,7 @@ async function renderAccountDetail(accountId) {
 
     <section class="action-zone">
       <div class="action-zone-col">
+        ${renderPersonaActionPlan(accountActionPlan, { detail: true })}
         <div class="detail-card">
           <div class="panel-header"><div><h3>Next moves</h3><p class="muted small">Quick actions for this account.</p></div></div>
           <div class="next-action-bar">
