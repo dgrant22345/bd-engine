@@ -6,10 +6,14 @@ const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FET
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
 const DEFAULT_ATS_MAX_PAGES = readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 10);
+const DEFAULT_WORKDAY_MAX_PAGES = readPositiveInteger(process.env.BD_WORKDAY_MAX_PAGES, 50);
 const DEFAULT_IMPORT_DISCOVERY_LIMIT = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_LIMIT, 250);
 const DEFAULT_ATS_MAX_DISCOVERY_BATCH = readPositiveInteger(process.env.BD_ATS_MAX_DISCOVERY_BATCH, 150);
 const DEFAULT_IMPORT_DISCOVERY_MIN_READY = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_MIN_READY, 100);
 const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'boardUrl', 'careersUrl', 'url'];
+const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MIN_JOB_LINKS, 3);
+const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
+const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
 
 const pastDate = (days) => {
   const d = new Date();
@@ -1405,7 +1409,7 @@ export function createStore() {
       const importResult = await this.importLiveJobs(tenantId, { plan: selectedPlan, autoDiscover: false });
       timings.importMs = importResult.timings?.totalMs || 0;
       warnings.push(...(importResult.warnings || []));
-      updateProgress(88, 'import', `Fetched ${importResult.stats?.fetched || 0} jobs; kept ${importResult.stats?.canadaKept || 0} Canada jobs.`);
+      updateProgress(88, 'import', `Fetched ${importResult.stats?.fetched || 0} jobs; imported ${importResult.stats?.kept || importResult.stats?.canadaKept || 0} jobs.`);
 
       let scoresRefreshed = 0;
       const scoringStartedAt = performance.now();
@@ -1460,7 +1464,7 @@ export function createStore() {
           boardsMapped: discovery.stats?.mapped || 0,
           boardsUnresolved: discovery.stats?.unresolved || 0,
           jobsFetched: importResult.stats?.fetched || 0,
-          jobsKept: importResult.stats?.canadaKept || 0,
+          jobsKept: importResult.stats?.kept || importResult.stats?.canadaKept || 0,
           jobsTouched: importResult.stats?.runImported || 0,
           activeTrackedJobs: importResult.stats?.imported || 0,
           scoresRefreshed,
@@ -1837,7 +1841,7 @@ export function createStore() {
       }
 
       let fetched = 0;
-      let canadaKept = 0;
+      let kept = 0;
       let filteredOutNonCanada = 0;
       let newJobs = 0;
       let updatedJobs = 0;
@@ -1881,7 +1885,7 @@ export function createStore() {
             continue;
           }
 
-          canadaKept++;
+          kept++;
           configKept++;
           const naturalKey = getJobNaturalKey(normalizedJob);
           const existingJob = existingByNaturalKey.get(naturalKey);
@@ -1950,7 +1954,8 @@ export function createStore() {
         importReadyConfigs: importReadyConfigs.length,
         supportedConfigs: supportedConfigs.length,
         fetched,
-        canadaKept,
+        kept,
+        canadaKept: kept,
         filteredOutNonCanada,
         imported: activeTrackedJobs,
         runImported: newJobs + updatedJobs,
@@ -1970,7 +1975,7 @@ export function createStore() {
         id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         tenantId,
         type: 'live_job_import',
-        summary: `Live job import fetched ${fetched} jobs across ${supportedConfigs.length} import-ready ATS configs and kept ${canadaKept} Canada jobs.`,
+        summary: `Live job import fetched ${fetched} jobs across ${supportedConfigs.length} import-ready ATS configs and imported ${kept} jobs.`,
         notes: warnings.join(' '),
         occurredAt: now(),
         createdAt: now(),
@@ -2860,6 +2865,7 @@ const ATS_FETCHERS = new Map([
   ['jobvite', fetchJobviteJobs],
   ['workday', fetchWorkdayJobs],
   ['bamboohr', fetchBamboohrJobs],
+  ['custom_static', fetchStaticCareersJobs],
 ]);
 
 function normalizeAtsType(value) {
@@ -2871,6 +2877,7 @@ function normalizeAtsType(value) {
   if (normalized.includes('jobvite')) return 'jobvite';
   if (normalized.includes('workday') || normalized.includes('myworkdayjobs')) return 'workday';
   if (normalized.includes('bamboohr')) return 'bamboohr';
+  if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
 
@@ -2969,12 +2976,13 @@ function parseUrlSearchParam(value, name) {
 }
 
 function repairKnownAtsIdentity(config = {}, options = {}) {
+  const corrected = applyKnownBoardCorrection(config);
   const atsType = getConfigAtsType(config);
   const boardId = getConfigBoardId(config);
-  if (!ATS_FETCHERS.has(atsType) || !boardId) return false;
+  if (!ATS_FETCHERS.has(atsType) || !boardId) return corrected;
   const directAtsUrl = getConfigAtsUrl(config);
   const canApprove = options.approveDirect && Boolean(directAtsUrl);
-  let changed = false;
+  let changed = corrected;
 
   if (normalizeAtsType(config.atsType || '') !== atsType) {
     config.atsType = atsType;
@@ -3017,6 +3025,45 @@ function repairKnownAtsIdentity(config = {}, options = {}) {
       config.lastImportStatus = 'ready';
       changed = true;
     }
+  }
+  if (changed) config.updatedAt = now();
+  return changed;
+}
+
+function applyKnownBoardCorrection(config = {}) {
+  const companyKey = normalizeKey(config.companyName || config.normalizedCompanyName || '');
+  const domainKey = normalizeKey(config.domain || config.canonicalDomain || config.careersUrl || '');
+  const boardKey = normalizeKey(config.boardId || '');
+  const looksLikeLightspeedCommerce = (
+    ['lightspeed', 'lightspeed commerce', 'lightspeedhq'].includes(companyKey) ||
+    domainKey.includes('lightspeedhq.com') ||
+    boardKey === 'lightspeedhq'
+  );
+  if (!looksLikeLightspeedCommerce) return false;
+
+  let changed = false;
+  const apply = (field, value) => {
+    if (config[field] !== value) {
+      config[field] = value;
+      changed = true;
+    }
+  };
+
+  apply('atsType', 'custom_static');
+  apply('ats', 'custom_static');
+  apply('boardId', 'lightspeedhq');
+  apply('domain', 'lightspeedhq.com');
+  apply('careersUrl', 'https://www.lightspeedhq.com/careers/openings/');
+  apply('sourceUrl', 'https://www.lightspeedhq.com/careers/openings/');
+  apply('resolvedBoardUrl', 'https://www.lightspeedhq.com/careers/openings/');
+  apply('apiUrl', 'https://www.lightspeedhq.com/careers/openings/');
+  apply('discoveryStatus', 'resolved');
+  apply('discoveryMethod', 'known_static_careers_page');
+  apply('reviewStatus', 'approved');
+  apply('confidenceBand', 'high');
+  apply('active', true);
+  if (!config.notes || String(config.notes).includes('Greenhouse')) {
+    apply('notes', 'Lightspeed Commerce jobs are listed on a static careers page; the old Greenhouse lightspeedhq board is stale.');
   }
   if (changed) config.updatedAt = now();
   return changed;
@@ -3136,13 +3183,20 @@ async function fetchAshbyJobs(config, boardId) {
 async function fetchSmartRecruitersJobs(config, boardId) {
   const pageSize = 100;
   const baseUrl = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings`;
-  const jobs = [];
-  for (let page = 0; page < DEFAULT_ATS_MAX_PAGES; page++) {
-    const url = setUrlSearchParams(baseUrl, { limit: pageSize, offset: page * pageSize });
-    const payload = await fetchJson(url);
-    const pageJobs = firstArray(payload?.content, payload?.postings, payload);
-    jobs.push(...pageJobs);
-    if (pageJobs.length < pageSize) break;
+  const firstPayload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset: 0 }));
+  const firstJobs = firstArray(firstPayload?.content, firstPayload?.postings, firstPayload);
+  const jobs = [...firstJobs];
+  const reportedTotal = Number(firstPayload?.totalFound || firstPayload?.total || firstPayload?.count || 0);
+  const maxRows = pageSize * DEFAULT_ATS_MAX_PAGES;
+  const totalRows = reportedTotal > 0 ? Math.min(reportedTotal, maxRows) : (firstJobs.length === pageSize ? maxRows : firstJobs.length);
+  const offsets = [];
+  for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
+  const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, async (offset) => {
+    const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }));
+    return firstArray(payload?.content, payload?.postings, payload);
+  });
+  for (const page of pages) {
+    if (page.status === 'fulfilled') jobs.push(...page.value);
   }
   return { jobs };
 }
@@ -3157,17 +3211,28 @@ async function fetchWorkdayJobs(config) {
   const descriptor = getWorkdayDescriptor(config);
   if (!descriptor) return { jobs: [] };
   const url = descriptor.apiUrl;
-  const pageSize = 100;
-  const jobs = [];
-  for (let page = 0; page < DEFAULT_ATS_MAX_PAGES; page++) {
+  const pageSize = 20;
+  const readPage = async (offset) => {
     const payload = await fetchJson(url, 15000, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ appliedFacets: {}, limit: pageSize, offset: page * pageSize, searchText: '' }),
+      body: JSON.stringify({ appliedFacets: {}, limit: pageSize, offset, searchText: '' }),
     });
-    const pageJobs = firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children);
-    jobs.push(...pageJobs);
-    if (pageJobs.length < pageSize) break;
+    return {
+      jobs: firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children),
+      total: Number(payload?.total || payload?.totalResults || payload?.count || 0),
+    };
+  };
+
+  const firstPage = await readPage(0);
+  const jobs = [...firstPage.jobs];
+  const maxRows = pageSize * DEFAULT_WORKDAY_MAX_PAGES;
+  const totalRows = firstPage.total > 0 ? Math.min(firstPage.total, maxRows) : (firstPage.jobs.length === pageSize ? maxRows : firstPage.jobs.length);
+  const offsets = [];
+  for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
+  const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, readPage);
+  for (const page of pages) {
+    if (page.status === 'fulfilled') jobs.push(...page.value.jobs);
   }
   return { jobs };
 }
@@ -3176,6 +3241,13 @@ async function fetchBamboohrJobs(config, boardId) {
   const url = config.apiUrl || `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
   const content = await fetchText(url);
   return { jobs: parseBamboohrJobs(content) };
+}
+
+async function fetchStaticCareersJobs(config) {
+  const url = config.apiUrl || config.sourceUrl || config.resolvedBoardUrl || config.careersUrl || config.boardUrl || config.url;
+  if (!url) return { jobs: [] };
+  const content = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
+  return { jobs: parseStaticCareersJobs(content, url) };
 }
 
 async function fetchJson(url, timeoutMs = 15000, init = {}) {
@@ -3322,6 +3394,18 @@ async function discoverAtsBoardFromCareersPages(config) {
         const result = await probeAtsUrl(config, atsUrl);
         if (result) return result;
       }
+      const staticJobs = parseStaticCareersJobs(html, url);
+      if (staticJobs.length >= STATIC_CAREERS_MIN_JOB_LINKS) {
+        const boardId = getConfigBoardId(config) || getStaticCareersBoardId(config, url);
+        return {
+          atsType: 'custom_static',
+          boardId,
+          apiUrl: url,
+          resolvedBoardUrl: url,
+          jobCount: staticJobs.length,
+          method: 'static_careers_page',
+        };
+      }
     } catch {
       // Many company careers pages block bots or time out; continue with the next candidate URL.
     }
@@ -3365,6 +3449,7 @@ function buildCareerPageUrls(config = {}) {
   for (const domain of domains) {
     add(`https://careers.${domain}`);
     add(`https://${domain}/careers`);
+    add(`https://${domain}/careers/jobs`);
     add(`https://jobs.${domain}`);
     add(`https://${domain}/jobs`);
   }
@@ -3391,6 +3476,242 @@ function extractAtsLinks(content, baseUrl = '') {
   for (const match of text.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)) add(match[0]);
   for (const match of text.matchAll(/\b(?:href|src|data-url)=["']([^"']+)["']/gi)) add(match[1]);
   return candidates.slice(0, 12);
+}
+
+function parseStaticCareersJobs(content, sourceUrl = '') {
+  const jobs = [];
+  const seen = new Set();
+  const addJob = (item = {}) => {
+    const title = cleanHtmlText(item.title || item.name || '');
+    const url = normalizeAbsoluteUrl(item.url || item.jobUrl || item.applyUrl || '', sourceUrl);
+    if (!title || !url || isGenericCareersLink(title, url)) return;
+    const key = `${normalizeKey(title)}|${normalizeKey(url)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    jobs.push({
+      id: item.id || extractJobIdFromUrl(url) || key,
+      title,
+      location: cleanHtmlText(item.location || ''),
+      department: cleanHtmlText(item.department || ''),
+      employmentType: cleanHtmlText(item.employmentType || ''),
+      url,
+      postedAt: item.postedAt || '',
+      sourceUrl,
+    });
+  };
+
+  for (const item of extractJsonLdJobs(content, sourceUrl)) addJob(item);
+
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of String(content || '').matchAll(anchorPattern)) {
+    const attrs = match[1] || '';
+    const href = readHtmlAttribute(attrs, 'href');
+    const url = normalizeAbsoluteUrl(href, sourceUrl);
+    if (!url || !looksLikeStaticJobUrl(url)) continue;
+    const text = cleanHtmlText(match[2] || '');
+    if (!text || isGenericCareersLink(text, url)) continue;
+    const parsed = splitStaticJobText(text, url);
+    addJob({
+      id: extractJobIdFromUrl(url),
+      title: parsed.title,
+      department: parsed.department,
+      location: parsed.location,
+      url,
+    });
+    if (jobs.length >= STATIC_CAREERS_MAX_JOBS) break;
+  }
+
+  return jobs.slice(0, STATIC_CAREERS_MAX_JOBS);
+}
+
+function extractJsonLdJobs(content, sourceUrl = '') {
+  const jobs = [];
+  for (const match of String(content || '').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed = JSON.parse(decodeHtmlEntities(match[1]));
+      const nodes = flattenJsonLd(parsed);
+      for (const node of nodes) {
+        const type = Array.isArray(node?.['@type']) ? node['@type'].join(' ') : String(node?.['@type'] || '');
+        if (!/JobPosting/i.test(type)) continue;
+        const locationValue = node.jobLocation || node.applicantLocationRequirements || '';
+        jobs.push({
+          title: node.title || node.name || '',
+          location: readJsonLdLocation(locationValue),
+          department: node.industry || node.occupationalCategory || '',
+          employmentType: Array.isArray(node.employmentType) ? node.employmentType.join(', ') : node.employmentType || '',
+          url: node.url || node.sameAs || sourceUrl,
+          postedAt: node.datePosted || '',
+        });
+      }
+    } catch {
+      // Ignore malformed structured data and continue with link parsing.
+    }
+  }
+  return jobs;
+}
+
+function flattenJsonLd(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(flattenJsonLd);
+  if (value['@graph']) return flattenJsonLd(value['@graph']);
+  return [value];
+}
+
+function readJsonLdLocation(value) {
+  if (!value) return '';
+  if (Array.isArray(value)) return value.map(readJsonLdLocation).filter(Boolean).join('; ');
+  if (typeof value === 'string') return value;
+  const address = value.address || value;
+  if (typeof address === 'string') return address;
+  return [
+    address.addressLocality,
+    address.addressRegion,
+    address.addressCountry?.name || address.addressCountry,
+  ].filter(Boolean).join(', ');
+}
+
+function splitStaticJobText(text, url) {
+  let title = cleanHtmlText(text);
+  let location = '';
+  let department = '';
+  try {
+    const parsed = new URL(url);
+    location = cleanHtmlText(parsed.searchParams.get('office') || parsed.searchParams.get('location') || '');
+  } catch {
+    // Keep empty location.
+  }
+
+  if (location) {
+    const escaped = escapeRegExp(location);
+    title = title.replace(new RegExp(`\\s+${escaped}$`, 'i'), '').trim();
+  }
+
+  const departments = [
+    'Sales',
+    'Technology',
+    'Customers',
+    'Operations',
+    'Marketing',
+    'Product',
+    'Finance',
+    'People',
+    'People & Culture',
+    'Engineering',
+    'Design',
+    'Legal',
+  ];
+  for (const candidate of departments) {
+    const escaped = escapeRegExp(candidate);
+    if (new RegExp(`\\s+${escaped}$`, 'i').test(title)) {
+      department = candidate;
+      title = title.replace(new RegExp(`\\s+${escaped}$`, 'i'), '').trim();
+      break;
+    }
+  }
+
+  return { title, department, location };
+}
+
+function cleanHtmlText(value) {
+  return decodeHtmlEntities(String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '-')
+    .replace(/&mdash;/g, '-')
+    .replace(/&eacute;/g, 'e')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function readHtmlAttribute(attrs, name) {
+  const match = String(attrs || '').match(new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i'));
+  return match?.[1] || '';
+}
+
+function normalizeAbsoluteUrl(value, baseUrl = '') {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '#') return '';
+  try {
+    const parsed = new URL(raw, baseUrl || undefined);
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function looksLikeStaticJobUrl(url) {
+  const parsed = new URL(url);
+  const path = parsed.pathname.toLowerCase();
+  if (/\/careers\/job\//.test(path)) return true;
+  if (/\/jobs\/[^/]+/.test(path) && !/\/jobs\/?(search|alerts?|categories?)?\/?$/.test(path)) return true;
+  if (/\/careers\/[^/]+\/[a-f0-9-]{16,}/.test(path)) return true;
+  return false;
+}
+
+function isGenericCareersLink(title, url) {
+  const normalizedTitle = normalizeKey(title).replace(/[^a-z0-9 ]/g, '').trim();
+  if (!normalizedTitle || normalizedTitle.length < 4) return true;
+  if ([
+    'career',
+    'careers',
+    'job',
+    'jobs',
+    'openings',
+    'departments',
+    'locations',
+    'culture',
+    'how we hire',
+    'us en',
+    'ca en',
+  ].includes(normalizedTitle)) return true;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    if (/\/careers\/openings\/?$/.test(path) || /\/careers\/?$/.test(path) || /\/jobs\/?$/.test(path)) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+function extractJobIdFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const idMatch = parsed.pathname.match(/\/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\/?$/i);
+    if (idMatch) return idMatch[1];
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return parts[parts.length - 1] || url;
+  } catch {
+    return url;
+  }
+}
+
+function getStaticCareersBoardId(config = {}, url = '') {
+  const domain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  if (domain) return domain.split('.')[0] || domain;
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./i, '').split('.')[0] || 'static-careers';
+  } catch {
+    return normalizeKey(config.companyName || 'static-careers').replace(/[^a-z0-9]/g, '') || 'static-careers';
+  }
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function probeAtsUrl(config, atsUrl) {
@@ -3708,6 +4029,35 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
       jobUrl: raw.url || raw.jobUrl || raw.applyUrl || '',
       url: raw.url || raw.jobUrl || raw.applyUrl || '',
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'custom_static') {
+    const title = raw.title || raw.name || '';
+    if (!title) return null;
+    const location = raw.location || '';
+    const postedAt = raw.postedAt || retrievedAt;
+    const jobUrl = raw.url || raw.jobUrl || raw.applyUrl || '';
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || '',
+      employmentType: raw.employmentType || '',
+      atsType,
+      source: 'Careers Page',
+      jobId: String(raw.id || jobUrl || title),
+      naturalKey: makeJobNaturalKey(config, atsType, raw.id || jobUrl || title, location),
+      jobUrl,
+      url: jobUrl,
       postedAt,
       retrievedAt,
       importedAt: retrievedAt,
