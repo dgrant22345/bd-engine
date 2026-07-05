@@ -682,7 +682,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 200, store.getActivity(tenantId, Object.fromEntries(url.searchParams)));
     }
     if (req.method === 'POST') {
-      return sendJson(res, 201, store.addActivity(tenantId, user.id, await readJson(req)));
+      return sendJson(res, 201, await store.addActivity(tenantId, user.id, await readJson(req)));
     }
   }
 
@@ -814,7 +814,7 @@ self.addEventListener('activate', (event) => {
   const logMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/log-outreach$/);
   if (logMatch && req.method === 'POST') {
     const payload = await readJson(req);
-    const result = store.addActivity(tenantId, user.id, {
+    const result = await store.addActivity(tenantId, user.id, {
       ...payload,
       contactId: logMatch[1],
     });

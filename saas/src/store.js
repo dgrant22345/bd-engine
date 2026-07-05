@@ -468,7 +468,11 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
   
   if (data) {
     const mergeStartedAt = Date.now();
-    if (data.accounts.length > 0 || !status.core) {
+    // Only load core the FIRST time. A contacts-only lazy load (needsContacts
+    // now true, core already loaded) must NOT re-set these maps from the DB
+    // snapshot: that would clobber in-memory mutations still sitting in the
+    // 500ms debounced-save window and silently discard them.
+    if (!status.core) {
       const tenantAccts = data.accounts || [];
       tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
       accountsByTenant.set(tenantId, tenantAccts);
@@ -477,8 +481,8 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       activitiesByTenant.set(tenantId, data.activities || []);
       tasksByTenant.set(tenantId, data.tasks || []);
 
-      // Optimization: Only merge into global arrays if this is the FIRST load for this tenant
-      if (!status.core) {
+      // Merge into global arrays only on this first load for the tenant.
+      {
         const existingAcctIds = new Set(accounts.map(x => x.id));
         for (const a of tenantAccts) if (!existingAcctIds.has(a.id)) accounts.push(a);
 
@@ -1051,8 +1055,13 @@ export function createStore() {
       return paginate(activitiesForTenant(tenantId), query);
     },
 
-    addActivity(tenantId, userId, payload) {
+    async addActivity(tenantId, userId, payload) {
       assertTenant(tenantId);
+      // Load core first: otherwise on a cold tenant this creates a fresh
+      // single-item tenant array, persistTenant skips it (status.core false ->
+      // COALESCE keeps old DB rows), and the next load overwrites it — the
+      // logged activity/follow-up would silently vanish.
+      await ensureDataLoaded(tenantId, false);
       const activity = {
         id: `act-${Date.now()}`,
         tenantId,
