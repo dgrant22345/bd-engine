@@ -2936,9 +2936,13 @@ function scheduleRuntimePoll() {
     try {
       const runtime = await loadRuntimeStatus(true);
       hydrateAdminRuntimePanels(runtime);
+      scheduleRuntimePoll();
     } catch (_error) {
       // Keep the current admin screen stable if polling fails.
-    } finally {
+      const msg = String(_error.message || _error);
+      if (msg.includes('401') || msg.includes('Unauth')) {
+        return;
+      }
       scheduleRuntimePoll();
     }
   }, 3000);

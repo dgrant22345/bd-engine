@@ -794,6 +794,11 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, job);
   }
 
+  if (pathname === '/api/google-sheets/run-engine' && req.method === 'POST') {
+    const plan = getPlan(getEffectivePlanId(tenant, user));
+    return sendJson(res, 202, store.startLaunchWorkflow(tenantId, { plan }));
+  }
+
   // Stub remaining import/enrichment/discovery endpoints
   if (pathname.startsWith('/api/import/') || pathname.startsWith('/api/enrichment/') || pathname.startsWith('/api/discovery/') || pathname.startsWith('/api/google-sheets/')) {
     return sendJson(res, 202, store.createCompletedJob('cloud-stub-job'));
