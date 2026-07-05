@@ -3414,12 +3414,26 @@ async function probeAtsUrl(config, atsUrl) {
   if (atsType === 'workday') {
     const descriptor = getWorkdayDescriptor(tempConfig);
     if (!descriptor) return null;
+    // Validate the descriptor actually returns jobs — a malformed tenant/site
+    // parse otherwise resolves a board that fetches nothing.
+    let jobCount = 0;
+    try {
+      const payload = await fetchJson(descriptor.apiUrl, 8000, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText: '' }),
+      });
+      jobCount = Array.isArray(payload?.jobPostings) ? payload.jobPostings.length : 0;
+    } catch {
+      return null;
+    }
+    if (jobCount === 0) return null;
     return {
       atsType,
       boardId,
       apiUrl: descriptor.apiUrl,
       resolvedBoardUrl: descriptor.resolvedBoardUrl,
-      jobCount: 0,
+      jobCount,
       method: 'careers_page_link',
     };
   }
@@ -3470,7 +3484,11 @@ async function probeAtsBoard(atsType, boardId) {
   try {
     const payload = await fetchJson(endpoint.apiUrl, 6000);
     const jobs = endpoint.readJobs(payload);
-    if (!Array.isArray(jobs)) return null;
+    // Require ACTUAL jobs, not just a 200 with an empty array. SmartRecruiters
+    // (and others) return 200 {content:[]} for any invalid slug, so accepting
+    // an empty array falsely "resolves" thousands of non-existent boards that
+    // then fetch zero jobs.
+    if (!Array.isArray(jobs) || jobs.length === 0) return null;
     return {
       apiUrl: endpoint.apiUrl,
       resolvedBoardUrl: endpoint.resolvedBoardUrl,
