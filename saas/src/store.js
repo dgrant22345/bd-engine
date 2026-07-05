@@ -499,6 +499,14 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
         for (const t of (data.tasks || [])) if (!existingTaskIds.has(t.id)) tasks.push(t);
       }
 
+      // Hydrate persisted settings (geographyFocus, thresholds, etc.) into the
+      // in-memory profile. Without this they were only ever set at signup and
+      // silently reverted to defaults after every restart.
+      const profile = tenantProfiles.get(tenantId);
+      if (profile && data.settings && Object.keys(data.settings).length) {
+        profile.settings = { ...profile.settings, ...data.settings };
+      }
+
       status.core = true;
     }
     

@@ -116,7 +116,21 @@ export async function initDb() {
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referred_by_tenant_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credited_at TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credit_transaction_id TEXT NOT NULL DEFAULT '';
-      ALTER TABLE tenant_data ADD COLUMN IF NOT EXISTS tasks JSONB NOT NULL DEFAULT '[]';
+      ALTER TABLE tenant_data ADD COLUMN IF NOT EXISTS tasks JSONB DEFAULT '[]';
+      -- Partial saves pass NULL for un-loaded sections and rely on COALESCE in
+      -- the upsert to preserve existing data. But NOT NULL is checked on the
+      -- INSERT tuple BEFORE ON CONFLICT arbitration, so those saves were
+      -- rejected outright ("null value in column ... violates not-null"),
+      -- silently losing imported jobs, activities and tasks. Drop NOT NULL so
+      -- the COALESCE-preserve pattern actually works; dbLoadTenantData already
+      -- coerces NULL to [].
+      ALTER TABLE tenant_data ALTER COLUMN accounts DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN contacts DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN jobs DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN configs DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN activities DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN tasks DROP NOT NULL;
+      ALTER TABLE tenant_data ALTER COLUMN settings DROP NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS tenants_referral_code_idx ON tenants (referral_code) WHERE referral_code <> '';
       CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
       CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
