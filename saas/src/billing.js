@@ -155,11 +155,13 @@ export function getUsage(tenantId, resource) {
   return usageCounters.get(`${tenantId}:${resource}`) || 0;
 }
 
-export function getUsageSummary(tenantId, planId) {
+export function getUsageSummary(tenantId, planId, actualUsage = {}) {
   const plan = getPlan(planId);
   const summary = {};
   for (const [resource, limit] of Object.entries(plan.limits)) {
-    const current = getUsage(tenantId, resource);
+    const current = Number.isFinite(Number(actualUsage[resource]))
+      ? Number(actualUsage[resource])
+      : getUsage(tenantId, resource);
     summary[resource] = {
       current,
       limit: limit === -1 ? 'unlimited' : limit,

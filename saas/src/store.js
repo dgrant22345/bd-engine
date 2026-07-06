@@ -407,6 +407,126 @@ function buildDashboardActionPlan(persona, tenantAccounts = [], tenantJobs = [],
   };
 }
 
+function buildWorkspaceReadiness(persona, tenantAccounts = [], tenantJobs = [], tenantContacts = [], tenantConfigs = []) {
+  const normalizedPersona = normalizePersona(persona);
+  const isJobSeeker = normalizedPersona === 'jobseeker';
+  const activeJobs = tenantJobs.filter((item) => item.active !== false);
+  const resolvedConfigs = tenantConfigs.filter(isResolvedBoardConfig);
+  const accountsWithDomain = tenantAccounts.filter((item) => item.domain || item.canonicalDomain || item.careersUrl);
+  const accountsWithJobs = tenantAccounts.filter((item) => Number(item.jobCount || item.openRoleCount || 0) > 0);
+  const accountsWithContacts = tenantAccounts.filter((item) => Number(item.connectionCount || item.seniorContactCount || item.talentContactCount || item.buyerTitleCount || 0) > 0);
+  const accountsWithNextAction = tenantAccounts.filter((item) => item.nextAction || item.recommendedAction);
+  const recentJobs = activeJobs.filter((item) => daysSince(item.importedAt || item.retrievedAt || item.postedAt) <= 7);
+  const warmContacts = tenantContacts.filter((item) => Number(item.priorityScore || 0) >= 50);
+  const thresholds = isJobSeeker
+    ? { accounts: 15, contacts: 25, boards: 8, jobs: 20, nextActions: 5, domainsPct: 60 }
+    : { accounts: 25, contacts: 50, boards: 12, jobs: 40, nextActions: 10, domainsPct: 70 };
+  const domainCoveragePct = tenantAccounts.length ? Math.round((accountsWithDomain.length / tenantAccounts.length) * 100) : 0;
+  const checks = [
+    {
+      id: 'accounts',
+      label: isJobSeeker ? 'Target companies imported' : 'Target accounts imported',
+      value: tenantAccounts.length,
+      target: thresholds.accounts,
+      met: tenantAccounts.length >= thresholds.accounts,
+      action: isJobSeeker ? 'Add 15-30 companies you would genuinely apply to.' : 'Import 25-100 target accounts before selling from the workspace.',
+    },
+    {
+      id: 'contacts',
+      label: isJobSeeker ? 'Warm contacts mapped' : 'Buyer or talent contacts mapped',
+      value: tenantContacts.length,
+      target: thresholds.contacts,
+      met: tenantContacts.length >= thresholds.contacts || warmContacts.length >= Math.ceil(thresholds.contacts / 2),
+      action: 'Import LinkedIn connections or add decision-makers manually.',
+    },
+    {
+      id: 'boards',
+      label: 'Resolved ATS boards',
+      value: resolvedConfigs.length,
+      target: thresholds.boards,
+      met: resolvedConfigs.length >= thresholds.boards,
+      action: 'Run ATS discovery and review unresolved companies.',
+    },
+    {
+      id: 'jobs',
+      label: isJobSeeker ? 'Open roles tracked' : 'Hiring signals tracked',
+      value: activeJobs.length,
+      target: thresholds.jobs,
+      met: activeJobs.length >= thresholds.jobs || accountsWithJobs.length >= Math.ceil(thresholds.accounts / 3),
+      action: 'Run live job import after boards resolve.',
+    },
+    {
+      id: 'next_actions',
+      label: 'Actionable next steps',
+      value: accountsWithNextAction.length,
+      target: thresholds.nextActions,
+      met: accountsWithNextAction.length >= thresholds.nextActions,
+      action: 'Review top accounts and save next actions.',
+    },
+    {
+      id: 'coverage',
+      label: 'Company identity coverage',
+      value: domainCoveragePct,
+      target: thresholds.domainsPct,
+      suffix: '%',
+      met: domainCoveragePct >= thresholds.domainsPct,
+      action: 'Fill domain and careers-page gaps for high-value companies.',
+    },
+  ];
+  const score = Math.round(checks.reduce((sum, check) => {
+    const pct = check.target ? Math.min(1, Number(check.value || 0) / check.target) : 0;
+    return sum + (check.met ? 1 : pct * 0.7);
+  }, 0) / checks.length * 100);
+  const metCount = checks.filter((check) => check.met).length;
+  const status = score >= 80 ? 'paid_ready' : score >= 55 ? 'trial_ready' : score >= 30 ? 'warming_up' : 'needs_setup';
+  const title = {
+    paid_ready: isJobSeeker ? 'Ready for a paid job-search workflow' : 'Ready for a paid sales workflow',
+    trial_ready: 'Strong trial value; tighten coverage before upgrading',
+    warming_up: 'Useful signals are forming',
+    needs_setup: 'Not enough data to feel valuable yet',
+  }[status];
+  const summary = isJobSeeker
+    ? 'A paid job-search workflow needs enough target companies, live roles, and warm paths to replace manual tracking.'
+    : 'A paid sales workflow needs enough target accounts, contacts, live hiring signals, and next actions to guide daily work.';
+  const nextBestActions = checks.filter((check) => !check.met).slice(0, 3).map((check) => ({
+    id: check.id,
+    title: check.action,
+    metric: `${check.value}${check.suffix || ''} of ${check.target}${check.suffix || ''}`,
+  }));
+  const proofPoints = [
+    `${tenantAccounts.length} ${isJobSeeker ? 'companies' : 'accounts'} in workspace`,
+    `${activeJobs.length} active roles tracked`,
+    `${resolvedConfigs.length} resolved ATS boards`,
+    `${tenantContacts.length} mapped contacts`,
+  ];
+
+  return {
+    persona: normalizedPersona,
+    score,
+    status,
+    title,
+    summary,
+    metCount,
+    totalChecks: checks.length,
+    checks,
+    nextBestActions,
+    proofPoints,
+    metrics: {
+      accountCount: tenantAccounts.length,
+      contactCount: tenantContacts.length,
+      warmContactCount: warmContacts.length,
+      activeJobCount: activeJobs.length,
+      recentJobCount: recentJobs.length,
+      resolvedBoardCount: resolvedConfigs.length,
+      accountsWithJobs: accountsWithJobs.length,
+      accountsWithContacts: accountsWithContacts.length,
+      accountsWithDomain: accountsWithDomain.length,
+      accountsWithNextAction: accountsWithNextAction.length,
+      domainCoveragePct,
+    },
+  };
+}
+
 function groupBy(items = [], keyOrGetter) {
   const getter = typeof keyOrGetter === 'function'
     ? keyOrGetter
@@ -936,7 +1056,12 @@ export function createStore() {
       timings.loadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
       const profile = getTenantProfile(tenantId);
-      const hasWorkspaceData = accountsForTenant(tenantId).length > 0 || jobsForTenant(tenantId).length > 0;
+      const tenantAccounts = accountsForTenant(tenantId);
+      const tenantJobs = jobsForTenant(tenantId);
+      const tenantContacts = contactsForTenant(tenantId);
+      const tenantConfigs = configsForTenant(tenantId);
+      const persona = this.getPersona(tenantId);
+      const hasWorkspaceData = tenantAccounts.length > 0 || tenantJobs.length > 0;
       if (!profile.settings.setupComplete && hasWorkspaceData) {
         profile.settings.setupComplete = true;
         profile.settings.lastPipelineRun = profile.settings.lastPipelineRun || now();
@@ -948,8 +1073,9 @@ export function createStore() {
         setupComplete,
         licensingEnabled: false,
         workspaceName: profile.workspace.name,
-        persona: this.getPersona(tenantId),
+        persona,
         user: profile.settings.user,
+        readiness: buildWorkspaceReadiness(persona, tenantAccounts, tenantJobs, tenantContacts, tenantConfigs),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
       const elapsedMs = Math.round(performance.now() - startedAt);
@@ -971,6 +1097,21 @@ export function createStore() {
         queuedJobs: 0,
         activeJobs: [],
         recentJobs: [],
+      };
+    },
+
+    async getUsageCounts(tenantId) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const tenantAccounts = accountsForTenant(tenantId);
+      const tenantContacts = contactsForTenant(tenantId);
+      const tenantConfigs = configsForTenant(tenantId);
+      const profile = getTenantProfile(tenantId);
+      return {
+        accounts: tenantAccounts.length,
+        contacts: tenantContacts.length,
+        jobBoards: tenantConfigs.filter((item) => item.active !== false).length,
+        users: Math.max(1, profile?.settings?.ownerRoster?.length || 1),
       };
     },
 
@@ -1049,6 +1190,7 @@ export function createStore() {
         networkLeaders: tenantContacts.slice(0, 5).map(dashboardContactSummary),
         needsResolution: unresolvedAccounts.slice(0, 5).map(dashboardAccountSummary),
         actionPlan: buildDashboardActionPlan(persona, tenantAccounts, activeJobs, tenantContacts, tenantConfigs),
+        readiness: buildWorkspaceReadiness(persona, tenantAccounts, activeJobs, tenantContacts, tenantConfigs),
         recommendedActions: tenantAccounts.slice(0, 5).map((item) => ({
           accountId: item.id,
           company: item.displayName,

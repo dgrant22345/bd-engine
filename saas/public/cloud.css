@@ -697,7 +697,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: baseline;
   gap: 4px;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
 }
 
 .price-amount {
@@ -708,6 +708,26 @@ a:hover { text-decoration: underline; }
 
 .price-period {
   font-size: 14px;
+  color: var(--text-muted);
+}
+
+.pricing-fit,
+.pricing-upgrade {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.pricing-fit {
+  min-height: 62px;
+  margin-bottom: 18px;
+}
+
+.pricing-upgrade {
+  min-height: 42px;
+  margin: -12px 0 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
   color: var(--text-muted);
 }
 

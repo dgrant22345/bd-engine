@@ -2866,6 +2866,92 @@ function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolut
   `;
 }
 
+function readinessTone(status, score = 0) {
+  if (status === 'paid_ready' || score >= 80) return 'success';
+  if (status === 'trial_ready' || score >= 55) return 'accent';
+  if (status === 'warming_up' || score >= 30) return 'warning';
+  return 'danger';
+}
+
+function renderWorkspaceReadinessPanel(readiness = {}) {
+  const score = Math.max(0, Math.min(100, Number(readiness.score || 0)));
+  const tone = readinessTone(readiness.status, score);
+  const copy = getPersonaUiCopy(readiness.persona);
+  const jobSeeker = copy.persona === 'jobseeker';
+  const rawChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
+  const checks = rawChecks.length ? rawChecks : [
+    { id: 'accounts', label: jobSeeker ? 'Target companies imported' : 'Target accounts imported', value: 0, target: jobSeeker ? 15 : 25, action: jobSeeker ? 'Add the companies you would genuinely apply to.' : 'Import the accounts you want to sell into.' },
+    { id: 'contacts', label: jobSeeker ? 'Warm contacts mapped' : 'Buyer or talent contacts mapped', value: 0, target: jobSeeker ? 25 : 50, action: 'Import LinkedIn connections or add decision-makers manually.' },
+    { id: 'boards', label: 'Resolved ATS boards', value: 0, target: jobSeeker ? 8 : 12, action: 'Run ATS discovery and review unresolved companies.' },
+    { id: 'jobs', label: jobSeeker ? 'Open roles tracked' : 'Hiring signals tracked', value: 0, target: jobSeeker ? 20 : 40, action: 'Run live job import after boards resolve.' },
+  ];
+  const proofPoints = Array.isArray(readiness.proofPoints) ? readiness.proofPoints : [];
+  const rawNextBestActions = Array.isArray(readiness.nextBestActions) ? readiness.nextBestActions : [];
+  const nextBestActions = rawNextBestActions.length || rawChecks.length
+    ? rawNextBestActions
+    : checks.slice(0, 3).map((check) => ({
+      title: check.action,
+      metric: `${formatNumber(check.value || 0)}${check.suffix || ''} of ${formatNumber(check.target || 0)}${check.suffix || ''}`,
+    }));
+  const paidWhy = copy.persona === 'jobseeker'
+    ? 'People pay when this replaces a target-company spreadsheet, manual careers checks, and scattered referral notes.'
+    : 'Teams pay when this replaces manual account research, job-board checking, and guesswork about who to contact next.';
+
+  return `
+    <section class="detail-card readiness-panel readiness-panel--${escapeAttr(tone)}" aria-label="Paid readiness">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Paid readiness</p>
+          <h3>${escapeHtml(readiness.title || 'Workspace readiness')}</h3>
+          <p class="muted small">${escapeHtml(readiness.summary || paidWhy)}</p>
+        </div>
+        <div class="readiness-score" style="--readiness-score:${score}">
+          <strong>${formatNumber(score)}</strong>
+          <span>/100</span>
+        </div>
+      </div>
+      <div class="readiness-proof">
+        ${proofPoints.map((point) => `<span>${escapeHtml(point)}</span>`).join('')}
+      </div>
+      <div class="readiness-body">
+        <div class="readiness-checklist">
+          ${checks.map((check) => {
+            const value = Number(check.value || 0);
+            const target = Number(check.target || 0);
+            const pct = target ? Math.min(100, Math.round((value / target) * 100)) : 0;
+            const suffix = check.suffix || '';
+            return `
+              <article class="readiness-check ${check.met ? 'is-met' : ''}">
+                <div class="inline-header">
+                  <strong>${escapeHtml(check.label)}</strong>
+                  ${renderStatusPill(check.met ? 'ready' : 'gap', check.met ? 'success' : 'warning')}
+                </div>
+                <div class="spark-bar readiness-bar" aria-hidden="true"><span style="width:${pct}%"></span></div>
+                <p class="small muted">${formatNumber(value)}${escapeHtml(suffix)} of ${formatNumber(target)}${escapeHtml(suffix)} target</p>
+              </article>
+            `;
+          }).join('')}
+        </div>
+        <div class="readiness-next">
+          <h4>Next best improvements</h4>
+          <p class="small muted">${escapeHtml(paidWhy)}</p>
+          ${nextBestActions.length ? `<div class="timeline">${nextBestActions.map((item) => `
+            <article class="timeline-item">
+              <strong>${escapeHtml(item.title)}</strong>
+              <span class="small muted">${escapeHtml(item.metric || '')}</span>
+            </article>
+          `).join('')}</div>` : '<div class="empty-state empty-state--compact">This workspace has enough coverage for a credible paid workflow. Keep jobs and contacts fresh.</div>'}
+          <div class="button-row button-row--wrap">
+            <a class="primary-button" href="#/admin">Improve coverage</a>
+            <a class="ghost-button" href="#/accounts">${escapeHtml(copy.openAccountsCta)}</a>
+            <a class="ghost-button" href="#/jobs">${escapeHtml(copy.reviewJobsCta)}</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function getPersonaUiCopy(persona = appState.persona) {
   const normalized = normalizeAppPersona(persona);
   if (normalized === 'jobseeker') {
@@ -3403,12 +3489,49 @@ async function renderSetupWizard() {
             `).join('')}
           </ol>
         </div>
+        ${renderSetupValueGuide(appState.setupStatus?.readiness, jobSeeker)}
         ${renderSetupStepContent(current.key)}
       </div>
     </section>
   `;
 
   wireSetupDropZone();
+}
+
+function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
+  const checks = Array.isArray(readiness?.checks) ? readiness.checks : [];
+  const score = Number(readiness?.score || 0);
+  const title = jobSeeker ? 'What makes this worth paying for?' : 'What makes this sales-ready?';
+  const copy = jobSeeker
+    ? 'Aim for enough target companies, roles, and warm contacts that BD Engine replaces your manual search tracker.'
+    : 'Aim for enough accounts, contacts, ATS boards, and live jobs that BD Engine can guide daily outreach.';
+  const visibleChecks = checks.length ? checks.slice(0, 4) : [
+    { label: jobSeeker ? 'Target companies imported' : 'Target accounts imported', value: 0, target: jobSeeker ? 15 : 25, suffix: '' },
+    { label: 'Mapped contacts', value: 0, target: jobSeeker ? 25 : 50, suffix: '' },
+    { label: 'Resolved ATS boards', value: 0, target: jobSeeker ? 8 : 12, suffix: '' },
+    { label: jobSeeker ? 'Open roles tracked' : 'Hiring signals tracked', value: 0, target: jobSeeker ? 20 : 40, suffix: '' },
+  ];
+  return `
+    <div class="setup-value-guide">
+      <div>
+        <p class="eyebrow">Value checklist</p>
+        <strong>${escapeHtml(title)}</strong>
+        <p class="muted small">${escapeHtml(copy)}</p>
+      </div>
+      <div class="setup-value-score">
+        <strong>${formatNumber(score)}</strong>
+        <span>/100 ready</span>
+      </div>
+      <div class="setup-value-grid">
+        ${visibleChecks.map((check) => `
+          <span>
+            <strong>${formatNumber(check.value || 0)}${escapeHtml(check.suffix || '')}</strong>
+            ${escapeHtml(check.label)} target: ${formatNumber(check.target || 0)}${escapeHtml(check.suffix || '')}
+          </span>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function renderSetupStepContent(stepKey) {
@@ -3860,6 +3983,7 @@ async function renderDashboardView(options = {}) {
   dashboard.recentlyDiscoveredBoards = Array.isArray(dashboard.recentlyDiscoveredBoards) ? dashboard.recentlyDiscoveredBoards : [];
   dashboard.needsResolution = (Array.isArray(dashboard.needsResolution) ? dashboard.needsResolution : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
   dashboard.actionPlan = dashboard.actionPlan && typeof dashboard.actionPlan === 'object' ? dashboard.actionPlan : {};
+  dashboard.readiness = dashboard.readiness && typeof dashboard.readiness === 'object' ? dashboard.readiness : {};
   dashboard.summary = dashboard.summary || {};
   const personaCopy = getPersonaUiCopy(dashboard.actionPlan.persona || appState.persona);
   const extended = {
@@ -4003,6 +4127,8 @@ async function renderDashboardView(options = {}) {
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('action-plan', renderPersonaActionPlan(dashboard.actionPlan))}
+
+    ${dashSection('readiness', renderWorkspaceReadinessPanel(dashboard.readiness))}
 
     ${dashSection('metrics', `<section class="metrics-grid">
       ${renderMetricCard('Companies in workspace', dashboard.summary.accountCount, `Imported company universe; use ${personaCopy.accountPlural} filters for the working list`)}

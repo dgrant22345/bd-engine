@@ -454,7 +454,7 @@ self.addEventListener('activate', (event) => {
     const effectivePlanId = getEffectivePlanId(tenant, user);
     const plan = getPlan(effectivePlanId);
     const trialDaysRemaining = effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant);
-    const usage = getUsageSummary(tenantId, effectivePlanId);
+    const usage = getUsageSummary(tenantId, effectivePlanId, await store.getUsageCounts(tenantId));
     const origin = getRequestOrigin(req);
     return sendJson(res, 200, {
       plan,
@@ -555,7 +555,7 @@ self.addEventListener('activate', (event) => {
       billing: {
         plan: getPlan(effectivePlanId),
         trialDaysRemaining: effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant),
-        usage: getUsageSummary(tenantId, effectivePlanId),
+        usage: getUsageSummary(tenantId, effectivePlanId, await store.getUsageCounts(tenantId)),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: getBillingTenantPayload(tenant, user),
