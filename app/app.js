@@ -3463,7 +3463,12 @@ async function renderSetupWizard() {
   const setupTitle = current.key === 'launch'
     ? 'Setup complete'
     : jobSeeker ? 'Job search setup' : 'First-run setup';
-  const setupEyebrow = jobSeeker ? 'Job search workspace' : 'BD Engine local setup';
+  // Card headline is distinct from the topbar view title so the two stacked
+  // headers don't repeat the same words back to back.
+  const setupCardTitle = current.key === 'launch'
+    ? 'You are ready to go'
+    : jobSeeker ? 'Set up your search workspace' : 'Set up your workspace';
+  const setupEyebrow = jobSeeker ? 'Job search workspace' : 'Three quick steps';
   const setupIntro = jobSeeker
     ? 'Create your search workspace, bring in your LinkedIn connections, and start mapping target companies from your own network.'
     : 'Create your workspace, bring in your LinkedIn connections, and start from your own data.';
@@ -3477,7 +3482,7 @@ async function renderSetupWizard() {
         <div class="setup-header">
           <div>
             <p class="eyebrow">${escapeHtml(setupEyebrow)}</p>
-            <h2 id="setup-title">${escapeHtml(setupTitle)}</h2>
+            <h2 id="setup-title">${escapeHtml(setupCardTitle)}</h2>
             <p class="muted">${escapeHtml(setupIntro)}</p>
           </div>
           <ol class="setup-steps" aria-label="Setup progress">
@@ -4398,7 +4403,14 @@ async function renderAccountsView() {
   setViewTitle('Accounts');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
   const filters = stateBootstrap.filters || { atsTypes: [], industries: [] };
-  const result = await api(`/api/accounts${buildQuery(appState.accountQuery)}`);
+  // Board view has no pagination, so a 20-row page would show ~4 cards per
+  // column and hide the rest with no indication. Pull a larger page for the
+  // board and surface a coverage note instead of silently truncating.
+  const BOARD_PAGE_SIZE = 100;
+  const fetchQuery = appState.kanbanMode
+    ? { ...appState.accountQuery, page: 1, pageSize: BOARD_PAGE_SIZE }
+    : appState.accountQuery;
+  const result = await api(`/api/accounts${buildQuery(fetchQuery)}`);
   result.items.forEach(a => {
     const score = getTargetScore(a);
     if (appState.previousScores[a.id] === undefined) appState.previousScores[a.id] = score;
@@ -4472,7 +4484,9 @@ async function renderAccountsView() {
         </form>
         ${renderActiveFilterStrip(appState.accountQuery)}
         ${appState.kanbanMode
-          ? (result.items.length ? renderKanbanBoard(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
+          ? (result.items.length
+              ? `${result.total > result.items.length ? `<p class="muted small board-coverage-note">Showing the top ${formatNumber(result.items.length)} of ${formatNumber(result.total)} accounts by score. Switch to <strong>Table</strong> to page through all of them, or use filters to focus the board.</p>` : ''}${renderKanbanBoard(result.items)}`
+              : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
           : (result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>')}
         ${!appState.kanbanMode ? renderPagination('accounts', result.page, result.pageSize, result.total) : ''}
       </div>
@@ -5295,27 +5309,45 @@ async function renderAdminView() {
     btn.addEventListener('click', () => { deleteAutomationRule(Number(btn.dataset.deleteRule)); renderAdminView(); });
   });
 }
+// Fetch EVERY page for an export. A single pageSize:10000 request silently
+// truncated exports for workspaces above 10k records (the flagship dataset has
+// 12k+ accounts / 20k+ contacts) and produced one giant server round-trip.
+async function fetchAllForExport(path, query) {
+  const pageSize = 2000;
+  const maxRows = 100000;
+  const items = [];
+  let page = 1;
+  for (;;) {
+    const result = await api(`${path}${buildQuery({ ...query, page, pageSize })}`);
+    items.push(...(result.items || []));
+    const total = Number(result.total || items.length);
+    if (items.length >= total || !(result.items || []).length || items.length >= maxRows) break;
+    page += 1;
+  }
+  return items;
+}
+
 async function exportAccountsCsv() {
-  const result = await api(`/api/accounts${buildQuery({ ...appState.accountQuery, page: 1, pageSize: 10000 })}`);
+  const items = await fetchAllForExport('/api/accounts', appState.accountQuery);
   exportToCsv('accounts.csv',
     ['Company', 'Domain', 'Target Score', 'Priority', 'Status', 'Owner', 'Outreach Status', 'Hiring Velocity', 'Jobs 30d', 'Next Action', 'Tags'],
-    result.items.map(a => [a.displayName, a.domain, getTargetScore(a), a.priority, a.status, a.owner, a.outreachStatus, a.hiringVelocity, a.jobsLast30Days, a.nextAction, (a.tags || []).join('; ')])
+    items.map(a => [a.displayName, a.domain, getTargetScore(a), a.priority, a.status, a.owner, a.outreachStatus, a.hiringVelocity, a.jobsLast30Days, a.nextAction, (a.tags || []).join('; ')])
   );
 }
 
 async function exportContactsCsv() {
-  const result = await api(`/api/contacts${buildQuery({ ...appState.contactQuery, page: 1, pageSize: 10000 })}`);
+  const items = await fetchAllForExport('/api/contacts', appState.contactQuery);
   exportToCsv('contacts.csv',
     ['Name', 'Company', 'Title', 'Score', 'Connected On', 'LinkedIn', 'Outreach Status'],
-    result.items.map(c => [c.fullName, c.companyName, c.title, c.priorityScore, c.connectedOn, c.linkedinUrl, c.outreachStatus])
+    items.map(c => [c.fullName, c.companyName, c.title, c.priorityScore, c.connectedOn, c.linkedinUrl, c.outreachStatus])
   );
 }
 
 async function exportJobsCsv() {
-  const result = await api(`/api/jobs${buildQuery({ ...appState.jobQuery, page: 1, pageSize: 10000 })}`);
+  const items = await fetchAllForExport('/api/jobs', appState.jobQuery);
   exportToCsv('jobs.csv',
     ['Title', 'Company', 'Location', 'ATS', 'Posted', 'Active', 'URL'],
-    result.items.map(j => [j.title, j.companyName, j.location, j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
+    items.map(j => [j.title, j.companyName, j.location, j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
   );
 }
 

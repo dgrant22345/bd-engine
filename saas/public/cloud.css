@@ -1376,8 +1376,12 @@ a:hover { text-decoration: underline; }
   .cloud-topbar { padding: 0 12px; }
   .cloud-app-name,
   .cloud-workspace { display: none; }
-  .cloud-trial-cta { padding: 12px; }
-  .cloud-referral-note { width: 100%; white-space: normal; }
+  /* Keep the trial banner from eating ~28% of the mobile viewport before the
+     product is visible: show only the essential line + upgrade action. */
+  .cloud-trial-cta { padding: 10px 12px; gap: 8px; }
+  .cloud-trial-cta-copy span:last-child { display: none; }
+  .cloud-referral-note { display: none; }
+  .cloud-trial-cta-actions { gap: 8px; width: 100%; }
   .cloud-trial-cta-actions .btn { flex: 1 1 140px; }
 
   .trust-main { padding: 48px 16px 72px; }
