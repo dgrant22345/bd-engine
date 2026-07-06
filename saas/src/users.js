@@ -314,25 +314,22 @@ export function normalizeReferralCode(code) {
 }
 
 function findUnclaimedTenantForUser(user) {
-  const userSuffix = String(user.id || '').slice(-4).toLowerCase();
-  const userCreatedAt = Date.parse(user.createdAt || '') || 0;
-  const candidates = [];
+  // Recovery for a membership-less (orphaned) workspace. Ownership normally
+  // lives in the memberships table; when that row is lost, the only trustworthy
+  // signal is the FULL user id that ensureTenantForUser bakes into the slug at
+  // creation (`${displayName}-${user.id}`). Match on that alone.
+  //
+  // The previous heuristic also matched a tenant created within +/-10 minutes
+  // of the user, and matched only the last 4 chars of the user id — either of
+  // which let a stranger who signed up around the same time claim someone
+  // else's orphaned workspace (a cross-tenant data-takeover bug).
+  const userId = String(user.id || '').trim().toLowerCase();
+  if (!userId) return null;
 
   for (const tenant of tenants.values()) {
     if (memberships.some((membership) => membership.tenantId === tenant.id)) continue;
     const slug = String(tenant.slug || '').toLowerCase();
-    const createdAt = Date.parse(tenant.createdAt || '') || 0;
-    const hasUserSuffix = userSuffix && slug.endsWith(`-${userSuffix}`);
-    const wasCreatedNearUser = userCreatedAt && createdAt && Math.abs(createdAt - userCreatedAt) < 10 * 60 * 1000;
-    if (hasUserSuffix || wasCreatedNearUser) {
-      candidates.push({
-        tenant,
-        score: (hasUserSuffix ? 10 : 0) + (wasCreatedNearUser ? 5 : 0),
-        distance: Math.abs(createdAt - userCreatedAt),
-      });
-    }
+    if (slug.includes(userId)) return tenant;
   }
-
-  candidates.sort((a, b) => b.score - a.score || a.distance - b.distance);
-  return candidates[0]?.tenant || null;
+  return null;
 }

@@ -29,6 +29,51 @@ const analyticsAdminEmails = new Set(parseEmailList([
 ].join(',')));
 const ownerPlanId = 'owner';
 
+// ── Abuse / DoS guards ───────────────────────────────────────────────────────
+// Cap request bodies so one large upload can't OOM the single process. The
+// LinkedIn CSV for a 20k-contact network is a few MB, so 50MB is generous.
+const MAX_BODY_BYTES = Number(process.env.BD_MAX_BODY_BYTES) > 0
+  ? Number(process.env.BD_MAX_BODY_BYTES)
+  : 50 * 1024 * 1024;
+const LOGIN_MAX = Number(process.env.BD_LOGIN_MAX) > 0 ? Number(process.env.BD_LOGIN_MAX) : 20;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const SIGNUP_MAX = Number(process.env.BD_SIGNUP_MAX) > 0 ? Number(process.env.BD_SIGNUP_MAX) : 10;
+const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
+
+// Restrict CORS to known origins instead of "*" (which also can't carry the
+// session cookie). Same-origin app requests are unaffected.
+const allowedOrigins = new Set();
+for (const domain of [process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL].filter(Boolean)) {
+  allowedOrigins.add(`https://${domain}`);
+}
+for (const origin of String(process.env.BD_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  allowedOrigins.add(origin);
+}
+allowedOrigins.add(`http://localhost:${port}`);
+allowedOrigins.add(`http://127.0.0.1:${port}`);
+
+const rateBuckets = new Map(); // key -> { count, resetAt }
+
+function clientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.socket?.remoteAddress || 'unknown';
+}
+
+// Fixed-window limiter. Returns true when the caller is OVER the limit.
+function rateLimitExceeded(key, max, windowMs) {
+  const nowMs = Date.now();
+  if (rateBuckets.size > 10000) {
+    for (const [k, v] of rateBuckets) if (nowMs >= v.resetAt) rateBuckets.delete(k);
+  }
+  const bucket = rateBuckets.get(key);
+  if (!bucket || nowMs >= bucket.resetAt) {
+    rateBuckets.set(key, { count: 1, resetAt: nowMs + windowMs });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > max;
+}
+
 function parseEmailList(value) {
   return String(value || '')
     .split(',')
@@ -66,8 +111,13 @@ async function startServer() {
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
     res.bdAcceptsGzip = acceptsGzip(req);
-    // CORS for dev
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS: only reflect known origins, and allow credentials so the session
+    // cookie works. Same-origin app traffic needs none of this.
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') {
@@ -81,6 +131,7 @@ async function startServer() {
       }
       await route(req, res);
     } catch (error) {
+      const status = error.status || 500;
       serverStats.errorCount += 1;
       serverStats.lastError = {
         at: new Date().toISOString(),
@@ -88,9 +139,14 @@ async function startServer() {
         url: req.url,
         message: error.message || 'Unexpected server error',
       };
-      sendJson(res, error.status || 500, {
-        error: error.message || 'Unexpected server error',
-      });
+      // Never leak internal error text to clients on 5xx; 4xx messages are
+      // intentional (validation, not-found) so keep those.
+      if (status >= 500) {
+        console.error(`  ${status} on ${req.method} ${req.url}:`, error.message);
+        sendJson(res, status, { error: 'Something went wrong on our end. Please try again.' });
+      } else {
+        sendJson(res, status, { error: error.message || 'Request failed' });
+      }
     } finally {
       const elapsedMs = Math.round(performance.now() - startedAt);
       recordRequestMetric(req, res, elapsedMs);
@@ -310,18 +366,26 @@ async function route(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
   const pathname = url.pathname;
 
-  // Health and public status checks.
+  // Health and public status checks. Internal metrics + lastError (which leaks
+  // request URLs and memory) are only returned to an authenticated caller.
   if (pathname === '/health' || pathname === '/api/health' || pathname === '/api/status') {
-    return sendJson(res, 200, getHealthPayload(pathname === '/api/status'));
+    const withDetails = pathname === '/api/status' && Boolean(extractSession(req));
+    return sendJson(res, 200, getHealthPayload(withDetails));
   }
 
-  // ── Auth endpoints (public) ───────────────────────────────────────────────
+  // ── Auth endpoints (public, rate-limited) ─────────────────────────────────
 
   if (pathname === '/api/auth/signup' && req.method === 'POST') {
+    if (rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many sign-ups from this network. Please wait a few minutes and try again.' });
+    }
     return handleSignup(req, res);
   }
 
   if (pathname === '/api/auth/login' && req.method === 'POST') {
+    if (rateLimitExceeded(`login:${clientIp(req)}`, LOGIN_MAX, LOGIN_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many login attempts. Please wait a few minutes and try again.' });
+    }
     return handleLogin(req, res);
   }
 
@@ -1382,7 +1446,14 @@ async function readBody(req) {
 
 async function readRawBody(req) {
   const chunks = [];
+  let total = 0;
   for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      const error = new Error('Request body too large.');
+      error.status = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
