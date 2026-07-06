@@ -5,12 +5,17 @@
  * In production this would verify JWTs or use an auth provider (Clerk, Auth0, etc.).
  */
 
-import { randomUUID } from 'node:crypto';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, scryptSync, createHmac, timingSafeEqual } from 'node:crypto';
+import { dbSaveSession, dbDeleteSession, dbLoadActiveSessions } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET || 'bd-engine-dev-secret-do-not-use-in-production';
+if (!process.env.SESSION_SECRET && (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production')) {
+  console.warn('  WARNING: SESSION_SECRET is not set in production — cookies use a default secret.');
+}
 
-// In-memory session store (replace with Redis/Postgres in production)
+// In-memory session cache, write-through to Postgres so sessions survive
+// deploys/restarts instead of logging everyone out. Reads stay synchronous
+// (the cache is repopulated from the DB at startup by loadSessionsFromDb).
 const sessions = new Map();
 
 // ── Cookie helpers ──────────────────────────────────────────────────────────
@@ -54,6 +59,7 @@ export function createSession(userId, tenantId, extra = {}) {
     ...extra,
   };
   sessions.set(sessionId, session);
+  dbSaveSession(session).catch(() => {});
   return { sessionId, cookie: createSignedCookie(sessionId) };
 }
 
@@ -62,6 +68,7 @@ export function getSession(sessionId) {
   if (!session) return null;
   if (new Date(session.expiresAt) < new Date()) {
     sessions.delete(sessionId);
+    dbDeleteSession(sessionId).catch(() => {});
     return null;
   }
   return session;
@@ -69,6 +76,22 @@ export function getSession(sessionId) {
 
 export function destroySession(sessionId) {
   sessions.delete(sessionId);
+  dbDeleteSession(sessionId).catch(() => {});
+}
+
+// Repopulate the in-memory cache from Postgres at startup so a deploy/restart
+// no longer logs everyone out. Called from server startup before serving.
+export async function loadSessionsFromDb() {
+  try {
+    const rows = await dbLoadActiveSessions();
+    let loaded = 0;
+    for (const session of rows) {
+      if (session?.id) { sessions.set(session.id, session); loaded += 1; }
+    }
+    if (loaded) console.log(`  Auth: restored ${loaded} active session(s) from DB`);
+  } catch (err) {
+    console.error('  Auth: failed to restore sessions:', err.message);
+  }
 }
 
 // ── Cookie parsing ──────────────────────────────────────────────────────────
@@ -109,17 +132,47 @@ export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${SECURE_COOKIE}`);
 }
 
-// ── Password hashing (dev stub — use bcrypt/argon2 in production) ───────────
+// ── Password hashing (salted scrypt, with legacy-hash fallback) ─────────────
+// New hashes: "scrypt$<saltHex>$<derivedHex>". Legacy hashes were an unsalted
+// keyed HMAC-SHA256 (64 hex chars) — still verifiable, and upgraded to scrypt
+// on the next successful login (see authenticateUser).
+
+const SCRYPT_KEYLEN = 64;
 
 export function hashPassword(password) {
-  return createHmac('sha256', SECRET).update(password).digest('hex');
+  const salt = randomBytes(16);
+  const derived = scryptSync(String(password), salt, SCRYPT_KEYLEN);
+  return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
 }
 
-export function verifyPassword(password, hash) {
-  const computed = hashPassword(password);
+function verifyScrypt(password, stored) {
+  const [, saltHex, hashHex] = String(stored).split('$');
+  if (!saltHex || !hashHex) return false;
+  const expected = Buffer.from(hashHex, 'hex');
+  const derived = scryptSync(String(password), Buffer.from(saltHex, 'hex'), expected.length);
   try {
-    return timingSafeEqual(Buffer.from(computed), Buffer.from(hash));
+    return derived.length === expected.length && timingSafeEqual(derived, expected);
   } catch {
     return false;
   }
+}
+
+function verifyLegacyHmac(password, hash) {
+  const computed = createHmac('sha256', SECRET).update(String(password)).digest('hex');
+  try {
+    return timingSafeEqual(Buffer.from(computed), Buffer.from(String(hash)));
+  } catch {
+    return false;
+  }
+}
+
+export function verifyPassword(password, hash) {
+  if (typeof hash === 'string' && hash.startsWith('scrypt$')) {
+    return verifyScrypt(password, hash);
+  }
+  return verifyLegacyHmac(password, hash);
+}
+
+export function passwordNeedsUpgrade(hash) {
+  return !(typeof hash === 'string' && hash.startsWith('scrypt$'));
 }

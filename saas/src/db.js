@@ -107,6 +107,16 @@ export async function initDb() {
         created_at TEXT NOT NULL,
         day TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        tenant_id TEXT,
+        data JSONB NOT NULL DEFAULT '{}',
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);
     `);
 
     await pool.query(`
@@ -608,6 +618,56 @@ function summarizeAnalyticsGroup(groupMap, key) {
     .map(([name, rows]) => ({ [key]: name || (key === 'source' ? 'direct' : '/'), visits: rows.length, visitors: new Set(rows.map((row) => row.visitorId)).size }))
     .sort((a, b) => b.visits - a.visits)
     .slice(0, 8);
+}
+
+// ── Sessions ────────────────────────────────────────────────────────────────
+
+export async function dbSaveSession(session) {
+  if (!dbReady) return;
+  try {
+    const { id, userId, tenantId, createdAt, expiresAt, ...extra } = session;
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, tenant_id, data, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         tenant_id = EXCLUDED.tenant_id,
+         data = EXCLUDED.data,
+         expires_at = EXCLUDED.expires_at`,
+      [id, userId, tenantId || null, JSON.stringify(extra || {}), expiresAt, createdAt]
+    );
+  } catch (err) {
+    console.error('DB: Failed to save session:', err.message);
+  }
+}
+
+export async function dbDeleteSession(sessionId) {
+  if (!dbReady) return;
+  try {
+    await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
+  } catch (err) {
+    console.error('DB: Failed to delete session:', err.message);
+  }
+}
+
+export async function dbLoadActiveSessions() {
+  if (!dbReady) return [];
+  try {
+    // Opportunistically purge expired rows, then return the live ones.
+    await pool.query('DELETE FROM sessions WHERE expires_at < $1', [new Date().toISOString()]);
+    const { rows } = await pool.query('SELECT id, user_id, tenant_id, data, expires_at, created_at FROM sessions');
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.user_id,
+      tenantId: r.tenant_id || undefined,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+      ...(r.data && typeof r.data === 'object' ? r.data : {}),
+    }));
+  } catch (err) {
+    console.error('DB: Failed to load sessions:', err.message);
+    return [];
+  }
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────────────

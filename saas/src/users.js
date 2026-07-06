@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { hashPassword, verifyPassword } from './auth.js';
+import { hashPassword, verifyPassword, passwordNeedsUpgrade } from './auth.js';
 import { dbSaveUser, dbSaveTenant, dbSaveMembership, dbLoadAllUsers, dbLoadAllTenants, dbLoadAllMemberships } from './db.js';
 
 const now = () => new Date().toISOString();
@@ -88,6 +88,12 @@ export function authenticateUser(email, password) {
   if (!user) return { error: 'Invalid email or password.' };
   if (!verifyPassword(password, user.passwordHash)) {
     return { error: 'Invalid email or password.' };
+  }
+  // Transparently upgrade legacy unsalted hashes to salted scrypt on login.
+  if (passwordNeedsUpgrade(user.passwordHash)) {
+    user.passwordHash = hashPassword(password);
+    user.updatedAt = now();
+    dbSaveUser(user).catch(() => {});
   }
   return { user };
 }

@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
-import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie } from './auth.js';
+import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb } from './auth.js';
 import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary } from './db.js';
@@ -213,6 +213,7 @@ async function initializeData() {
     const dbConnected = await initDb();
     if (dbConnected) {
       await loadUsersFromDb();
+      await loadSessionsFromDb();
       await store.loadFromDb();
     }
   } catch (error) {
