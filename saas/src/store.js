@@ -2392,6 +2392,316 @@ export function createStore() {
       };
     },
 
+    // ── Real per-account/config actions (previously fabricated stubs) ──────
+
+    async accountQuickEnrich(tenantId, accountId) {
+      assertTenant(tenantId);
+      const startedAt = performance.now();
+      await ensureDataLoaded(tenantId, true); // contacts needed for domain inference
+      const item = accountById(accountId, tenantId);
+      if (!item || item.tenantId !== tenantId) return null;
+      let totalUpdated = 0;
+      const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, accountId);
+      if (domain && !item.domain) { item.domain = domain; totalUpdated++; }
+      if (domain && !item.canonicalDomain) { item.canonicalDomain = domain; totalUpdated++; }
+      if (domain && !item.careersUrl) {
+        item.careersUrl = `https://${domain.replace(/^https?:\/\//, '')}/careers`;
+        totalUpdated++;
+      }
+      refreshAccountHiringStats(item, getTenantArray(jobsByTenant, tenantId));
+      if (totalUpdated) persistTenant(tenantId);
+      return {
+        ok: true,
+        stats: { totalUpdated, checked: 1, domain: domain || '' },
+        durationMs: Math.round(performance.now() - startedAt),
+        account: item,
+      };
+    },
+
+    // Shared engine for resolve-now / deep-verify / rerun-resolution / config
+    // resolve: find (or create) the account's board config, verify or discover
+    // its ATS board for real, and report honest results.
+    startAccountResolution(tenantId, { accountId = '', configId = '', deep = false, label = 'ATS resolution' } = {}) {
+      assertTenant(tenantId);
+      const jobId = `resolve-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const job = {
+        id: jobId,
+        type: 'ats-resolution',
+        status: 'queued',
+        summary: label,
+        progressMessage: `Queued ${label.toLowerCase()}.`,
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        progress: 0,
+        stage: 'queued',
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        const startedAt = performance.now();
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          job.progressMessage = 'Probing ATS boards...';
+          await ensureDataLoaded(tenantId, false);
+          const tenantConfigArr = getTenantArray(configsByTenant, tenantId);
+          let config = null;
+          let item = null;
+          if (configId) {
+            config = tenantConfigArr.find((c) => c.id === configId) || null;
+          }
+          if (!config && accountId) {
+            item = accountById(accountId, tenantId);
+            if (!item || item.tenantId !== tenantId) throw new Error('Account not found');
+            config = tenantConfigArr.find((c) => c.accountId === item.id)
+              || tenantConfigArr.find((c) => c.normalizedCompanyName === item.normalizedName)
+              || null;
+            if (!config) {
+              config = normalizeConfigPatch({
+                id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                tenantId,
+                accountId: item.id,
+                companyName: item.displayName,
+                normalizedCompanyName: item.normalizedName,
+                atsType: 'unknown',
+                ats: 'unknown',
+                boardId: '',
+                domain: item.domain || item.canonicalDomain || '',
+                careersUrl: item.careersUrl || '',
+                active: false,
+                discoveryStatus: 'needs_review',
+                reviewStatus: 'pending',
+                confidenceBand: item.domain || item.canonicalDomain || item.careersUrl ? 'medium' : 'unresolved',
+                source: 'manual_resolve',
+                createdAt: now(),
+                updatedAt: now(),
+              });
+              boardConfigs.unshift(config);
+              tenantConfigArr.unshift(config);
+            }
+          }
+          if (!config) throw new Error('Board config not found');
+
+          let verifiedJobCount = null;
+          if (deep && isResolvedBoardConfig(config)) {
+            // Deep verify: actually fetch the currently-resolved board and
+            // count live postings instead of trusting the stored identity.
+            const atsType = getConfigAtsType(config);
+            const boardId = getConfigBoardId(config);
+            const fetcher = ATS_FETCHERS.get(atsType);
+            try {
+              const response = await fetcher(config, boardId);
+              verifiedJobCount = Array.isArray(response?.jobs) ? response.jobs.length : 0;
+            } catch {
+              verifiedJobCount = 0;
+            }
+            if (verifiedJobCount > 0) {
+              config.lastDiscoveryJobCount = verifiedJobCount;
+              config.lastDiscoveryCheckedAt = now();
+              config.updatedAt = now();
+              persistTenant(tenantId);
+              job.status = 'completed';
+              job.progress = 100;
+              job.progressMessage = 'Completed';
+              job.recordsAffected = 1;
+              job.result = {
+                stats: { resolved: 1, verified: 1, atsType, boardId, jobCount: verifiedJobCount },
+                timings: { enrichmentMs: Math.round(performance.now() - startedAt) },
+              };
+              job.finishedAt = now();
+              return;
+            }
+            // Stored identity no longer returns jobs — fall through to rediscovery.
+            config.discoveryStatus = 'needs_review';
+          }
+
+          const match = await discoverAtsBoard(config);
+          if (match) {
+            Object.assign(config, {
+              atsType: match.atsType,
+              ats: match.atsType,
+              boardId: match.boardId,
+              apiUrl: match.apiUrl,
+              resolvedBoardUrl: match.resolvedBoardUrl,
+              discoveryStatus: 'resolved',
+              discoveryMethod: match.method,
+              confidenceBand: 'high',
+              reviewStatus: 'approved',
+              active: true,
+              lastDiscoveryJobCount: match.jobCount,
+              lastDiscoveryCheckedAt: now(),
+              updatedAt: now(),
+            });
+          } else {
+            config.discoveryStatus = 'unresolved';
+            config.discoveryMethod = 'public_ats_probe';
+            config.confidenceBand = config.domain || config.careersUrl ? 'medium' : 'unresolved';
+            config.lastDiscoveryCheckedAt = now();
+            config.updatedAt = now();
+          }
+          persistTenant(tenantId);
+          job.status = 'completed';
+          job.progress = 100;
+          job.progressMessage = 'Completed';
+          job.recordsAffected = match ? 1 : 0;
+          job.result = {
+            stats: {
+              resolved: match ? 1 : 0,
+              verified: verifiedJobCount === null ? undefined : 0,
+              atsType: match?.atsType || '',
+              boardId: match?.boardId || '',
+              jobCount: match?.jobCount || 0,
+            },
+            timings: { enrichmentMs: Math.round(performance.now() - startedAt) },
+          };
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || `${label} failed.`;
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
+    startTargetScoreRollout(tenantId, options = {}) {
+      assertTenant(tenantId);
+      const limit = Math.max(1, Math.min(2000, Number(options.limit) || 150));
+      const maxBatches = Math.max(1, Math.min(50, Number(options.maxBatches) || 6));
+      const jobId = `target-score-rollout-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'target-score-rollout',
+        status: 'queued',
+        summary: 'Target-score rollout',
+        progressMessage: 'Queued target-score rollout.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        progress: 0,
+        stage: 'queued',
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          const scopeStartedAt = performance.now();
+          await ensureDataLoaded(tenantId, false);
+          const scopeLoadMs = Math.round(performance.now() - scopeStartedAt);
+          const deriveStartedAt = performance.now();
+          const tenantAccounts = accountsForTenant(tenantId);
+          const tenantJobsArr = getTenantArray(jobsByTenant, tenantId);
+          const toProcess = tenantAccounts.slice(0, limit * maxBatches);
+          for (const item of toProcess) refreshAccountHiringStats(item, tenantJobsArr);
+          const deriveMs = Math.round(performance.now() - deriveStartedAt);
+          const persistStartedAt = performance.now();
+          if (toProcess.length) persistTenant(tenantId);
+          job.status = 'completed';
+          job.progress = 100;
+          job.progressMessage = 'Completed';
+          job.recordsAffected = toProcess.length;
+          job.result = {
+            accountCount: toProcess.length,
+            count: toProcess.length,
+            batchCount: Math.ceil(toProcess.length / limit) || 0,
+            remainingCount: Math.max(0, tenantAccounts.length - toProcess.length),
+            timings: {
+              deriveMs,
+              scopeLoadMs,
+              persistMs: Math.round(performance.now() - persistStartedAt),
+            },
+          };
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'Target-score rollout failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
+    startConfigsSync(tenantId) {
+      assertTenant(tenantId);
+      const jobId = `configs-sync-${Date.now()}`;
+      const job = {
+        id: jobId,
+        type: 'configs-sync',
+        status: 'queued',
+        summary: 'Rebuild board configs from accounts',
+        progressMessage: 'Queued config rebuild.',
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
+        progress: 0,
+        stage: 'queued',
+        recordsAffected: 0,
+        result: null,
+      };
+      backgroundJobs.set(jobId, job);
+
+      setImmediate(async () => {
+        try {
+          job.status = 'running';
+          job.startedAt = now();
+          await ensureDataLoaded(tenantId, false);
+          const tenantAccounts = accountsForTenant(tenantId);
+          const tenantConfigArr = getTenantArray(configsByTenant, tenantId);
+          const existingNames = new Set(tenantConfigArr.map((c) => normalizeKey(c.normalizedCompanyName || c.companyName)));
+          let created = 0;
+          for (const item of tenantAccounts) {
+            const normalizedName = normalizeKey(item.normalizedName || item.displayName);
+            if (!normalizedName || existingNames.has(normalizedName)) continue;
+            const config = normalizeConfigPatch({
+              id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              tenantId,
+              accountId: item.id,
+              companyName: item.displayName,
+              normalizedCompanyName: normalizedName,
+              atsType: 'unknown',
+              ats: 'unknown',
+              boardId: '',
+              domain: item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id),
+              careersUrl: item.careersUrl || '',
+              active: false,
+              discoveryStatus: 'needs_review',
+              reviewStatus: 'pending',
+              confidenceBand: item.domain || item.canonicalDomain || item.careersUrl ? 'medium' : 'unresolved',
+              source: 'configs_sync',
+              createdAt: now(),
+              updatedAt: now(),
+            });
+            boardConfigs.unshift(config);
+            tenantConfigArr.unshift(config);
+            existingNames.add(normalizedName);
+            created++;
+          }
+          if (created) persistTenant(tenantId);
+          job.status = 'completed';
+          job.progress = 100;
+          job.progressMessage = 'Completed';
+          job.recordsAffected = created;
+          job.result = { count: created, created, totalRows: tenantConfigArr.length };
+        } catch (err) {
+          job.status = 'failed';
+          job.errorMessage = err.message || 'Config rebuild failed.';
+        } finally {
+          job.finishedAt = now();
+        }
+      });
+
+      return { ok: true, jobId, job };
+    },
+
     createCompletedJob(id, result = {}) {
       const job = {
         id: id || `cloud-job-${Date.now()}`,
@@ -2462,7 +2772,21 @@ export function createStore() {
     },
 
     getBackgroundJob(jobId) {
-      return backgroundJobs.get(jobId) || this.createCompletedJob(jobId).job;
+      // Never invent a fake "completed" job for an unknown id — report the
+      // truth so the UI shows a failure instead of a phantom success.
+      return backgroundJobs.get(jobId) || {
+        id: jobId,
+        type: 'unknown',
+        status: 'failed',
+        summary: 'Job not found',
+        progressMessage: 'Job not found',
+        errorMessage: 'This job is no longer available. It may have been lost during a server restart — try running the action again.',
+        queuedAt: null,
+        startedAt: null,
+        finishedAt: now(),
+        recordsAffected: 0,
+        result: null,
+      };
     },
 
     // ── Revenue Pipeline ──────────────────────────────────────────────────

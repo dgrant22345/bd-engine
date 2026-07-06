@@ -705,12 +705,24 @@ self.addEventListener('activate', (event) => {
   }
 
   const accountJobActionMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/(quick-enrich|resolve-now|deep-verify|quick-update)$/);
-  if (accountJobActionMatch && req.method === 'POST') {
-    return sendJson(res, 202, store.createCompletedJob(`${accountJobActionMatch[2]}-${accountJobActionMatch[1]}`, {
-      stats: { totalUpdated: 1, checked: 1, verified: 1 },
-      timings: { enrichmentMs: 1 },
-      durationMs: 1,
-    }));
+  if (accountJobActionMatch) {
+    const [, actionAccountId, action] = accountJobActionMatch;
+    if (action === 'quick-enrich' && req.method === 'POST') {
+      const result = await store.accountQuickEnrich(tenantId, actionAccountId);
+      if (!result) return sendJson(res, 404, { error: 'Account not found' });
+      return sendJson(res, 200, result);
+    }
+    if (action === 'resolve-now' && req.method === 'POST') {
+      return sendJson(res, 202, store.startAccountResolution(tenantId, { accountId: actionAccountId, deep: false, label: 'ATS resolution' }));
+    }
+    if (action === 'deep-verify' && req.method === 'POST') {
+      return sendJson(res, 202, store.startAccountResolution(tenantId, { accountId: actionAccountId, deep: true, label: 'Deep verification' }));
+    }
+    if (action === 'quick-update' && (req.method === 'PATCH' || req.method === 'POST')) {
+      const item = await store.patchAccount(tenantId, actionAccountId, await readJson(req));
+      if (!item) return sendJson(res, 404, { error: 'Account not found' });
+      return sendJson(res, 200, item);
+    }
   }
 
   const configActionMatch = pathname.match(/^\/api\/configs\/([^/]+)\/(resolve|review)$/);
@@ -720,17 +732,15 @@ self.addEventListener('activate', (event) => {
       if (!config) return sendJson(res, 404, { error: 'Config not found' });
       return sendJson(res, 200, config);
     }
-    return sendJson(res, 202, store.createCompletedJob(`config-resolution-${configActionMatch[1]}`));
+    return sendJson(res, 202, store.startAccountResolution(tenantId, { configId: configActionMatch[1], deep: false, label: 'Config resolution' }));
   }
 
-  if ((pathname === '/api/configs/sync' || pathname === '/api/admin/target-score-rollout') && req.method === 'POST') {
-    return sendJson(res, 202, store.createCompletedJob(pathname.split('/').pop(), {
-      count: 2,
-      accountCount: 2,
-      batchCount: 1,
-      remainingCount: 0,
-      timings: { deriveMs: 1, scopeLoadMs: 1, persistMs: 1 },
-    }));
+  if (pathname === '/api/configs/sync' && req.method === 'POST') {
+    return sendJson(res, 202, store.startConfigsSync(tenantId));
+  }
+
+  if (pathname === '/api/admin/target-score-rollout' && req.method === 'POST') {
+    return sendJson(res, 202, store.startTargetScoreRollout(tenantId, await readJson(req)));
   }
 
   // ── LinkedIn CSV import (real) ─────────────────────────────────────────
@@ -794,14 +804,31 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, job);
   }
 
+  // "Run Full Engine" maps to the real launch workflow in the cloud app.
   if (pathname === '/api/google-sheets/run-engine' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     return sendJson(res, 202, store.startLaunchWorkflow(tenantId, { plan }));
   }
 
-  // Stub remaining import/enrichment/discovery endpoints
-  if (pathname.startsWith('/api/import/') || pathname.startsWith('/api/enrichment/') || pathname.startsWith('/api/discovery/') || pathname.startsWith('/api/google-sheets/')) {
-    return sendJson(res, 202, store.createCompletedJob('cloud-stub-job'));
+  const rerunResolutionMatch = pathname.match(/^\/api\/enrichment\/([^/]+)\/rerun-resolution$/);
+  if (rerunResolutionMatch && req.method === 'POST') {
+    const body = await readJson(req);
+    const deep = isTruthy(body.deepVerify);
+    return sendJson(res, 202, store.startAccountResolution(tenantId, {
+      accountId: rerunResolutionMatch[1],
+      deep,
+      label: deep ? 'Deep ATS resolution' : 'ATS resolution',
+    }));
+  }
+
+  if (pathname.startsWith('/api/google-sheets/')) {
+    return sendJson(res, 501, { error: 'Google Sheets sync is part of the desktop edition and is not available in the cloud app.' });
+  }
+
+  // Anything else under these prefixes is not implemented — say so honestly
+  // instead of fabricating a completed job.
+  if (pathname.startsWith('/api/import/') || pathname.startsWith('/api/enrichment/') || pathname.startsWith('/api/discovery/')) {
+    return sendJson(res, 501, { error: 'This action is not available in the cloud app yet.' });
   }
 
   const backgroundJobMatch = pathname.match(/^\/api\/background-jobs\/([^/]+)$/);
