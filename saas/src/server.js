@@ -90,6 +90,28 @@ const serverStats = {
   lastError: null,
 };
 
+// ── Error alerting ───────────────────────────────────────────────────────────
+// Optional: set BD_ERROR_WEBHOOK to a Slack/Discord/generic incoming-webhook URL
+// to get real-time alerts on 5xx errors. No dependency, no paid service; a no-op
+// when unset. Throttled so a burst can't spam the channel.
+const ERROR_WEBHOOK = String(process.env.BD_ERROR_WEBHOOK || '').trim();
+let lastErrorAlertAt = 0;
+const ERROR_ALERT_MIN_INTERVAL_MS = 60 * 1000;
+
+function reportServerError(status, req, error) {
+  if (!ERROR_WEBHOOK) return;
+  const nowMs = Date.now();
+  if (nowMs - lastErrorAlertAt < ERROR_ALERT_MIN_INTERVAL_MS) return;
+  lastErrorAlertAt = nowMs;
+  const text = `🚨 BD Engine ${status} on ${req.method} ${(req.url || '').split('?')[0]} — ${error?.message || 'error'}`;
+  fetch(ERROR_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, content: text }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+}
+
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -143,6 +165,7 @@ async function startServer() {
       // intentional (validation, not-found) so keep those.
       if (status >= 500) {
         console.error(`  ${status} on ${req.method} ${req.url}:`, error.message);
+        reportServerError(status, req, error);
         sendJson(res, status, { error: 'Something went wrong on our end. Please try again.' });
       } else {
         sendJson(res, status, { error: error.message || 'Request failed' });
