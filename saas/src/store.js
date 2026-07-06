@@ -832,9 +832,14 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
 
   const { dbLoadTenantData } = await import('./db.js');
   const dbStartedAt = Date.now();
-  const data = await dbLoadTenantData(tenantId, needsContacts);
+  // A tenant with no tenant_data row yet (fresh signup) is an EMPTY workspace,
+  // not an unloaded one. Leaving status.core false meant the tenant's first
+  // mutations were never persisted (saveTenantNow skips un-loaded sections)
+  // and were then wiped from memory by the next load.
+  const data = (await dbLoadTenantData(tenantId, needsContacts))
+    || { accounts: [], contacts: [], jobs: [], configs: [], activities: [], tasks: [], settings: {} };
   timings.dbLoadMs = Date.now() - dbStartedAt;
-  
+
   if (data) {
     const mergeStartedAt = Date.now();
     // Only load core the FIRST time. A contacts-only lazy load (needsContacts
