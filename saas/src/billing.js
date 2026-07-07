@@ -174,7 +174,7 @@ export function getUsageSummary(tenantId, planId, actualUsage = {}) {
 
 // ── Stripe Checkout ─────────────────────────────────────────────────────────
 
-export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}) {
+export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}, options = {}) {
   if (!stripe) throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY environment variable.');
   const status = getStripeConfigStatus();
   if (!status.checkoutReady) {
@@ -193,9 +193,8 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     ...Object.fromEntries(Object.entries(metadata || {}).filter(([, value]) => value !== undefined && value !== null && value !== '')),
   };
 
-  const session = await stripe.checkout.sessions.create({
+  const checkoutParams = {
     payment_method_types: ['card'],
-    customer_email: userEmail,
     client_reference_id: tenantId,
     line_items: [{ price: plan.stripePriceId, quantity: 1 }],
     mode: 'subscription',
@@ -205,7 +204,15 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     },
     success_url: successUrl,
     cancel_url: cancelUrl,
-  });
+  };
+
+  if (options.customerId) {
+    checkoutParams.customer = options.customerId;
+  } else {
+    checkoutParams.customer_email = userEmail;
+  }
+
+  const session = await stripe.checkout.sessions.create(checkoutParams);
 
   return session.url;
 }

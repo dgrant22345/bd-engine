@@ -1,55 +1,157 @@
 /**
- * BD Engine — database backup.
+ * BD Engine database backup.
  *
- * Dumps the durable tables (users, tenants, memberships, tenant_data) to a
- * timestamped JSON file. Ephemeral tables (sessions) and regenerable ones
- * (analytics_events) are skipped.
+ * Creates a compressed logical backup of the durable Postgres tables. The
+ * output contains user records and password hashes, so treat it as sensitive.
  *
  * Usage:
- *   DATABASE_URL=postgres://... node scripts/backup.mjs [outputDir]
- *   node scripts/backup.mjs --url postgres://... [outputDir]
- *
- * The dump contains password hashes — treat the file as sensitive and store it
- * somewhere access-controlled (object storage, encrypted disk).
- *
- * Restore is intentionally NOT automated (it overwrites live data). To restore,
- * load the JSON and UPSERT each table's rows in dependency order:
- * users -> tenants -> memberships -> tenant_data.
+ *   npm run backup
+ *   node scripts/backup.mjs --out backups/nightly.json.gz
+ *   node scripts/backup.mjs --url postgres://... --include-volatile
  */
 import pg from 'pg';
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, resolve } from 'node:path';
+import { gzipSync, gunzipSync } from 'node:zlib';
+
+const { Pool } = pg;
+
+const BASE_TABLES = [
+  { name: 'users', orderBy: 'id' },
+  { name: 'tenants', orderBy: 'id' },
+  { name: 'memberships', orderBy: 'tenant_id, user_id' },
+  { name: 'tenant_data', orderBy: 'tenant_id' },
+  { name: 'analytics_events', orderBy: 'id' },
+];
+
+const VOLATILE_TABLES = [
+  { name: 'sessions', orderBy: 'id' },
+  { name: 'password_reset_tokens', orderBy: 'created_at' },
+];
+
+function flag(name) {
+  return process.argv.includes(name);
+}
 
 function arg(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-const connectionString = arg('--url') || process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
-if (!connectionString) {
-  console.error('No connection string. Set DATABASE_URL or pass --url.');
-  process.exit(1);
+function positionalOutputDir() {
+  return process.argv
+    .slice(2)
+    .find((value, index, args) => {
+      if (value.startsWith('--')) return false;
+      const previous = args[index - 1];
+      return !['--url', '--out'].includes(previous);
+    });
 }
-const outDir = process.argv.find((a, i) => i >= 2 && !a.startsWith('--') && a !== arg('--url')) || 'backups';
 
-const TABLES = ['users', 'tenants', 'memberships', 'tenant_data'];
+function connectionString() {
+  return arg('--url') || process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+}
 
-const pool = new pg.Pool({ connectionString, ssl: { rejectUnauthorized: false }, max: 2 });
+function sslConfig() {
+  return process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false };
+}
+
+function backupPath() {
+  const explicit = arg('--out');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `bd-engine-backup-${stamp}.json.gz`;
+  if (explicit) {
+    const target = resolve(explicit);
+    return extname(target) ? target : resolve(target, filename);
+  }
+  return resolve(positionalOutputDir() || process.env.BD_BACKUP_DIR || 'backups', filename);
+}
+
+async function tableExists(client, table) {
+  const result = await client.query('SELECT to_regclass($1) AS table_name', [`public.${table}`]);
+  return !!result.rows[0]?.table_name;
+}
+
+async function dumpTable(client, table) {
+  if (!(await tableExists(client, table.name))) {
+    return { skipped: true, rows: [] };
+  }
+  const result = await client.query(`SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`);
+  return { skipped: false, rows: result.rows };
+}
+
+async function verifyBackupFile(file) {
+  if (!existsSync(file)) throw new Error(`Backup was not written: ${file}`);
+  const compressed = await readFile(file);
+  const json = gunzipSync(compressed).toString('utf8');
+  const parsed = JSON.parse(json);
+  if (parsed.app !== 'bd-engine' || !parsed.tables || typeof parsed.tables !== 'object') {
+    throw new Error('Backup verification failed: unexpected file format.');
+  }
+  return {
+    bytes: compressed.byteLength,
+    sha256: createHash('sha256').update(compressed).digest('hex'),
+  };
+}
 
 async function main() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dump = { app: 'bd-engine', takenAt: new Date().toISOString(), tables: {} };
-  for (const table of TABLES) {
-    const { rows } = await pool.query(`SELECT * FROM ${table}`);
-    dump.tables[table] = rows;
-    console.log(`  ${table}: ${rows.length} rows`);
+  const url = connectionString();
+  if (!url) {
+    console.error('No database connection. Set DATABASE_URL or pass --url.');
+    process.exit(1);
   }
-  mkdirSync(outDir, { recursive: true });
-  const file = join(outDir, `bd-engine-backup-${stamp}.json`);
-  writeFileSync(file, JSON.stringify(dump));
-  const bytes = Buffer.byteLength(JSON.stringify(dump));
-  console.log(`\nBackup written: ${file} (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
-  await pool.end();
+
+  const includeVolatile = flag('--include-volatile');
+  const skipAnalytics = flag('--skip-analytics');
+  const tables = BASE_TABLES
+    .filter((table) => !(skipAnalytics && table.name === 'analytics_events'))
+    .concat(includeVolatile ? VOLATILE_TABLES : []);
+  const outFile = backupPath();
+
+  const pool = new Pool({ connectionString: url, ssl: sslConfig(), max: 2 });
+  const client = await pool.connect();
+  const startedAt = Date.now();
+  const backup = {
+    app: 'bd-engine',
+    formatVersion: 1,
+    createdAt: new Date().toISOString(),
+    includesVolatileTables: includeVolatile,
+    skippedAnalytics: skipAnalytics,
+    tables: {},
+    tableCounts: {},
+  };
+
+  try {
+    for (const table of tables) {
+      const { skipped, rows } = await dumpTable(client, table);
+      if (skipped) {
+        backup.tableCounts[table.name] = 'missing';
+        console.log(`  ${table.name}: skipped, table does not exist`);
+        continue;
+      }
+      backup.tables[table.name] = rows;
+      backup.tableCounts[table.name] = rows.length;
+      console.log(`  ${table.name}: ${rows.length} row(s)`);
+    }
+
+    await mkdir(dirname(outFile), { recursive: true });
+    await writeFile(outFile, gzipSync(Buffer.from(JSON.stringify(backup))));
+    const verification = await verifyBackupFile(outFile);
+    const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log('');
+    console.log(`Backup written: ${outFile}`);
+    console.log(`Size: ${(verification.bytes / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`SHA-256: ${verification.sha256}`);
+    console.log(`Verified: yes (${basename(outFile)}, ${elapsedSeconds}s)`);
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
-main().catch((err) => { console.error('Backup failed:', err.message); process.exit(1); });
+main().catch((err) => {
+  console.error('Backup failed:', err.message);
+  process.exit(1);
+});

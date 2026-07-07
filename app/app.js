@@ -2070,6 +2070,7 @@ function bindEvents() {
     if (actionName === 'billing-checkout') {
       const planId = document.getElementById('billing-plan-select')?.value;
       if (!planId) return;
+      const originalText = action.textContent;
       action.disabled = true;
       action.textContent = 'Redirecting...';
       try {
@@ -2082,12 +2083,12 @@ function bindEvents() {
         } else {
           showToast(result.error || 'Failed to initialize checkout', 'error');
           action.disabled = false;
-          action.textContent = 'Subscribe via Stripe';
+          action.textContent = originalText;
         }
       } catch (err) {
         showToast(err.message, 'error');
         action.disabled = false;
-        action.textContent = 'Subscribe via Stripe';
+        action.textContent = originalText;
       }
       return;
     }
@@ -3276,10 +3277,11 @@ async function renderBillingRequiredView(error = {}) {
 
   const stripeStatus = billing?.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady);
-  const selectedPlanId = billing?.plan?.id === 'sales' ? 'sales' : 'jobseeker';
+  const selectedPlanId = 'sales';
+  const canManageBilling = Boolean(billing?.canManageBilling);
   const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
   const stripeBillingMessage = stripeReady
-    ? 'Checkout is ready.'
+    ? (canManageBilling ? 'Open Stripe to update your payment method or plan.' : 'Checkout is ready.')
     : 'Live checkout is not enabled yet. Ask the BD Engine owner to finish Stripe live-mode setup.';
 
   appRoot.innerHTML = `
@@ -3291,12 +3293,10 @@ async function renderBillingRequiredView(error = {}) {
         <p class="small muted">${escapeHtml(stripeBillingMessage)}</p>
         <div class="inline-field-stack" style="max-width: 420px;">
           <select id="billing-plan-select">
-            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
             <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
           </select>
           <div class="button-row">
-            <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
-            ${billing?.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
+            <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${stripeReady || canManageBilling ? '' : ' disabled'}>${canManageBilling ? 'Open Stripe billing' : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled')}</button>
           </div>
         </div>
       </div>
@@ -5252,11 +5252,10 @@ async function renderAdminView() {
               <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}${stripeReady && stripeMissing ? ` Missing optional plans: ${escapeHtml(stripeMissing)}` : ''}</p>
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
-                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
                   <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">
-                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled'}</button>
+                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${billing.canManageBilling ? 'Change plan in Stripe' : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled')}</button>
                   ${billing.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
                 </div>
               </div>

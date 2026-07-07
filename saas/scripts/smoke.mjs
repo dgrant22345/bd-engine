@@ -253,7 +253,7 @@ await check('sample workspace completes onboarding without overwriting data', as
   assert(secondResponse.status === 409, `second sample load should be blocked, got ${secondResponse.status}`);
 });
 
-await check('job seeker persona persists into the app bootstrap', async () => {
+await check('frozen job seeker signup normalizes to the sales persona', async () => {
   const email = `smoke-jobseeker-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -269,14 +269,14 @@ await check('job seeker persona persists into the app bootstrap', async () => {
   assert(response.status === 201, `signup returned ${response.status}`);
   const signupCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
   const signupBody = await response.json();
-  assert(signupBody.persona === 'jobseeker', 'signup did not return jobseeker persona');
-  assert(signupBody.tenant?.persona === 'jobseeker', 'tenant did not persist jobseeker persona');
+  assert(signupBody.persona === 'bd', 'signup should normalize frozen jobseeker persona to bd');
+  assert(signupBody.tenant?.persona === 'bd', 'tenant should normalize frozen jobseeker persona to bd');
   const setup = await getJson('/api/setup/status', signupCookie);
-  assert(setup.persona === 'jobseeker', '/api/setup/status did not return jobseeker persona');
+  assert(setup.persona === 'bd', '/api/setup/status should return bd persona');
   const me = await getJson('/api/auth/me', signupCookie);
-  assert(me.persona === 'jobseeker', '/api/auth/me did not return jobseeker persona');
+  assert(me.persona === 'bd', '/api/auth/me should return bd persona');
   const bootstrap = await getJson('/api/bootstrap?includeFilters=true', signupCookie);
-  assert(bootstrap.persona === 'jobseeker', '/api/bootstrap did not return jobseeker persona');
+  assert(bootstrap.persona === 'bd', '/api/bootstrap should return bd persona');
 });
 
 await check('referral code tracks referred signup', async () => {

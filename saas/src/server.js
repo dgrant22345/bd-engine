@@ -393,12 +393,15 @@ function isTenantBillingBlocked(tenant, user = null) {
   if (isInternalOwner(user)) return false;
   if (tenant.plan === 'trial') return isTrialExpired(tenant);
   const status = String(tenant.status || '').toLowerCase();
-  return !['active', 'trialing'].includes(status);
+  return !['active', 'trialing', 'past_due'].includes(status);
 }
 
 function sendBillingRequired(res, tenant) {
+  const status = String(tenant?.status || '').toLowerCase();
   return sendJson(res, 402, {
-    error: 'Your trial has ended. Choose a plan to continue using BD Engine.',
+    error: status === 'canceled' || status === 'unpaid'
+      ? 'Billing needs attention before this workspace can continue.'
+      : 'Your trial has ended. Choose a plan to continue using BD Engine.',
     code: 'billing_required',
     billingRequired: true,
     plan: tenant?.plan || 'trial',
@@ -631,11 +634,23 @@ self.addEventListener('activate', (event) => {
       const origin = getRequestOrigin(req);
       const successUrl = `${origin}/app/#/admin`;
       const cancelUrl = `${origin}/app/#/admin`;
+      const customerId = tenant.stripeCustomerId || tenant.stripe_customer_id || '';
+      const subscriptionId = tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '';
+      if (customerId && subscriptionId) {
+        const portalUrl = await createBillingPortalSession(customerId, `${origin}/app/#/admin`);
+        return sendJson(res, 200, {
+          url: portalUrl,
+          mode: 'portal',
+          message: 'This workspace already has a Stripe subscription. Manage plan changes in the billing portal.',
+        });
+      }
       const sessionUrl = await createCheckoutSession(tenantId, user.email, planId, successUrl, cancelUrl, {
         referredByTenantId: tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
         referralCode: tenant.referralCode || tenant.referral_code || '',
+      }, {
+        customerId,
       });
-      return sendJson(res, 200, { url: sessionUrl });
+      return sendJson(res, 200, { url: sessionUrl, mode: 'checkout' });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
     }
@@ -1148,7 +1163,42 @@ async function handleStripeBillingEvent(event) {
     return { updated: Boolean(tenant), tenantId, status: 'canceled' };
   }
 
+  if (event.type === 'invoice.payment_failed') {
+    const tenant = resolveTenantFromStripeInvoice(object);
+    if (!tenant) return { updated: false, reason: 'workspace not found for failed invoice' };
+    if (tenant.plan === ownerPlanId) return { updated: false, ownerProtected: true };
+    const updated = updateTenant(tenant.id, {
+      status: 'past_due',
+      stripeCustomerId: getStripeId(object.customer) || tenant.stripeCustomerId || tenant.stripe_customer_id || '',
+      stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+    });
+    return { updated: Boolean(updated), tenantId: tenant.id, status: 'past_due' };
+  }
+
+  if (event.type === 'invoice.payment_succeeded') {
+    const tenant = resolveTenantFromStripeInvoice(object);
+    if (!tenant) return { updated: false, reason: 'workspace not found for paid invoice' };
+    if (tenant.plan === ownerPlanId) return { updated: false, ownerProtected: true };
+    const status = tenant.plan === 'trial' ? tenant.status : 'active';
+    const updated = updateTenant(tenant.id, {
+      status,
+      stripeCustomerId: getStripeId(object.customer) || tenant.stripeCustomerId || tenant.stripe_customer_id || '',
+      stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+    });
+    return { updated: Boolean(updated), tenantId: tenant.id, status };
+  }
+
   return { updated: false, ignored: true };
+}
+
+function resolveTenantFromStripeInvoice(invoice = {}) {
+  const customerId = getStripeId(invoice.customer);
+  if (customerId) {
+    const tenant = findTenantByStripeCustomerId(customerId);
+    if (tenant) return tenant;
+  }
+  const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId || '';
+  return tenantId ? findTenantById(tenantId) : null;
 }
 
 async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {

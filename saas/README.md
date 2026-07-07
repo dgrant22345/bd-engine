@@ -81,6 +81,22 @@ npm run check
 npm run smoke
 ```
 
+## Backups and Recovery
+
+Create a compressed Postgres backup from the `saas` folder:
+
+```powershell
+npm run backup
+```
+
+Verify a backup without touching the database:
+
+```powershell
+npm run restore -- --file .\backups\<backup-file>.json.gz --dry-run
+```
+
+The full runbook lives in `docs/disaster-recovery.md`.
+
 ## Rollback
 
 This experiment started from tag:
