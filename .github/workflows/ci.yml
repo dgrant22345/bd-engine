@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - deploy/perf-restore
+
+jobs:
+  saas-checks:
+    name: SaaS checks and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: saas
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: saas/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static checks
+        run: npm run check
+
+      - name: Start local SaaS server
+        env:
+          BD_CLOUD_PORT: 8787
+          BD_CLOUD_HOST: 127.0.0.1
+          NODE_ENV: test
+          SESSION_SECRET: ci-session-secret-with-enough-length
+        run: |
+          npm run start > ../ci-server.log 2>&1 &
+          echo $! > ../ci-server.pid
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:8787/health > /dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat ../ci-server.pid)" 2>/dev/null; then
+              cat ../ci-server.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          cat ../ci-server.log
+          exit 1
+
+      - name: Smoke test
+        env:
+          BD_CLOUD_SMOKE_URL: http://127.0.0.1:8787
+        run: npm run smoke
+
+      - name: Show server log on failure
+        if: failure()
+        run: cat ../ci-server.log || true
+
+      - name: Stop local SaaS server
+        if: always()
+        run: |
+          if [ -f ../ci-server.pid ]; then
+            kill "$(cat ../ci-server.pid)" 2>/dev/null || true
+          fi
