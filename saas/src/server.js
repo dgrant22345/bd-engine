@@ -1631,6 +1631,7 @@ function getHealthPayload(includeDetails = false) {
     stripeCommercialReady: stripeStatus.commercialReady,
     stripeMode: stripeStatus.mode,
     stripeMissing: stripeStatus.missing,
+    emailConfigured: isEmailConfigured(),
   };
   const payload = {
     ok: true,

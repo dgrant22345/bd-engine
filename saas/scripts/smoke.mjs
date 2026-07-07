@@ -77,6 +77,11 @@ await check('authenticated session can load bootstrap', async () => {
   assert(Array.isArray(body.ownerRoster), 'bootstrap did not include owner roster');
 });
 
+await check('authenticated status includes email readiness', async () => {
+  const body = await getJson('/api/status', cookie);
+  assert(typeof body.checks?.emailConfigured === 'boolean', '/api/status did not include emailConfigured');
+});
+
 await check('manual ATS URL creates an import-ready board config', async () => {
   const response = await fetch(`${baseUrl}/api/configs`, {
     method: 'POST',
