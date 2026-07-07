@@ -3497,6 +3497,7 @@ function normalizeConfigPatch(input) {
   if (Object.prototype.hasOwnProperty.call(output, 'active')) {
     output.active = output.active === true || output.active === 'true';
   }
+  repairKnownAtsIdentity(output, { approveDirect: true });
   return output;
 }
 

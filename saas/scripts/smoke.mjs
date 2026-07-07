@@ -43,6 +43,26 @@ await check('authenticated session can load bootstrap', async () => {
   assert(Array.isArray(body.ownerRoster), 'bootstrap did not include owner roster');
 });
 
+await check('manual ATS URL creates an import-ready board config', async () => {
+  const response = await fetch(`${baseUrl}/api/configs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({
+      companyName: 'Smoke Manual Board',
+      careersUrl: 'https://job-boards.greenhouse.io/smokemanualboard',
+      active: true,
+    }),
+  });
+  assert(response.status === 201, `config create returned ${response.status}`);
+  const config = await response.json();
+  assert(config.atsType === 'greenhouse', `expected greenhouse, got ${config.atsType || 'blank'}`);
+  assert(config.ats === 'greenhouse', `expected ats mirror greenhouse, got ${config.ats || 'blank'}`);
+  assert(config.boardId === 'smokemanualboard', `expected board id from URL, got ${config.boardId || 'blank'}`);
+  assert(config.resolvedBoardUrl === 'https://job-boards.greenhouse.io/smokemanualboard', 'resolved board URL was not preserved');
+  assert(config.reviewStatus === 'approved', 'manual config was not approved');
+  assert(config.active === true, 'manual config was not active');
+});
+
 await check('shared app is mounted under /app', async () => {
   const response = await fetch(`${baseUrl}/app/`, { headers: cookie ? { Cookie: cookie } : {} });
   assert(response.ok, `/app/ returned ${response.status}`);
@@ -50,6 +70,35 @@ await check('shared app is mounted under /app', async () => {
   assert(html.includes('/app/styles.css'), 'app html did not rewrite stylesheet path');
   assert(html.includes('/app/app.js'), 'app html did not rewrite app script path');
   assert(!html.includes('serviceWorker.register'), 'app html should not register a service worker in SaaS shell');
+});
+
+await check('public demo opens a read-only synthetic workspace', async () => {
+  const response = await fetch(`${baseUrl}/api/demo/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert(response.status === 201, `demo start returned ${response.status}`);
+  const demoCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
+  assert(demoCookie.includes('bd_session='), 'demo did not set a session cookie');
+  const body = await response.json();
+  assert(body.demo === true && body.readOnly === true, 'demo response was not marked read-only');
+
+  const me = await getJson('/api/auth/me', demoCookie);
+  assert(me.demo === true && me.readOnly === true, '/api/auth/me did not mark demo read-only');
+
+  const dashboard = await getJson('/api/dashboard', demoCookie);
+  assert(dashboard.summary?.accountCount >= 3, 'demo workspace did not load synthetic accounts');
+  assert(dashboard.summary?.activeJobCount >= 4, 'demo workspace did not load synthetic jobs');
+
+  const blocked = await fetch(`${baseUrl}/api/configs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: demoCookie },
+    body: JSON.stringify({ companyName: 'Should Not Save', atsType: 'greenhouse', boardId: 'blocked' }),
+  });
+  assert(blocked.status === 403, `demo mutation should be blocked, got ${blocked.status}`);
+  const blockedBody = await blocked.json();
+  assert(blockedBody.code === 'demo_read_only', 'demo mutation did not return demo_read_only');
 });
 
 await check('analytics visit records and summarizes visitors', async () => {

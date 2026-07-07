@@ -28,6 +28,8 @@
       plan: null,
       trialDaysRemaining: null,
       referral: null,
+      demo: false,
+      readOnly: false,
       error: '',
       busy: false,
       referralCode: getInitialReferralCode(),
@@ -103,6 +105,8 @@
           state.plan = data.plan;
           state.trialDaysRemaining = data.trialDaysRemaining;
           state.referral = data.referral || null;
+          state.demo = Boolean(data.demo);
+          state.readOnly = Boolean(data.readOnly);
           state.view = 'app';
         } else {
           state.view = 'landing';
@@ -139,6 +143,8 @@
         state.plan = data.plan || null;
         state.trialDaysRemaining = data.trialDaysRemaining ?? null;
         state.referral = data.referral || null;
+        state.demo = false;
+        state.readOnly = false;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -164,6 +170,32 @@
         state.plan = data.plan || null;
         state.trialDaysRemaining = data.trialDaysRemaining ?? null;
         state.referral = data.referral || null;
+        state.demo = false;
+        state.readOnly = false;
+        state.view = 'app';
+        state.error = '';
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function doStartDemo() {
+      state.busy = true;
+      state.error = '';
+      render();
+      try {
+        const data = await api('/api/demo/start', { method: 'POST', body: JSON.stringify({}) });
+        state.user = data.user;
+        state.tenant = data.tenant;
+        state.tenants = data.tenants || [];
+        state.plan = data.plan || null;
+        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
+        state.referral = data.referral || null;
+        state.demo = true;
+        state.readOnly = true;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -181,7 +213,16 @@
       state.plan = null;
       state.trialDaysRemaining = null;
       state.referral = null;
+      state.demo = false;
+      state.readOnly = false;
       state.view = 'landing';
+      state.error = '';
+      render();
+    }
+
+    async function exitDemoToSignup() {
+      await doLogout();
+      state.view = 'signup';
       state.error = '';
       render();
     }
@@ -308,6 +349,7 @@
               </p>
               <div class="hero-cta">
                 <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
+                <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Try live demo'}</button>
               </div>
               <p class="hero-note">No credit card required · 14-day trial includes 25 accounts, 100 contacts, and 50 ATS boards</p>
             </div>
@@ -479,6 +521,7 @@
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
       root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
       root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
+      root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
     }
@@ -652,6 +695,7 @@
             </form>
             <div class="auth-footer">
               <p>Don't have an account? <button class="link-btn" id="goto-signup">Sign up free</button></p>
+              <p><button class="link-btn" data-demo-start>${state.busy ? 'Opening demo...' : 'Try the read-only demo'}</button></p>
               <button class="link-btn" id="goto-landing">Back to home</button>
             </div>
           </div>
@@ -665,6 +709,7 @@
       });
       root.querySelector('#goto-signup')?.addEventListener('click', () => { state.view = 'signup'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+      root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
     }
 
     // ── Signup page ───────────────────────────────────────────────────────
@@ -785,10 +830,12 @@
 
     // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
     function renderApp() {
-      const planBadge = state.plan ? state.plan.displayName : 'Trial';
-      const trialNotice = state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
+      const planBadge = state.demo ? 'Demo' : (state.plan ? state.plan.displayName : 'Trial');
+      const trialNotice = !state.demo && state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
         ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
-      const trialUpgradeBanner = renderTrialUpgradeBanner();
+      const trialUpgradeBanner = state.demo
+        ? `<div class="cloud-demo-banner"><strong>Read-only demo workspace</strong><span>This uses synthetic data. Create a free trial to import your own LinkedIn connections and edit records.</span><button class="btn btn-primary btn-sm" data-demo-signup>Start free trial</button></div>`
+        : renderTrialUpgradeBanner();
 
       root.innerHTML = `
         <div class="cloud-shell">
@@ -813,8 +860,8 @@
                     <span>${escapeHtml(state.user?.email || '')}</span>
                   </div>
                   <hr>
-                  <button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>
-                  <button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>
+                  ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
+                  ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
                   <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
               </div>
@@ -838,6 +885,8 @@
         if (!e.target.closest('#cloud-user-menu')) setUserMenuOpen(false);
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
+      root.querySelector('[data-demo-signup]')?.addEventListener('click', exitDemoToSignup);
+      root.querySelector('#cloud-demo-signup-menu-btn')?.addEventListener('click', exitDemoToSignup);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
         openBillingPage();
         setUserMenuOpen(false);

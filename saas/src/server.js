@@ -5,7 +5,7 @@ import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb } from './auth.js';
-import { createUser, authenticateUser, findUserById, findTenantsForUser, findTenantById, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { createUser, authenticateUser, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary } from './db.js';
 
@@ -39,6 +39,12 @@ const LOGIN_MAX = Number(process.env.BD_LOGIN_MAX) > 0 ? Number(process.env.BD_L
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const SIGNUP_MAX = Number(process.env.BD_SIGNUP_MAX) > 0 ? Number(process.env.BD_SIGNUP_MAX) : 10;
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
+const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
+const DEMO_WINDOW_MS = 60 * 60 * 1000;
+const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
+const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
+const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
+const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
 
 // Restrict CORS to known origins instead of "*" (which also can't carry the
 // session cookie). Same-origin app requests are unaffected.
@@ -72,6 +78,28 @@ function rateLimitExceeded(key, max, windowMs) {
   }
   bucket.count += 1;
   return bucket.count > max;
+}
+
+function isReadOnlyDemoSession(sessionData, tenant) {
+  return Boolean(sessionData?.readOnly || sessionData?.demo || tenant?.slug === PUBLIC_DEMO_SLUG);
+}
+
+function isMutationMethod(method) {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(String(method || 'GET').toUpperCase());
+}
+
+function canDemoSessionUsePath(pathname, method) {
+  if (!isMutationMethod(method)) return true;
+  return pathname === '/api/auth/logout';
+}
+
+function sendDemoReadOnly(res) {
+  return sendJson(res, 403, {
+    error: 'This is a read-only demo workspace. Create a free trial to import data, edit records, or run jobs.',
+    code: 'demo_read_only',
+    demo: true,
+    readOnly: true,
+  });
 }
 
 function parseEmailList(value) {
@@ -432,6 +460,13 @@ async function route(req, res) {
     });
   }
 
+  if (pathname === '/api/demo/start' && req.method === 'POST') {
+    if (rateLimitExceeded(`demo:${clientIp(req)}`, DEMO_MAX, DEMO_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many demo starts from this network. Please wait a few minutes and try again.' });
+    }
+    return handleStartDemo(req, res);
+  }
+
   // ── Session check ─────────────────────────────────────────────────────────
 
   if (pathname === '/api/auth/me') {
@@ -503,7 +538,10 @@ self.addEventListener('activate', (event) => {
     tenant = ensureInternalOwnerEntitlement(tenant, user);
     store.ensureTenant(tenant, user);
     await persistUserWorkspace(user, tenant);
-    const { cookie } = createSession(user.id, tenantId);
+    const { cookie } = createSession(user.id, tenantId, {
+      demo: Boolean(sessionData.demo),
+      readOnly: Boolean(sessionData.readOnly),
+    });
     setSessionCookie(res, cookie);
   }
 
@@ -517,8 +555,14 @@ self.addEventListener('activate', (event) => {
     tenant: getEffectiveTenant(tenant, user),
     user: safeUser(user),
     membership: { role: getEffectiveMembershipRole(membership, user) },
+    demo: isReadOnlyDemoSession(sessionData, tenant),
+    readOnly: isReadOnlyDemoSession(sessionData, tenant),
   };
   store.ensureTenant(tenant, session.user);
+
+  if (isReadOnlyDemoSession(sessionData, tenant) && !canDemoSessionUsePath(pathname, req.method)) {
+    return sendDemoReadOnly(res);
+  }
 
   if (isTenantBillingBlocked(tenant, user) && !isBillingExemptPath(pathname)) {
     return sendBillingRequired(res, tenant);
@@ -1110,6 +1154,75 @@ function getStripeId(value) {
 
 // ── Auth handlers ───────────────────────────────────────────────────────────
 
+async function handleStartDemo(req, res) {
+  let user = findUserByEmail(PUBLIC_DEMO_EMAIL);
+  if (!user) {
+    const created = createUser({
+      email: PUBLIC_DEMO_EMAIL,
+      name: PUBLIC_DEMO_USER_NAME,
+      password: `demo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    });
+    if (created.error) {
+      user = findUserByEmail(PUBLIC_DEMO_EMAIL);
+    } else {
+      user = created.user;
+    }
+  }
+  if (!user) return sendJson(res, 500, { error: 'Demo workspace is unavailable right now.' });
+
+  let tenant = findTenantBySlug(PUBLIC_DEMO_SLUG);
+  if (!tenant) {
+    const createdTenant = createTenant({
+      name: PUBLIC_DEMO_WORKSPACE,
+      slug: PUBLIC_DEMO_SLUG,
+      plan: 'sales',
+      ownerUserId: user.id,
+      persona: 'bd',
+    });
+    if (createdTenant.error) return sendJson(res, 500, { error: 'Demo workspace is unavailable right now.' });
+    tenant = createdTenant.tenant;
+  }
+
+  let membership = getMembership(tenant.id, user.id);
+  if (!membership) membership = addMember(tenant.id, user.id, 'viewer');
+
+  tenant = updateTenant(tenant.id, {
+    name: PUBLIC_DEMO_WORKSPACE,
+    slug: PUBLIC_DEMO_SLUG,
+    plan: 'sales',
+    status: 'active',
+    persona: 'bd',
+  }) || { ...tenant, name: PUBLIC_DEMO_WORKSPACE, slug: PUBLIC_DEMO_SLUG, plan: 'sales', status: 'active', persona: 'bd' };
+
+  store.ensureTenant(tenant, user);
+  store.setPersona(tenant.id, 'bd');
+  await store.loadSampleWorkspace(tenant.id, {
+    force: true,
+    persona: 'bd',
+    setup: {
+      workspaceName: PUBLIC_DEMO_WORKSPACE,
+      userName: PUBLIC_DEMO_USER_NAME,
+      userEmail: PUBLIC_DEMO_EMAIL,
+      owners: [{ displayName: PUBLIC_DEMO_USER_NAME, email: PUBLIC_DEMO_EMAIL, role: 'Demo' }],
+    },
+  });
+  await persistUserWorkspace(user, tenant);
+
+  const { cookie } = createSession(user.id, tenant.id, { demo: true, readOnly: true });
+  setSessionCookie(res, cookie);
+  return sendJson(res, 201, {
+    demo: true,
+    readOnly: true,
+    user: safeUser(user),
+    tenant,
+    tenants: [{ ...tenant, role: membership.role }],
+    plan: getPublicPlanPayload(getPlan('sales')),
+    trialDaysRemaining: null,
+    persona: 'bd',
+    redirect: '/app/#/dashboard',
+  });
+}
+
 async function handleSignup(req, res) {
   const { email, password, name, workspaceName, persona, referralCode } = await readJson(req);
 
@@ -1259,6 +1372,8 @@ function handleMe(req, res) {
 
   return sendJson(res, 200, {
     authenticated: true,
+    demo: isReadOnlyDemoSession(sessionData, tenant),
+    readOnly: isReadOnlyDemoSession(sessionData, tenant),
     user: safeUser(user),
     tenant: getEffectiveTenant(tenant, user),
     tenants: withEffectiveTenantRoles(userTenants, user),

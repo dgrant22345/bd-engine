@@ -5351,14 +5351,14 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Admin-managed job board records replace hardcoded spreadsheet helpers.')}
+        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Paste a Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite, or BambooHR board URL and BD Engine will auto-fill what it can.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
             ${renderField('ATS type', '<select name="atsType"><option value="">Unknown</option><option value="greenhouse">greenhouse</option><option value="lever">lever</option><option value="ashby">ashby</option><option value="smartrecruiters">smartrecruiters</option><option value="workday">workday</option><option value="jobvite">jobvite</option><option value="icims">icims</option><option value="taleo">taleo</option></select>')}
-            ${renderField('Board ID', '<input name="boardId">')}
+            ${renderField('Board ID', '<input name="boardId" placeholder="Auto-detected from supported ATS URLs">')}
             ${renderField('Domain', '<input name="domain">')}
-            ${renderField('Careers URL', '<input name="careersUrl">')}
+            ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://jobs.lever.co/company">')}
             ${renderField('Source', '<input name="source">')}
             ${renderField('Active', '<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select>')}
             <div class="field" style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes" rows="4"></textarea></div>

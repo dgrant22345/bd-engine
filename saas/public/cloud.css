@@ -1184,6 +1184,32 @@ a:hover { text-decoration: underline; }
   z-index: 900;
 }
 
+.cloud-demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(16, 185, 129, 0.08)),
+    rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid var(--border-strong);
+  flex-shrink: 0;
+  z-index: 900;
+}
+
+.cloud-demo-banner strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cloud-demo-banner span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  flex: 1 1 auto;
+}
+
 .cloud-trial-cta-copy {
   display: grid;
   gap: 2px;
@@ -1348,6 +1374,10 @@ a:hover { text-decoration: underline; }
     align-items: flex-start;
     flex-direction: column;
   }
+  .cloud-demo-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
   .cloud-trial-cta-actions { justify-content: flex-start; }
 }
 
@@ -1380,6 +1410,8 @@ a:hover { text-decoration: underline; }
      product is visible: show only the essential line + upgrade action. */
   .cloud-trial-cta { padding: 10px 12px; gap: 8px; }
   .cloud-trial-cta-copy span:last-child { display: none; }
+  .cloud-demo-banner { padding: 10px 12px; gap: 8px; }
+  .cloud-demo-banner .btn { width: 100%; }
   .cloud-referral-note { display: none; }
   .cloud-trial-cta-actions { gap: 8px; width: 100%; }
   .cloud-trial-cta-actions .btn { flex: 1 1 140px; }
