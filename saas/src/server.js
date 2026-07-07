@@ -700,6 +700,35 @@ self.addEventListener('activate', (event) => {
     });
   }
 
+  if (pathname === '/api/privacy/export' && req.method === 'GET') {
+    const payload = await store.exportTenantData(tenantId, {
+      tenant: getEffectiveTenant(tenant, user),
+      user: safeUser(user),
+      membership: session.membership,
+    });
+    const slug = String(tenant.slug || tenant.name || tenant.id || 'workspace')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-|-$/g, '') || 'workspace';
+    return sendDownloadJson(res, 200, payload, `bd-engine-${slug}-export.json`);
+  }
+
+  if (pathname === '/api/privacy/delete-workspace' && req.method === 'POST') {
+    const body = await readJson(req);
+    const expected = `DELETE ${tenant.name}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, {
+        error: `Type "${expected}" to delete this workspace's imported data.`,
+        code: 'confirmation_required',
+      });
+    }
+    const result = await store.clearTenantWorkspaceData(tenantId);
+    return sendJson(res, 200, {
+      ...result,
+      message: 'Workspace data deleted. Your account and workspace shell remain available.',
+    });
+  }
+
   if (pathname === '/api/owners') {
     const bootstrapData = await store.getBootstrap(tenantId, { session });
     return sendJson(res, 200, { owners: bootstrapData.ownerRoster });
@@ -1593,6 +1622,15 @@ function sendJson(res, status, body) {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
   }, JSON.stringify(body));
+}
+
+function sendDownloadJson(res, status, body, filename) {
+  const safeName = String(filename || 'bd-engine-export.json').replace(/[^a-zA-Z0-9._-]/g, '-');
+  sendCompressible(res, status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${safeName}"`,
+    'Cache-Control': 'no-store',
+  }, JSON.stringify(body, null, 2));
 }
 
 async function readJson(req) {

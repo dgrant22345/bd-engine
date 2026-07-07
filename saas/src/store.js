@@ -610,6 +610,18 @@ function replaceTenantItems(map, globalName, tenantId, items) {
   if (globalName === 'tasks') tasks = tasks.filter((item) => item.tenantId !== tenantId).concat(items);
 }
 
+function mergeTenantItems(persisted = [], inMemory = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...persisted, ...inMemory]) {
+    const key = item?.id || `${item?.tenantId || ''}:${JSON.stringify(item)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
 function buildSampleWorkspaceData(tenantId, persona = 'bd') {
   const isJobSeeker = normalizePersona(persona) === 'jobseeker';
   const id = (slug) => `sample-${tenantId}-${slug}`;
@@ -942,13 +954,16 @@ const LARGE_WORKSPACE_LOAD_THRESHOLDS = Object.freeze({
 });
 
 function countTenantWorkspaceItems(tenantId) {
-  return {
+  const counts = {
     accountCount: accountsForTenant(tenantId).length,
     contactCount: contactsForTenant(tenantId).length,
     jobCount: jobsForTenant(tenantId).length,
     configCount: configsForTenant(tenantId).length,
     activityCount: getTenantArray(activitiesByTenant, tenantId).length,
+    taskCount: getTenantArray(tasksByTenant, tenantId).length,
   };
+  counts.total = counts.accountCount + counts.contactCount + counts.jobCount + counts.configCount + counts.activityCount + counts.taskCount;
+  return counts;
 }
 
 function normalizeWorkspaceLoadCounts(stats = {}) {
@@ -999,13 +1014,13 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
     // snapshot: that would clobber in-memory mutations still sitting in the
     // 500ms debounced-save window and silently discard them.
     if (!status.core) {
-      const tenantAccts = data.accounts || [];
+      const tenantAccts = mergeTenantItems(data.accounts || [], accountsByTenant.get(tenantId) || []);
       tenantAccts.sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
       accountsByTenant.set(tenantId, tenantAccts);
-      jobsByTenant.set(tenantId, data.jobs || []);
-      configsByTenant.set(tenantId, data.configs || []);
-      activitiesByTenant.set(tenantId, data.activities || []);
-      tasksByTenant.set(tenantId, data.tasks || []);
+      jobsByTenant.set(tenantId, mergeTenantItems(data.jobs || [], jobsByTenant.get(tenantId) || []));
+      configsByTenant.set(tenantId, mergeTenantItems(data.configs || [], configsByTenant.get(tenantId) || []));
+      activitiesByTenant.set(tenantId, mergeTenantItems(data.activities || [], activitiesByTenant.get(tenantId) || []));
+      tasksByTenant.set(tenantId, mergeTenantItems(data.tasks || [], tasksByTenant.get(tenantId) || []));
 
       // Merge into global arrays only on this first load for the tenant.
       {
@@ -1037,7 +1052,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
     }
     
     if (needsContacts && !status.contacts) {
-      const tenantConts = data.contacts || [];
+      const tenantConts = mergeTenantItems(data.contacts || [], contactsByTenant.get(tenantId) || []);
       tenantConts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
       contactsByTenant.set(tenantId, tenantConts);
 
@@ -1085,6 +1100,54 @@ export function createStore() {
     getPersona(tenantId) {
       const profile = getTenantProfile(tenantId);
       return normalizePersona(profile?.persona || profile?.settings?.persona);
+    },
+
+    async exportTenantData(tenantId, context = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const profile = getTenantProfile(tenantId);
+      return {
+        exportedAt: now(),
+        product: 'BD Engine',
+        tenant: context.tenant || { id: tenantId },
+        user: context.user || null,
+        membership: context.membership || null,
+        workspace: {
+          profile: profile ? {
+            persona: profile.persona,
+            settings: profile.settings || {},
+          } : null,
+          accounts: accountsForTenant(tenantId),
+          contacts: contactsForTenant(tenantId),
+          jobs: jobsForTenant(tenantId),
+          configs: configsForTenant(tenantId),
+          activities: activitiesForTenant(tenantId),
+          tasks: tasksForTenant(tenantId),
+        },
+      };
+    },
+
+    async clearTenantWorkspaceData(tenantId) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const before = countTenantWorkspaceItems(tenantId);
+      replaceTenantItems(accountsByTenant, 'accounts', tenantId, []);
+      replaceTenantItems(contactsByTenant, 'contacts', tenantId, []);
+      replaceTenantItems(jobsByTenant, 'jobs', tenantId, []);
+      replaceTenantItems(configsByTenant, 'configs', tenantId, []);
+      replaceTenantItems(activitiesByTenant, 'activities', tenantId, []);
+      replaceTenantItems(tasksByTenant, 'tasks', tenantId, []);
+      loadedTenants.set(tenantId, { core: true, contacts: true });
+      await dbSaveTenantData(tenantId, {
+        accounts: [],
+        contacts: [],
+        jobs: [],
+        configs: [],
+        activities: [],
+        tasks: [],
+        settings: getTenantProfile(tenantId)?.settings || {},
+      });
+      return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
     },
 
     getSession() {

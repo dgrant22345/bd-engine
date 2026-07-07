@@ -63,6 +63,37 @@ await check('manual ATS URL creates an import-ready board config', async () => {
   assert(config.active === true, 'manual config was not active');
 });
 
+await check('privacy export and confirmed workspace delete work', async () => {
+  const exportResponse = await fetch(`${baseUrl}/api/privacy/export`, {
+    headers: { Cookie: cookie },
+  });
+  assert(exportResponse.status === 200, `privacy export returned ${exportResponse.status}`);
+  assert((exportResponse.headers.get('content-disposition') || '').includes('bd-engine-'), 'privacy export did not set a download filename');
+  const exported = await exportResponse.json();
+  assert(exported.user?.email?.startsWith('smoke-auth-'), 'privacy export did not include the signed-in user');
+  assert(exported.workspace?.configs?.some((item) => item.boardId === 'smokemanualboard'), 'privacy export did not include workspace config data');
+
+  const badDelete = await fetch(`${baseUrl}/api/privacy/delete-workspace`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ confirm: 'DELETE' }),
+  });
+  assert(badDelete.status === 400, `bad privacy delete confirmation returned ${badDelete.status}`);
+
+  const deleteResponse = await fetch(`${baseUrl}/api/privacy/delete-workspace`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ confirm: 'DELETE Smoke Auth Workspace' }),
+  });
+  assert(deleteResponse.status === 200, `privacy delete returned ${deleteResponse.status}`);
+  const deleted = await deleteResponse.json();
+  assert(deleted.deleted?.configCount >= 1, 'privacy delete did not report deleted config data');
+  assert(deleted.remaining?.total === 0, 'privacy delete did not clear workspace data');
+
+  const afterExport = await getJson('/api/privacy/export', cookie);
+  assert(afterExport.workspace?.configs?.length === 0, 'workspace configs remained after privacy delete');
+});
+
 await check('shared app is mounted under /app', async () => {
   const response = await fetch(`${baseUrl}/app/`, { headers: cookie ? { Cookie: cookie } : {} });
   assert(response.ok, `/app/ returned ${response.status}`);

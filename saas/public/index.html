@@ -227,6 +227,27 @@
       render();
     }
 
+    async function doExportData() {
+      try {
+        const response = await fetch('/api/privacy/export', { credentials: 'same-origin' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.error || `Export failed: ${response.status}`);
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const slug = String(state.tenant?.slug || state.tenant?.name || 'workspace').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'workspace';
+        link.href = url;
+        link.download = `bd-engine-${slug}-export.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        state.error = err.message || 'Export failed.';
+        render();
+      }
+    }
+
     const fallbackPlanLimits = {
       trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
       jobseeker: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
@@ -493,7 +514,7 @@
                   <li>CSV export</li>
                   <li>3 team members</li>
                 </ul>
-                <p class="pricing-upgrade">Pay when the dashboard tells the team which accounts to work and why.</p>
+                <p class="pricing-upgrade">Pay when the dashboard tells the team which accounts to work and why. Device-only preferences and lightweight automations stay on each browser until team sync ships.</p>
                 <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
               </div>
             </div>
@@ -550,7 +571,7 @@
             ['Information collected', 'Account profile data, workspace names, imported company/contact data, job-board configuration, activity notes, and product usage needed to operate the app.'],
             ['How it is used', 'To authenticate users, provide the workspace, rank accounts, show hiring and relationship signals, support imports, and manage subscriptions.'],
             ['Processors', 'Railway hosts the app infrastructure. Stripe may process checkout and subscription billing when enabled.'],
-            ['Retention and deletion', 'Workspace data should be retained while the account is active and removed or exported on verified customer request where legally appropriate.'],
+            ['Retention and deletion', 'Signed-in users can export workspace data from the account menu. Workspace data can be deleted after an explicit confirmation step, while account and billing records may be retained where legally required.'],
           ],
           cta: 'Create account',
         },
@@ -823,6 +844,7 @@
                   </div>
                   <hr>
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
+                  <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Export my data</button>
                   ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
                   <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
@@ -847,6 +869,10 @@
         if (!e.target.closest('#cloud-user-menu')) setUserMenuOpen(false);
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
+      root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
+        doExportData();
+        setUserMenuOpen(false);
+      });
       root.querySelector('[data-demo-signup]')?.addEventListener('click', exitDemoToSignup);
       root.querySelector('#cloud-demo-signup-menu-btn')?.addEventListener('click', exitDemoToSignup);
       root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
