@@ -447,7 +447,8 @@ async function route(req, res) {
   if (pathname === '/api/plans') {
     return sendJson(res, 200, {
       plans: Object.values(PLANS)
-        .filter((p) => p.id !== ownerPlanId)
+        // Recruiting/BD only (#13): don't surface the frozen jobseeker plan.
+        .filter((p) => p.id !== ownerPlanId && p.id !== 'jobseeker')
         .map((p) => ({
           id: p.id,
           name: p.name,
@@ -1239,8 +1240,9 @@ async function handleSignup(req, res) {
     return sendJson(res, 409, { error: userResult.error });
   }
 
-  // Create default workspace
-  const userPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+  // Create default workspace. Recruiting/BD is the only supported persona now
+  // (#13); the jobseeker path is frozen, so all new workspaces are 'bd'.
+  const userPersona = 'bd';
   const workspaceDisplayName = workspaceName || `${userResult.user.name}'s Workspace`;
   const referrerTenant = findTenantByReferralCode(referralCode);
   const tenantResult = ensureTenantForUser(userResult.user, {
@@ -1443,8 +1445,10 @@ function getAppIndexHtml() {
     .replace(/href="\/app\.js/g, 'href="/app/app.js')
     .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
-    .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '')
-    .replace(/<script src="\/app\/local-api\.js/g, '<script src="/persona-labels.js"></script>\n  <script src="/app/local-api.js');
+    .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
+  // (Removed the persona-labels.js injection — the product is recruiting/BD
+  // only now, so the fragile jobseeker DOM label-swap overlay is no longer
+  // loaded. See #13.)
   return cachedAppIndexHtml;
 }
 

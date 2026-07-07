@@ -341,11 +341,11 @@
             <div class="hero-content">
               <div class="hero-badge">Cloud beta</div>
               <h1 class="hero-title">
-                Growth intelligence<br>
-                <span class="hero-gradient">for Sales & Job Seekers</span>
+                Business development<br>
+                <span class="hero-gradient">for recruiting &amp; staffing</span>
               </h1>
               <p class="hero-subtitle">
-                Track accounts, discover hiring signals, and orchestrate smart outreach. Built for modern BD teams and proactive job seekers to get ahead of the curve.
+                Turn your LinkedIn network into a ranked list of companies hiring right now — where you already know someone. Built for recruiters and staffing teams to win clients faster.
               </p>
               <div class="hero-cta">
                 <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
@@ -467,21 +467,6 @@
                 </ul>
                 <p class="pricing-upgrade">Upgrade when your readiness score shows enough live data to run the workflow every week.</p>
                 <button class="btn btn-primary btn-block" data-signup>Start free trial</button>
-              </div>
-              <div class="pricing-card">
-                <div class="pricing-badge">For Individuals</div>
-                <h3>Job Seeker</h3>
-                <div class="pricing-price"><span class="price-amount">$5</span><span class="price-period">/month</span></div>
-                <p class="pricing-fit">Best for active searches where you are tracking target companies, open roles, and referral paths.</p>
-                <ul class="pricing-features">
-                  <li>200 target companies</li>
-                  <li>1,000 contacts</li>
-                  <li>50 ATS job boards</li>
-                  <li>50 CSV imports</li>
-                  <li>1 user</li>
-                </ul>
-                <p class="pricing-upgrade">Pay when it replaces your spreadsheet and weekly manual careers-page checking.</p>
-                <button class="btn btn-primary btn-block" data-signup>Get started</button>
               </div>
               <div class="pricing-card pricing-card--popular">
                 <div class="pricing-badge popular">For Teams</div>
@@ -728,21 +713,6 @@
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">
-                <label>I'm using BD Engine for</label>
-                <div class="persona-toggle" id="persona-toggle" aria-label="Choose your BD Engine workspace type">
-                  <button type="button" class="persona-option active" data-persona="bd" aria-pressed="true">
-                    <span class="persona-icon" aria-hidden="true">BD</span>
-                    <span class="persona-label">Sales / BD</span>
-                    <span class="persona-desc">Win new clients &amp; grow revenue</span>
-                  </button>
-                  <button type="button" class="persona-option" data-persona="jobseeker" aria-pressed="false">
-                    <span class="persona-icon" aria-hidden="true">JS</span>
-                    <span class="persona-label">Job Search</span>
-                    <span class="persona-desc">Track companies &amp; land roles</span>
-                  </button>
-                </div>
-              </div>
-              <div class="form-group">
                 <label for="signup-name">Full name</label>
                 <input type="text" id="signup-name" placeholder="Jane Smith" autocomplete="name" required autofocus>
               </div>
@@ -769,28 +739,8 @@
           </div>
         </div>`;
 
-      // Persona toggle
-      let selectedPersona = 'bd';
-      root.querySelectorAll('.persona-option').forEach(btn => {
-        btn.addEventListener('click', () => {
-          root.querySelectorAll('.persona-option').forEach(b => {
-            const active = b === btn;
-            b.classList.toggle('active', active);
-            b.setAttribute('aria-pressed', active ? 'true' : 'false');
-          });
-          selectedPersona = btn.dataset.persona;
-          // Update workspace label based on persona
-          const wsLabel = root.querySelector('#workspace-label');
-          const wsInput = root.querySelector('#signup-workspace');
-          if (selectedPersona === 'jobseeker') {
-            wsLabel.textContent = 'Your name for this search';
-            wsInput.placeholder = 'My Job Search 2026';
-          } else {
-            wsLabel.textContent = 'Workspace name';
-            wsInput.placeholder = 'My Company';
-          }
-        });
-      });
+      // Recruiting/BD is the only persona now (#13).
+      const selectedPersona = 'bd';
 
       root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
