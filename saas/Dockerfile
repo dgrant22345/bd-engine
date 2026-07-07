@@ -11,6 +11,7 @@ COPY saas/package-lock.json ./
 RUN npm install --omit=dev
 
 COPY saas/src ./src
+COPY saas/scripts ./scripts
 COPY saas/public ./public
 COPY saas/schema.sql ./
 COPY app ./app
