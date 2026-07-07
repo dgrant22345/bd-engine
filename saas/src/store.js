@@ -1015,6 +1015,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
 
   if (data) {
     const mergeStartedAt = Date.now();
+    const mirrorData = {};
     // Only load core the FIRST time. A contacts-only lazy load (needsContacts
     // now true, core already loaded) must NOT re-set these maps from the DB
     // snapshot: that would clobber in-memory mutations still sitting in the
@@ -1027,6 +1028,11 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       configsByTenant.set(tenantId, mergeTenantItems(data.configs || [], configsByTenant.get(tenantId) || []));
       activitiesByTenant.set(tenantId, mergeTenantItems(data.activities || [], activitiesByTenant.get(tenantId) || []));
       tasksByTenant.set(tenantId, mergeTenantItems(data.tasks || [], tasksByTenant.get(tenantId) || []));
+      mirrorData.accounts = accountsByTenant.get(tenantId) || [];
+      mirrorData.jobs = jobsByTenant.get(tenantId) || [];
+      mirrorData.configs = configsByTenant.get(tenantId) || [];
+      mirrorData.activities = activitiesByTenant.get(tenantId) || [];
+      mirrorData.tasks = tasksByTenant.get(tenantId) || [];
 
       // Merge into global arrays only on this first load for the tenant.
       {
@@ -1066,8 +1072,13 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       for (const c of tenantConts) if (!existingContactIds.has(c.id)) contacts.push(c);
 
       status.contacts = true;
+      mirrorData.contacts = tenantConts;
     }
     timings.mergeMs = Date.now() - mergeStartedAt;
+    if (Object.keys(mirrorData).length) {
+      syncTenantRelationalMirror(tenantId, mirrorData)
+        .catch((err) => console.error('Relational mirror lazy backfill error:', tenantId, err.message));
+    }
   }
   
   loadedTenants.set(tenantId, status);
