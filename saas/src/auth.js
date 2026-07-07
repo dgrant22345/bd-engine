@@ -10,7 +10,7 @@ import { dbSaveSession, dbDeleteSession, dbLoadActiveSessions } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET || 'bd-engine-dev-secret-do-not-use-in-production';
 if (!process.env.SESSION_SECRET && (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production')) {
-  console.warn('  WARNING: SESSION_SECRET is not set in production — cookies use a default secret.');
+  throw new Error('SESSION_SECRET is required in production.');
 }
 
 // In-memory session cache, write-through to Postgres so sessions survive

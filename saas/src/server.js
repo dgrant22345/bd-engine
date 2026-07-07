@@ -247,7 +247,7 @@ async function initializeData() {
 function isHealthRequest(req) {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
-    return url.pathname === '/health' || url.pathname === '/api/health' || url.pathname === '/api/status';
+    return url.pathname === '/health' || url.pathname === '/api/health';
   } catch {
     return false;
   }
@@ -390,11 +390,10 @@ async function route(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
   const pathname = url.pathname;
 
-  // Health and public status checks. Internal metrics + lastError (which leaks
-  // request URLs and memory) are only returned to an authenticated caller.
-  if (pathname === '/health' || pathname === '/api/health' || pathname === '/api/status') {
-    const withDetails = pathname === '/api/status' && Boolean(extractSession(req));
-    return sendJson(res, 200, getHealthPayload(withDetails));
+  // Health checks stay public for Railway. Detailed status is authenticated
+  // below because it can expose runtime metrics and recent error context.
+  if (pathname === '/health' || pathname === '/api/health') {
+    return sendJson(res, 200, getHealthPayload(false));
   }
 
   // ── Auth endpoints (public, rate-limited) ─────────────────────────────────
@@ -589,6 +588,10 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/session') {
     return sendJson(res, 200, session);
+  }
+
+  if (pathname === '/api/status') {
+    return sendJson(res, 200, getHealthPayload(true));
   }
 
   if (pathname === '/api/setup/status') {

@@ -13,6 +13,11 @@ await check('protected API rejects anonymous requests', async () => {
   assert(response.status === 401, `expected 401, got ${response.status}`);
 });
 
+await check('detailed status rejects anonymous requests', async () => {
+  const response = await fetch(`${baseUrl}/api/status`);
+  assert(response.status === 401, `expected 401, got ${response.status}`);
+});
+
 await check('signup creates a session', async () => {
   const email = `smoke-auth-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
