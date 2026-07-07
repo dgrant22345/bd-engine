@@ -90,6 +90,50 @@ await check('new signup gets an empty first-run workspace', async () => {
   assert(setup.workspaceName === 'Smoke Test Workspace', 'new workspace name was not preserved');
 });
 
+await check('sample workspace completes onboarding without overwriting data', async () => {
+  const email = `smoke-sample-${Date.now()}@example.com`;
+  const response = await fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      password: 'smoke1234',
+      name: 'Smoke Sample User',
+      workspaceName: 'Smoke Sample Workspace',
+    }),
+  });
+  assert(response.status === 201, `signup returned ${response.status}`);
+  const signupCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
+
+  const sampleResponse = await fetch(`${baseUrl}/api/setup/sample-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: signupCookie },
+    body: JSON.stringify({
+      workspaceName: 'Smoke Sample Workspace',
+      userName: 'Smoke Sample User',
+      userEmail: email,
+      persona: 'bd',
+    }),
+  });
+  assert(sampleResponse.status === 201, `sample data returned ${sampleResponse.status}`);
+  const sample = await sampleResponse.json();
+  assert(sample.sample === true, 'sample route did not mark the response as sample data');
+  assert(sample.stats?.accounts >= 3, 'sample workspace did not include accounts');
+  assert(sample.stats?.contacts >= 4, 'sample workspace did not include contacts');
+  assert(sample.stats?.jobs >= 4, 'sample workspace did not include jobs');
+  assert(sample.stats?.configs >= 3, 'sample workspace did not include ATS boards');
+
+  const setup = await getJson('/api/setup/status', signupCookie);
+  assert(setup.requiresSetup === false, 'sample workspace should complete setup');
+
+  const secondResponse = await fetch(`${baseUrl}/api/setup/sample-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: signupCookie },
+    body: JSON.stringify({ workspaceName: 'Smoke Sample Workspace' }),
+  });
+  assert(secondResponse.status === 409, `second sample load should be blocked, got ${secondResponse.status}`);
+});
+
 await check('job seeker persona persists into the app bootstrap', async () => {
   const email = `smoke-jobseeker-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {

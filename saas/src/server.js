@@ -760,9 +760,28 @@ self.addEventListener('activate', (event) => {
       });
     }
 
-    store.completeSetup(tenantId);
+    store.completeSetup(tenantId, fields);
     return sendJson(res, 200, {
       ok: true,
+      setupComplete: true,
+      status: await store.getSetupStatus(tenantId),
+    });
+  }
+
+  if (pathname === '/api/setup/sample-data' && req.method === 'POST') {
+    const body = await readJson(req);
+    const result = await store.loadSampleWorkspace(tenantId, {
+      persona: body.persona,
+      setup: {
+        workspaceName: body.workspaceName,
+        userName: body.userName,
+        userEmail: body.userEmail,
+        owners: Array.isArray(body.owners) ? body.owners : [],
+      },
+    });
+    if (result.error) return sendJson(res, 409, result);
+    return sendJson(res, 201, {
+      ...result,
       setupComplete: true,
       status: await store.getSetupStatus(tenantId),
     });
@@ -847,7 +866,7 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, result);
   }
 
-  if (pathname === '/api/import/linkedin-csv' && req.method === 'POST') {
+  if ((pathname === '/api/import/linkedin-csv' || pathname === '/api/import/connections-csv') && req.method === 'POST') {
     const payload = await readFormOrJson(req);
     const fields = payload.fields || payload;
     const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || payload.text || '';

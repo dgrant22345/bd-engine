@@ -4430,6 +4430,21 @@ a {
   color: var(--muted);
   font-size: 0.9rem;
 }
+.setup-sample-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  text-align: left;
+}
+.setup-sample-panel strong {
+  display: block;
+  margin: 2px 0 4px;
+}
 .setup-drop-zone.dragover,
 .setup-drop-zone:focus {
   outline: none;
@@ -4529,6 +4544,9 @@ a {
   }
   .setup-value-score {
     justify-items: start;
+  }
+  .setup-sample-panel {
+    grid-template-columns: 1fr;
   }
   .setup-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -600,6 +600,158 @@ function getTenantArray(map, tenantId) {
   return map.get(tenantId);
 }
 
+function replaceTenantItems(map, globalName, tenantId, items) {
+  map.set(tenantId, items);
+  if (globalName === 'accounts') accounts = accounts.filter((item) => item.tenantId !== tenantId).concat(items);
+  if (globalName === 'contacts') contacts = contacts.filter((item) => item.tenantId !== tenantId).concat(items);
+  if (globalName === 'jobs') jobs = jobs.filter((item) => item.tenantId !== tenantId).concat(items);
+  if (globalName === 'configs') boardConfigs = boardConfigs.filter((item) => item.tenantId !== tenantId).concat(items);
+  if (globalName === 'activities') activities = activities.filter((item) => item.tenantId !== tenantId).concat(items);
+  if (globalName === 'tasks') tasks = tasks.filter((item) => item.tenantId !== tenantId).concat(items);
+}
+
+function buildSampleWorkspaceData(tenantId, persona = 'bd') {
+  const isJobSeeker = normalizePersona(persona) === 'jobseeker';
+  const id = (slug) => `sample-${tenantId}-${slug}`;
+  const sampleAccounts = [
+    account({
+      id: id('northstar'),
+      tenantId,
+      displayName: 'Northstar Robotics',
+      domain: 'northstar.example',
+      canonicalDomain: 'northstar.example',
+      careersUrl: 'https://northstar.example/careers',
+      industry: 'Industrial automation',
+      location: 'Toronto, ON',
+      status: 'contacted',
+      outreachStatus: 'contacted',
+      targetScore: 91,
+      dailyScore: 91,
+      priorityTier: 'A',
+      owner: 'Owner',
+      connectionCount: 3,
+      seniorContactCount: 2,
+      talentContactCount: 1,
+      buyerTitleCount: 1,
+      jobCount: 3,
+      openRoleCount: 14,
+      newRoleCount7d: 2,
+      jobsLast30Days: 3,
+      jobsLast90Days: 7,
+      hiringVelocity: 84,
+      relationshipStrengthScore: 86,
+      alertPriorityScore: 91,
+      nextAction: isJobSeeker ? 'Ask Priya for team context' : 'Follow up with Priya Shah',
+      nextActionAt: futureDate(2),
+      recommendedAction: isJobSeeker ? 'Use Priya as the warm path before applying.' : 'Lead with controls hiring and recruiting bandwidth.',
+      targetScoreExplanation: 'Fresh hiring plus a warm talent leader makes this the clearest next move.',
+      topContactName: 'Priya Shah',
+      topContactTitle: 'Director of Talent',
+      atsTypesText: 'Greenhouse',
+      hiringStatus: 'Active hiring',
+      notes: 'Synthetic sample account. Safe to delete after exploring.',
+    }),
+    account({
+      id: id('vertex'),
+      tenantId,
+      displayName: 'Vertex Health Systems',
+      domain: 'vertexhealth.example',
+      canonicalDomain: 'vertexhealth.example',
+      careersUrl: 'https://vertexhealth.example/jobs',
+      industry: 'Health technology',
+      location: 'Boston, MA',
+      status: 'ready',
+      outreachStatus: 'ready_to_contact',
+      targetScore: 84,
+      dailyScore: 84,
+      priorityTier: 'A',
+      owner: 'Owner',
+      connectionCount: 2,
+      seniorContactCount: 1,
+      talentContactCount: 1,
+      buyerTitleCount: 1,
+      jobCount: 2,
+      openRoleCount: 8,
+      newRoleCount7d: 1,
+      jobsLast30Days: 2,
+      jobsLast90Days: 5,
+      hiringVelocity: 73,
+      relationshipStrengthScore: 75,
+      alertPriorityScore: 80,
+      nextAction: isJobSeeker ? 'Draft referral ask to Marcus' : 'Draft VP People outreach',
+      nextActionAt: futureDate(1),
+      recommendedAction: 'Lead with data platform hiring and speed-to-shortlist.',
+      targetScoreExplanation: 'New product hiring with a senior people leader in network.',
+      topContactName: 'Marcus Lee',
+      topContactTitle: 'VP People',
+      atsTypesText: 'Lever',
+      hiringStatus: 'Active hiring',
+      notes: 'Synthetic sample account. Safe to delete after exploring.',
+    }),
+    account({
+      id: id('luma'),
+      tenantId,
+      displayName: 'Luma Climate',
+      domain: 'lumaclimate.example',
+      canonicalDomain: 'lumaclimate.example',
+      careersUrl: 'https://jobs.ashbyhq.com/lumaclimate',
+      industry: 'Climate software',
+      location: 'Remote',
+      status: 'researching',
+      outreachStatus: 'researching',
+      targetScore: 72,
+      dailyScore: 72,
+      priorityTier: 'B',
+      owner: 'Owner',
+      connectionCount: 1,
+      seniorContactCount: 1,
+      talentContactCount: 0,
+      buyerTitleCount: 1,
+      jobCount: 1,
+      openRoleCount: 5,
+      newRoleCount7d: 0,
+      jobsLast30Days: 1,
+      jobsLast90Days: 3,
+      hiringVelocity: 58,
+      relationshipStrengthScore: 64,
+      alertPriorityScore: 72,
+      nextAction: 'Verify hiring manager path',
+      nextActionAt: futureDate(5),
+      recommendedAction: 'Research the platform team before outreach.',
+      targetScoreExplanation: 'Moderate hiring and one executive contact.',
+      topContactName: 'Elena Park',
+      topContactTitle: 'Head of Partnerships',
+      atsTypesText: 'Ashby',
+      hiringStatus: 'Active hiring',
+      notes: 'Synthetic sample account. Safe to delete after exploring.',
+    }),
+  ];
+  const sampleContacts = [
+    contact({ id: id('priya'), tenantId, accountId: id('northstar'), fullName: 'Priya Shah', firstName: 'Priya', lastName: 'Shah', email: 'priya.shah@example.com', linkedinUrl: 'https://www.linkedin.com/in/priya-shah', companyName: 'Northstar Robotics', title: 'Director of Talent', connectedOn: pastDate(90), outreachStatus: 'contacted', priorityScore: 93, seniority: 'director', isTalentLeader: true }),
+    contact({ id: id('owen'), tenantId, accountId: id('northstar'), fullName: 'Owen Miller', firstName: 'Owen', lastName: 'Miller', email: 'owen.miller@example.com', linkedinUrl: 'https://www.linkedin.com/in/owen-miller', companyName: 'Northstar Robotics', title: 'VP Engineering', connectedOn: pastDate(160), outreachStatus: 'not_started', priorityScore: 81, seniority: 'vp', isTalentLeader: false }),
+    contact({ id: id('marcus'), tenantId, accountId: id('vertex'), fullName: 'Marcus Lee', firstName: 'Marcus', lastName: 'Lee', email: 'marcus.lee@example.com', linkedinUrl: 'https://www.linkedin.com/in/marcus-lee', companyName: 'Vertex Health Systems', title: 'VP People', connectedOn: pastDate(45), outreachStatus: 'ready_to_contact', priorityScore: 88, seniority: 'vp', isTalentLeader: true }),
+    contact({ id: id('elena'), tenantId, accountId: id('luma'), fullName: 'Elena Park', firstName: 'Elena', lastName: 'Park', email: 'elena.park@example.com', linkedinUrl: 'https://www.linkedin.com/in/elena-park', companyName: 'Luma Climate', title: 'Head of Partnerships', connectedOn: pastDate(220), outreachStatus: 'researching', priorityScore: 71, seniority: 'head', isTalentLeader: false }),
+  ];
+  const sampleJobs = [
+    job({ id: id('controls-job'), tenantId, accountId: id('northstar'), title: 'Senior Controls Engineer', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/controls', postedAt: pastDate(2), retrievedAt: now(), importedAt: now(), isNew: true }),
+    job({ id: id('embedded-job'), tenantId, accountId: id('northstar'), title: 'Embedded Robotics Developer', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/embedded', postedAt: pastDate(6), retrievedAt: now(), importedAt: now(), isNew: true }),
+    job({ id: id('data-platform-job'), tenantId, accountId: id('vertex'), title: 'Data Platform Engineer', companyName: 'Vertex Health Systems', location: 'Boston, MA', source: 'Lever', atsType: 'lever', jobUrl: 'https://vertexhealth.example/jobs/data-platform', postedAt: pastDate(4), retrievedAt: now(), importedAt: now(), isNew: true }),
+    job({ id: id('climate-pm-job'), tenantId, accountId: id('luma'), title: 'Product Manager, Climate Intelligence', companyName: 'Luma Climate', location: 'Remote', source: 'Ashby', atsType: 'ashby', jobUrl: 'https://jobs.ashbyhq.com/lumaclimate/pm', postedAt: pastDate(12), retrievedAt: now(), importedAt: now(), isNew: false }),
+  ];
+  const sampleConfigs = [
+    { id: id('cfg-northstar'), tenantId, accountId: id('northstar'), companyName: 'Northstar Robotics', normalizedCompanyName: 'northstar robotics', ats: 'greenhouse', atsType: 'greenhouse', boardId: 'northstar', domain: 'northstar.example', careersUrl: 'https://northstar.example/careers', discoveryStatus: 'resolved', discoveryMethod: 'sample', confidenceBand: 'high', reviewStatus: 'approved', active: true, source: 'sample_workspace', createdAt: now(), updatedAt: now() },
+    { id: id('cfg-vertex'), tenantId, accountId: id('vertex'), companyName: 'Vertex Health Systems', normalizedCompanyName: 'vertex health systems', ats: 'lever', atsType: 'lever', boardId: 'vertexhealth', domain: 'vertexhealth.example', careersUrl: 'https://vertexhealth.example/jobs', discoveryStatus: 'resolved', discoveryMethod: 'sample', confidenceBand: 'high', reviewStatus: 'approved', active: true, source: 'sample_workspace', createdAt: now(), updatedAt: now() },
+    { id: id('cfg-luma'), tenantId, accountId: id('luma'), companyName: 'Luma Climate', normalizedCompanyName: 'luma climate', ats: 'ashby', atsType: 'ashby', boardId: 'lumaclimate', domain: 'lumaclimate.example', careersUrl: 'https://jobs.ashbyhq.com/lumaclimate', discoveryStatus: 'resolved', discoveryMethod: 'sample', confidenceBand: 'high', reviewStatus: 'approved', active: true, source: 'sample_workspace', createdAt: now(), updatedAt: now() },
+  ];
+  const sampleActivities = [
+    { id: id('activity-sample'), tenantId, type: 'sample_workspace', summary: 'Loaded synthetic sample workspace', notes: 'Synthetic data for product exploration; no real personal data.', occurredAt: now(), createdAt: now(), createdByUserId: 'system' },
+  ];
+  const sampleTasks = [
+    { id: id('task-sample'), tenantId, accountId: id('northstar'), title: isJobSeeker ? 'Draft Priya referral ask' : 'Send Priya hiring-signal follow-up', dueDate: futureDate(2), status: 'pending', priority: 'high', createdAt: now(), updatedAt: now() },
+  ];
+  return { accounts: sampleAccounts, contacts: sampleContacts, jobs: sampleJobs, configs: sampleConfigs, activities: sampleActivities, tasks: sampleTasks };
+}
+
 let accounts = [
   account({
     id: 'acct-northstar',
@@ -1448,19 +1600,91 @@ export function createStore() {
       return { ok: true, settings: { ...profile.settings } };
     },
 
-    completeSetup(tenantId) {
+    completeSetup(tenantId, payload = {}, options = {}) {
       assertTenant(tenantId);
       const profile = getTenantProfile(tenantId);
+      const workspaceName = String(payload.workspaceName || '').trim();
+      const userName = String(payload.userName || '').trim();
+      const userEmail = String(payload.userEmail || '').trim();
+      if (workspaceName) {
+        profile.workspace.name = workspaceName;
+        profile.workspace.companyName = workspaceName;
+        profile.workspace.updatedAt = now();
+      }
+      if (userName || userEmail) {
+        profile.settings.user = {
+          ...(profile.settings.user || {}),
+          name: userName || profile.settings.user?.name || '',
+          email: userEmail || profile.settings.user?.email || '',
+        };
+      }
+      if (Array.isArray(payload.owners)) {
+        const owners = payload.owners
+          .filter((item) => item && (item.name || item.displayName || item.email))
+          .map((item, index) => ({
+            id: item.id || `owner-${tenantId}-${index + 1}`,
+            name: item.name || item.displayName || item.email || `Owner ${index + 1}`,
+            displayName: item.displayName || item.name || item.email || `Owner ${index + 1}`,
+            email: item.email || '',
+            role: item.role || (index === 0 ? 'Owner' : 'Member'),
+          }));
+        if (owners.length) profile.settings.ownerRoster = owners;
+      }
       const wasComplete = profile.settings.setupComplete;
       profile.settings.setupComplete = true;
       profile.settings.lastPipelineRun = now();
       persistTenant(tenantId);
       
-      if (!wasComplete) {
+      if (!wasComplete && options.runPipeline !== false) {
         console.log(`[Auto-Pipeline] Triggering initial pipeline for ${tenantId}`);
         this.startRevenuePipeline(tenantId);
       }
       return { ok: true };
+    },
+
+    async loadSampleWorkspace(tenantId, options = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const existingCounts = countTenantWorkspaceItems(tenantId);
+      const normalizedCounts = normalizeWorkspaceLoadCounts(existingCounts);
+      if (!options.force && (normalizedCounts.accounts || normalizedCounts.contacts || normalizedCounts.jobs || normalizedCounts.configs)) {
+        return {
+          error: 'Sample data can only be loaded into an empty workspace.',
+          counts: normalizedCounts,
+        };
+      }
+      const profile = getTenantProfile(tenantId);
+      if (options.setup) this.completeSetup(tenantId, options.setup, { runPipeline: false });
+      const persona = normalizePersona(options.persona || profile?.persona || profile?.settings?.persona);
+      const sample = buildSampleWorkspaceData(tenantId, persona);
+      replaceTenantItems(accountsByTenant, 'accounts', tenantId, sample.accounts);
+      replaceTenantItems(contactsByTenant, 'contacts', tenantId, sample.contacts);
+      replaceTenantItems(jobsByTenant, 'jobs', tenantId, sample.jobs);
+      replaceTenantItems(configsByTenant, 'configs', tenantId, sample.configs);
+      replaceTenantItems(activitiesByTenant, 'activities', tenantId, sample.activities);
+      replaceTenantItems(tasksByTenant, 'tasks', tenantId, sample.tasks);
+      if (profile) {
+        profile.settings.setupComplete = true;
+        profile.settings.sampleDataLoadedAt = now();
+        profile.settings.lastPipelineRun = now();
+      }
+      loadedTenants.set(tenantId, { core: true, contacts: true });
+      persistTenant(tenantId);
+      return {
+        ok: true,
+        sample: true,
+        stats: {
+          accounts: sample.accounts.length,
+          contacts: sample.contacts.length,
+          jobs: sample.jobs.length,
+          configs: sample.configs.length,
+          tasks: sample.tasks.length,
+          imported: sample.contacts.length,
+          updated: 0,
+          skipped: 0,
+          failed: 0,
+        },
+      };
     },
 
     getActivity(tenantId, query) {

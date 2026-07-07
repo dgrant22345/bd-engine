@@ -1879,11 +1879,15 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-skip-import') {
-        appState.setupCsvFile = null;
+      appState.setupCsvFile = null;
       appState.setupCsvContent = '';
       appState.setupCsvFileName = '';
       appState.setupPreview = null;
       await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-load-sample') {
+      await loadSetupSampleWorkspace();
       return;
     }
     if (actionName === 'setup-preview-csv') {
@@ -3617,18 +3621,18 @@ function renderSetupStepContent(stepKey) {
         <div class="onboarding-guide onboarding-guide--setup">
           <p class="onboarding-guide__title">How to get your Connections.csv:</p>
           <ol class="onboarding-guide__list">
-            <li>Go to <strong>Settings & Privacy</strong> on LinkedIn.</li>
-            <li>Click <strong>Data privacy</strong> in the sidebar.</li>
-            <li>Select <strong>Get a copy of your data</strong>.</li>
-            <li>Choose <strong>"Want something in particular?"</strong> and check <strong>Connections</strong>.</li>
-            <li>Click <strong>Request archive</strong>. LinkedIn will email you a link usually within <strong>10–15 minutes</strong>.</li>
+            <li>Use LinkedIn on a desktop browser and open <strong>Me</strong>, then <strong>Settings & Privacy</strong>.</li>
+            <li>Click <strong>Data privacy</strong>, then <strong>Get a copy of your data</strong>.</li>
+            <li>Choose the data archive option that includes <strong>Connections</strong>, then click <strong>Request archive</strong>.</li>
+            <li>When LinkedIn emails the download link, unzip the archive and upload <code>Connections.csv</code> here.</li>
           </ol>
           <div class="onboarding-guide__note">
             <span class="toast-icon">&#8505;</span>
-            <span>Once you receive the zip from LinkedIn, look for the <code>Connections.csv</code> file inside.</span>
+            <span>LinkedIn says smaller account-data downloads can arrive within minutes; larger archives can take up to 24 hours.</span>
           </div>
         </div>
 
+        ${renderSetupSamplePanel(jobSeeker)}
         <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
           <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
@@ -3649,6 +3653,20 @@ function renderSetupStepContent(stepKey) {
 
   const result = appState.setupResult || {};
   const stats = result.stats || {};
+  const sampleLoaded = Boolean(result.sample || result.sampleLoaded);
+  const summaryItems = sampleLoaded
+    ? [
+      { label: 'Accounts', value: stats.accounts || 0 },
+      { label: 'Contacts', value: stats.contacts || 0 },
+      { label: 'Jobs', value: stats.jobs || 0 },
+      { label: 'Boards', value: stats.configs || 0 },
+    ]
+    : [
+      { label: 'Imported', value: stats.imported || 0 },
+      { label: 'Updated', value: stats.updated || 0 },
+      { label: 'Skipped', value: stats.skipped || 0 },
+      { label: 'Failed', value: stats.failed || 0 },
+    ];
   if (appState.setupBusy && appState.setupImportJobId) {
     return `
       <div class="setup-success">
@@ -3668,14 +3686,25 @@ function renderSetupStepContent(stepKey) {
       <h3>${escapeHtml(successTitle)}</h3>
       <p class="muted">${escapeHtml(successCopy)}</p>
       <div class="setup-summary-grid">
-        <div><strong>${formatNumber(stats.imported || 0)}</strong><span>Imported</span></div>
-        <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updated</span></div>
-        <div><strong>${formatNumber(stats.skipped || 0)}</strong><span>Skipped</span></div>
-        <div><strong>${formatNumber(stats.failed || 0)}</strong><span>Failed</span></div>
+        ${summaryItems.map((item) => `<div><strong>${formatNumber(item.value)}</strong><span>${escapeHtml(item.label)}</span></div>`).join('')}
       </div>
       <div class="button-row center">
         <button class="primary-button" type="button" data-action="setup-open-dashboard">Open dashboard</button>
       </div>
+    </div>
+  `;
+}
+
+function renderSetupSamplePanel(jobSeeker = false) {
+  const title = jobSeeker ? 'Try a sample job-search workspace' : 'Try a sample sales workspace';
+  return `
+    <div class="setup-sample-panel">
+      <div>
+        <p class="eyebrow">Want to see it first?</p>
+        <strong>${escapeHtml(title)}</strong>
+        <p class="muted small">Loads synthetic companies, contacts, jobs, and ATS boards so you can explore the dashboard without using real people data.</p>
+      </div>
+      <button class="secondary-button" type="button" data-action="setup-load-sample" ${appState.setupBusy ? 'disabled' : ''}>Load sample data</button>
     </div>
   `;
 }
@@ -3929,6 +3958,63 @@ async function completeSetupWizard() {
   } finally {
     appState.setupBusy = false;
     appState.setupImportJobId = '';
+    await renderSetupWizard();
+  }
+}
+
+async function loadSetupSampleWorkspace() {
+  persistSetupDraftFromDom();
+  const draft = appState.setupDraft;
+
+  if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
+    showToast('Workspace, name, and email are required before loading sample data.', 'warning');
+    return;
+  }
+
+  appState.setupBusy = true;
+  appState.setupProgressMessage = 'Loading a synthetic sample workspace...';
+  await renderSetupWizard();
+
+  try {
+    const result = await api('/api/setup/sample-data', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceName: draft.workspaceName,
+        userName: draft.userName,
+        userEmail: draft.userEmail,
+        owners: parseSetupOwners(draft.ownersText),
+        persona: appState.persona,
+      }),
+    });
+
+    appState.setupResult = {
+      ...result,
+      sampleLoaded: true,
+      stats: {
+        accounts: result.stats?.accounts || 0,
+        contacts: result.stats?.contacts || 0,
+        jobs: result.stats?.jobs || 0,
+        configs: result.stats?.configs || 0,
+        tasks: result.stats?.tasks || 0,
+        imported: result.stats?.imported || result.stats?.contacts || 0,
+        updated: result.stats?.updated || 0,
+        skipped: result.stats?.skipped || 0,
+        failed: result.stats?.failed || 0,
+      },
+    };
+    appState.setupStatus = result.status;
+    appState.setupStep = getSetupSteps().length;
+    appState.setupCsvFile = null;
+    appState.setupCsvContent = '';
+    appState.setupCsvFileName = '';
+    appState.setupPreview = null;
+    invalidateAppData();
+    showToast('Sample workspace loaded.', 'success');
+  } catch (error) {
+    showToast(`Sample workspace failed: ${error.message || error}`, 'error', 8000);
+  } finally {
+    appState.setupBusy = false;
+    appState.setupProgressMessage = '';
     await renderSetupWizard();
   }
 }
