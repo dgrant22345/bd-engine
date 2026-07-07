@@ -1810,7 +1810,7 @@ function bindEvents() {
       await renderRoute();
     } finally {
       refreshBootstrapButton.disabled = false;
-      refreshBootstrapButton.textContent = 'Refresh snapshot';
+      refreshBootstrapButton.textContent = 'Refresh data';
     }
   });
 
@@ -3007,7 +3007,7 @@ function renderPersonaActionPlan(plan = {}, options = {}) {
         </div>
         ${plan.primaryCompany ? renderStatusPill(plan.primaryCompany, 'accent') : ''}
       </div>
-      ${items.length ? `<div class="persona-action-grid">${items.map((item) => renderPersonaActionCard(item, { detail })).join('')}</div>` : `<div class="empty-state empty-state--compact">${escapeHtml(copy.actionEmpty)}</div>`}
+      ${items.length ? `<div class="persona-action-grid">${items.map((item) => renderPersonaActionCard(item, { detail })).join('')}</div>` : renderEmptyState({ icon: 'Next', title: 'No recommended actions yet', copy: copy.actionEmpty, compact: true })}
     </section>
   `;
 }
@@ -3088,7 +3088,7 @@ function hydrateAdminRuntimePanels(runtime) {
         <div>
           <p class="eyebrow">Live runtime</p>
           <h4>${summary.warmed ? 'Server warm' : 'Server starting'}</h4>
-          <p class="small muted">${summary.workerRunning ? `Worker PID ${summary.workerPid || 'unknown'} is draining the queue.` : 'No worker is active right now.'}</p>
+          <p class="small muted">${summary.workerRunning ? 'Background work is running.' : 'No background work is running right now.'}</p>
         </div>
         <div class="runtime-banner-flags">
           ${renderStatusPill(summary.warmed ? 'Warm' : 'Starting', summary.warmed ? 'success' : 'warning')}
@@ -3097,9 +3097,9 @@ function hydrateAdminRuntimePanels(runtime) {
       </div>
       <div class="status-matrix status-matrix--premium">
         <div class="status-item"><span class="small muted">Server</span><strong>${summary.warmed ? 'Warm' : 'Starting'}</strong><span class="small muted">${summary.serverStartedAt ? formatDate(summary.serverStartedAt) : 'Just now'}</span></div>
-        <div class="status-item"><span class="small muted">Worker</span><strong>${summary.workerRunning ? 'Online' : 'Idle'}</strong><span class="small muted">${summary.workerPid ? `PID ${summary.workerPid}` : 'No active process'}</span></div>
-        <div class="status-item"><span class="small muted">Running jobs</span><strong>${formatNumber(summary.runningJobs || 0)}</strong><span class="small muted">Currently executing</span></div>
-        <div class="status-item"><span class="small muted">Queued jobs</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong><span class="small muted">${summary.queuedJobs ? 'Waiting for worker time' : 'Queue clear'}</span></div>
+        <div class="status-item"><span class="small muted">Background work</span><strong>${summary.workerRunning ? 'Running' : 'Idle'}</strong><span class="small muted">${summary.workerRunning ? 'Ready to process updates' : 'No active process'}</span></div>
+        <div class="status-item"><span class="small muted">Running tasks</span><strong>${formatNumber(summary.runningJobs || 0)}</strong><span class="small muted">Working now</span></div>
+        <div class="status-item"><span class="small muted">Queued tasks</span><strong>${formatNumber(summary.queuedJobs || 0)}</strong><span class="small muted">${summary.queuedJobs ? 'Waiting to start' : 'Queue clear'}</span></div>
       </div>
       ${renderIngestionHealthPanel(summary)}
     </div>
@@ -3111,9 +3111,9 @@ function hydrateAdminRuntimePanels(runtime) {
   jobsTarget.innerHTML = `
     ${activeJobs.length
       ? activeJobs.map((job) => renderBackgroundJobItem(job)).join('')
-      : '<div class="empty-state compact">No jobs are active right now.</div>'}
+      : renderEmptyState({ icon: 'OK', title: 'No background work running', copy: 'Imports, discovery runs, and refreshes will appear here once you start them.', compact: true })}
     ${recentJobs.length
-      ? `<div class="inline-header"><strong>Recent jobs</strong><span class="small muted">Completed and failed work</span></div>${recentJobs.map((job) => renderBackgroundJobItem(job)).join('')}`
+      ? `<div class="inline-header"><strong>Recent work</strong><span class="small muted">Finished updates and any issues</span></div>${recentJobs.map((job) => renderBackgroundJobItem(job)).join('')}`
       : ''}
   `;
 }
@@ -3679,7 +3679,7 @@ function renderSetupStepContent(stepKey) {
   const successTitle = jobSeeker ? 'Your job search workspace is ready' : 'Your workspace is ready';
   const successCopy = jobSeeker
     ? 'BD Engine will now open your job search dashboard using your own network and target-company data.'
-    : 'BD Engine will now open your dashboard using the local data stored on this computer.';
+    : 'BD Engine will now open your dashboard using this workspace data.';
   return `
     <div class="setup-success">
       <div class="setup-success-mark" aria-hidden="true">OK</div>
@@ -4283,7 +4283,7 @@ async function renderDashboardView(options = {}) {
               <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
             </div>
           </article>
-        `).join('')}</div>` : '<div class="empty-state">No trigger alerts are active right now.</div>'}
+          `).join('')}</div>` : renderEmptyState({ icon: 'OK', title: 'No alerts need attention', copy: 'Your highest-priority trigger alerts will appear here when scores, hiring signals, or follow-up timing change.' })}
       </div>
       <div class="list-card detail-card">
         <div class="panel-header">
@@ -4305,7 +4305,7 @@ async function renderDashboardView(options = {}) {
               <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
             </div>
           </article>
-        `).join('')}</div>` : '<div class="empty-state">No active sequence steps are queued yet.</div>'}
+        `).join('')}</div>` : renderEmptyState({ icon: 'Next', title: 'No sequence steps queued', copy: 'Generate outreach or add follow-up tasks to build a daily sequence queue.' })}
       </div>
       <div class="list-card detail-card">
         <div class="panel-header">
@@ -4327,7 +4327,7 @@ async function renderDashboardView(options = {}) {
               <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
             </div>
           </article>
-        `).join('')}</div>` : '<div class="empty-state">No warm intro opportunities are mapped yet.</div>'}
+        `).join('')}</div>` : renderEmptyState({ icon: 'Path', title: 'No warm intro paths yet', copy: 'Import LinkedIn connections or add contacts to reveal referral paths into priority accounts.' })}
       </div>
     </section>
     ` : '')}
@@ -4341,7 +4341,7 @@ async function renderDashboardView(options = {}) {
           </div>
           <a class="ghost-button" href="#/accounts">See all ${escapeHtml(personaCopy.accountPlural)}</a>
         </div>
-        ${dashboard.todayQueue.length ? renderTodayQueueTable(dashboard.todayQueue) : '<div class="empty-state">No companies match the current settings thresholds.</div>'}
+        ${dashboard.todayQueue.length ? renderTodayQueueTable(dashboard.todayQueue) : renderEmptyState({ icon: 'Queue', title: "No accounts in today's queue", copy: 'Lower the score filters, import more contacts, or run live job import to create a stronger queue.', action: '<a class="secondary-button" href="#/admin">Refresh coverage</a><a class="ghost-button" href="#/accounts">Review filters</a>' })}
       </div>
       <div class="panel-stack">
         <div class="list-card detail-card">
@@ -4351,7 +4351,7 @@ async function renderDashboardView(options = {}) {
               <p class="muted small">Accounts due for outreach, stale for too long, or ready for a next move.</p>
             </div>
           </div>
-          ${dashboard.followUpAccounts.length ? `<div class="timeline">${dashboard.followUpAccounts.map((item) => renderFollowUpItem(item)).join('')}</div>` : '<div class="empty-state">No follow-up pressure right now.</div>'}
+          ${dashboard.followUpAccounts.length ? `<div class="timeline">${dashboard.followUpAccounts.map((item) => renderFollowUpItem(item)).join('')}</div>` : renderEmptyState({ icon: 'OK', title: 'No follow-ups due', copy: 'When accounts become stale or ready for another touch, they will appear here.' })}
         </div>
         <div class="list-card detail-card">
           <div class="panel-header">
@@ -4361,7 +4361,7 @@ async function renderDashboardView(options = {}) {
             </div>
             <a class="ghost-button" href="#/admin">Open review queue</a>
           </div>
-          ${resolutionQueue.length ? `<div class="timeline">${resolutionQueue.map((item) => renderResolutionQueueItem(item)).join('')}</div>` : '<div class="empty-state">Identity resolution is in a healthy state right now.</div>'}
+          ${resolutionQueue.length ? `<div class="timeline">${resolutionQueue.map((item) => renderResolutionQueueItem(item)).join('')}</div>` : renderEmptyState({ icon: 'OK', title: 'Identity coverage looks healthy', copy: 'Accounts that need domain, careers page, or ATS review will appear here.' })}
         </div>
         <div class="list-card detail-card">
           <div class="panel-header">
@@ -4379,7 +4379,7 @@ async function renderDashboardView(options = {}) {
               <p>${escapeHtml(item.text)}</p>
               <button class="ghost-button" data-action="open-account" data-id="${item.accountId}">Open</button>
             </article>
-          `).join('')}</div>` : '<div class="empty-state">No actions available yet.</div>'}
+          `).join('')}</div>` : renderEmptyState({ icon: 'Next', title: 'No actions ready yet', copy: 'Add contacts, resolve ATS boards, or import live jobs to build your next action list.' })}
         </div>
       </div>
     </section>`)}
@@ -4414,7 +4414,7 @@ async function renderDashboardView(options = {}) {
           </div>
           <a class="ghost-button" href="#/jobs">Open jobs</a>
         </div>
-        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : '<div class="empty-state">No jobs have been imported in the last 24 hours.</div>'}
+        ${dashboard.newJobsToday.length ? renderRecentJobsTable(dashboard.newJobsToday) : renderEmptyState({ icon: 'Jobs', title: 'No new jobs in the last 24 hours', copy: 'Run live job import to refresh the latest hiring signals from active ATS boards.', action: '<a class="secondary-button" href="#/admin">Run import</a>' })}
       </div>
       <div class="panel-stack">
         <div class="chart-card">
@@ -4432,7 +4432,7 @@ async function renderDashboardView(options = {}) {
               </div>
               <p class="small">${escapeHtml(item.summary || '')}</p>
             </article>
-          `).join('')}</div>` : '<div class="empty-state">No activity logged yet.</div>'}
+          `).join('')}</div>` : renderEmptyState({ icon: 'Log', title: 'No activity logged yet', copy: 'Log outreach, notes, and follow-ups to build a useful history for each account.' })}
         </div>
         <div class="list-card detail-card">
           <div class="panel-header">
@@ -4442,7 +4442,7 @@ async function renderDashboardView(options = {}) {
             </div>
             <a class="ghost-button" href="#/admin">Open admin</a>
           </div>
-          ${dashboard.recentlyDiscoveredBoards.length ? renderDiscoveryList(dashboard.recentlyDiscoveredBoards) : '<div class="empty-state">Run ATS discovery to populate supported boards.</div>'}
+          ${dashboard.recentlyDiscoveredBoards.length ? renderDiscoveryList(dashboard.recentlyDiscoveredBoards) : renderEmptyState({ icon: 'ATS', title: 'No boards discovered yet', copy: 'Run ATS discovery to find supported job boards for your tracked accounts.', action: '<a class="secondary-button" href="#/admin">Discover boards</a>' })}
         </div>
       </div>
     </section>`)}
@@ -4572,8 +4572,8 @@ async function renderAccountsView() {
         ${appState.kanbanMode
           ? (result.items.length
               ? `${result.total > result.items.length ? `<p class="muted small board-coverage-note">Showing the top ${formatNumber(result.items.length)} of ${formatNumber(result.total)} accounts by score. Switch to <strong>Table</strong> to page through all of them, or use filters to focus the board.</p>` : ''}${renderKanbanBoard(result.items)}`
-              : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts to show on the board.</div>')
-          : (result.items.length ? renderAccountsTable(result.items) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDD0D</div>No accounts match the current filters.<div class="empty-state-suggestion">Try broadening your search, or <strong>reset a filter</strong> to see more results.</div></div>')}
+              : renderEmptyState({ icon: 'Search', title: 'No accounts on this board', copy: 'Import contacts or add accounts, then use status stages to organize follow-up.', action: '<a class="secondary-button" href="#/admin">Import contacts</a>' }))
+          : (result.items.length ? renderAccountsTable(result.items) : renderEmptyState({ icon: 'Search', title: 'No accounts match these filters', copy: 'Broaden your search or reset filters to bring accounts back into view.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset filters</button>' }))}
         ${!appState.kanbanMode ? renderPagination('accounts', result.page, result.pageSize, result.total) : ''}
       </div>
 
@@ -4773,7 +4773,7 @@ async function renderAccountDetail(accountId) {
           <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
           ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th><th>Action</th></tr></thead><tbody>' +
             detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td><td><button class="ghost-button ghost-button--xs" type="button" data-action="select-contact-outreach" data-account-id="' + escapeAttr(detail.account.id) + '" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName || '') + '">Outreach</button></td></tr>').join('') +
-            '</tbody></table></div>' : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDC64</div>No contacts imported yet.<div class="empty-state-suggestion">Import a <strong>LinkedIn Connections CSV</strong> from the Admin view to populate contacts.</div></div>'}
+            '</tbody></table></div>' : renderEmptyState({ icon: 'People', title: 'No contacts imported for this account', copy: 'Import LinkedIn connections or add contacts so outreach has a warm path.', action: '<a class="secondary-button" href="#/admin">Import contacts</a>' })}
         </div>
       </div>
 
@@ -4796,7 +4796,7 @@ async function renderAccountDetail(accountId) {
             <button class="secondary-button compact-btn" type="submit">Log</button>
           </form>
           <div class="timeline" style="max-height:400px;overflow-y:auto;">
-            ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDCDD</div>No activity yet.<div class="empty-state-suggestion">Log your first outreach or note using the form above.</div></div>'}
+            ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : renderEmptyState({ icon: 'Log', title: 'No activity on this account', copy: 'Log outreach or a note so the next step is easy to remember.' })}
           </div>
         </div>
       </div>
@@ -4885,7 +4885,7 @@ async function renderAccountDetail(accountId) {
                 <p class="small muted">${escapeHtml(alert.summary || '')}</p>
                 ${alert.recommendedAction ? `<p>${escapeHtml(alert.recommendedAction)}</p>` : ''}
               </article>
-            `).join('') : '<div class="empty-state empty-state--compact">No live trigger alerts on this account yet.</div>'}
+            `).join('') : renderEmptyState({ icon: 'OK', title: 'No trigger alerts yet', copy: 'Score changes, hiring spikes, and follow-up signals will appear here.', compact: true })}
           </div>
           ${warmIntroCandidates.length ? `
             <div class="table-scroll" style="margin-top:12px;">
@@ -4908,12 +4908,12 @@ async function renderAccountDetail(accountId) {
 
         <div class="table-card">
           <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Recent hiring context tied directly to this company.</p></div></div>
-          ${detail.jobs.length ? renderAccountJobsTable(detail.jobs) : '<div class="empty-state"><div class="empty-state-icon">\uD83D\uDCBC</div>No jobs connected to this account yet.<div class="empty-state-suggestion">Run <strong>ATS discovery</strong> or <strong>live import</strong> from Admin to pull in open roles.</div></div>'}
+          ${detail.jobs.length ? renderAccountJobsTable(detail.jobs) : renderEmptyState({ icon: 'Jobs', title: 'No jobs linked yet', copy: 'Run board discovery and live import to pull in open roles for this account.', action: '<a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
         </div>
 
         <div class="table-card">
           <div class="panel-header"><div><h3>ATS configs</h3><p class="muted small">Discovery results and import sources.</p></div></div>
-          ${detail.configs.length ? renderAccountConfigsTable(detail.configs) : '<div class="empty-state">No ATS config rows for this account yet.</div>'}
+          ${detail.configs.length ? renderAccountConfigsTable(detail.configs) : renderEmptyState({ icon: 'Boards', title: 'No job board mapped', copy: 'Resolve this account to find a supported careers board.', action: `<button class="secondary-button" type="button" data-action="account-resolve-now" data-id="${escapeAttr(detail.account.id)}">Find board</button>` })}
         </div>
       </div>
     </section>
@@ -4968,9 +4968,9 @@ async function renderContactsView() {
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
+        <div class="field field--action"><label>Filter contacts</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
       </form>
-      ${result.items.length ? renderContactsTable(result.items) : '<div class="empty-state">No contacts match the current filters.</div>'}
+      ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts match these filters', copy: 'Reset filters or import your LinkedIn Connections.csv to see mapped contacts.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset filters</button><a class="secondary-button" href="#/admin">Import contacts</a>' })}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -5008,9 +5008,9 @@ async function renderJobsView() {
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
-        <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
+        <div class="field field--action"><label>Filter jobs</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
-      ${result.items.length ? renderJobsTable(result.items) : '<div class="empty-state">No jobs match the current filter set.</div>'}
+      ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -5169,9 +5169,9 @@ async function renderAdminView() {
     <section class="hero-card hero-card--compact">
       <div class="hero-layout">
         <div class="hero-copy">
-          <p class="eyebrow">Pipeline operations</p>
-          <h3>Admin and automation controls</h3>
-          <p class="subtitle">Run discovery, import jobs, manage ATS resolution quality, and keep the outreach engine moving without falling back to the spreadsheet.</p>
+          <p class="eyebrow">Workspace operations</p>
+          <h3>Keep coverage fresh</h3>
+          <p class="subtitle">Refresh company data, find job boards, import live roles, and keep the daily account queue ready for action.</p>
           <div class="hero-signal-strip">
             ${renderSignalChip('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`, 'success')}
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
@@ -5183,9 +5183,9 @@ async function renderAdminView() {
         </div>
         <div class="action-card action-card--featured">
           <p class="eyebrow">Most used</p>
-          <h4>Run everything</h4>
-          <p class="small muted">Enriches accounts, discovers ATS boards, imports jobs, and refreshes scores in one background run.</p>
-          <button class="primary-button" type="button" data-action="run-launch-workflow">Run everything</button>
+          <h4>Refresh all signals</h4>
+          <p class="small muted">Updates company identity, finds job boards, imports live jobs, and refreshes account scores in one background run.</p>
+          <button class="primary-button" type="button" data-action="run-launch-workflow">Refresh all signals</button>
         </div>
       </div>
     </section>
@@ -5205,46 +5205,46 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       <div class="two-column">
-        ${renderCollapsibleStart('pipeline-ops', 'Pipeline operations', 'Most used workflow actions, from full automation to targeted refreshes.')}
+        ${renderCollapsibleStart('pipeline-ops', 'Refresh actions', 'Choose a full refresh or update one part of the workspace.')}
           <div class="actions-grid">
             <div class="action-card">
               <p class="eyebrow">Next most used</p>
-              <h4>Discover supported boards</h4>
-              <p class="small muted">Use this when you only need to remap ATS boards without re-running imports and scoring.</p>
+              <h4>Find job boards</h4>
+              <p class="small muted">Use this when you only need to find or recheck company job boards.</p>
               <div class="inline-field-stack">
                 <input id="discovery-limit" type="number" min="1" value="${escapeAttr(discoveryLimitDefault)}" placeholder="Rows to check">
-                <label class="field"><span class="small muted">Only unresolved configs</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
-                <label class="field"><span class="small muted">Force refresh</span><select id="discovery-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
+                <label class="field"><span class="small muted">Only missing boards</span><select id="discovery-only-missing"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
+                <label class="field"><span class="small muted">Recheck known boards</span><select id="discovery-force-refresh"><option value="false" selected>No</option><option value="true">Yes</option></select></label>
                 <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="run-discovery">Run discovery</button>
+                  <button class="secondary-button" type="button" data-action="run-discovery">Find boards</button>
                 </div>
               </div>
             </div>
             <div class="action-card">
               <p class="eyebrow">Frequent refresh</p>
-              <h4>Import live jobs</h4>
-              <p class="small muted">Fetches jobs from active ATS configs and updates tracked roles.</p>
-              <button class="secondary-button" data-action="run-live-import">Run live import</button>
+              <h4>Refresh live jobs</h4>
+              <p class="small muted">Fetches jobs from active job boards and updates tracked roles.</p>
+              <button class="secondary-button" data-action="run-live-import">Import latest jobs</button>
             </div>
             <div class="action-card">
               <p class="eyebrow">Setup and reseed</p>
-              <h4>Connections CSV</h4>
-              <p class="small muted">Validate or import a LinkedIn Connections.csv file.</p>
+              <h4>Import LinkedIn contacts</h4>
+              <p class="small muted">Preview the file first, then import contacts and companies.</p>
               <div class="inline-field-stack">
                 <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
                 <input type="file" id="connections-csv-file" accept=".csv">
                 <div class="button-row">
-                  <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Dry run CSV</button>
-                  <button class="ghost-button" type="button" data-action="import-connections-csv">Import CSV</button>
+                  <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Preview CSV</button>
+                  <button class="ghost-button" type="button" data-action="import-connections-csv">Import contacts</button>
                 </div>
               </div>
             </div>
           </div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('background-jobs', 'Background jobs', 'Long-running imports, discovery, and sheet syncs now run out of band.')}
+        ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}
           <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('billing-subscription', 'Billing & Subscription', 'Manage your plan and checkout.')}
+        ${renderCollapsibleStart('billing-subscription', 'Plan and billing', 'Manage your subscription.')}
           <div class="settings-grid">
             <div class="action-card">
               <p class="eyebrow">Current Plan: ${escapeHtml(billing.plan?.name || 'Trial')}</p>
@@ -5276,7 +5276,7 @@ async function renderAdminView() {
       </div>
 
       <div class="two-column">
-        ${renderCollapsibleStart('ats-config-records', 'ATS config records', 'Discovery results, manual overrides, and live import status for every tracked company.')}
+        ${renderCollapsibleStart('ats-config-records', 'Job board coverage', 'Board matches, manual overrides, and import readiness for tracked companies.')}
           <form id="configs-filter-form" class="filter-grid filter-grid--compact">
             ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
             ${renderField('ATS', `<select name="ats"><option value="">All</option>${(stateBootstrap.filters?.atsTypes || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
@@ -5284,20 +5284,20 @@ async function renderAdminView() {
             ${renderField('Confidence', `<select name="confidenceBand"><option value="">All</option>${(stateBootstrap.filters?.configConfidenceBands || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.confidenceBand, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Review', `<select name="reviewStatus"><option value="">All</option>${(stateBootstrap.filters?.configReviewStatuses || []).map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.configQuery.reviewStatus, value)}>${escapeHtml(humanize(value))}</option>`).join('')}</select>`)}
             ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.configQuery.active, 'true')}>Active</option><option value="false" ${selected(appState.configQuery.active, 'false')}>Inactive</option></select>`)}
-            <div class="field field--action"><label>Refresh queue</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
+            <div class="field field--action"><label>Filter boards</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset</button></div>
           </form>
-          ${configs.items.length ? renderConfigsTable(configs.items) : '<div class="empty-state">No config rows match the current filters.</div>'}
+          ${configs.items.length ? renderConfigsTable(configs.items) : renderEmptyState({ icon: 'Boards', title: 'No job boards match these filters', copy: 'Reset filters or run board discovery to create supported board matches.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset filters</button><button class="secondary-button" type="button" data-action="run-discovery">Find boards</button>' })}
           ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
           <div class="panel-stack">
             <div>
               <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
-              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : '<div class="empty-state empty-state--compact">No medium-confidence configs need review right now.</div>'}
+              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : renderEmptyState({ icon: 'OK', title: 'Nothing needs review', copy: 'Medium-confidence board matches will land here before they are approved.', compact: true })}
             </div>
             <div>
               <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
-              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : '<div class="empty-state empty-state--compact">No unresolved configs are waiting in the queue.</div>'}
+              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : renderEmptyState({ icon: 'OK', title: 'No unresolved companies waiting', copy: 'Companies missing a usable board will appear here with the reason they need help.', compact: true })}
             </div>
           </div>
         ${renderCollapsibleEnd()}
@@ -5305,7 +5305,7 @@ async function renderAdminView() {
 
       <div class="two-column">
         ${siteAnalyticsSection}
-        ${renderCollapsibleStart('runtime-status', 'Runtime status', 'See whether the server is warm and whether background jobs are queued or running.')}
+        ${renderCollapsibleStart('runtime-status', 'App status', 'See whether background work is idle, queued, or running.')}
           <div id="runtime-status-panel"></div>
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
@@ -5350,7 +5350,7 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit ATS config' : 'Add ATS config'}`, 'Paste a Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite, or BambooHR board URL and BD Engine will auto-fill what it can.')}
+        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit job board source' : 'Add job board source'}`, 'Paste a Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite, or BambooHR board URL and BD Engine will auto-fill what it can.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
@@ -5531,7 +5531,7 @@ function renderJobsTable(items, compact) {
 
 function renderMiniStatList(items) {
   if (!items || !items.length) {
-    return '<div class="empty-state empty-state--compact">No resolver data yet.</div>';
+    return renderEmptyState({ icon: 'Info', title: 'No summary yet', copy: 'Run discovery or import data to populate this breakdown.', compact: true });
   }
 
   return `
@@ -5558,7 +5558,7 @@ function renderResolverQueue(items, tone) {
             ${renderStatusPill(item.confidenceBand || 'unresolved', tone === 'medium' ? 'warning' : 'neutral')}
           </div>
           <p>${escapeHtml(item.evidenceSummary || item.failureReason || item.notes || 'Resolver evidence not available yet.')}</p>
-          <div class="small muted">${escapeHtml(item.atsType || 'unknown')} · ${escapeHtml(item.discoveryMethod || 'n/a')} · ${escapeHtml(item.domain || item.careersUrl || '')}</div>
+          <div class="small muted">${escapeHtml(item.atsType || 'unknown')} / ${escapeHtml(item.discoveryMethod || 'n/a')} / ${escapeHtml(item.domain || item.careersUrl || '')}</div>
           <div class="button-row button-row--wrap">
             <button class="ghost-button" data-action="retry-config-resolution" data-id="${item.id}">Retry</button>
             <button class="ghost-button" data-action="config-review" data-id="${item.id}" data-decision="approve">Approve</button>
@@ -5602,7 +5602,7 @@ function renderEnrichmentFilters() {
 
 function renderEnrichmentQueuePanel(result) {
   if (!result.items || !result.items.length) {
-    return '<div class="empty-state empty-state--compact">No companies match the current filters.</div>';
+    return renderEmptyState({ icon: 'Search', title: 'No companies match this review queue', copy: 'Reset filters or use Top 100/250 to focus the queue.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="enrichment">Reset filters</button>', compact: true });
   }
   return `
     <div class="table-scroll"><table class="table">
@@ -5624,7 +5624,7 @@ function renderEnrichmentQueuePanel(result) {
             <td>${formatNumber(item.openRoleCount || 0)}</td>
             <td>${renderStatusPill(item.enrichmentConfidence || 'unresolved', item.enrichmentConfidence === 'high' ? 'success' : (item.enrichmentConfidence === 'medium' ? 'warning' : 'neutral'))}</td>
             <td>${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}${renderEnrichmentSignalPills(item, { compact: true })}<div class="small muted">${safeJoin(item.aliases)}</div></td>
-            <td><div class="button-row button-row--wrap"><button class="ghost-button ghost-button--xs" data-action="account-quick-enrich" data-id="${item.id}">Quick</button><button class="secondary-button ghost-button--xs" data-action="account-resolve-now" data-id="${item.id}">Resolve</button><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></div></td>
+            <td><div class="button-row button-row--wrap"><button class="ghost-button ghost-button--xs" data-action="account-quick-enrich" data-id="${item.id}">Quick check</button><button class="secondary-button ghost-button--xs" data-action="account-resolve-now" data-id="${item.id}">Resolve</button><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></div></td>
           </tr>
           <tr class="enrichment-edit-row hidden" id="enrichment-edit-${item.id}">
             <td colspan="7">
@@ -6079,13 +6079,13 @@ function formatConnectionsImportStats(stats = {}) {
 }
 
 function formatConnectionsImportWarnings(warnings = []) {
-  return Array.isArray(warnings) && warnings.length ? ` Warnings: ${warnings.join(' ')}` : '';
+  return Array.isArray(warnings) && warnings.length ? ` Note: ${warnings.join(' ')}` : '';
 }
 
 function formatConnectionsImportError(error) {
   const parts = [error?.message || String(error || 'Import failed.')];
   if (Array.isArray(error?.expectedHeaders) && error.expectedHeaders.length) {
-    parts.push(`Expected headers include: ${error.expectedHeaders.join(', ')}.`);
+    parts.push(`The file should include columns such as: ${error.expectedHeaders.join(', ')}.`);
   }
   if (Array.isArray(error?.warnings) && error.warnings.length) {
     parts.push(error.warnings.join(' '));
@@ -6140,6 +6140,17 @@ function renderField(label, control) {
   const id = `field-${++fieldIdCounter}`;
   const controlWithId = control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
   return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}</div>`;
+}
+
+function renderEmptyState({ icon = 'i', title = 'Nothing to show yet', copy = '', action = '', compact = false } = {}) {
+  return `
+    <div class="empty-state${compact ? ' empty-state--compact' : ''}">
+      ${icon ? `<span class="empty-state-icon" aria-hidden="true">${escapeHtml(icon)}</span>` : ''}
+      <strong class="empty-state-title">${escapeHtml(title)}</strong>
+      ${copy ? `<p class="empty-state-copy">${escapeHtml(copy)}</p>` : ''}
+      ${action ? `<div class="empty-state-actions">${action}</div>` : ''}
+    </div>
+  `;
 }
 
 function renderStatusPill(value, tone) {
@@ -6269,11 +6280,11 @@ async function runLiveImport(buttonEl) {
       ? ` ${formatNumber(changedJobs)} material job row${changedJobs === 1 ? '' : 's'} changed this run;`
       : '';
     const discoveryText = Number(stats.autoDiscoveryChecked || 0) > 0
-      ? `Auto-discovered ${formatNumber(stats.autoDiscoveryMapped || 0)} of ${formatNumber(stats.autoDiscoveryChecked || 0)} ATS configs before import. `
+      ? `Found ${formatNumber(stats.autoDiscoveryMapped || 0)} of ${formatNumber(stats.autoDiscoveryChecked || 0)} job boards before import. `
       : '';
-    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} ATS configs; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
+    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} job boards; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
     const status = run?.status === 'completed_with_errors'
-      ? `${baseStatus} ${formatNumber(stats.errors || 0)} configs errored.`
+      ? `${baseStatus} ${formatNumber(stats.errors || 0)} boards had issues.`
       : baseStatus;
     window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
   });
@@ -6609,8 +6620,8 @@ function getConnectionsCsvPath() {
 async function runConnectionsCsvImport(dryRun) {
   const action = dryRun ? 'dry-run-connections-csv' : 'import-connections-csv';
   const button = document.querySelector(`[data-action="${action}"]`);
-  const originalLabel = dryRun ? 'Dry run CSV' : 'Import CSV';
-  if (button) { button.disabled = true; button.textContent = dryRun ? 'Dry running...' : 'Queueing...'; }
+  const originalLabel = dryRun ? 'Preview CSV' : 'Import contacts';
+  if (button) { button.disabled = true; button.textContent = dryRun ? 'Previewing...' : 'Importing...'; }
 
   try {
     const fileInput = document.getElementById('connections-csv-file');
@@ -7589,6 +7600,7 @@ const tourSteps = [
   { title: 'Open the source lists', copy: 'Accounts, Contacts, Jobs, and Tasks are your day-to-day work tabs once setup is complete.', target: '[data-route="accounts"]' },
   { title: 'Tune the engine', copy: 'Admin holds imports, ATS discovery, enrichment, scoring settings, and background-job controls.', target: '[data-route="admin"]' }
 ];
+tourSteps[1].copy = "These chips summarize today's account queue, fresh roles, follow-up pressure, and identity work.";
 
 let currentTourStep = 0;
 
@@ -7695,10 +7707,10 @@ async function renderTasksView() {
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? '<div class="empty-state">No pending tasks! Time to generate some outreach.</div>' : ''}
+            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Generate outreach, log follow-ups, or set next actions from an account page to build your task list.' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
-            ${!completed.length ? '<div class="empty-state">No completed tasks yet.</div>' : ''}
+            ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
           `}
         </div>
       </section>
