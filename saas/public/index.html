@@ -21,7 +21,7 @@
 
     // ── State ─────────────────────────────────────────────────────────────
     let state = {
-      view: 'loading', // loading | landing | login | signup | app | trust | privacy | terms | security | status
+      view: 'loading', // loading | landing | login | signup | forgot | reset | app | trust | privacy | terms | security | status
       user: null,
       tenant: null,
       tenants: [],
@@ -33,6 +33,8 @@
       error: '',
       busy: false,
       referralCode: getInitialReferralCode(),
+      resetToken: getInitialResetToken(),
+      resetMessage: '',
     };
 
     function getInitialReferralCode() {
@@ -44,6 +46,10 @@
         .slice(0, 24);
       if (normalized) localStorage.setItem('bd_referral_code', normalized);
       return normalized;
+    }
+
+    function getInitialResetToken() {
+      return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
     }
 
     // ── API helper ────────────────────────────────────────────────────────
@@ -108,11 +114,13 @@
           state.demo = Boolean(data.demo);
           state.readOnly = Boolean(data.readOnly);
           state.view = 'app';
+        } else if (state.resetToken) {
+          state.view = 'reset';
         } else {
           state.view = 'landing';
         }
       } catch {
-        state.view = 'landing';
+        state.view = state.resetToken ? 'reset' : 'landing';
       }
       render();
     }
@@ -174,6 +182,51 @@
         state.readOnly = false;
         state.view = 'app';
         state.error = '';
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function doRequestPasswordReset(email) {
+      state.busy = true;
+      state.error = '';
+      state.resetMessage = '';
+      render();
+      try {
+        const data = await api('/api/auth/password-reset/request', {
+          method: 'POST',
+          body: JSON.stringify({ email }),
+        });
+        state.resetMessage = data.message || 'If an account exists for that email, a reset link will be sent shortly.';
+        if (data.resetToken) {
+          state.resetToken = data.resetToken;
+          state.view = 'reset';
+        }
+      } catch (err) {
+        state.error = err.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+    }
+
+    async function doConfirmPasswordReset(password) {
+      state.busy = true;
+      state.error = '';
+      state.resetMessage = '';
+      render();
+      try {
+        const data = await api('/api/auth/password-reset/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ token: state.resetToken, password }),
+        });
+        state.resetMessage = data.message || 'Password reset. You can now log in.';
+        state.resetToken = '';
+        if (window.history?.replaceState) window.history.replaceState({}, document.title, window.location.pathname);
+        state.view = 'login';
       } catch (err) {
         state.error = err.message;
       } finally {
@@ -333,6 +386,8 @@
         case 'landing': return renderLanding();
         case 'login': return renderLogin();
         case 'signup': return renderSignup();
+        case 'forgot': return renderForgotPassword();
+        case 'reset': return renderResetPassword();
         case 'app': return renderApp();
         case 'trust':
         case 'privacy':
@@ -712,6 +767,8 @@
               </button>
             </form>
             <div class="auth-footer">
+              ${state.resetMessage ? `<p class="auth-success">${escapeHtml(state.resetMessage)}</p>` : ''}
+              <p><button class="link-btn" id="goto-forgot">Forgot password?</button></p>
               <p>Don't have an account? <button class="link-btn" id="goto-signup">Sign up free</button></p>
               <p><button class="link-btn" data-demo-start>${state.busy ? 'Opening demo...' : 'Try the read-only demo'}</button></p>
               <button class="link-btn" id="goto-landing">Back to home</button>
@@ -725,12 +782,84 @@
         const password = root.querySelector('#login-password').value;
         doLogin(email, password);
       });
+      root.querySelector('#goto-forgot')?.addEventListener('click', () => { state.view = 'forgot'; state.error = ''; state.resetMessage = ''; render(); });
       root.querySelector('#goto-signup')?.addEventListener('click', () => { state.view = 'signup'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
     }
 
     // ── Signup page ───────────────────────────────────────────────────────
+    function renderForgotPassword() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <div class="auth-card">
+            <div class="auth-header">
+              <div class="brand-icon-sm">
+                <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg-reset)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><defs><linearGradient id="bg-reset" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <h2>Reset your password</h2>
+              <p>Enter your email and we will send a reset link if an account exists.</p>
+            </div>
+            ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
+            ${state.resetMessage ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">${escapeHtml(state.resetMessage)}</div>` : ''}
+            <form id="forgot-form" class="auth-form">
+              <div class="form-group">
+                <label for="forgot-email">Email</label>
+                <input type="email" id="forgot-email" placeholder="you@company.com" autocomplete="email" required autofocus>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
+                ${state.busy ? '<span class="btn-spinner"></span> Sending...' : 'Send reset link'}
+              </button>
+            </form>
+            <div class="auth-footer">
+              <p><button class="link-btn" id="goto-login">Back to login</button></p>
+              <button class="link-btn" id="goto-landing">Back to home</button>
+            </div>
+          </div>
+        </div>`;
+
+      root.querySelector('#forgot-form')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        doRequestPasswordReset(root.querySelector('#forgot-email').value);
+      });
+      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+    }
+
+    function renderResetPassword() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <div class="auth-card">
+            <div class="auth-header">
+              <div class="brand-icon-sm">
+                <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg-reset2)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><defs><linearGradient id="bg-reset2" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+              </div>
+              <h2>Choose a new password</h2>
+              <p>Use at least 6 characters.</p>
+            </div>
+            ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
+            <form id="reset-form" class="auth-form">
+              <div class="form-group">
+                <label for="reset-password">New password</label>
+                <input type="password" id="reset-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" autofocus>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
+                ${state.busy ? '<span class="btn-spinner"></span> Resetting...' : 'Reset password'}
+              </button>
+            </form>
+            <div class="auth-footer">
+              <p><button class="link-btn" id="goto-login">Back to login</button></p>
+            </div>
+          </div>
+        </div>`;
+
+      root.querySelector('#reset-form')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        doConfirmPasswordReset(root.querySelector('#reset-password').value);
+      });
+      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+    }
+
     function renderSignup() {
       root.innerHTML = `
         <div class="auth-page">

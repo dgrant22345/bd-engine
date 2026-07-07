@@ -5,7 +5,7 @@
  * In production this would verify JWTs or use an auth provider (Clerk, Auth0, etc.).
  */
 
-import { randomUUID, randomBytes, scryptSync, createHmac, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, scryptSync, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { dbSaveSession, dbDeleteSession, dbLoadActiveSessions } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET || 'bd-engine-dev-secret-do-not-use-in-production';
@@ -175,4 +175,13 @@ export function verifyPassword(password, hash) {
 
 export function passwordNeedsUpgrade(hash) {
   return !(typeof hash === 'string' && hash.startsWith('scrypt$'));
+}
+
+export function createPasswordResetSecret() {
+  const token = randomBytes(32).toString('base64url');
+  return { token, tokenHash: hashPasswordResetToken(token) };
+}
+
+export function hashPasswordResetToken(token) {
+  return createHash('sha256').update(String(token || '')).digest('hex');
 }

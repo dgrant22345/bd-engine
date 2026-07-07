@@ -2,6 +2,7 @@ const baseUrl = process.env.BD_CLOUD_SMOKE_URL || 'http://127.0.0.1:8787';
 
 const checks = [];
 let cookie = '';
+let authEmail = '';
 
 await check('health endpoint', async () => {
   const body = await getJson('/health');
@@ -20,6 +21,7 @@ await check('detailed status rejects anonymous requests', async () => {
 
 await check('signup creates a session', async () => {
   const email = `smoke-auth-${Date.now()}@example.com`;
+  authEmail = email;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -35,6 +37,38 @@ await check('signup creates a session', async () => {
   assert(cookie.includes('bd_session='), 'signup did not set bd_session cookie');
   const body = await response.json();
   assert(body.user?.email === email, 'signup returned unexpected user');
+});
+
+await check('password reset changes the account password', async () => {
+  const request = await fetch(`${baseUrl}/api/auth/password-reset/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: authEmail }),
+  });
+  assert(request.status === 202, `password reset request returned ${request.status}`);
+  const requestBody = await request.json();
+  assert(requestBody.resetToken, 'test reset request did not return a reset token');
+
+  const confirm = await fetch(`${baseUrl}/api/auth/password-reset/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: requestBody.resetToken, password: 'smoke5678' }),
+  });
+  assert(confirm.status === 200, `password reset confirm returned ${confirm.status}`);
+
+  const oldLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: authEmail, password: 'smoke1234' }),
+  });
+  assert(oldLogin.status === 401, 'old password still logged in after reset');
+
+  const newLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: authEmail, password: 'smoke5678' }),
+  });
+  assert(newLogin.status === 200, `new password login returned ${newLogin.status}`);
 });
 
 await check('authenticated session can load bootstrap', async () => {

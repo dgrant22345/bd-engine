@@ -117,6 +117,16 @@ export async function initDb() {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);
+
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens (user_id);
+      CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_idx ON password_reset_tokens (expires_at);
     `);
 
     await pool.query(`
@@ -671,6 +681,55 @@ export async function dbLoadActiveSessions() {
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────────────
+
+export async function dbSavePasswordResetToken(record) {
+  if (!dbReady) return;
+  try {
+    await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at < $2 OR used_at <> $3', [
+      record.userId,
+      new Date().toISOString(),
+      '',
+    ]);
+    await pool.query(
+      `INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, used_at, created_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [record.tokenHash, record.userId, record.expiresAt, record.usedAt || '', record.createdAt]
+    );
+  } catch (err) {
+    console.error('DB: Failed to save password reset token:', err.message);
+  }
+}
+
+export async function dbFindPasswordResetToken(tokenHash) {
+  if (!dbReady) return null;
+  try {
+    const { rows } = await pool.query(
+      'SELECT token_hash, user_id, expires_at, used_at, created_at FROM password_reset_tokens WHERE token_hash = $1',
+      [tokenHash]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      tokenHash: row.token_hash,
+      userId: row.user_id,
+      expiresAt: row.expires_at,
+      usedAt: row.used_at || '',
+      createdAt: row.created_at,
+    };
+  } catch (err) {
+    console.error('DB: Failed to find password reset token:', err.message);
+    return null;
+  }
+}
+
+export async function dbMarkPasswordResetTokenUsed(tokenHash) {
+  if (!dbReady) return;
+  try {
+    await pool.query('UPDATE password_reset_tokens SET used_at = $2 WHERE token_hash = $1', [tokenHash, new Date().toISOString()]);
+  } catch (err) {
+    console.error('DB: Failed to mark password reset token used:', err.message);
+  }
+}
 
 export async function closeDb() {
   // Idempotent: a second signal (e.g. double Ctrl+C) must not double-end the pool.

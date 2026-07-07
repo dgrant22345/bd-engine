@@ -4,10 +4,11 @@ import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
-import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb } from './auth.js';
-import { createUser, authenticateUser, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
+import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -39,12 +40,16 @@ const LOGIN_MAX = Number(process.env.BD_LOGIN_MAX) > 0 ? Number(process.env.BD_L
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const SIGNUP_MAX = Number(process.env.BD_SIGNUP_MAX) > 0 ? Number(process.env.BD_SIGNUP_MAX) : 10;
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
+const PASSWORD_RESET_MAX = Number(process.env.BD_PASSWORD_RESET_MAX) > 0 ? Number(process.env.BD_PASSWORD_RESET_MAX) : 5;
+const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
 const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
+const passwordResetTokens = new Map();
 
 // Restrict CORS to known origins instead of "*" (which also can't carry the
 // session cookie). Same-origin app requests are unaffected.
@@ -363,6 +368,12 @@ function getRequestOrigin(req) {
   return `${protoValue || 'https'}://${hostValue}`;
 }
 
+function shouldExposeDevResetToken() {
+  return process.env.BD_EXPOSE_RESET_TOKEN === 'true'
+    || process.env.NODE_ENV === 'test'
+    || (!process.env.RAILWAY_ENVIRONMENT && process.env.NODE_ENV !== 'production');
+}
+
 const billingExemptApiPaths = new Set([
   '/api/auth/me',
   '/api/auth/logout',
@@ -438,6 +449,20 @@ async function route(req, res) {
       return sendJson(res, 429, { error: 'Too many login attempts. Please wait a few minutes and try again.' });
     }
     return handleLogin(req, res);
+  }
+
+  if (pathname === '/api/auth/password-reset/request' && req.method === 'POST') {
+    if (rateLimitExceeded(`password-reset:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many reset requests from this network. Please wait a few minutes and try again.' });
+    }
+    return handlePasswordResetRequest(req, res);
+  }
+
+  if (pathname === '/api/auth/password-reset/confirm' && req.method === 'POST') {
+    if (rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many reset attempts. Please wait a few minutes and try again.' });
+    }
+    return handlePasswordResetConfirm(req, res);
   }
 
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
@@ -1183,6 +1208,69 @@ function getStripeId(value) {
 }
 
 // ── Auth handlers ───────────────────────────────────────────────────────────
+
+async function handlePasswordResetRequest(req, res) {
+  const { email } = await readJson(req);
+  const user = findUserByEmail(email);
+  const emailConfigured = isEmailConfigured();
+  let resetUrl = '';
+  let devToken = '';
+
+  if (user) {
+    const { token, tokenHash } = createPasswordResetSecret();
+    const record = {
+      tokenHash,
+      userId: user.id,
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString(),
+      usedAt: '',
+      createdAt: new Date().toISOString(),
+    };
+    passwordResetTokens.set(tokenHash, record);
+    await dbSavePasswordResetToken(record);
+    resetUrl = `${getRequestOrigin(req)}/?reset=${encodeURIComponent(token)}`;
+    if (emailConfigured) {
+      try {
+        await sendPasswordResetEmail({ to: user.email, name: user.name, resetUrl });
+      } catch (error) {
+        console.error('Password reset email failed:', error.message || error);
+      }
+    }
+    if (shouldExposeDevResetToken()) devToken = token;
+  }
+
+  return sendJson(res, 202, {
+    ok: true,
+    message: 'If an account exists for that email, a reset link will be sent shortly.',
+    emailConfigured,
+    ...(devToken ? { resetToken: devToken, resetUrl } : {}),
+  });
+}
+
+async function handlePasswordResetConfirm(req, res) {
+  const { token, password } = await readJson(req);
+  if (!token || !password) {
+    return sendJson(res, 400, { error: 'Reset token and new password are required.' });
+  }
+  if (String(password).length < 6) {
+    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  }
+
+  const tokenHash = hashPasswordResetToken(token);
+  const record = passwordResetTokens.get(tokenHash) || await dbFindPasswordResetToken(tokenHash);
+  if (!record || record.usedAt || new Date(record.expiresAt).getTime() < Date.now()) {
+    return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
+  }
+
+  const result = setUserPassword(record.userId, password);
+  if (result.error) {
+    return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
+  }
+
+  const usedRecord = { ...record, usedAt: new Date().toISOString() };
+  passwordResetTokens.set(tokenHash, usedRecord);
+  await dbMarkPasswordResetTokenUsed(tokenHash);
+  return sendJson(res, 200, { ok: true, message: 'Password reset. You can now log in.' });
+}
 
 async function handleStartDemo(req, res) {
   let user = findUserByEmail(PUBLIC_DEMO_EMAIL);

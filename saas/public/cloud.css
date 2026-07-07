@@ -965,6 +965,13 @@ a:hover { text-decoration: underline; }
   margin-bottom: 20px;
 }
 
+.auth-success {
+  color: #166534;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;

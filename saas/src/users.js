@@ -100,6 +100,15 @@ export function authenticateUser(email, password) {
 
 // ── Tenant CRUD ─────────────────────────────────────────────────────────────
 
+export function setUserPassword(userId, password) {
+  const user = findUserById(userId);
+  if (!user) return { error: 'User not found.' };
+  user.passwordHash = hashPassword(password);
+  user.updatedAt = now();
+  dbSaveUser(user).catch(() => {});
+  return { user };
+}
+
 export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '' }) {
   const id = `tenant-${randomUUID().slice(0, 8)}`;
   const normalizedSlug = makeUniqueTenantSlug(slug || name || id, id);
