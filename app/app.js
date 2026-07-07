@@ -3628,7 +3628,7 @@ function renderSetupStepContent(stepKey) {
           </ol>
           <div class="onboarding-guide__note">
             <span class="toast-icon">&#8505;</span>
-            <span>LinkedIn says smaller account-data downloads can arrive within minutes; larger archives can take up to 24 hours.</span>
+            <span>LinkedIn sends the archive link to your primary email. <a href="https://www.linkedin.com/help/linkedin/answer/a566336/export-connections-from-linkedin" target="_blank" rel="noopener">Open LinkedIn's export guide</a>.</span>
           </div>
         </div>
 
