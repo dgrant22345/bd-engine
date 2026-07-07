@@ -837,7 +837,7 @@ function evaluateAutomationRules(account) {
 function renderAutomationRulesPanel() {
   return `
     <div class="detail-card automation-panel">
-      <div class="panel-header"><div><h3>Automation Rules</h3><p class="muted small">When conditions are met, auto-apply actions.</p></div></div>
+      <div class="panel-header"><div><h3>Automation Rules</h3><p class="muted small">When conditions are met, auto-apply actions. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
       <div class="automation-form" id="automation-form">
         <select id="auto-trigger">
           <option value="status_change">When status changes to...</option>
@@ -1198,7 +1198,7 @@ function renderOutreachSequencePanel(accountId) {
   const seqs = appState.outreachSequences.filter(s => s.accountId === accountId);
   return `
     <div class="detail-card sequence-panel">
-      <div class="panel-header"><div><h3>Outreach sequence</h3><p class="muted small">Multi-step cadence for this account.</p></div></div>
+      <div class="panel-header"><div><h3>Outreach sequence</h3><p class="muted small">Multi-step cadence for this account. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
       <form class="sequence-form" data-account-id="${accountId}">
         <select name="channel" class="compact-select"><option value="email">Email</option><option value="linkedin">LinkedIn</option><option value="call">Call</option></select>
         <input name="note" placeholder="Step description..." class="compact-input">
@@ -1443,7 +1443,7 @@ function renderCustomFieldsPanel(accountId) {
   if (!fields.length) {
     return `
       <div class="detail-card custom-fields-panel">
-        <div class="panel-header"><div><h3>Custom fields</h3><p class="muted small">Define your own fields to track per account.</p></div></div>
+        <div class="panel-header"><div><h3>Custom fields</h3><p class="muted small">Define your own fields to track per account. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
         <form class="custom-field-def-form" id="custom-field-def-form">
           <input name="fieldName" placeholder="Field name..." class="compact-input">
           <select name="fieldType" class="compact-select"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select (comma-separated)</option></select>
@@ -1455,7 +1455,7 @@ function renderCustomFieldsPanel(accountId) {
   return `
     <div class="detail-card custom-fields-panel">
       <div class="panel-header">
-        <div><h3>Custom fields</h3><p class="muted small">${fields.length} custom field${fields.length > 1 ? 's' : ''} defined.</p></div>
+        <div><h3>Custom fields</h3><p class="muted small">${fields.length} custom field${fields.length > 1 ? 's' : ''} defined. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div>
         <button class="ghost-button ghost-button--xs" id="add-custom-field-toggle">+ Add field</button>
       </div>
       <form class="custom-field-def-form hidden" id="custom-field-def-form">
@@ -2790,7 +2790,7 @@ async function applyAccountPreset(presetId, options = {}) {
 
 function renderSavedFilters() {
   if (!appState.savedFilters.length) return '';
-  return `<div class="saved-filters-bar">${appState.savedFilters.map(f =>
+  return `<div class="saved-filters-bar"><span class="muted small" title="Stored in this browser only — not yet synced across devices or team members">Saved views (this device):</span>${appState.savedFilters.map(f =>
     `<span class="saved-filter-chip"><button class="ghost-button ghost-button--xs" data-action="load-saved-filter" data-name="${escapeAttr(f.name)}">${escapeHtml(f.name)}</button><button class="saved-filter-delete" data-action="delete-saved-filter" data-name="${escapeAttr(f.name)}" aria-label="Delete filter ${escapeAttr(f.name)}">&times;</button></span>`
   ).join('')}</div>`;
 }

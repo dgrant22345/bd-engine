@@ -260,7 +260,19 @@
 
     function openBillingPage() {
       const frame = root.querySelector('.cloud-app-frame');
-      if (frame) frame.src = '/app/#/admin/billing';
+      if (!frame) return;
+      // Navigate the SPA's hash in place rather than resetting src, which would
+      // force a full ~373KB reload of the app on every billing click. The iframe
+      // is same-origin, so hash navigation is allowed and the SPA's hashchange
+      // router handles it without reloading.
+      try {
+        const win = frame.contentWindow;
+        if (win && win.location && String(win.location.href).includes('/app/')) {
+          win.location.hash = '#/admin/billing';
+          return;
+        }
+      } catch { /* cross-origin/not-ready — fall through to full navigation */ }
+      frame.src = '/app/#/admin/billing';
     }
 
     async function copyReferralLink(btn) {
