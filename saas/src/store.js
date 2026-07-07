@@ -1,4 +1,12 @@
-import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
+import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled, dbQuery } from './db.js';
+import * as relationalReads from './relational-reads.js';
+
+// When on, list reads go to the normalized rel_* tables (SQL) instead of the
+// in-memory blob. Default OFF — safe to flip only once writes also update rel_*
+// (dual-write), otherwise the SQL path can read stale data. See
+// docs/relational-migration.md.
+const USE_RELATIONAL = process.env.BD_USE_RELATIONAL === 'true';
+const relationalDb = { query: (sql, params) => dbQuery(sql, params) };
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1486,6 +1494,7 @@ export function createStore() {
 
     async findAccounts(tenantId, query) {
       assertTenant(tenantId);
+      if (USE_RELATIONAL) return relationalReads.findAccounts(relationalDb, tenantId, query);
       await ensureDataLoaded(tenantId);
       return paginate(filterText(accountsForTenant(tenantId), query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']), query);
     },
@@ -1549,6 +1558,7 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
+      if (USE_RELATIONAL) return relationalReads.findContacts(relationalDb, tenantId, query);
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
       return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
     },

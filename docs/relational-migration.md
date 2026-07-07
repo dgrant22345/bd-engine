@@ -38,18 +38,36 @@ creating/backfilling them does not affect the running app.
   fetch+parse the 30MB blob the app loads today. From inside Railway (private
   network) the SQL side is single-digit ms.
 
+## Status — step 2 done (read adapter for lists, flag-gated, default OFF)
+- `saas/src/relational-reads.js` — SQL `findAccounts` + `findContacts`, matching
+  the blob semantics exactly (text search across indexed columns + JSONB fields,
+  sort by score with `ord` tie-break, pagination). Same `{items,page,pageSize,
+  total}` shape; `items` are the full objects (from the `data` JSONB).
+- `rel_*` gained an `ord` column (original array index) so tie-order matches the
+  in-memory stable sort byte-for-byte.
+- `store.js` delegates `findAccounts`/`findContacts` to the SQL adapter when
+  `BD_USE_RELATIONAL=true`; default OFF keeps the in-memory path untouched.
+- `db.js` exports `dbQuery` for the adapters.
+- Proven: `eqtest-reads.mjs` shows byte-identical pages vs the blob across 12
+  queries (empty, pagination, text search, no-match) on the real tenant;
+  `test-integration.mjs` runs the full store→adapter→pool path (flag ON) returning
+  the real 12,317 accounts in ~190ms with no 30MB memory load; flag-OFF verified
+  unchanged.
+
+**Still NOT safe to flip on in prod** until writes also update `rel_*` — the SQL
+path would otherwise read a stale snapshot. That's the next step.
+
 ## Remaining steps (future sessions)
-1. **Store read adapter behind a flag** (`BD_USE_RELATIONAL`): reimplement the
-   read paths (`findAccounts`, `findContacts`, `findJobs`, `getAccountDetail`,
-   dashboard aggregates) as SQL. Default OFF.
-2. **Write adapter**: per-mutation upserts to `rel_*` (drop the whole-blob
-   debounced save). Consider dual-write (blob + relational) during transition so
-   rollback is trivial.
+1. **Write adapter / dual-write**: on each mutation, upsert the affected row(s)
+   into `rel_*` (and update `ord` as needed) so the SQL reads are never stale.
+   Then `BD_USE_RELATIONAL` becomes safe to flip per tenant.
+2. **Remaining reads**: `findJobs` (has ats/active/isNew/recency/sortBy filters),
+   `getAccountDetail`, and the dashboard aggregates.
 3. **Cutover per tenant**: re-run backfill fresh, flip the flag for that tenant,
    monitor. `rel_migration_state` tracks who's migrated.
 4. **Decommission** the in-memory global arrays + `tenant_data` writes once all
-   tenants are on relational; add LRU/eviction is no longer needed (reads are
-   SQL). Unblocks a second instance.
+   tenants are on relational; LRU/eviction is no longer needed (reads are SQL).
+   Unblocks a second instance.
 5. **Follow-up**: the backfill de-dupes colliding ids by suffixing; a real
    cutover should also remap references (contact.accountId) for any re-ided
    accounts. (No collisions were found in the current real data, so this is

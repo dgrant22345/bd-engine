@@ -27,6 +27,12 @@ export function isDbReady() {
   return dbReady;
 }
 
+// Generic query helper for the relational read/write adapters (rel_* tables).
+export async function dbQuery(text, params = []) {
+  if (!pool) throw new Error('Database is not connected.');
+  return pool.query(text, params);
+}
+
 export async function initDb() {
   if (!isDbEnabled()) {
     console.log('  DB: No DATABASE_URL — running in-memory only');

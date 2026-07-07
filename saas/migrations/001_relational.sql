@@ -21,6 +21,7 @@
 CREATE TABLE IF NOT EXISTS rel_accounts (
   tenant_id        TEXT NOT NULL,
   id               TEXT NOT NULL,
+  ord              INTEGER NOT NULL DEFAULT 0,
   normalized_name  TEXT,
   display_name     TEXT,
   domain           TEXT,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS rel_accounts (
   data             JSONB NOT NULL DEFAULT '{}',
   PRIMARY KEY (tenant_id, id)
 );
+ALTER TABLE rel_accounts ADD COLUMN IF NOT EXISTS ord INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS rel_accounts_tenant_score_idx  ON rel_accounts (tenant_id, target_score DESC);
 CREATE INDEX IF NOT EXISTS rel_accounts_tenant_name_idx   ON rel_accounts (tenant_id, normalized_name);
 CREATE INDEX IF NOT EXISTS rel_accounts_tenant_status_idx ON rel_accounts (tenant_id, status);
@@ -40,6 +42,7 @@ CREATE INDEX IF NOT EXISTS rel_accounts_tenant_status_idx ON rel_accounts (tenan
 CREATE TABLE IF NOT EXISTS rel_contacts (
   tenant_id      TEXT NOT NULL,
   id             TEXT NOT NULL,
+  ord            INTEGER NOT NULL DEFAULT 0,
   account_id     TEXT,
   full_name      TEXT,
   company_name   TEXT,
@@ -50,12 +53,14 @@ CREATE TABLE IF NOT EXISTS rel_contacts (
   data           JSONB NOT NULL DEFAULT '{}',
   PRIMARY KEY (tenant_id, id)
 );
+ALTER TABLE rel_contacts ADD COLUMN IF NOT EXISTS ord INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS rel_contacts_tenant_score_idx   ON rel_contacts (tenant_id, priority_score DESC);
 CREATE INDEX IF NOT EXISTS rel_contacts_tenant_account_idx ON rel_contacts (tenant_id, account_id);
 
 CREATE TABLE IF NOT EXISTS rel_jobs (
   tenant_id    TEXT NOT NULL,
   id           TEXT NOT NULL,
+  ord          INTEGER NOT NULL DEFAULT 0,
   account_id   TEXT,
   title        TEXT,
   company_name TEXT,
@@ -67,6 +72,7 @@ CREATE TABLE IF NOT EXISTS rel_jobs (
   data         JSONB NOT NULL DEFAULT '{}',
   PRIMARY KEY (tenant_id, id)
 );
+ALTER TABLE rel_jobs ADD COLUMN IF NOT EXISTS ord INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS rel_jobs_tenant_posted_idx  ON rel_jobs (tenant_id, posted_at DESC);
 CREATE INDEX IF NOT EXISTS rel_jobs_tenant_account_idx ON rel_jobs (tenant_id, account_id);
 

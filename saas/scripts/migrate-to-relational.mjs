@@ -52,16 +52,16 @@ function dedupeIds(arr) {
 
 const ENTITIES = {
   rel_accounts: {
-    cols: ['tenant_id', 'id', 'normalized_name', 'display_name', 'domain', 'status', 'priority_tier', 'target_score', 'job_count', 'connection_count', 'updated_at', 'data'],
-    row: (t, a) => [t, a.id, s(a.normalizedName), s(a.displayName), s(a.domain || a.canonicalDomain), s(a.status), s(a.priorityTier), n(a.targetScore), n(a.jobCount), n(a.connectionCount), s(a.updatedAt), JSON.stringify(a)],
+    cols: ['tenant_id', 'id', 'ord', 'normalized_name', 'display_name', 'domain', 'status', 'priority_tier', 'target_score', 'job_count', 'connection_count', 'updated_at', 'data'],
+    row: (t, a, i) => [t, a.id, i, s(a.normalizedName), s(a.displayName), s(a.domain || a.canonicalDomain), s(a.status), s(a.priorityTier), n(a.targetScore), n(a.jobCount), n(a.connectionCount), s(a.updatedAt), JSON.stringify(a)],
   },
   rel_contacts: {
-    cols: ['tenant_id', 'id', 'account_id', 'full_name', 'company_name', 'title', 'email', 'priority_score', 'updated_at', 'data'],
-    row: (t, c) => [t, c.id, s(c.accountId), s(c.fullName), s(c.companyName), s(c.title), s(c.email), n(c.priorityScore), s(c.updatedAt), JSON.stringify(c)],
+    cols: ['tenant_id', 'id', 'ord', 'account_id', 'full_name', 'company_name', 'title', 'email', 'priority_score', 'updated_at', 'data'],
+    row: (t, c, i) => [t, c.id, i, s(c.accountId), s(c.fullName), s(c.companyName), s(c.title), s(c.email), n(c.priorityScore), s(c.updatedAt), JSON.stringify(c)],
   },
   rel_jobs: {
-    cols: ['tenant_id', 'id', 'account_id', 'title', 'company_name', 'location', 'ats_type', 'active', 'posted_at', 'updated_at', 'data'],
-    row: (t, j) => [t, j.id, s(j.accountId), s(j.title), s(j.companyName), s(j.location), s(j.atsType), bool(j.active), s(j.postedAt), s(j.updatedAt), JSON.stringify(j)],
+    cols: ['tenant_id', 'id', 'ord', 'account_id', 'title', 'company_name', 'location', 'ats_type', 'active', 'posted_at', 'updated_at', 'data'],
+    row: (t, j, i) => [t, j.id, i, s(j.accountId), s(j.title), s(j.companyName), s(j.location), s(j.atsType), bool(j.active), s(j.postedAt), s(j.updatedAt), JSON.stringify(j)],
   },
   rel_board_configs: {
     cols: ['tenant_id', 'id', 'account_id', 'normalized_company_name', 'ats_type', 'board_id', 'discovery_status', 'review_status', 'active', 'updated_at', 'data'],
@@ -110,7 +110,7 @@ async function migrateTenant(client, tenantId, blob) {
     const arr = Array.isArray(blob[SOURCE[table]]) ? blob[SOURCE[table]] : [];
     collisions[table] = dedupeIds(arr);
     await client.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
-    await batchInsert(client, table, def.cols, arr.map((item) => def.row(tenantId, item)));
+    await batchInsert(client, table, def.cols, arr.map((item, i) => def.row(tenantId, item, i)));
     counts[table] = arr.length;
   }
   await client.query(
