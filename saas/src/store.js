@@ -1,4 +1,5 @@
 import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
+import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -896,7 +897,7 @@ function getTouchedJobCountFromResult(result = {}) {
 
 const pendingSaves = new Map();
 
-function saveTenantNow(tenantId) {
+async function saveTenantNow(tenantId) {
   const profile = tenantProfiles.get(tenantId);
   const status = loadedTenants.get(tenantId) || {};
 
@@ -917,7 +918,12 @@ function saveTenantNow(tenantId) {
     data.contacts = contactsByTenant.get(tenantId);
   }
 
-  return dbSaveTenantData(tenantId, data);
+  await dbSaveTenantData(tenantId, data);
+  try {
+    await syncTenantRelationalMirror(tenantId, data);
+  } catch (err) {
+    console.error('Relational mirror sync error:', tenantId, err.message);
+  }
 }
 
 function persistTenant(tenantId) {
@@ -1147,6 +1153,11 @@ export function createStore() {
         tasks: [],
         settings: getTenantProfile(tenantId)?.settings || {},
       });
+      try {
+        await wipeTenantRelationalMirror(tenantId);
+      } catch (err) {
+        console.error('Relational mirror wipe error:', tenantId, err.message);
+      }
       return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
     },
 
@@ -1827,6 +1838,7 @@ export function createStore() {
       const task = tasks.find((t) => t.id === taskId && t.tenantId === tenantId);
       if (task) {
         task.status = 'completed';
+        task.updatedAt = now();
         persistTenant(tenantId);
       }
       return task;

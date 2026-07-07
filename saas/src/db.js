@@ -27,6 +27,11 @@ export function isDbReady() {
   return dbReady;
 }
 
+export async function dbQuery(text, params = []) {
+  if (!dbReady || !pool) return null;
+  return pool.query(text, params);
+}
+
 export async function initDb() {
   if (!isDbEnabled()) {
     console.log('  DB: No DATABASE_URL — running in-memory only');
@@ -127,6 +132,111 @@ export async function initDb() {
       );
       CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens (user_id);
       CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_idx ON password_reset_tokens (expires_at);
+
+      CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL DEFAULT '',
+        normalized_name TEXT NOT NULL DEFAULT '',
+        domain TEXT NOT NULL DEFAULT '',
+        industry TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'new',
+        outreach_status TEXT NOT NULL DEFAULT 'not_started',
+        target_score INTEGER NOT NULL DEFAULT 0,
+        open_role_count INTEGER NOT NULL DEFAULT 0,
+        next_action TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT,
+        full_name TEXT NOT NULL DEFAULT '',
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        email TEXT NOT NULL DEFAULT '',
+        linkedin_url TEXT NOT NULL DEFAULT '',
+        company_name TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT '',
+        connected_on TEXT NOT NULL DEFAULT '',
+        outreach_status TEXT NOT NULL DEFAULT 'not_started',
+        priority_score INTEGER NOT NULL DEFAULT 0,
+        notes TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'manual',
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT,
+        title TEXT NOT NULL DEFAULT '',
+        company_name TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        ats_type TEXT NOT NULL DEFAULT '',
+        source_url TEXT NOT NULL DEFAULT '',
+        job_url TEXT NOT NULL DEFAULT '',
+        posted_at TEXT NOT NULL DEFAULT '',
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS board_configs (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT,
+        company_name TEXT NOT NULL DEFAULT '',
+        normalized_company_name TEXT NOT NULL DEFAULT '',
+        ats_type TEXT NOT NULL DEFAULT '',
+        board_id TEXT NOT NULL DEFAULT '',
+        domain TEXT NOT NULL DEFAULT '',
+        careers_url TEXT NOT NULL DEFAULT '',
+        discovery_status TEXT NOT NULL DEFAULT '',
+        review_status TEXT NOT NULL DEFAULT '',
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS activities (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT,
+        contact_id TEXT,
+        type TEXT NOT NULL DEFAULT 'note',
+        summary TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        occurred_at TEXT NOT NULL DEFAULT '',
+        created_by_user_id TEXT,
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT,
+        contact_id TEXT,
+        title TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority TEXT NOT NULL DEFAULT '',
+        due_date TEXT NOT NULL DEFAULT '',
+        raw JSONB NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
     `);
 
     await pool.query(`
@@ -155,6 +265,93 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
       CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
       CREATE INDEX IF NOT EXISTS analytics_events_created_at_idx ON analytics_events (created_at);
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS normalized_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS industry TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS outreach_status TEXT NOT NULL DEFAULT 'not_started';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS target_score INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS open_role_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS next_action TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS account_id TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linkedin_url TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS connected_on TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS outreach_status TEXT NOT NULL DEFAULT 'not_started';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS priority_score INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS account_id TEXT;
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ats_type TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_url TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_url TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS posted_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS account_id TEXT;
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS normalized_company_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS ats_type TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS board_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS careers_url TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS discovery_status TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS account_id TEXT;
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS contact_id TEXT;
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'note';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS occurred_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS created_by_user_id TEXT;
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS account_id TEXT;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS contact_id TEXT;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS raw JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS accounts_tenant_updated_idx ON accounts (tenant_id, updated_at, id);
+      CREATE INDEX IF NOT EXISTS contacts_tenant_updated_idx ON contacts (tenant_id, updated_at, id);
+      CREATE INDEX IF NOT EXISTS jobs_tenant_updated_idx ON jobs (tenant_id, updated_at, id);
+      CREATE INDEX IF NOT EXISTS board_configs_tenant_updated_idx ON board_configs (tenant_id, updated_at, id);
+      CREATE INDEX IF NOT EXISTS activities_tenant_updated_idx ON activities (tenant_id, updated_at, id);
+      CREATE INDEX IF NOT EXISTS tasks_tenant_updated_idx ON tasks (tenant_id, updated_at, id);
     `);
 
     dbReady = true;

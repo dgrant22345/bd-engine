@@ -97,6 +97,21 @@ npm run restore -- --file .\backups\<backup-file>.json.gz --dry-run
 
 The full runbook lives in `docs/disaster-recovery.md`.
 
+## Relational Migration
+
+The app still uses the existing tenant JSONB row as the production source of
+truth, but writes now also mirror loaded workspace records into relational
+tables for the larger data-model migration.
+
+Backfill existing workspaces after deploying the mirror tables:
+
+```powershell
+npm run backfill:relational -- --dry-run
+npm run backfill:relational
+```
+
+Set `BD_RELATIONAL_MIRROR=false` to temporarily disable mirror writes.
+
 ## Rollback
 
 This experiment started from tag:
