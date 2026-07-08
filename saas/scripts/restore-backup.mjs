@@ -19,10 +19,33 @@ const TABLE_ORDER = [
   'tenants',
   'memberships',
   'tenant_data',
+  'accounts',
+  'contacts',
+  'jobs',
+  'board_configs',
+  'activities',
+  'tasks',
+  'import_runs',
+  'import_run_items',
+  'audit_log',
+  'schema_migrations',
   'analytics_events',
   'sessions',
   'password_reset_tokens',
 ];
+
+const GENERIC_ID_TABLES = new Set([
+  'accounts',
+  'contacts',
+  'jobs',
+  'board_configs',
+  'activities',
+  'tasks',
+  'import_runs',
+  'import_run_items',
+  'audit_log',
+  'schema_migrations',
+]);
 
 function flag(name) {
   return process.argv.includes(name);
@@ -215,6 +238,33 @@ async function upsertPasswordResetTokens(client, rows) {
   }
 }
 
+function quoteIdent(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+async function upsertGenericById(client, table, rows) {
+  for (const row of rows) {
+    const columns = Object.keys(row).filter((key) => row[key] !== undefined);
+    if (!columns.includes('id')) continue;
+    const columnSql = columns.map(quoteIdent).join(', ');
+    const valueSql = columns.map((_, index) => `$${index + 1}`).join(', ');
+    const updateColumns = columns.filter((column) => column !== 'id');
+    const updateSql = updateColumns.length
+      ? `DO UPDATE SET ${updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(', ')}`
+      : 'DO NOTHING';
+    await client.query(
+      `INSERT INTO ${quoteIdent(table)} (${columnSql}) VALUES (${valueSql}) ON CONFLICT (id) ${updateSql}`,
+      columns.map((column) => {
+        const value = row[column];
+        return value && typeof value === 'object' ? JSON.stringify(value) : value;
+      })
+    );
+  }
+  if (rows.length && ['analytics_events', 'import_run_items', 'audit_log'].includes(table)) {
+    await client.query(`SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${quoteIdent(table)}), 1))`);
+  }
+}
+
 async function restoreTable(client, table, rows) {
   if (!rows?.length) return;
   if (table === 'users') return upsertUsers(client, rows);
@@ -224,6 +274,7 @@ async function restoreTable(client, table, rows) {
   if (table === 'analytics_events') return upsertAnalyticsEvents(client, rows);
   if (table === 'sessions') return upsertSessions(client, rows);
   if (table === 'password_reset_tokens') return upsertPasswordResetTokens(client, rows);
+  if (GENERIC_ID_TABLES.has(table)) return upsertGenericById(client, table, rows);
 }
 
 async function main() {

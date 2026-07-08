@@ -32,6 +32,28 @@ export async function dbQuery(text, params = []) {
   return pool.query(text, params);
 }
 
+async function runSchemaMigration(id, description, migrate) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [738260701]);
+    const existing = await client.query('SELECT id FROM schema_migrations WHERE id = $1', [id]);
+    if (existing.rows.length === 0) {
+      await migrate(client);
+      await client.query(
+        'INSERT INTO schema_migrations (id, description, applied_at) VALUES ($1, $2, $3)',
+        [id, description, new Date().toISOString()]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function initDb() {
   if (!isDbEnabled()) {
     console.log('  DB: No DATABASE_URL — running in-memory only');
@@ -61,6 +83,12 @@ export async function initDb() {
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        description TEXT NOT NULL DEFAULT '',
+        applied_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS tenants (
@@ -354,6 +382,105 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS tasks_tenant_updated_idx ON tasks (tenant_id, updated_at, id);
     `);
 
+    await runSchemaMigration('20260707_persistence_foundation', 'Add audit/import durability, identity keys, and query indexes', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS import_runs (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          run_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'started',
+          source TEXT NOT NULL DEFAULT '',
+          source_hash TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          rows_total INTEGER NOT NULL DEFAULT 0,
+          rows_created INTEGER NOT NULL DEFAULT 0,
+          rows_updated INTEGER NOT NULL DEFAULT 0,
+          rows_skipped INTEGER NOT NULL DEFAULT 0,
+          rows_failed INTEGER NOT NULL DEFAULT 0,
+          warnings JSONB NOT NULL DEFAULT '[]',
+          errors JSONB NOT NULL DEFAULT '[]',
+          metadata JSONB NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS import_run_items (
+          id BIGSERIAL PRIMARY KEY,
+          import_run_id TEXT REFERENCES import_runs(id) ON DELETE CASCADE,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          entity_type TEXT NOT NULL DEFAULT '',
+          entity_id TEXT NOT NULL DEFAULT '',
+          natural_key TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          message TEXT NOT NULL DEFAULT '',
+          source_row JSONB NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id BIGSERIAL PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          actor_user_id TEXT NOT NULL DEFAULT '',
+          action TEXT NOT NULL,
+          entity_type TEXT NOT NULL DEFAULT '',
+          entity_id TEXT NOT NULL DEFAULT '',
+          before JSONB,
+          after JSONB,
+          metadata JSONB NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+
+        ALTER TABLE accounts ADD COLUMN IF NOT EXISTS identity_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE accounts ADD COLUMN IF NOT EXISTS canonical_domain TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE contacts ADD COLUMN IF NOT EXISTS identity_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_email TEXT NOT NULL DEFAULT '';
+        ALTER TABLE contacts ADD COLUMN IF NOT EXISTS canonical_linkedin_url TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS natural_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS first_seen_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS closed_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS import_run_id TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS identity_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS resolved_board_url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS last_checked_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS last_imported_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS last_import_status TEXT NOT NULL DEFAULT '';
+        ALTER TABLE board_configs ADD COLUMN IF NOT EXISTS last_import_error TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS accounts_tenant_score_idx ON accounts (tenant_id, target_score DESC, updated_at DESC, id);
+        CREATE INDEX IF NOT EXISTS accounts_tenant_identity_idx ON accounts (tenant_id, identity_key) WHERE identity_key <> '';
+        CREATE INDEX IF NOT EXISTS accounts_tenant_normalized_idx ON accounts (tenant_id, normalized_name) WHERE normalized_name <> '';
+        CREATE INDEX IF NOT EXISTS accounts_tenant_domain_idx ON accounts (tenant_id, canonical_domain) WHERE canonical_domain <> '';
+
+        CREATE INDEX IF NOT EXISTS contacts_tenant_account_priority_idx ON contacts (tenant_id, account_id, priority_score DESC, updated_at DESC, id);
+        CREATE INDEX IF NOT EXISTS contacts_tenant_identity_idx ON contacts (tenant_id, identity_key) WHERE identity_key <> '';
+        CREATE INDEX IF NOT EXISTS contacts_tenant_email_idx ON contacts (tenant_id, normalized_email) WHERE normalized_email <> '';
+        CREATE INDEX IF NOT EXISTS contacts_tenant_linkedin_idx ON contacts (tenant_id, canonical_linkedin_url) WHERE canonical_linkedin_url <> '';
+
+        CREATE INDEX IF NOT EXISTS jobs_tenant_posted_idx ON jobs (tenant_id, active, posted_at DESC, updated_at DESC, id);
+        CREATE INDEX IF NOT EXISTS jobs_tenant_account_posted_idx ON jobs (tenant_id, account_id, posted_at DESC, updated_at DESC, id);
+        CREATE INDEX IF NOT EXISTS jobs_tenant_natural_key_idx ON jobs (tenant_id, natural_key) WHERE natural_key <> '';
+        CREATE INDEX IF NOT EXISTS jobs_tenant_import_run_idx ON jobs (tenant_id, import_run_id) WHERE import_run_id <> '';
+
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_status_idx ON board_configs (tenant_id, discovery_status, active);
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_identity_idx ON board_configs (tenant_id, identity_key) WHERE identity_key <> '';
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_board_idx ON board_configs (tenant_id, normalized_company_name, ats_type, board_id) WHERE board_id <> '';
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_checked_idx ON board_configs (tenant_id, last_checked_at DESC, id);
+
+        CREATE INDEX IF NOT EXISTS activities_tenant_account_time_idx ON activities (tenant_id, account_id, occurred_at DESC, id);
+        CREATE INDEX IF NOT EXISTS tasks_tenant_due_idx ON tasks (tenant_id, status, due_date ASC, updated_at DESC, id);
+
+        CREATE INDEX IF NOT EXISTS import_runs_tenant_started_idx ON import_runs (tenant_id, started_at DESC, id);
+        CREATE INDEX IF NOT EXISTS import_runs_tenant_hash_idx ON import_runs (tenant_id, run_type, source_hash) WHERE source_hash <> '';
+        CREATE INDEX IF NOT EXISTS import_run_items_run_idx ON import_run_items (import_run_id, status);
+        CREATE INDEX IF NOT EXISTS import_run_items_tenant_key_idx ON import_run_items (tenant_id, entity_type, natural_key) WHERE natural_key <> '';
+        CREATE INDEX IF NOT EXISTS audit_log_tenant_entity_idx ON audit_log (tenant_id, entity_type, entity_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS audit_log_tenant_action_idx ON audit_log (tenant_id, action, created_at DESC);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -568,6 +695,94 @@ export async function dbLoadTenantData(tenantId, includeContacts = true) {
   }
 }
 
+export async function dbRecordImportRun(run = {}) {
+  if (!dbReady || !run.id || !run.tenantId) return { recorded: false };
+  try {
+    await pool.query(
+      `INSERT INTO import_runs (id, tenant_id, run_type, status, source, source_hash, started_at, completed_at, rows_total, rows_created, rows_updated, rows_skipped, rows_failed, warnings, errors, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         completed_at = EXCLUDED.completed_at,
+         rows_total = EXCLUDED.rows_total,
+         rows_created = EXCLUDED.rows_created,
+         rows_updated = EXCLUDED.rows_updated,
+         rows_skipped = EXCLUDED.rows_skipped,
+         rows_failed = EXCLUDED.rows_failed,
+         warnings = EXCLUDED.warnings,
+         errors = EXCLUDED.errors,
+         metadata = EXCLUDED.metadata`,
+      [
+        run.id,
+        run.tenantId,
+        run.runType || run.type || '',
+        run.status || 'started',
+        run.source || '',
+        run.sourceHash || '',
+        run.startedAt || new Date().toISOString(),
+        run.completedAt || '',
+        Number(run.rowsTotal || 0),
+        Number(run.rowsCreated || 0),
+        Number(run.rowsUpdated || 0),
+        Number(run.rowsSkipped || 0),
+        Number(run.rowsFailed || 0),
+        JSON.stringify(run.warnings || []),
+        JSON.stringify(run.errors || []),
+        JSON.stringify(run.metadata || {}),
+      ]
+    );
+
+    if (Array.isArray(run.items) && run.items.length) {
+      for (const item of run.items.slice(0, 2000)) {
+        await pool.query(
+          `INSERT INTO import_run_items (import_run_id, tenant_id, entity_type, entity_id, natural_key, status, message, source_row, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            run.id,
+            run.tenantId,
+            item.entityType || '',
+            item.entityId || '',
+            item.naturalKey || '',
+            item.status || '',
+            item.message || '',
+            JSON.stringify(item.sourceRow || {}),
+            item.createdAt || new Date().toISOString(),
+          ]
+        );
+      }
+    }
+    return { recorded: true };
+  } catch (err) {
+    console.error('DB: Failed to record import run:', err.message);
+    return { recorded: false, reason: err.message };
+  }
+}
+
+export async function dbRecordAuditLog(entry = {}) {
+  if (!dbReady || !entry.tenantId || !entry.action) return { recorded: false };
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (tenant_id, actor_user_id, action, entity_type, entity_id, before, after, metadata, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        entry.tenantId,
+        entry.actorUserId || '',
+        entry.action,
+        entry.entityType || '',
+        entry.entityId || '',
+        entry.before === undefined ? null : JSON.stringify(entry.before),
+        entry.after === undefined ? null : JSON.stringify(entry.after),
+        JSON.stringify(entry.metadata || {}),
+        entry.createdAt || new Date().toISOString(),
+      ]
+    );
+    return { recorded: true };
+  } catch (err) {
+    console.error('DB: Failed to record audit log:', err.message);
+    return { recorded: false, reason: err.message };
+  }
+}
+
 export async function dbGetTenantDataStats(tenantId) {
   if (!dbReady) return null;
   const startedAt = Date.now();
@@ -627,6 +842,7 @@ export async function dbLoadAllTenantData() {
         jobs: r.jobs || [],
         configs: r.configs || [],
         activities: r.activities || [],
+        tasks: r.tasks || [],
         settings: r.settings || {},
       });
     }

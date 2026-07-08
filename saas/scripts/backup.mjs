@@ -23,6 +23,16 @@ const BASE_TABLES = [
   { name: 'tenants', orderBy: 'id' },
   { name: 'memberships', orderBy: 'tenant_id, user_id' },
   { name: 'tenant_data', orderBy: 'tenant_id' },
+  { name: 'accounts', orderBy: 'tenant_id, id' },
+  { name: 'contacts', orderBy: 'tenant_id, id' },
+  { name: 'jobs', orderBy: 'tenant_id, id' },
+  { name: 'board_configs', orderBy: 'tenant_id, id' },
+  { name: 'activities', orderBy: 'tenant_id, id' },
+  { name: 'tasks', orderBy: 'tenant_id, id' },
+  { name: 'import_runs', orderBy: 'tenant_id, started_at, id' },
+  { name: 'import_run_items', orderBy: 'tenant_id, id' },
+  { name: 'audit_log', orderBy: 'tenant_id, id' },
+  { name: 'schema_migrations', orderBy: 'id' },
   { name: 'analytics_events', orderBy: 'id' },
 ];
 

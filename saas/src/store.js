@@ -1,4 +1,5 @@
-import { dbSaveTenantData, dbLoadAllTenantData, isDbEnabled } from './db.js';
+import { createHash } from 'node:crypto';
+import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 
 const now = () => new Date().toISOString();
@@ -1169,6 +1170,15 @@ export function createStore() {
       } catch (err) {
         console.error('Relational mirror wipe error:', tenantId, err.message);
       }
+      await dbRecordAuditLog({
+        tenantId,
+        action: 'workspace.clear',
+        entityType: 'tenant',
+        entityId: tenantId,
+        before: before,
+        after: countTenantWorkspaceItems(tenantId),
+        metadata: { privacySafe: true },
+      });
       return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
     },
 
@@ -2236,6 +2246,9 @@ export function createStore() {
       const timings = {};
       const warnings = [];
       const errors = [];
+      const importStartedAt = now();
+      const importRunId = `imp-jobs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const importItems = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
       const requestedLimitOption = Number(options.limit || 0);
@@ -2576,6 +2589,14 @@ export function createStore() {
         if (settled.status === 'rejected') {
           const message = settled.reason?.message || 'Unknown ATS fetch failure';
           errors.push({ configId: config.id, companyName: config.companyName, atsType, error: message });
+          importItems.push({
+            entityType: 'board_config',
+            entityId: config.id,
+            naturalKey: `${normalizeKey(config.companyName)}|${atsType}|${normalizeKey(config.boardId || config.resolvedBoardUrl)}`,
+            status: 'failed',
+            message,
+            sourceRow: { companyName: config.companyName, atsType, boardId: config.boardId },
+          });
           config.lastImportStatus = 'failed';
           config.lastImportError = message;
           config.updatedAt = now();
@@ -2605,7 +2626,19 @@ export function createStore() {
               id: existingJob.id,
               tenantId,
               createdAt: existingJob.createdAt || normalizedJob.createdAt,
+              naturalKey,
+              firstSeenAt: existingJob.firstSeenAt || existingJob.createdAt || normalizedJob.createdAt,
+              lastSeenAt: now(),
+              importRunId,
               updatedAt: now(),
+            });
+            importItems.push({
+              entityType: 'job',
+              entityId: existingJob.id,
+              naturalKey,
+              status: 'updated',
+              message: 'Matched existing job',
+              sourceRow: { title: normalizedJob.title, companyName: normalizedJob.companyName, jobId: normalizedJob.jobId, jobUrl: normalizedJob.jobUrl || normalizedJob.url },
             });
             updatedJobs++;
           } else {
@@ -2613,12 +2646,24 @@ export function createStore() {
               ...normalizedJob,
               id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               tenantId,
+              naturalKey,
+              firstSeenAt: now(),
+              lastSeenAt: now(),
+              importRunId,
               createdAt: now(),
               updatedAt: now(),
             });
             tenantJobs.unshift(newJob);
             jobs.push(newJob);
             existingByNaturalKey.set(naturalKey, newJob);
+            importItems.push({
+              entityType: 'job',
+              entityId: newJob.id,
+              naturalKey,
+              status: 'created',
+              message: 'Imported from ATS board',
+              sourceRow: { title: normalizedJob.title, companyName: normalizedJob.companyName, jobId: normalizedJob.jobId, jobUrl: normalizedJob.jobUrl || normalizedJob.url },
+            });
             newJobs++;
           }
           if (accountItem?.id) touchedAccountIds.add(accountItem.id);
@@ -2674,12 +2719,32 @@ export function createStore() {
         errors: errors.length,
       };
       const importRun = {
+        id: importRunId,
         status: errors.length ? 'completed_with_errors' : warnings.length ? 'completed_with_warnings' : 'completed',
         stats,
         timings,
         warnings,
         errors,
       };
+      await dbRecordImportRun({
+        id: importRunId,
+        tenantId,
+        runType: 'live_jobs',
+        status: importRun.status,
+        source: 'ats_boards',
+        sourceHash: hashText(supportedConfigs.map(({ config, atsType, boardId }) => `${config.id}|${atsType}|${boardId}`).join('\n')),
+        startedAt: importStartedAt,
+        completedAt: now(),
+        rowsTotal: fetched,
+        rowsCreated: newJobs,
+        rowsUpdated: updatedJobs,
+        rowsSkipped: filteredOutNonCanada,
+        rowsFailed: errors.length,
+        warnings,
+        errors,
+        metadata: { stats, timings },
+        items: importItems,
+      });
 
       activities.unshift({
         id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3204,10 +3269,19 @@ export function createStore() {
       });
 
       if (filteredJobs.length !== initialCount) {
+        const removed = initialCount - filteredJobs.length;
         jobsByTenant.set(tenantId, filteredJobs);
         const keptJobIds = new Set(filteredJobs.map((item) => item.id));
         jobs = jobs.filter((item) => item.tenantId !== tenantId || keptJobIds.has(item.id));
-        console.log(`[Purge] Removed ${initialCount - filteredJobs.length} jobs for ${tenantId} (Retention: ${retentionDays} days)`);
+        console.log(`[Purge] Removed ${removed} jobs for ${tenantId} (Retention: ${retentionDays} days)`);
+        dbRecordAuditLog({
+          tenantId,
+          action: 'jobs.purge_stale',
+          entityType: 'job',
+          before: { count: initialCount },
+          after: { count: filteredJobs.length },
+          metadata: { retentionDays, removed },
+        }).catch(() => {});
         persistTenant(tenantId);
       }
       const totalMs = Math.round(performance.now() - startedAt);
@@ -3318,6 +3392,9 @@ export function createStore() {
       const dryRun = Boolean(options.dryRun);
       const plan = options.plan || { limits: {} };
       const timestamp = now();
+      const importRunId = `imp-linkedin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const sourceHash = hashText(csvText || '');
+      const importItems = [];
       
       const rows = parseCSV(csvText || '');
       if (!String(csvText || '').trim()) {
@@ -3415,7 +3492,7 @@ export function createStore() {
       // Create fast lookups
       const existingContactsMap = new Map();
       for (const c of tenantContArray) {
-        existingContactsMap.set(`${normalizeKey(c.fullName)}|${normalizeKey(c.companyName)}`, c);
+        indexContactDedupeKeys(existingContactsMap, c);
       }
 
       const existingAccountsMap = new Map();
@@ -3429,6 +3506,13 @@ export function createStore() {
         if (!existingAccount) {
           if (remainingNewAccounts <= 0) {
             planLimitedSkipped += companyData.contacts.length;
+            importItems.push({
+              entityType: 'account',
+              naturalKey: `account:${normName}`,
+              status: 'skipped',
+              message: 'Account limit reached',
+              sourceRow: { company: companyData.displayName, contacts: companyData.contacts.length },
+            });
             continue;
           }
           if (!dryRun) {
@@ -3436,7 +3520,7 @@ export function createStore() {
               tenantId,
               displayName: companyData.displayName,
               domain: companyData.domain,
-              connectionCount: companyData.contacts.length,
+              connectionCount: 0,
               createdAt: timestamp,
               updatedAt: timestamp,
             });
@@ -3449,7 +3533,6 @@ export function createStore() {
           accountsCreated++;
         } else {
           if (!dryRun) {
-            existingAccount.connectionCount = (existingAccount.connectionCount || 0) + companyData.contacts.length;
             existingAccount.updatedAt = timestamp;
           }
           accountsUpdated++;
@@ -3461,16 +3544,34 @@ export function createStore() {
         const newContacts = [];
 
         for (const c of companyData.contacts) {
-          const contactKey = `${normalizeKey(c.fullName)}|${normName}`;
-          const existing = existingContactsMap.get(contactKey);
+          const contactKeys = contactDedupeKeys({
+            fullName: c.fullName,
+            email: c.email,
+            linkedinUrl: c.linkedinUrl,
+            companyName: c.company,
+          }, normName);
+          const existing = contactKeys.map((key) => existingContactsMap.get(key)).find(Boolean);
           if (existing) {
             duplicatesSkipped++;
-            if (['executive', 'director', 'vp'].includes(existing.seniority)) newSeniorCount++;
-            if (existing.isTalentLeader) newTalentCount++;
+            importItems.push({
+              entityType: 'contact',
+              entityId: existing.id || '',
+              naturalKey: contactKeys[0] || '',
+              status: 'duplicate',
+              message: 'Matched an existing contact',
+              sourceRow: { fullName: c.fullName, company: c.company, email: c.email, linkedinUrl: c.linkedinUrl },
+            });
             continue;
           }
           if (remainingNewContacts <= 0) {
             planLimitedSkipped++;
+            importItems.push({
+              entityType: 'contact',
+              naturalKey: contactKeys[0] || '',
+              status: 'skipped',
+              message: 'Contact limit reached',
+              sourceRow: { fullName: c.fullName, company: c.company, email: c.email, linkedinUrl: c.linkedinUrl },
+            });
             continue;
           }
 
@@ -3503,6 +3604,15 @@ export function createStore() {
             contacts.push(contactItem);
             tenantContArray.push(contactItem);
             newContacts.push(contactItem);
+            indexContactDedupeKeys(existingContactsMap, contactItem, normName);
+            importItems.push({
+              entityType: 'contact',
+              entityId: contactItem.id,
+              naturalKey: contactKeys[0] || '',
+              status: 'created',
+              message: 'Imported from LinkedIn CSV',
+              sourceRow: { fullName: c.fullName, company: c.company, email: c.email, linkedinUrl: c.linkedinUrl },
+            });
           }
           remainingNewContacts--;
           contactsCreated++;
@@ -3514,6 +3624,7 @@ export function createStore() {
           existingAccount.talentContactCount = (existingAccount.talentContactCount || 0) + newTalentCount;
           existingAccount.connectionCount = (existingAccount.connectionCount || 0) + newContacts.length;
           existingAccount.contactCount = existingAccount.connectionCount;
+          existingAccount.updatedAt = timestamp;
           
           // Simple target score based on connections
           existingAccount.targetScore = Math.min(100, Math.round(
@@ -3561,6 +3672,28 @@ export function createStore() {
         missingNameRows: skippedMissingName,
         missingCompanyRows: skippedMissingCompany,
       };
+
+      if (!dryRun) {
+        await dbRecordImportRun({
+          id: importRunId,
+          tenantId,
+          runType: 'linkedin_csv',
+          status: stats.failed ? 'failed' : warnings.length ? 'completed_with_warnings' : 'completed',
+          source: 'linkedin_csv',
+          sourceHash,
+          startedAt: timestamp,
+          completedAt: now(),
+          rowsTotal: rows.length,
+          rowsCreated: contactsCreated + accountsCreated,
+          rowsUpdated: accountsUpdated,
+          rowsSkipped: stats.skipped,
+          rowsFailed: stats.failed,
+          warnings,
+          errors: [],
+          metadata: { stats },
+          items: importItems,
+        });
+      }
 
       return {
         ok: true,
@@ -3879,6 +4012,54 @@ function readPositiveInteger(value, fallback) {
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function stableIdentityKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function hashText(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function canonicalLinkedInUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    const path = url.pathname.replace(/\/+$/, '').toLowerCase();
+    return `${url.hostname.replace(/^www\./, '').toLowerCase()}${path}`;
+  } catch {
+    return raw.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  }
+}
+
+function normalizedEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function contactDedupeKeys(item = {}, companyKey = '') {
+  const keys = [];
+  const linkedin = canonicalLinkedInUrl(item.linkedinUrl || item.linkedin_url || item.url);
+  const email = normalizedEmail(item.email || item.emailAddress);
+  const name = stableIdentityKey(item.fullName || item.name);
+  const company = companyKey || stableIdentityKey(item.companyName || item.company);
+  if (linkedin) keys.push(`linkedin:${linkedin}`);
+  if (email) keys.push(`email:${email}`);
+  if (name && company) keys.push(`name-company:${name}|${company}`);
+  return keys;
+}
+
+function indexContactDedupeKeys(map, contactItem, companyKey = '') {
+  for (const key of contactDedupeKeys(contactItem, companyKey)) {
+    if (!map.has(key)) map.set(key, contactItem);
+  }
 }
 
 function inferDomainFromContacts(tenantId, accountId) {
@@ -5125,11 +5306,13 @@ function makeJobNaturalKey(config, atsType, jobId, location = '') {
 
 function getJobNaturalKey(item) {
   if (item.naturalKey) return item.naturalKey;
+  const providerJobId = String(item.jobId || item.providerJobId || '').trim();
+  const stableSource = String(item.jobUrl || item.url || item.sourceUrl || '').trim();
   return [
     item.tenantId,
     item.configId || item.accountId || normalizeKey(item.companyName),
     normalizeAtsType(item.atsType || item.source),
-    String(item.jobId || item.id || normalizeKey(`${item.title}|${item.location}`)).trim(),
+    providerJobId || stableSource || normalizeKey(`${item.title}|${item.location}`),
   ].map((part) => normalizeKey(part)).join('|');
 }
 

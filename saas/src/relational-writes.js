@@ -17,6 +17,76 @@ function nullableText(value) {
   return normalized || null;
 }
 
+function normalizeKey(value) {
+  return text(value)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function canonicalDomain(value) {
+  return text(value)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .split('/')[0]
+    .replace(/:\d+$/, '');
+}
+
+function canonicalLinkedInUrl(value) {
+  const raw = text(value).trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    const path = url.pathname.replace(/\/+$/, '').toLowerCase();
+    return `${url.hostname.replace(/^www\./, '').toLowerCase()}${path}`;
+  } catch {
+    return raw.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  }
+}
+
+function normalizedEmail(value) {
+  return text(value).trim().toLowerCase();
+}
+
+function accountIdentityKey(item) {
+  const domain = canonicalDomain(item.canonicalDomain || item.domain);
+  if (domain) return `domain:${domain}`;
+  const name = normalizeKey(item.normalizedName || item.normalizedCompanyName || item.displayName || item.companyName);
+  return name ? `name:${name}` : '';
+}
+
+function contactIdentityKey(item) {
+  const linkedin = canonicalLinkedInUrl(item.linkedinUrl || item.linkedin_url);
+  if (linkedin) return `linkedin:${linkedin}`;
+  const email = normalizedEmail(item.email);
+  if (email) return `email:${email}`;
+  const name = normalizeKey(item.fullName || item.name);
+  const company = normalizeKey(item.companyName || item.normalizedCompanyName);
+  return name && company ? `name-company:${name}|${company}` : '';
+}
+
+function jobNaturalKey(item) {
+  if (item.naturalKey) return text(item.naturalKey);
+  const providerId = text(item.jobId || item.providerJobId).trim();
+  const sourceUrl = text(item.jobUrl || item.url || item.sourceUrl).trim().toLowerCase();
+  const accountKey = text(item.configId || item.accountId || normalizeKey(item.companyName)).trim();
+  const ats = normalizeKey(item.atsType || item.ats || item.source);
+  if (providerId) return [item.tenantId, accountKey, ats, providerId].map(normalizeKey).join('|');
+  if (sourceUrl) return [item.tenantId, ats, sourceUrl].map(normalizeKey).join('|');
+  return [item.tenantId, accountKey, ats, item.title, item.location].map(normalizeKey).join('|');
+}
+
+function configIdentityKey(item) {
+  const board = normalizeKey(item.boardId || item.resolvedBoardUrl || item.careersUrl || item.domain);
+  const company = normalizeKey(item.normalizedCompanyName || item.companyName);
+  const ats = normalizeKey(item.atsType || item.ats);
+  return [company, ats, board].filter(Boolean).join('|');
+}
+
 function int(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.round(n) : 0;
@@ -82,13 +152,17 @@ export async function wipeTenantRelationalMirror(tenantId) {
 }
 
 async function upsertAccount(item) {
+  const identityKey = accountIdentityKey(item);
+  const domain = canonicalDomain(item.canonicalDomain || item.domain);
   await dbQuery(
-    `INSERT INTO accounts (id, tenant_id, display_name, normalized_name, domain, industry, location, status, outreach_status, target_score, open_role_count, next_action, notes, raw, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    `INSERT INTO accounts (id, tenant_id, display_name, normalized_name, domain, canonical_domain, identity_key, industry, location, status, outreach_status, target_score, open_role_count, next_action, notes, raw, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      ON CONFLICT (id) DO UPDATE SET
        display_name = EXCLUDED.display_name,
        normalized_name = EXCLUDED.normalized_name,
        domain = EXCLUDED.domain,
+       canonical_domain = EXCLUDED.canonical_domain,
+       identity_key = EXCLUDED.identity_key,
        industry = EXCLUDED.industry,
        location = EXCLUDED.location,
        status = EXCLUDED.status,
@@ -101,7 +175,7 @@ async function upsertAccount(item) {
        updated_at = EXCLUDED.updated_at`,
     [
       item.id, item.tenantId, text(item.displayName || item.companyName), text(item.normalizedName || item.normalizedCompanyName),
-      text(item.domain || item.canonicalDomain), text(item.industry), text(item.location), text(item.status || 'new'),
+      text(item.domain || item.canonicalDomain), domain, identityKey, text(item.industry), text(item.location), text(item.status || 'new'),
       text(item.outreachStatus || 'not_started'), int(item.targetScore || item.dailyScore), int(item.openRoleCount || item.jobCount),
       text(item.nextAction), text(item.notes), JSON.stringify(item), text(item.createdAt), text(item.updatedAt || item.createdAt),
     ]
@@ -109,16 +183,22 @@ async function upsertAccount(item) {
 }
 
 async function upsertContact(item) {
+  const email = normalizedEmail(item.email);
+  const linkedin = canonicalLinkedInUrl(item.linkedinUrl || item.linkedin_url);
+  const identityKey = contactIdentityKey(item);
   await dbQuery(
-    `INSERT INTO contacts (id, tenant_id, account_id, full_name, first_name, last_name, email, linkedin_url, company_name, title, connected_on, outreach_status, priority_score, notes, source, raw, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+    `INSERT INTO contacts (id, tenant_id, account_id, full_name, first_name, last_name, email, normalized_email, linkedin_url, canonical_linkedin_url, identity_key, company_name, title, connected_on, outreach_status, priority_score, notes, source, raw, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      ON CONFLICT (id) DO UPDATE SET
        account_id = EXCLUDED.account_id,
        full_name = EXCLUDED.full_name,
        first_name = EXCLUDED.first_name,
        last_name = EXCLUDED.last_name,
        email = EXCLUDED.email,
+       normalized_email = EXCLUDED.normalized_email,
        linkedin_url = EXCLUDED.linkedin_url,
+       canonical_linkedin_url = EXCLUDED.canonical_linkedin_url,
+       identity_key = EXCLUDED.identity_key,
        company_name = EXCLUDED.company_name,
        title = EXCLUDED.title,
        connected_on = EXCLUDED.connected_on,
@@ -130,7 +210,7 @@ async function upsertContact(item) {
        updated_at = EXCLUDED.updated_at`,
     [
       item.id, item.tenantId, nullableText(item.accountId), text(item.fullName || item.name), text(item.firstName), text(item.lastName),
-      text(item.email), text(item.linkedinUrl || item.linkedin_url), text(item.companyName), text(item.title), text(item.connectedOn),
+      text(item.email), email, text(item.linkedinUrl || item.linkedin_url), linkedin, identityKey, text(item.companyName), text(item.title), text(item.connectedOn),
       text(item.outreachStatus || 'not_started'), int(item.priorityScore), text(item.notes), text(item.source || 'manual'),
       JSON.stringify(item), text(item.createdAt), text(item.updatedAt || item.createdAt),
     ]
@@ -138,9 +218,12 @@ async function upsertContact(item) {
 }
 
 async function upsertJob(item) {
+  const naturalKey = jobNaturalKey(item);
+  const firstSeenAt = text(item.firstSeenAt || item.first_seen_at || item.createdAt);
+  const lastSeenAt = text(item.lastSeenAt || item.last_seen_at || item.retrievedAt || item.importedAt || item.updatedAt || item.createdAt);
   await dbQuery(
-    `INSERT INTO jobs (id, tenant_id, account_id, title, company_name, location, source, ats_type, source_url, job_url, posted_at, active, raw, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    `INSERT INTO jobs (id, tenant_id, account_id, title, company_name, location, source, ats_type, source_url, job_url, posted_at, active, natural_key, first_seen_at, last_seen_at, closed_at, import_run_id, raw, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT (id) DO UPDATE SET
        account_id = EXCLUDED.account_id,
        title = EXCLUDED.title,
@@ -152,20 +235,27 @@ async function upsertJob(item) {
        job_url = EXCLUDED.job_url,
        posted_at = EXCLUDED.posted_at,
        active = EXCLUDED.active,
+       natural_key = EXCLUDED.natural_key,
+       first_seen_at = COALESCE(NULLIF(jobs.first_seen_at, ''), EXCLUDED.first_seen_at),
+       last_seen_at = EXCLUDED.last_seen_at,
+       closed_at = EXCLUDED.closed_at,
+       import_run_id = EXCLUDED.import_run_id,
        raw = EXCLUDED.raw,
        updated_at = EXCLUDED.updated_at`,
     [
       item.id, item.tenantId, nullableText(item.accountId), text(item.title), text(item.companyName), text(item.location),
       text(item.source), text(item.atsType || item.ats), text(item.sourceUrl), text(item.jobUrl || item.url),
-      text(item.postedAt), bool(item.active, true), JSON.stringify(item), text(item.createdAt), text(item.updatedAt || item.createdAt),
+      text(item.postedAt), bool(item.active, true), naturalKey, firstSeenAt, lastSeenAt, text(item.closedAt || item.closed_at),
+      text(item.importRunId || item.import_run_id), JSON.stringify(item), text(item.createdAt), text(item.updatedAt || item.createdAt),
     ]
   );
 }
 
 async function upsertConfig(item) {
+  const identityKey = configIdentityKey(item);
   await dbQuery(
-    `INSERT INTO board_configs (id, tenant_id, account_id, company_name, normalized_company_name, ats_type, board_id, domain, careers_url, discovery_status, review_status, active, raw, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    `INSERT INTO board_configs (id, tenant_id, account_id, company_name, normalized_company_name, ats_type, board_id, domain, careers_url, resolved_board_url, identity_key, discovery_status, review_status, active, last_checked_at, last_imported_at, last_import_status, last_import_error, raw, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      ON CONFLICT (id) DO UPDATE SET
        account_id = EXCLUDED.account_id,
        company_name = EXCLUDED.company_name,
@@ -174,15 +264,23 @@ async function upsertConfig(item) {
        board_id = EXCLUDED.board_id,
        domain = EXCLUDED.domain,
        careers_url = EXCLUDED.careers_url,
+       resolved_board_url = EXCLUDED.resolved_board_url,
+       identity_key = EXCLUDED.identity_key,
        discovery_status = EXCLUDED.discovery_status,
        review_status = EXCLUDED.review_status,
        active = EXCLUDED.active,
+       last_checked_at = EXCLUDED.last_checked_at,
+       last_imported_at = EXCLUDED.last_imported_at,
+       last_import_status = EXCLUDED.last_import_status,
+       last_import_error = EXCLUDED.last_import_error,
        raw = EXCLUDED.raw,
        updated_at = EXCLUDED.updated_at`,
     [
       item.id, item.tenantId, nullableText(item.accountId), text(item.companyName), text(item.normalizedCompanyName),
       text(item.atsType || item.ats), text(item.boardId), text(item.domain), text(item.careersUrl),
-      text(item.discoveryStatus), text(item.reviewStatus), bool(item.active, true), JSON.stringify(item),
+      text(item.resolvedBoardUrl || item.boardUrl || item.sourceUrl), identityKey, text(item.discoveryStatus), text(item.reviewStatus),
+      bool(item.active, true), text(item.lastCheckedAt), text(item.lastImportedAt || item.lastImportAt),
+      text(item.lastImportStatus), text(item.lastImportError), JSON.stringify(item),
       text(item.createdAt), text(item.updatedAt || item.createdAt),
     ]
   );
