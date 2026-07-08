@@ -28,6 +28,8 @@ dist-*/
 scratch.txt
 server-test.log
 *.log
+saas-server-scratch.js
+saas-store-scratch.js
 
 # Claude Code config
 .claude/
