@@ -1535,6 +1535,29 @@ export function createStore() {
 
     async getAccountDetail(tenantId, accountId) {
       assertTenant(tenantId);
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          const data = await relationalQueries.getAccountDetailData(tenantId, accountId);
+          if (!data) return null;
+          const persona = this.getPersona(tenantId);
+          return {
+            account: data.account,
+            contacts: data.contacts,
+            jobs: data.jobs,
+            activity: data.activities,
+            activities: data.activities,
+            configs: data.configs,
+            config: data.configs[0] || null,
+            actionPlan: buildPersonaActionPlan(persona, data.account, {
+              contacts: data.contacts,
+              jobs: data.jobs,
+              configs: data.configs,
+            }),
+          };
+        } catch (err) {
+          console.error('Relational read fallback (accountDetail):', tenantId, err.message);
+        }
+      }
       const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, true);
       const loadElapsedMs = Math.round(performance.now() - loadStartedAt);
@@ -1614,10 +1637,22 @@ export function createStore() {
       return item;
     },
 
-    findJobs(tenantId, query) {
+    async findJobs(tenantId, query) {
       assertTenant(tenantId);
       const queryStartedAt = performance.now();
-      let items = filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']);
+      // Source the tenant's jobs from SQL when enabled (few per tenant), then
+      // apply the identical in-memory filters/sort below. Fall back to the
+      // in-memory array on any error.
+      let source = null;
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          source = await relationalQueries.getTenantJobs(tenantId);
+        } catch (err) {
+          console.error('Relational read fallback (jobs):', tenantId, err.message);
+        }
+      }
+      if (!source) source = jobsForTenant(tenantId);
+      let items = filterText(source, query.q, ['title', 'companyName', 'location', 'source']);
       if (query.ats) {
         const ats = normalizeAtsType(query.ats);
         items = items.filter((item) => normalizeAtsType(item.atsType || item.source) === ats);
@@ -1647,8 +1682,15 @@ export function createStore() {
       return result;
     },
 
-    findConfigs(tenantId, query) {
+    async findConfigs(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          return await relationalQueries.findConfigs(tenantId, query);
+        } catch (err) {
+          console.error('Relational read fallback (configs):', tenantId, err.message);
+        }
+      }
       return paginate(boardConfigs.filter((item) => item.tenantId === tenantId), query);
     },
 

@@ -78,3 +78,49 @@ export async function findContacts(tenantId, query = {}) {
     params)).rows;
   return { items: rows.map((r) => r.raw), page, pageSize, total };
 }
+
+// Jobs are few per tenant (hundreds), so fetch the tenant's jobs from SQL and
+// let store.js apply the existing in-memory filters/sort byte-for-byte. Returns
+// the raw job objects pre-sorted like jobsForTenant (postedAt DESC).
+export async function getTenantJobs(tenantId) {
+  const rows = (await dbQuery('SELECT raw FROM jobs WHERE tenant_id = $1', [tenantId])).rows;
+  return rows
+    .map((r) => r.raw)
+    // postedAt DESC like jobsForTenant, with an id tiebreak so equal-postedAt
+    // order is deterministic (vs the in-memory blob-array-order tiebreak).
+    .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)) || String(a.id).localeCompare(String(b.id)));
+}
+
+// findConfigs is a plain tenant filter + pagination (no text search) — push it
+// straight into SQL. Deterministic order (board_configs has no array-index col).
+export async function findConfigs(tenantId, query = {}) {
+  const { page, pageSize, offset, limit } = pageParams(query);
+  const total = (await dbQuery('SELECT count(*)::int AS c FROM board_configs WHERE tenant_id = $1', [tenantId])).rows[0].c;
+  const rows = (await dbQuery(
+    `SELECT raw FROM board_configs WHERE tenant_id = $1
+     ORDER BY updated_at DESC, id ASC
+     LIMIT ${limit} OFFSET ${offset}`,
+    [tenantId])).rows;
+  return { items: rows.map((r) => r.raw), page, pageSize, total };
+}
+
+// One account plus its related records, fetched by index. store.js keeps the
+// persona/action-plan shaping. Returns null if the account is not in the tenant.
+export async function getAccountDetailData(tenantId, accountId) {
+  const acct = (await dbQuery(
+    "SELECT raw, normalized_name FROM accounts WHERE tenant_id = $1 AND id = $2", [tenantId, accountId])).rows[0];
+  if (!acct) return null;
+  const [contacts, jobs, activities, configs] = await Promise.all([
+    dbQuery('SELECT raw FROM contacts WHERE tenant_id = $1 AND account_id = $2 ORDER BY priority_score DESC, id ASC', [tenantId, accountId]),
+    dbQuery('SELECT raw FROM jobs WHERE tenant_id = $1 AND account_id = $2 ORDER BY posted_at DESC, id ASC', [tenantId, accountId]),
+    dbQuery('SELECT raw FROM activities WHERE tenant_id = $1 AND account_id = $2 ORDER BY occurred_at DESC, id ASC', [tenantId, accountId]),
+    dbQuery('SELECT raw FROM board_configs WHERE tenant_id = $1 AND normalized_company_name = $2 ORDER BY id ASC', [tenantId, acct.normalized_name]),
+  ]);
+  return {
+    account: acct.raw,
+    contacts: contacts.rows.map((r) => r.raw),
+    jobs: jobs.rows.map((r) => r.raw),
+    activities: activities.rows.map((r) => r.raw),
+    configs: configs.rows.map((r) => r.raw),
+  };
+}
