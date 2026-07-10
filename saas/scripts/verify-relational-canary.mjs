@@ -19,10 +19,13 @@ async function main() {
   store.ensureTenant(tenant, { id: 'relational-verifier', name: 'Relational Verifier', email: '' });
   const startedAt = Date.now();
   const bootstrap = await store.getBootstrap(tenantId, { includeFilters: true });
-  const usage = await store.getUsageCounts(tenantId);
   const accountQueryStartedAt = Date.now();
   const accountPage = await store.findAccounts(tenantId, { page: 1, pageSize: 20 });
   const accountQueryMs = Date.now() - accountQueryStartedAt;
+  const contactQueryStartedAt = Date.now();
+  const contactPage = await store.findContacts(tenantId, { page: 1, pageSize: 20 });
+  const contactQueryMs = Date.now() - contactQueryStartedAt;
+  const usage = await store.getUsageCounts(tenantId);
   console.log(JSON.stringify({
     ok: true,
     tenantId,
@@ -33,6 +36,9 @@ async function main() {
     accountPageTotal: accountPage.total,
     accountPageItems: accountPage.items.length,
     accountQueryMs,
+    contactPageTotal: contactPage.total,
+    contactPageItems: contactPage.items.length,
+    contactQueryMs,
     elapsedMs: Date.now() - startedAt,
   }));
 }

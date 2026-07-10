@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, findTenantAccountsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, findTenantContactsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -25,7 +25,12 @@ const RELATIONAL_SQL_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_TENA
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const RELATIONAL_SQL_CONTACT_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_CONTACT_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
 const confirmedRelationalSqlTenants = new Set();
+const confirmedRelationalContactSqlTenants = new Set();
 
 function relationalReadsEnabledForTenant(tenantId) {
   return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
@@ -33,6 +38,10 @@ function relationalReadsEnabledForTenant(tenantId) {
 
 function relationalSqlEnabledForTenant(tenantId) {
   return RELATIONAL_SQL_TENANTS.has('*') || RELATIONAL_SQL_TENANTS.has(tenantId);
+}
+
+function relationalContactSqlEnabledForTenant(tenantId) {
+  return RELATIONAL_SQL_CONTACT_TENANTS.has('*') || RELATIONAL_SQL_CONTACT_TENANTS.has(tenantId);
 }
 
 async function hasRelationalParity(tenantId, includeContacts = false) {
@@ -1653,6 +1662,24 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalContactSqlEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, true)) {
+            const result = await findTenantContactsRelational(tenantId, query);
+            if (result) {
+              if (!confirmedRelationalContactSqlTenants.has(tenantId)) {
+                confirmedRelationalContactSqlTenants.add(tenantId);
+                console.log(`Relational SQL contact queries active for ${tenantId}.`);
+              }
+              return result;
+            }
+          } else {
+            console.warn(`Relational contact query fallback for ${tenantId}: parity check failed.`);
+          }
+        } catch (error) {
+          console.error(`Relational contact query failed for ${tenantId}; using memory:`, error.message);
+        }
+      }
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
       return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
     },
