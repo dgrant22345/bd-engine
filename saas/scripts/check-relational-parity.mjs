@@ -17,6 +17,15 @@ async function main() {
     max: 2,
   });
   const requestedTenant = arg('--tenant');
+  const deep = process.argv.includes('--deep');
+  const deepColumns = deep ? `,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.accounts, '[]'::jsonb)) item JOIN accounts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_accounts,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.contacts, '[]'::jsonb)) item JOIN contacts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_contacts,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.jobs, '[]'::jsonb)) item JOIN jobs r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_jobs,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.configs, '[]'::jsonb)) item JOIN board_configs r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_configs,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.activities, '[]'::jsonb)) item JOIN activities r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_activities,
+         (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.tasks, '[]'::jsonb)) item JOIN tasks r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_tasks`
+    : '';
   try {
     const result = await pool.query(
       `SELECT td.tenant_id,
@@ -32,6 +41,7 @@ async function main() {
          (SELECT COUNT(*)::int FROM board_configs WHERE tenant_id = td.tenant_id) AS relational_configs,
          (SELECT COUNT(*)::int FROM activities WHERE tenant_id = td.tenant_id) AS relational_activities,
          (SELECT COUNT(*)::int FROM tasks WHERE tenant_id = td.tenant_id) AS relational_tasks
+         ${deepColumns}
        FROM tenant_data td
        ${requestedTenant ? 'WHERE td.tenant_id = $1' : ''}
        ORDER BY td.tenant_id`,
@@ -54,6 +64,13 @@ async function main() {
         activity_count: row.relational_activities,
         task_count: row.relational_tasks,
       }, true);
+      if (deep) {
+        for (const entity of ['accounts', 'contacts', 'jobs', 'configs', 'activities', 'tasks']) {
+          const mismatchCount = Number(row[`content_${entity}`] || 0);
+          if (mismatchCount) parity.mismatches.push({ entity: `${entity}-content`, blobCount: mismatchCount, relationalCount: 0 });
+        }
+        parity.matches = parity.mismatches.length === 0;
+      }
       if (parity.matches) {
         console.log(`OK ${row.tenant_id}`);
       } else {
