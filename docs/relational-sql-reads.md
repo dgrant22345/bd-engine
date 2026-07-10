@@ -70,8 +70,31 @@ backfill this tenant, slow over the proxy and a wide partial-failure window).
 Batching into multi-row `INSERT … ON CONFLICT` would make dual-write and backfill
 fast and more robust. Flag for codex.
 
+## Read paths converted (all flag-gated, fallback to in-memory)
+- **Lists**: `findAccounts`, `findContacts` (indexed SQL: filter/sort/paginate).
+- **`findJobs`**: hybrid — SQL sources the tenant's jobs, store applies the exact
+  in-memory filters (ats/active/isNew/recency/sortBy).
+- **`findConfigs`**: full SQL pushdown (12k configs).
+- **`getAccountDetail`**: account + related records by index; store keeps the
+  `buildPersonaActionPlan` shaping.
+- **`getDashboard`**: hybrid — `getDashboardArrays` fetches the four tenant arrays
+  from SQL, the existing builders run verbatim. Aggregates (incl. the fuzzy
+  `needsResolutionCount`) proven byte-identical; slices differ by tie-order only.
+- Verified on the real tenant: `eqtest-queries` (34/0), `eqtest-queries2` (12/0),
+  `eqtest-dashboard` (10/0).
+
+## Dashboard latency tradeoff (measured)
+The hybrid dashboard re-fetches the whole tenant per request: **~2.4s over the
+public proxy vs ~1.5s cold blob load**. It removes *resident* memory (the
+multi-tenant ceiling) but adds repeated I/O, so it's best paired with a short-TTL
+cache or a move to pure SQL-aggregate counts (the counts are all
+`COUNT(*) FILTER` expressible; only the fuzzy resolution count is awkward). In
+prod's internal network the fetch is faster than over the proxy.
+
 ## Remaining
-1. More reads: `findJobs` (ats/active/isNew/recency/sortBy), `getAccountDetail`,
-   dashboard aggregates.
+1. `getDashboardExtended` still on the in-memory path (uses `accountById` +
+   `followups` globals) — convert (build an id→account map from the fetched
+   array) so a tenant is fully memory-free.
 2. Decide the tie-order question (accept `updated_at` tiebreak vs add `ord`).
-3. Per-tenant cutover via `rel_migration_state` (+ the backfill-before-flip rule).
+3. Dashboard perf: short-TTL cache or SQL-aggregate counts.
+4. Per-tenant cutover via `rel_migration_state` (+ the backfill-before-flip rule).
