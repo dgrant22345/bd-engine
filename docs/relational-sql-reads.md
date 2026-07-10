@@ -77,11 +77,13 @@ fast and more robust. Flag for codex.
 - **`findConfigs`**: full SQL pushdown (12k configs).
 - **`getAccountDetail`**: account + related records by index; store keeps the
   `buildPersonaActionPlan` shaping.
-- **`getDashboard`**: hybrid — `getDashboardArrays` fetches the four tenant arrays
-  from SQL, the existing builders run verbatim. Aggregates (incl. the fuzzy
-  `needsResolutionCount`) proven byte-identical; slices differ by tie-order only.
+- **`getDashboard`** + **`getDashboardExtended`**: hybrid — `getDashboardArrays`
+  / `getDashboardExtendedArrays` fetch the tenant arrays from SQL, the existing
+  builders run verbatim (an id→account map replaces `accountById`). Aggregates
+  (incl. the fuzzy `needsResolutionCount` / `resolutionQueueTotal` = 12,292)
+  proven byte-identical; slices differ by tie-order only.
 - Verified on the real tenant: `eqtest-queries` (34/0), `eqtest-queries2` (12/0),
-  `eqtest-dashboard` (10/0).
+  `eqtest-dashboard` (17/0, both dashboards).
 
 ## Dashboard latency tradeoff (measured)
 The hybrid dashboard re-fetches the whole tenant per request: **~2.4s over the
@@ -92,9 +94,18 @@ cache or a move to pure SQL-aggregate counts (the counts are all
 prod's internal network the fetch is faster than over the proxy.
 
 ## Remaining
-1. `getDashboardExtended` still on the in-memory path (uses `accountById` +
-   `followups` globals) — convert (build an id→account map from the fetched
-   array) so a tenant is fully memory-free.
-2. Decide the tie-order question (accept `updated_at` tiebreak vs add `ord`).
-3. Dashboard perf: short-TTL cache or SQL-aggregate counts.
-4. Per-tenant cutover via `rel_migration_state` (+ the backfill-before-flip rule).
+1. **`getBootstrap`** still calls `ensureDataLoaded` (loads the blob), but its
+   payload is almost entirely from the tenant *profile* — only `buildFilters`
+   (when `includeFilters`) touches the arrays. Convert this (it's the session
+   bootstrap, likely hit on every load) for a tenant to be fully memory-free on
+   reads. Minor status/usage reads (`getSetupStatus`, `getUsageCounts`,
+   `getIngestionDiagnostics`) similarly load the blob.
+2. **Write path**: mutations (`patchAccount`, `addAccount`, `importLinkedInCSV`,
+   `addActivity`, …) still `ensureDataLoaded` — inherent to this architecture
+   (writes mutate the in-memory arrays, then `saveTenantNow` persists + mirrors).
+   Making writes memory-free is a separate, larger project (per-record writes
+   straight to SQL) — out of scope for the read migration.
+3. Decide the tie-order question (accept `updated_at` tiebreak vs add `ord`).
+4. Dashboard perf: short-TTL cache or SQL-aggregate counts (per-request fetch
+   ~2.4s over proxy).
+5. Per-tenant cutover via `rel_migration_state` (+ the backfill-before-flip rule).
