@@ -280,6 +280,7 @@ async function restoreTable(client, table, rows) {
 async function main() {
   const file = arg('--file');
   const dryRun = flag('--dry-run');
+  const legacyOnly = flag('--legacy-only');
   const backup = await readBackup(file);
   const counts = Object.fromEntries(TABLE_ORDER.map((table) => [table, backup.tables[table]?.length || 0]));
 
@@ -306,6 +307,7 @@ async function main() {
   try {
     await client.query('BEGIN');
     for (const table of TABLE_ORDER) {
+      if (legacyOnly && !['users', 'tenants', 'memberships', 'tenant_data'].includes(table)) continue;
       await restoreTable(client, table, backup.tables[table] || []);
     }
     await client.query('COMMIT');

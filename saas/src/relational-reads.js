@@ -58,3 +58,21 @@ export async function getTenantRelationalStats(tenantId) {
   );
   return result?.rows?.[0] || null;
 }
+
+export function compareTenantDataCounts(blobStats = {}, relationalStats = {}, includeContacts = true) {
+  const fields = [
+    ['accounts', 'accountCount', 'account_count'],
+    ['jobs', 'jobCount', 'job_count'],
+    ['configs', 'configCount', 'config_count'],
+    ['activities', 'activityCount', 'activity_count'],
+    ['tasks', 'taskCount', 'task_count'],
+  ];
+  if (includeContacts) fields.push(['contacts', 'contactCount', 'contact_count']);
+
+  const mismatches = fields.flatMap(([entity, blobKey, relationalKey]) => {
+    const blobCount = Number(blobStats[blobKey] || 0);
+    const relationalCount = Number(relationalStats[relationalKey] || relationalStats[blobKey] || 0);
+    return blobCount === relationalCount ? [] : [{ entity, blobCount, relationalCount }];
+  });
+  return { matches: mismatches.length === 0, mismatches };
+}

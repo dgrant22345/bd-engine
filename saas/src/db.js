@@ -64,7 +64,7 @@ export async function initDb() {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
-      max: 5,
+      max: Math.max(1, Math.min(20, Number(process.env.BD_DB_POOL_MAX) || 5)),
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
     });
@@ -709,6 +709,17 @@ export async function dbLoadTenantData(tenantId, includeContacts = true) {
   }
 }
 
+export async function dbLoadTenantSettings(tenantId) {
+  if (!dbReady) return null;
+  try {
+    const result = await pool.query('SELECT settings FROM tenant_data WHERE tenant_id = $1', [tenantId]);
+    return result.rows[0]?.settings || {};
+  } catch (err) {
+    console.error('DB: Failed to load tenant settings:', err.message);
+    return null;
+  }
+}
+
 export async function dbRecordImportRun(run = {}) {
   if (!dbReady || !run.id || !run.tenantId) return { recorded: false };
   try {
@@ -808,6 +819,7 @@ export async function dbGetTenantDataStats(tenantId) {
          CASE WHEN jsonb_typeof(jobs) = 'array' THEN jsonb_array_length(jobs) ELSE 0 END AS job_count,
          CASE WHEN jsonb_typeof(configs) = 'array' THEN jsonb_array_length(configs) ELSE 0 END AS config_count,
          CASE WHEN jsonb_typeof(activities) = 'array' THEN jsonb_array_length(activities) ELSE 0 END AS activity_count,
+         CASE WHEN jsonb_typeof(tasks) = 'array' THEN jsonb_array_length(tasks) ELSE 0 END AS task_count,
          updated_at
        FROM tenant_data
        WHERE tenant_id = $1`,
@@ -824,6 +836,7 @@ export async function dbGetTenantDataStats(tenantId) {
         jobCount: 0,
         configCount: 0,
         activityCount: 0,
+        taskCount: 0,
         updatedAt: '',
         queryMs: elapsedMs,
       };
@@ -835,6 +848,7 @@ export async function dbGetTenantDataStats(tenantId) {
       jobCount: Number(row.job_count || 0),
       configCount: Number(row.config_count || 0),
       activityCount: Number(row.activity_count || 0),
+      taskCount: Number(row.task_count || 0),
       updatedAt: row.updated_at || '',
       queryMs: elapsedMs,
     };

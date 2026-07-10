@@ -1,6 +1,7 @@
 import { dbQuery, isDbReady } from './db.js';
 
 const DISABLED = process.env.BD_RELATIONAL_MIRROR === 'false';
+const UPSERT_CONCURRENCY = Math.max(1, Math.min(32, Number(process.env.BD_RELATIONAL_UPSERT_CONCURRENCY) || 16));
 const syncCursors = new Map(); // tenantId -> section -> last updatedAt synced
 
 function cursorFor(tenantId) {
@@ -120,8 +121,9 @@ function advanceCursor(tenantId, section, items = []) {
 
 async function upsertRows(tenantId, section, items, upsert) {
   const changed = changedItems(tenantId, section, items);
-  for (const item of changed) {
-    await upsert({ ...item, tenantId: item.tenantId || tenantId });
+  for (let offset = 0; offset < changed.length; offset += UPSERT_CONCURRENCY) {
+    const batch = changed.slice(offset, offset + UPSERT_CONCURRENCY);
+    await Promise.all(batch.map((item) => upsert({ ...item, tenantId: item.tenantId || tenantId })));
   }
   advanceCursor(tenantId, section, items);
   return { changed: changed.length, total: items.length };

@@ -31,6 +31,7 @@ function counts(row) {
 
 async function main() {
   const dryRun = flag('--dry-run');
+  const missingOnly = flag('--missing-only');
   const tenantId = arg('--tenant');
   const ready = await initDb();
   if (!ready) throw new Error('DATABASE_URL is required for relational backfill.');
@@ -49,14 +50,24 @@ async function main() {
     const rowCounts = counts(row);
     console.log(`  ${row.tenant_id}: ${Object.entries(rowCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
     if (!dryRun) {
-      await syncTenantRelationalMirror(row.tenant_id, {
+      const data = {
         accounts: row.accounts || [],
         contacts: row.contacts || [],
         jobs: row.jobs || [],
         configs: row.configs || [],
         activities: row.activities || [],
         tasks: row.tasks || [],
-      });
+      };
+      if (missingOnly) {
+        const tables = { accounts: 'accounts', contacts: 'contacts', jobs: 'jobs', configs: 'board_configs', activities: 'activities', tasks: 'tasks' };
+        for (const [section, table] of Object.entries(tables)) {
+          const existing = await dbQuery(`SELECT id FROM ${table} WHERE tenant_id = $1`, [row.tenant_id]);
+          const existingIds = new Set((existing?.rows || []).map((item) => item.id));
+          data[section] = data[section].filter((item) => !existingIds.has(item.id));
+        }
+        console.log(`    missing: ${Object.entries(data).map(([key, items]) => `${key}=${items.length}`).join(', ')}`);
+      }
+      await syncTenantRelationalMirror(row.tenant_id, data);
     }
   }
   console.log(dryRun ? 'Dry run complete. No relational rows were written.' : 'Backfill complete.');

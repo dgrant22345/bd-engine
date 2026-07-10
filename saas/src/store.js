@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
+import { compareTenantDataCounts, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -16,6 +17,14 @@ const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'board
 const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MIN_JOB_LINKS, 3);
 const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
 const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
+const RELATIONAL_READ_TENANTS = new Set(String(process.env.BD_RELATIONAL_READ_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
+
+function relationalReadsEnabledForTenant(tenantId) {
+  return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
+}
 
 const pastDate = (days) => {
   const d = new Date();
@@ -1004,15 +1013,41 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
   const timings = {};
   console.log(`  Store: Loading data for ${tenantId} (needsContacts: ${needsContacts})`);
 
-  const { dbLoadTenantData } = await import('./db.js');
+  const { dbGetTenantDataStats, dbLoadTenantData, dbLoadTenantSettings } = await import('./db.js');
   const dbStartedAt = Date.now();
   // A tenant with no tenant_data row yet (fresh signup) is an EMPTY workspace,
   // not an unloaded one. Leaving status.core false meant the tenant's first
   // mutations were never persisted (saveTenantNow skips un-loaded sections)
   // and were then wiped from memory by the next load.
-  const data = (await dbLoadTenantData(tenantId, needsContacts))
-    || { accounts: [], contacts: [], jobs: [], configs: [], activities: [], tasks: [], settings: {} };
+  let data = null;
+  let readSource = 'legacy';
+  if (relationalReadsEnabledForTenant(tenantId)) {
+    try {
+      const [blobStats, relationalStats, settings] = await Promise.all([
+        dbGetTenantDataStats(tenantId),
+        getTenantRelationalStats(tenantId),
+        dbLoadTenantSettings(tenantId),
+      ]);
+      const parity = blobStats && relationalStats
+        ? compareTenantDataCounts(blobStats, relationalStats, needsContacts)
+        : { matches: false, mismatches: [{ entity: 'workspace', reason: 'stats unavailable' }] };
+      if (parity.matches && settings !== null) {
+        const relationalData = await loadTenantRelationalData(tenantId, needsContacts);
+        if (relationalData) {
+          data = { ...relationalData, settings };
+          readSource = 'relational';
+        }
+      } else {
+        console.warn(`Relational read fallback for ${tenantId}:`, parity.mismatches);
+      }
+    } catch (error) {
+      console.error(`Relational read failed for ${tenantId}; using legacy data:`, error.message);
+    }
+  }
+  if (!data) data = await dbLoadTenantData(tenantId, needsContacts);
+  data = data || { accounts: [], contacts: [], jobs: [], configs: [], activities: [], tasks: [], settings: {} };
   timings.dbLoadMs = Date.now() - dbStartedAt;
+  timings.readSource = readSource;
 
   if (data) {
     const mergeStartedAt = Date.now();
