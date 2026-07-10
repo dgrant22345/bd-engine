@@ -844,7 +844,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/jobs') {
-    return sendJson(res, 200, store.findJobs(tenantId, Object.fromEntries(url.searchParams)));
+    return sendJson(res, 200, await store.findJobs(tenantId, Object.fromEntries(url.searchParams)));
   }
 
   if (pathname === '/api/configs') {

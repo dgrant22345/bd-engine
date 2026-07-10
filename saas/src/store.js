@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, findTenantAccountsRelational, findTenantContactsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -29,8 +29,13 @@ const RELATIONAL_SQL_CONTACT_TENANTS = new Set(String(process.env.BD_RELATIONAL_
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const RELATIONAL_SQL_JOB_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_JOB_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
 const confirmedRelationalSqlTenants = new Set();
 const confirmedRelationalContactSqlTenants = new Set();
+const confirmedRelationalJobSqlTenants = new Set();
 
 function relationalReadsEnabledForTenant(tenantId) {
   return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
@@ -42,6 +47,10 @@ function relationalSqlEnabledForTenant(tenantId) {
 
 function relationalContactSqlEnabledForTenant(tenantId) {
   return RELATIONAL_SQL_CONTACT_TENANTS.has('*') || RELATIONAL_SQL_CONTACT_TENANTS.has(tenantId);
+}
+
+function relationalJobSqlEnabledForTenant(tenantId) {
+  return RELATIONAL_SQL_JOB_TENANTS.has('*') || RELATIONAL_SQL_JOB_TENANTS.has(tenantId);
 }
 
 async function hasRelationalParity(tenantId, includeContacts = false) {
@@ -1695,8 +1704,26 @@ export function createStore() {
       return item;
     },
 
-    findJobs(tenantId, query) {
+    async findJobs(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalJobSqlEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, false)) {
+            const result = await findTenantJobsRelational(tenantId, query);
+            if (result) {
+              if (!confirmedRelationalJobSqlTenants.has(tenantId)) {
+                confirmedRelationalJobSqlTenants.add(tenantId);
+                console.log(`Relational SQL job queries active for ${tenantId}.`);
+              }
+              return result;
+            }
+          } else {
+            console.warn(`Relational job query fallback for ${tenantId}: parity check failed.`);
+          }
+        } catch (error) {
+          console.error(`Relational job query failed for ${tenantId}; using memory:`, error.message);
+        }
+      }
       const queryStartedAt = performance.now();
       let items = filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']);
       if (query.ats) {

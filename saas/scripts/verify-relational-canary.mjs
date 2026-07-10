@@ -25,6 +25,9 @@ async function main() {
   const contactQueryStartedAt = Date.now();
   const contactPage = await store.findContacts(tenantId, { page: 1, pageSize: 20 });
   const contactQueryMs = Date.now() - contactQueryStartedAt;
+  const jobQueryStartedAt = Date.now();
+  const jobPage = await store.findJobs(tenantId, { page: 1, pageSize: 20, active: 'true' });
+  const jobQueryMs = Date.now() - jobQueryStartedAt;
   const usage = await store.getUsageCounts(tenantId);
   console.log(JSON.stringify({
     ok: true,
@@ -39,6 +42,9 @@ async function main() {
     contactPageTotal: contactPage.total,
     contactPageItems: contactPage.items.length,
     contactQueryMs,
+    jobPageTotal: jobPage.total,
+    jobPageItems: jobPage.items.length,
+    jobQueryMs,
     elapsedMs: Date.now() - startedAt,
   }));
 }
