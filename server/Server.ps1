@@ -980,6 +980,17 @@ function Handle-ApiRequest {
     $query = $Request.Query
 
     if ($path -eq '/api/health' -and $method -eq 'GET') { return (New-JsonResult ([ordered]@{ ok = $true })) }
+    if ($path -eq '/api/analytics/visit' -and $method -eq 'POST') {
+        return (New-JsonResult ([ordered]@{ recorded = $false; storage = 'local'; reason = 'Local analytics are disabled.' }))
+    }
+    if ($path -eq '/api/workspace/load-hint' -and $method -eq 'GET') {
+        return (New-JsonResult ([ordered]@{
+            tenantId = 'local'
+            shouldShowProgress = $false
+            isLargeDataset = $false
+            counts = [ordered]@{ accounts = 0; contacts = 0; jobs = 0; configs = 0 }
+        }))
+    }
     if ($path -eq '/api/intelligence/draft-outreach' -and $method -eq 'GET') {
         try {
             $state = Get-AppStateView -Segments @('Companies', 'Jobs', 'Contacts')
@@ -1497,6 +1508,21 @@ function Handle-ApiRequest {
         $result = Set-ContactFields -State $state -ContactId $matches[1] -Patch (Read-JsonBody -Request $Request)
         Save-AppSegment -Segment 'Contacts' -Data $result.state.contacts -SkipSnapshots
         return (New-JsonResult $result.contact)
+    }
+
+    # Tasks are persisted by the cloud store. The local app exposes an empty,
+    # stable collection until local task persistence is implemented.
+    if ($path -eq '/api/tasks' -and $method -eq 'GET') {
+        $page = [Math]::Max(1, [int](Convert-ToNumber $query.page))
+        $pageSize = [int](Convert-ToNumber $query.pageSize)
+        if ($pageSize -lt 1) { $pageSize = 50 }
+        return (New-JsonResult ([ordered]@{
+            items = [object[]]@()
+            total = 0
+            page = $page
+            pageSize = $pageSize
+            supported = $false
+        }))
     }
 
     if ($path -eq '/api/jobs' -and $method -eq 'GET') {

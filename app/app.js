@@ -27,11 +27,25 @@ function readJsonSetting(key, fallback) {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : fallback;
   } catch {
+    localStorage.removeItem(key);
     return fallback;
   }
 }
 
 const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
+const defaultAlertThresholds = {
+  staleDays: 14,
+  scoreDropMin: 10,
+  hiringSpikeFactor: 3,
+  hiringSpikeMinJobs: 5,
+  highScoreNoContacts: 80,
+  highValueStaleMin: 70,
+};
+const storedAlertThresholds = readJsonSetting('bd_alert_thresholds', defaultAlertThresholds);
+if (storedAlertThresholds.hiringSpikeMinJobs === undefined && storedAlertThresholds.hiringSpikMinJobs !== undefined) {
+  storedAlertThresholds.hiringSpikeMinJobs = storedAlertThresholds.hiringSpikMinJobs;
+  delete storedAlertThresholds.hiringSpikMinJobs;
+}
 
 const appState = {
   bootstrap: null,
@@ -49,7 +63,7 @@ const appState = {
   configEditingId: '',
   runtimeStatus: null,
   runtimePollTimer: null,
-  savedFilters: JSON.parse(localStorage.getItem('bd_saved_filters') || '[]'),
+  savedFilters: readJsonSetting('bd_saved_filters', []),
   adminCollapsed: savedAdminCollapsed && typeof savedAdminCollapsed === 'object'
     ? { ...defaultAdminCollapsed, ...savedAdminCollapsed }
     : { ...defaultAdminCollapsed },
@@ -64,25 +78,25 @@ const appState = {
   lastKey: '',
   mobileNavOpen: false,
   // Phase 5: Elite features
-  columnPrefs: JSON.parse(localStorage.getItem('bd_col_prefs') || '{}'),
+  columnPrefs: readJsonSetting('bd_col_prefs', {}),
   kanbanMode: localStorage.getItem('bd_kanban') === 'true',
-  automationRules: JSON.parse(localStorage.getItem('bd_auto_rules') || '[]'),
-  scoreHistory: JSON.parse(localStorage.getItem('bd_score_history') || '{}'),
+  automationRules: readJsonSetting('bd_auto_rules', []),
+  scoreHistory: readJsonSetting('bd_score_history', {}),
   smartAlerts: [],
   inlineEditCell: null,
   pwaInstallPrompt: null,
-  accountNotes: JSON.parse(localStorage.getItem('bd_notes') || '{}'),
-  stageTimestamps: JSON.parse(localStorage.getItem('bd_stage_ts') || '{}'),
+  accountNotes: readJsonSetting('bd_notes', {}),
+  stageTimestamps: readJsonSetting('bd_stage_ts', {}),
   // Phase 6: Commercial-grade features
   onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
   postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
   tourActive: false,
-  dashboardLayout: JSON.parse(localStorage.getItem('bd_dash_layout') || 'null'),
-  dashboardCollapsed: JSON.parse(localStorage.getItem('bd_dash_collapsed') || '{}'),
-  customFields: JSON.parse(localStorage.getItem('bd_custom_fields') || '[]'),
-  outreachSequences: JSON.parse(localStorage.getItem('bd_sequences') || '[]'),
-  activityLog: JSON.parse(localStorage.getItem('bd_activity_log') || '[]'),
-  alertThresholds: JSON.parse(localStorage.getItem('bd_alert_thresholds') || '{"staleDays":14,"scoreDropMin":10,"hiringSpikeFactor":3,"hiringSpikMinJobs":5,"highScoreNoContacts":80,"highValueStaleMin":70}'),
+  dashboardLayout: readJsonSetting('bd_dash_layout', null),
+  dashboardCollapsed: readJsonSetting('bd_dash_collapsed', {}),
+  customFields: readJsonSetting('bd_custom_fields', []),
+  outreachSequences: readJsonSetting('bd_sequences', []),
+  activityLog: readJsonSetting('bd_activity_log', []),
+  alertThresholds: { ...defaultAlertThresholds, ...storedAlertThresholds },
   bulkLastClickIdx: null,
   duplicateCache: null,
   persona: 'bd',
@@ -787,7 +801,7 @@ function renderAccountNotesPanel(accountId) {
   const notes = appState.accountNotes[accountId] || [];
   return `
     <div class="detail-card notes-panel">
-      <div class="panel-header"><div><h3>Quick Notes</h3><p class="muted small">Team-visible notes saved locally.</p></div></div>
+      <div class="panel-header"><div><h3>Private notes</h3><p class="muted small">Saved only in this browser on this device.</p></div></div>
       <div class="notes-input-row">
         <input id="note-input" class="compact-input" placeholder="Add a note..." maxlength="500">
         <button class="secondary-button compact-btn" id="add-note-btn" data-account-id="${accountId}">Add</button>
@@ -802,6 +816,26 @@ function renderAccountNotesPanel(accountId) {
       </div>
     </div>
   `;
+}
+
+function wireAccountNotes(accountId) {
+  const rerender = () => {
+    const panel = document.querySelector('.notes-panel');
+    if (panel) panel.outerHTML = renderAccountNotesPanel(accountId);
+    wireAccountNotes(accountId);
+  };
+  document.getElementById('add-note-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('note-input');
+    if (!input?.value.trim()) return;
+    addAccountNote(accountId, input.value);
+    rerender();
+  });
+  document.querySelectorAll('.note-delete').forEach((button) => {
+    button.addEventListener('click', () => {
+      deleteAccountNote(button.dataset.accountId, Number(button.dataset.noteId));
+      rerender();
+    });
+  });
 }
 
 /* ── Automation rules engine ── */
@@ -837,7 +871,7 @@ function evaluateAutomationRules(account) {
 function renderAutomationRulesPanel() {
   return `
     <div class="detail-card automation-panel">
-      <div class="panel-header"><div><h3>Automation Rules</h3><p class="muted small">When conditions are met, auto-apply actions. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
+      <div class="panel-header"><div><h3>Rule drafts</h3><p class="muted small">Saved in this browser for review. Actions are not applied automatically.</p></div></div>
       <div class="automation-form" id="automation-form">
         <select id="auto-trigger">
           <option value="status_change">When status changes to...</option>
@@ -976,7 +1010,8 @@ function renderConversionFunnel(stages, width = 320, height = 160) {
     const y2 = pad + (i + 1) * stageH;
     const colors = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)', 'var(--muted)'];
     const color = s.color || colors[i % colors.length];
-    const convRate = i > 0 ? Math.round((s.value / stages[i - 1].value) * 100) : 100;
+    const previousValue = i > 0 ? Number(stages[i - 1].value || 0) : 0;
+    const convRate = i > 0 && previousValue > 0 ? Math.round((s.value / previousValue) * 100) : 0;
     return `<path d="M${x1},${y1} L${x2},${y1} L${x3},${y2} L${x4},${y2} Z" fill="${color}" opacity="0.7"/>
       <text x="${width/2}" y="${y1 + stageH/2 + 4}" text-anchor="middle" fill="var(--surface-strong)" font-size="10" font-weight="600">${escapeHtml(s.label)} (${s.value})</text>
       ${i > 0 ? `<text x="${width - 8}" y="${y1 + stageH/2 + 3}" text-anchor="end" fill="var(--muted)" font-size="8">${convRate}%</text>` : ''}`;
@@ -1198,7 +1233,7 @@ function renderOutreachSequencePanel(accountId) {
   const seqs = appState.outreachSequences.filter(s => s.accountId === accountId);
   return `
     <div class="detail-card sequence-panel">
-      <div class="panel-header"><div><h3>Outreach sequence</h3><p class="muted small">Multi-step cadence for this account. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
+      <div class="panel-header"><div><h3>Private sequence plan</h3><p class="muted small">A planning aid saved only in this browser.</p></div></div>
       <form class="sequence-form" data-account-id="${accountId}">
         <select name="channel" class="compact-select"><option value="email">Email</option><option value="linkedin">LinkedIn</option><option value="call">Call</option></select>
         <input name="note" placeholder="Step description..." class="compact-input">
@@ -1249,7 +1284,7 @@ function renderActivityTimeline(accountId) {
 
 /* ── Phase 6: Sales cycle analytics ── */
 function renderSalesCycleAnalytics(accounts) {
-  if (!Array.isArray(accounts)) return '';
+  if (!Array.isArray(accounts) || !accounts.length) return '';
   const stageOrder = ['new', 'researching', 'outreach', 'engaged', 'client'];
   const stageCounts = {};
   const stageAvgDays = {};
@@ -1291,7 +1326,7 @@ function renderAlertThresholdsPanel() {
         ${renderField('Stale days', `<input name="staleDays" type="number" min="1" value="${t.staleDays}">`)}
         ${renderField('Min score drop', `<input name="scoreDropMin" type="number" min="1" value="${t.scoreDropMin}">`)}
         ${renderField('Hiring spike factor', `<input name="hiringSpikeFactor" type="number" min="1" step="0.5" value="${t.hiringSpikeFactor}">`)}
-        ${renderField('Spike min jobs', `<input name="hiringSpikMinJobs" type="number" min="1" value="${t.hiringSpikMinJobs}">`)}
+        ${renderField('Spike min jobs', `<input name="hiringSpikeMinJobs" type="number" min="1" value="${t.hiringSpikeMinJobs}">`)}
         ${renderField('High score no contacts', `<input name="highScoreNoContacts" type="number" min="1" value="${t.highScoreNoContacts}">`)}
         ${renderField('High value stale min', `<input name="highValueStaleMin" type="number" min="1" value="${t.highValueStaleMin}">`)}
         <div><button class="secondary-button" type="submit">Save thresholds</button></div>
@@ -1314,7 +1349,7 @@ detectSmartAlerts = function(accounts) {
     if (a.staleFlag === 'STALE' && current >= t.highValueStaleMin) {
       alerts.push({ type: 'stale_high_value', accountId: a.id, name: a.displayName, message: `High-value account (${current} pts) hasn't been touched in ${t.staleDays}+ days`, severity: 'danger' });
     }
-    if ((a.hiringSpikeRatio || 0) > t.hiringSpikeFactor && (a.jobsLast30Days || 0) >= t.hiringSpikMinJobs) {
+    if ((a.hiringSpikeRatio || 0) > t.hiringSpikeFactor && (a.jobsLast30Days || 0) >= t.hiringSpikeMinJobs) {
       alerts.push({ type: 'hiring_spike', accountId: a.id, name: a.displayName, message: `Hiring spike: ${a.jobsLast30Days} jobs in 30d (${a.hiringSpikeRatio}x normal)`, severity: 'success' });
     }
     if (current >= t.highScoreNoContacts && (a.contactCount || 0) === 0) {
@@ -1439,11 +1474,11 @@ function exportToPdf() {
 /* ── Phase 6: Custom fields ── */
 function renderCustomFieldsPanel(accountId) {
   const fields = appState.customFields;
-  const values = JSON.parse(localStorage.getItem(`bd_cf_${accountId}`) || '{}');
+  const values = readJsonSetting(`bd_cf_${accountId}`, {});
   if (!fields.length) {
     return `
       <div class="detail-card custom-fields-panel">
-        <div class="panel-header"><div><h3>Custom fields</h3><p class="muted small">Define your own fields to track per account. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div></div>
+        <div class="panel-header"><div><h3>Private custom fields</h3><p class="muted small">Define fields stored only in this browser.</p></div></div>
         <form class="custom-field-def-form" id="custom-field-def-form">
           <input name="fieldName" placeholder="Field name..." class="compact-input">
           <select name="fieldType" class="compact-select"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select (comma-separated)</option></select>
@@ -1455,7 +1490,7 @@ function renderCustomFieldsPanel(accountId) {
   return `
     <div class="detail-card custom-fields-panel">
       <div class="panel-header">
-        <div><h3>Custom fields</h3><p class="muted small">${fields.length} custom field${fields.length > 1 ? 's' : ''} defined. <span title="Stored in this browser only — not yet synced across devices or team members">· Saved on this device only</span></p></div>
+        <div><h3>Private custom fields</h3><p class="muted small">${fields.length} browser-only field${fields.length > 1 ? 's' : ''} defined.</p></div>
         <button class="ghost-button ghost-button--xs" id="add-custom-field-toggle">+ Add field</button>
       </div>
       <form class="custom-field-def-form hidden" id="custom-field-def-form">
@@ -2405,7 +2440,7 @@ function bindEvents() {
         staleDays: Number(values.staleDays) || 14,
         scoreDropMin: Number(values.scoreDropMin) || 10,
         hiringSpikeFactor: Number(values.hiringSpikeFactor) || 3,
-        hiringSpikMinJobs: Number(values.hiringSpikMinJobs) || 5,
+        hiringSpikeMinJobs: Number(values.hiringSpikeMinJobs) || 5,
         highScoreNoContacts: Number(values.highScoreNoContacts) || 80,
         highValueStaleMin: Number(values.highValueStaleMin) || 70,
       };
@@ -4920,26 +4955,7 @@ async function renderAccountDetail(accountId) {
   `;
   applyPendingOutreachContact(detail.account.id);
   syncOutreachComposerState();
-  // Wire notes
-  document.getElementById('add-note-btn')?.addEventListener('click', () => {
-    const input = document.getElementById('note-input');
-    if (input?.value.trim()) {
-      addAccountNote(accountId, input.value);
-      const panel = document.querySelector('.notes-panel');
-      if (panel) panel.outerHTML = renderAccountNotesPanel(accountId);
-      // Re-wire after re-render
-      document.getElementById('add-note-btn')?.addEventListener('click', arguments.callee);
-    }
-  });
-  document.querySelectorAll('.note-delete').forEach(btn => {
-    btn.addEventListener('click', () => {
-      deleteAccountNote(btn.dataset.accountId, Number(btn.dataset.noteId));
-      const panel = document.querySelector('.notes-panel');
-      if (panel) panel.outerHTML = renderAccountNotesPanel(btn.dataset.accountId);
-    });
-  });
-  // Request notification permission on first detail view
-  requestNotificationPermission();
+  wireAccountNotes(accountId);
 }
 async function renderContactsView() {
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
