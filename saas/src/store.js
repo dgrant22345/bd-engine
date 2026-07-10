@@ -1408,13 +1408,24 @@ export function createStore() {
       const loadStartedAt = performance.now();
       // Contacts are needed for networkLeaders; without them the widget was
       // silently empty until some other endpoint happened to load contacts.
-      await ensureDataLoaded(tenantId, true);
+      let tenantAccounts, tenantJobs, tenantConfigs, tenantContacts;
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          const arrays = await relationalQueries.getDashboardArrays(tenantId);
+          ({ accounts: tenantAccounts, jobs: tenantJobs, configs: tenantConfigs, contacts: tenantContacts } = arrays);
+        } catch (err) {
+          console.error('Relational read fallback (dashboard):', tenantId, err.message);
+        }
+      }
+      if (!tenantAccounts) {
+        await ensureDataLoaded(tenantId, true);
+        tenantAccounts = accountsForTenant(tenantId);
+        tenantJobs = jobsForTenant(tenantId);
+        tenantConfigs = configsForTenant(tenantId);
+        tenantContacts = contactsForTenant(tenantId);
+      }
       timings.scopeLoadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
-      const tenantAccounts = accountsForTenant(tenantId);
-      const tenantJobs = jobsForTenant(tenantId);
-      const tenantConfigs = configsForTenant(tenantId);
-      const tenantContacts = contactsForTenant(tenantId);
       const persona = this.getPersona(tenantId);
       const activeJobs = tenantJobs.filter((item) => item.active !== false);
       const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);

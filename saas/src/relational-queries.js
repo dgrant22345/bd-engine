@@ -104,6 +104,30 @@ export async function findConfigs(tenantId, query = {}) {
   return { items: rows.map((r) => r.raw), page, pageSize, total };
 }
 
+// Whole-tenant arrays for the dashboard, each ordered to match the in-memory
+// *ForTenant getters so the existing dashboard builders produce identical output:
+//   accounts  → targetScore DESC (accountsByTenant sort)
+//   contacts  → priorityScore DESC (contactsByTenant sort)
+//   jobs      → postedAt DESC (jobsForTenant)
+//   configs   → deterministic (configsByTenant is load-order; only affects the
+//               recentlyDiscoveredBoards slice, cosmetic)
+// This trades resident memory (nothing kept in the per-tenant maps) for a
+// per-request fetch. Reuses the tested builders verbatim → zero divergence.
+export async function getDashboardArrays(tenantId) {
+  const [accounts, contacts, configs, jobs] = await Promise.all([
+    dbQuery('SELECT raw FROM accounts WHERE tenant_id = $1 ORDER BY target_score DESC, updated_at DESC, id ASC', [tenantId]),
+    dbQuery('SELECT raw FROM contacts WHERE tenant_id = $1 ORDER BY priority_score DESC, updated_at DESC, id ASC', [tenantId]),
+    dbQuery('SELECT raw FROM board_configs WHERE tenant_id = $1 ORDER BY updated_at DESC, id ASC', [tenantId]),
+    getTenantJobs(tenantId),
+  ]);
+  return {
+    accounts: accounts.rows.map((r) => r.raw),
+    contacts: contacts.rows.map((r) => r.raw),
+    configs: configs.rows.map((r) => r.raw),
+    jobs,
+  };
+}
+
 // One account plus its related records, fetched by index. store.js keeps the
 // persona/action-plan shaping. Returns null if the account is not in the tenant.
 export async function getAccountDetailData(tenantId, accountId) {
