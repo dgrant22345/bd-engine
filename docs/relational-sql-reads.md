@@ -41,22 +41,37 @@ updated first within equal priority" is arguably better — but it is a visible
 change. If exact current order must be preserved, add an `ord` (array-index)
 column to the mirror + writer and order by that instead.
 
-## BLOCKER before enabling `BD_RELATIONAL_READS` — mirror drift
-Testing surfaced that codex's dual-write is **not keeping the mirror current**:
-- **Accounts: 3,623 / 12,317 (29%) stale** — updated in the blob today
-  (2026-07-10, one bulk timestamp) but still at the 2026-07-05 state in the
-  mirror (`raw_content_drift = 3623`; `target_score` unaffected, so order is
-  fine, but other fields are stale). **Contacts: 0 drift.**
-- `BD_RELATIONAL_MIRROR` is unset (mirror enabled), and `saveTenantNow` does sync
-  the mirror — so the stale rows came from a path that bypassed that choke-point
-  (a maintenance/scoring script writing `tenant_data` directly, most likely).
-- Until dual-write reliably captures **every** write, SQL reads would serve a
-  stale snapshot for ~29% of accounts. **Do not flip the flag on** until the
-  dual-write gap is closed (and a fresh backfill re-syncs the drifted rows).
+## Mirror drift — diagnosed & healed
+Testing surfaced the mirror lagging the blob. Full diagnosis:
+- **Only `updatedAt` differed** on 3,623 / 12,317 accounts (07-05 → 07-10),
+  sequential-ms timestamps = a one-by-one loop. **No real content stale** (scores,
+  status, notes identical); **contacts 0 drift**.
+- **The app's dual-write is sound**: both blob writers mirror correctly —
+  `saveTenantNow` (store.js:923 → `syncTenantRelationalMirror`) and
+  `clearTenantWorkspaceData` (store.js:1160 → `wipeTenantRelationalMirror`).
+  `BD_RELATIONAL_MIRROR` is unset (enabled).
+- **Root cause: an out-of-band bulk write to `tenant_data`** (a normalization
+  pass re-stamping `updatedAt` during other work) that did NOT go through the app,
+  so the mirror never saw it. Not a recurring code bug.
+- **Healed** by re-running codex's `backfill-relational.mjs --tenant …` (a fresh
+  process has an empty cursor, so it re-upserts everything blob → mirror).
+
+### Cutover safety rule (the durable fix)
+The in-memory `updatedAt` cursor means any write that bypasses the app
+choke-point (scripts, direct DB edits) can leave the mirror stale until the next
+cold load or backfill. So: **run `backfill-relational.mjs --tenant <id>`
+immediately before enabling `BD_RELATIONAL_READS` for a tenant**, and after any
+out-of-band `tenant_data` mutation. Track migrated tenants in
+`rel_migration_state`.
+
+### Recommended (not done here — codex's file, avoid collision)
+`relational-writes.js` upserts **one row per query** (~45k round-trips to
+backfill this tenant, slow over the proxy and a wide partial-failure window).
+Batching into multi-row `INSERT … ON CONFLICT` would make dual-write and backfill
+fast and more robust. Flag for codex.
 
 ## Remaining
-1. Fix the dual-write drift (find the bypass path; ensure all account mutations
-   sync the mirror) + re-backfill, then the flag is safe per tenant.
-2. More reads: `findJobs` (ats/active/isNew/recency/sortBy), `getAccountDetail`,
+1. More reads: `findJobs` (ats/active/isNew/recency/sortBy), `getAccountDetail`,
    dashboard aggregates.
-3. Decide the tie-order question (accept `updated_at` tiebreak vs add `ord`).
+2. Decide the tie-order question (accept `updated_at` tiebreak vs add `ord`).
+3. Per-tenant cutover via `rel_migration_state` (+ the backfill-before-flip rule).
