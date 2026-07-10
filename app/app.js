@@ -94,6 +94,7 @@ const appState = {
   dashboardLayout: readJsonSetting('bd_dash_layout', null),
   dashboardCollapsed: readJsonSetting('bd_dash_collapsed', {}),
   customFields: readJsonSetting('bd_custom_fields', []),
+  customFieldValues: {},
   outreachSequences: readJsonSetting('bd_sequences', []),
   activityLog: readJsonSetting('bd_activity_log', []),
   alertThresholds: { ...defaultAlertThresholds, ...storedAlertThresholds },
@@ -123,6 +124,101 @@ const appState = {
   },
   taskQuery: { page: 1, pageSize: 50, status: 'pending' },
 };
+
+const sharedWorkspaceStorageKeys = {
+  accountNotes: 'bd_notes',
+  automationRules: 'bd_auto_rules',
+  customFields: 'bd_custom_fields',
+  outreachSequences: 'bd_sequences',
+  activityLog: 'bd_activity_log',
+  alertThresholds: 'bd_alert_thresholds',
+};
+let pendingWorkspacePreferenceFields = new Set();
+let workspacePreferenceSaveTimer = null;
+
+function readLocalCustomFieldValues() {
+  const values = {};
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith('bd_cf_')) values[key.slice(6)] = readJsonSetting(key, {});
+    }
+  } catch {
+    // Local storage is only a migration and offline cache.
+  }
+  return values;
+}
+
+function collectSharedWorkspacePreferences() {
+  return {
+    accountNotes: appState.accountNotes,
+    automationRules: appState.automationRules,
+    customFields: appState.customFields,
+    customFieldValues: appState.customFieldValues,
+    outreachSequences: appState.outreachSequences,
+    activityLog: appState.activityLog,
+    alertThresholds: appState.alertThresholds,
+  };
+}
+
+function cacheSharedWorkspacePreference(key, value) {
+  try {
+    if (key === 'customFieldValues') {
+      Object.entries(value || {}).forEach(([accountId, fields]) => localStorage.setItem(`bd_cf_${accountId}`, JSON.stringify(fields)));
+      return;
+    }
+    const storageKey = sharedWorkspaceStorageKeys[key];
+    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // Server persistence remains authoritative when the browser cache is full.
+  }
+}
+
+function applySharedWorkspacePreferences(preferences = {}) {
+  Object.keys(collectSharedWorkspacePreferences()).forEach((key) => {
+    if (preferences[key] === undefined) return;
+    appState[key] = preferences[key];
+    cacheSharedWorkspacePreference(key, preferences[key]);
+  });
+}
+
+async function loadWorkspacePreferences() {
+  appState.customFieldValues = readLocalCustomFieldValues();
+  try {
+    const remote = await api('/api/workspace/preferences', { skipCache: true });
+    if (remote?.updatedAt) {
+      applySharedWorkspacePreferences(remote);
+      return;
+    }
+    const local = collectSharedWorkspacePreferences();
+    const hasLocalData = Object.entries(local).some(([key, value]) => key === 'alertThresholds'
+      ? JSON.stringify(value) !== JSON.stringify(defaultAlertThresholds)
+      : Array.isArray(value) ? value.length > 0 : Object.keys(value || {}).length > 0);
+    if (hasLocalData) {
+      const saved = await api('/api/workspace/preferences', { method: 'PATCH', body: JSON.stringify(local) });
+      applySharedWorkspacePreferences(saved);
+    }
+  } catch (error) {
+    console.warn('Workspace collaboration data is using the local cache.', error);
+  }
+}
+
+function persistSharedWorkspacePreference(key) {
+  cacheSharedWorkspacePreference(key, appState[key]);
+  pendingWorkspacePreferenceFields.add(key);
+  clearTimeout(workspacePreferenceSaveTimer);
+  workspacePreferenceSaveTimer = setTimeout(async () => {
+    const fields = Array.from(pendingWorkspacePreferenceFields);
+    pendingWorkspacePreferenceFields = new Set();
+    const payload = Object.fromEntries(fields.map((field) => [field, appState[field]]));
+    try {
+      await api('/api/workspace/preferences', { method: 'PATCH', body: JSON.stringify(payload) });
+    } catch (error) {
+      fields.forEach((field) => pendingWorkspacePreferenceFields.add(field));
+      showToast('Could not sync workspace changes. They remain saved on this device.', 'warning', 7000);
+    }
+  }, 250);
+}
 
 const viewTitle = document.getElementById('view-title');
 const appRoot = document.getElementById('app');
@@ -787,21 +883,21 @@ function addAccountNote(accountId, text) {
   if (!notes[accountId]) notes[accountId] = [];
   notes[accountId].unshift({ text: text.trim(), at: new Date().toISOString(), id: Date.now() });
   if (notes[accountId].length > 50) notes[accountId] = notes[accountId].slice(0, 50);
-  try { localStorage.setItem('bd_notes', JSON.stringify(notes)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('accountNotes');
 }
 
 function deleteAccountNote(accountId, noteId) {
   const notes = appState.accountNotes;
   if (!notes[accountId]) return;
   notes[accountId] = notes[accountId].filter(n => n.id !== noteId);
-  try { localStorage.setItem('bd_notes', JSON.stringify(notes)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('accountNotes');
 }
 
 function renderAccountNotesPanel(accountId) {
   const notes = appState.accountNotes[accountId] || [];
   return `
     <div class="detail-card notes-panel">
-      <div class="panel-header"><div><h3>Private notes</h3><p class="muted small">Saved only in this browser on this device.</p></div></div>
+      <div class="panel-header"><div><h3>Workspace notes</h3><p class="muted small">Shared with everyone in this workspace.</p></div></div>
       <div class="notes-input-row">
         <input id="note-input" class="compact-input" placeholder="Add a note..." maxlength="500">
         <button class="secondary-button compact-btn" id="add-note-btn" data-account-id="${accountId}">Add</button>
@@ -841,18 +937,18 @@ function wireAccountNotes(accountId) {
 /* ── Automation rules engine ── */
 function addAutomationRule(rule) {
   appState.automationRules.push({ ...rule, id: Date.now(), enabled: true });
-  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('automationRules');
 }
 
 function deleteAutomationRule(ruleId) {
   appState.automationRules = appState.automationRules.filter(r => r.id !== ruleId);
-  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('automationRules');
 }
 
 function toggleAutomationRule(ruleId) {
   const rule = appState.automationRules.find(r => r.id === ruleId);
   if (rule) rule.enabled = !rule.enabled;
-  try { localStorage.setItem('bd_auto_rules', JSON.stringify(appState.automationRules)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('automationRules');
 }
 
 function evaluateAutomationRules(account) {
@@ -871,7 +967,7 @@ function evaluateAutomationRules(account) {
 function renderAutomationRulesPanel() {
   return `
     <div class="detail-card automation-panel">
-      <div class="panel-header"><div><h3>Rule drafts</h3><p class="muted small">Saved in this browser for review. Actions are not applied automatically.</p></div></div>
+      <div class="panel-header"><div><h3>Shared rule drafts</h3><p class="muted small">Visible to your workspace for review. Actions are not applied automatically.</p></div></div>
       <div class="automation-form" id="automation-form">
         <select id="auto-trigger">
           <option value="status_change">When status changes to...</option>
@@ -1233,7 +1329,7 @@ function renderOutreachSequencePanel(accountId) {
   const seqs = appState.outreachSequences.filter(s => s.accountId === accountId);
   return `
     <div class="detail-card sequence-panel">
-      <div class="panel-header"><div><h3>Private sequence plan</h3><p class="muted small">A planning aid saved only in this browser.</p></div></div>
+      <div class="panel-header"><div><h3>Workspace sequence plan</h3><p class="muted small">Shared follow-up steps for this account.</p></div></div>
       <form class="sequence-form" data-account-id="${accountId}">
         <select name="channel" class="compact-select"><option value="email">Email</option><option value="linkedin">LinkedIn</option><option value="call">Call</option></select>
         <input name="note" placeholder="Step description..." class="compact-input">
@@ -1260,7 +1356,7 @@ function logActivity(type, detail) {
   const entry = { id: Date.now(), type, ...detail, at: new Date().toISOString() };
   appState.activityLog.unshift(entry);
   if (appState.activityLog.length > 500) appState.activityLog = appState.activityLog.slice(0, 500);
-  try { localStorage.setItem('bd_activity_log', JSON.stringify(appState.activityLog)); } catch(e) { /* quota */ }
+  persistSharedWorkspacePreference('activityLog');
 }
 
 function renderActivityTimeline(accountId) {
@@ -1268,7 +1364,7 @@ function renderActivityTimeline(accountId) {
   if (!items.length) return '';
   return `
     <div class="detail-card">
-      <div class="panel-header"><div><h3>Activity timeline</h3><p class="muted small">Recent local actions on this account.</p></div></div>
+      <div class="panel-header"><div><h3>Activity timeline</h3><p class="muted small">Recent workspace actions on this account.</p></div></div>
       <div class="timeline">
         ${items.map(a => `
           <article class="timeline-item">
@@ -1474,11 +1570,11 @@ function exportToPdf() {
 /* ── Phase 6: Custom fields ── */
 function renderCustomFieldsPanel(accountId) {
   const fields = appState.customFields;
-  const values = readJsonSetting(`bd_cf_${accountId}`, {});
+  const values = appState.customFieldValues[accountId] || {};
   if (!fields.length) {
     return `
       <div class="detail-card custom-fields-panel">
-        <div class="panel-header"><div><h3>Private custom fields</h3><p class="muted small">Define fields stored only in this browser.</p></div></div>
+        <div class="panel-header"><div><h3>Workspace custom fields</h3><p class="muted small">Define fields shared across this workspace.</p></div></div>
         <form class="custom-field-def-form" id="custom-field-def-form">
           <input name="fieldName" placeholder="Field name..." class="compact-input">
           <select name="fieldType" class="compact-select"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select (comma-separated)</option></select>
@@ -1490,7 +1586,7 @@ function renderCustomFieldsPanel(accountId) {
   return `
     <div class="detail-card custom-fields-panel">
       <div class="panel-header">
-        <div><h3>Private custom fields</h3><p class="muted small">${fields.length} browser-only field${fields.length > 1 ? 's' : ''} defined.</p></div>
+        <div><h3>Workspace custom fields</h3><p class="muted small">${fields.length} shared field${fields.length > 1 ? 's' : ''} defined.</p></div>
         <button class="ghost-button ghost-button--xs" id="add-custom-field-toggle">+ Add field</button>
       </div>
       <form class="custom-field-def-form hidden" id="custom-field-def-form">
@@ -1709,6 +1805,7 @@ async function init() {
       await renderRoute();
       return;
     }
+    await loadWorkspacePreferences();
     if (routeNeedsBootstrapFilters(initialRoot)) {
       updateWorkspaceLoadProgress(46, 'Large first run: loading workspace snapshot and filters...');
       await loadBootstrap(true, { includeFilters: true });
@@ -2294,7 +2391,7 @@ function bindEvents() {
       const seq = appState.outreachSequences.find(s => s.id === seqId);
       if (seq) {
         seq.done = true;
-        localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+        persistSharedWorkspacePreference('outreachSequences');
         logActivity('sequence_complete', { accountId: seq.accountId, summary: `Completed ${seq.channel}: ${seq.note}` });
         showToast('Sequence step completed.', 'success');
         if (appState.accountDetail) renderAccountDetail(appState.accountDetail.account.id);
@@ -2345,6 +2442,25 @@ function bindEvents() {
     if (form.id === 'accounts-filter-form') {
       appState.accountQuery = { ...appState.accountQuery, page: 1, ...getFormValues(form) };
       await renderAccountsView();
+      return;
+    }
+
+    if (form.id === 'task-create-form') {
+      const payload = getFormValues(form);
+      if (!payload.summary?.trim()) {
+        showToast('Add a short description for the task.', 'warning');
+        return;
+      }
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) submitButton.disabled = true;
+      try {
+        await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        showToast('Task added to the workspace.', 'success');
+        await renderTasksView();
+      } catch (error) {
+        showToast(`Could not add task: ${error.message || error}`, 'error', 7000);
+        if (submitButton) submitButton.disabled = false;
+      }
       return;
     }
 
@@ -2402,7 +2518,7 @@ function bindEvents() {
       const dueIn = Number(values.dueIn || 3);
       const dueAt = new Date(Date.now() + dueIn * 86400000).toISOString();
       appState.outreachSequences.push({ id: Date.now(), accountId, channel: values.channel, note: values.note, dueAt, done: false });
-      localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+      persistSharedWorkspacePreference('outreachSequences');
       logActivity('sequence_add', { accountId, summary: `Added ${values.channel} step: ${values.note}` });
       showToast('Sequence step added.', 'success');
       if (appState.accountDetail) renderAccountDetail(accountId);
@@ -2414,7 +2530,7 @@ function bindEvents() {
       const values = getFormValues(form);
       if (!values.fieldName?.trim()) { showToast('Field name required.', 'warning'); return; }
       appState.customFields.push({ name: values.fieldName.trim(), type: values.fieldType || 'text', options: values.fieldOptions || '' });
-      localStorage.setItem('bd_custom_fields', JSON.stringify(appState.customFields));
+      persistSharedWorkspacePreference('customFields');
       showToast('Custom field added.', 'success');
       if (appState.accountDetail) renderAccountDetail(appState.accountDetail.account.id);
       return;
@@ -2428,7 +2544,8 @@ function bindEvents() {
       Object.entries(values).forEach(([k, v]) => {
         if (k.startsWith('cf_')) cfValues[k.slice(3)] = v;
       });
-      localStorage.setItem(`bd_cf_${accountId}`, JSON.stringify(cfValues));
+      appState.customFieldValues[accountId] = cfValues;
+      persistSharedWorkspacePreference('customFieldValues');
       showToast('Custom fields saved.', 'success');
       return;
     }
@@ -2444,7 +2561,7 @@ function bindEvents() {
         highScoreNoContacts: Number(values.highScoreNoContacts) || 80,
         highValueStaleMin: Number(values.highValueStaleMin) || 70,
       };
-      localStorage.setItem('bd_alert_thresholds', JSON.stringify(appState.alertThresholds));
+      persistSharedWorkspacePreference('alertThresholds');
       showToast('Alert thresholds saved.', 'success');
       return;
     }
@@ -7090,7 +7207,7 @@ async function logGeneratedOutreach(buttonEl) {
       dueAt: new Date(`${followUpAt}T09:00:00`).toISOString(),
       done: false,
     });
-    localStorage.setItem('bd_sequences', JSON.stringify(appState.outreachSequences));
+    persistSharedWorkspacePreference('outreachSequences');
     logActivity('outreach_logged', { accountId: account.id, summary });
     invalidateAppData();
     showToast(`Outreach logged. Follow-up set for ${formatDate(followUpAt)}.`, 'success', 7000);
@@ -7718,12 +7835,24 @@ async function renderTasksView() {
           </div>
         </div>
 
+        <form id="task-create-form" class="task-create-form">
+          <label>
+            <span>What needs to happen?</span>
+            <input name="summary" maxlength="240" required placeholder="Follow up with the hiring manager">
+          </label>
+          <label>
+            <span>Due date</span>
+            <input name="dueDate" type="date" value="${toLocalDateInputValue(new Date(Date.now() + 86400000))}" required>
+          </label>
+          <button type="submit" class="primary-button">Add task</button>
+        </form>
+
         <div class="tasks-content">
           ${appState.taskQuery.status === 'pending' ? `
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Generate outreach, log follow-ups, or set next actions from an account page to build your task list.' }) : ''}
+            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Add a task above or create a follow-up from an account page.' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
             ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
@@ -7780,4 +7909,9 @@ function isToday(dateStr) {
   const d = new Date(dateStr);
   const now = new Date();
   return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+}
+
+function toLocalDateInputValue(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
 }

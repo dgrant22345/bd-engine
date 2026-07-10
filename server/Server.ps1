@@ -451,6 +451,29 @@ function Read-JsonBody {
     ConvertTo-PlainObject -InputObject ($Request.Body | ConvertFrom-Json)
 }
 
+function Merge-WorkspacePreferences {
+    param($Current, $Patch)
+
+    if ($null -eq $Current) { $Current = [ordered]@{} }
+    if ($null -eq $Patch) { $Patch = [ordered]@{} }
+    $allowed = @('accountNotes', 'automationRules', 'customFields', 'customFieldValues', 'outreachSequences', 'activityLog', 'alertThresholds')
+    $result = [ordered]@{}
+    foreach ($name in $allowed) {
+        if (Test-ObjectHasKey -Object $Current -Name $name) {
+            $result[$name] = Get-ObjectValue -Object $Current -Name $name
+        }
+        if (Test-ObjectHasKey -Object $Patch -Name $name) {
+            $value = Get-ObjectValue -Object $Patch -Name $name
+            if ($name -in @('automationRules', 'customFields')) { $value = @($value | Select-Object -First 100) }
+            if ($name -eq 'outreachSequences') { $value = @($value | Select-Object -Last 1000) }
+            if ($name -eq 'activityLog') { $value = @($value | Select-Object -First 500) }
+            $result[$name] = $value
+        }
+    }
+    $result.updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    return $result
+}
+
 function Get-PayloadValue {
     param(
         [Parameter(Mandatory = $true)]
@@ -1510,19 +1533,56 @@ function Handle-ApiRequest {
         return (New-JsonResult $result.contact)
     }
 
-    # Tasks are persisted by the cloud store. The local app exposes an empty,
-    # stable collection until local task persistence is implemented.
     if ($path -eq '/api/tasks' -and $method -eq 'GET') {
-        $page = [Math]::Max(1, [int](Convert-ToNumber $query.page))
-        $pageSize = [int](Convert-ToNumber $query.pageSize)
-        if ($pageSize -lt 1) { $pageSize = 50 }
-        return (New-JsonResult ([ordered]@{
-            items = [object[]]@()
-            total = 0
-            page = $page
-            pageSize = $pageSize
-            supported = $false
-        }))
+        $settings = Get-AppSegment -Segment 'Settings'
+        if ($null -eq $settings) { $settings = [ordered]@{} }
+        $status = if ($query.status) { [string]$query.status } else { 'pending' }
+        $items = @((Get-ObjectValue -Object $settings -Name 'localTasks' -Default @()) | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'status' -Default 'pending')) -eq $status } | Sort-Object @{ Expression = { [string](Get-ObjectValue -Object $_ -Name 'dueDate' -Default '') }; Descending = $false })
+        return (New-JsonResult (Get-PagedResult -Items $items -Page ([int](Convert-ToNumber $query.page)) -PageSize ([int](Convert-ToNumber $query.pageSize))))
+    }
+
+    if ($path -eq '/api/tasks' -and $method -eq 'POST') {
+        $payload = Read-JsonBody -Request $Request
+        $summary = ([string](Get-ObjectValue -Object $payload -Name 'summary' -Default '')).Trim()
+        if (-not $summary) { return (New-JsonResult ([ordered]@{ error = 'Task summary is required' }) 400) }
+        if ($summary.Length -gt 240) { $summary = $summary.Substring(0, 240) }
+        $dueDate = [DateTime]::UtcNow.AddDays(1)
+        $requestedDueDate = [string](Get-ObjectValue -Object $payload -Name 'dueDate' -Default '')
+        if ($requestedDueDate) {
+            $parsedDueDate = [DateTime]::MinValue
+            if ([DateTime]::TryParse($requestedDueDate, [ref]$parsedDueDate)) { $dueDate = $parsedDueDate.ToUniversalTime() }
+        }
+        $now = [DateTime]::UtcNow.ToString('o')
+        $task = [ordered]@{
+            id = 'task-' + [Guid]::NewGuid().ToString('N')
+            accountId = [string](Get-ObjectValue -Object $payload -Name 'accountId' -Default '')
+            type = [string](Get-ObjectValue -Object $payload -Name 'type' -Default 'follow_up')
+            status = 'pending'
+            summary = $summary
+            dueDate = $dueDate.ToString('o')
+            createdAt = $now
+            updatedAt = $now
+        }
+        $settings = Get-AppSegment -Segment 'Settings'
+        if ($null -eq $settings) { $settings = [ordered]@{} }
+        $tasks = @((Get-ObjectValue -Object $settings -Name 'localTasks' -Default @())) + @($task)
+        Set-ObjectValue -Object $settings -Name 'localTasks' -Value $tasks | Out-Null
+        Save-AppSegment -Segment 'Settings' -Data $settings -SkipSnapshots
+        return (New-JsonResult $task 201)
+    }
+
+    if ($path -match '^/api/tasks/([^/]+)/complete$' -and $method -eq 'POST') {
+        $taskId = $matches[1]
+        $settings = Get-AppSegment -Segment 'Settings'
+        if ($null -eq $settings) { $settings = [ordered]@{} }
+        $tasks = @((Get-ObjectValue -Object $settings -Name 'localTasks' -Default @()))
+        $task = @($tasks | Where-Object { ([string](Get-ObjectValue -Object $_ -Name 'id' -Default '')) -eq $taskId } | Select-Object -First 1)
+        if (-not $task) { return (New-JsonResult ([ordered]@{ error = 'Task not found' }) 404) }
+        Set-ObjectValue -Object $task[0] -Name 'status' -Value 'completed' | Out-Null
+        Set-ObjectValue -Object $task[0] -Name 'updatedAt' -Value ([DateTime]::UtcNow.ToString('o')) | Out-Null
+        Set-ObjectValue -Object $settings -Name 'localTasks' -Value $tasks | Out-Null
+        Save-AppSegment -Segment 'Settings' -Data $settings -SkipSnapshots
+        return (New-JsonResult $task[0])
     }
 
     if ($path -eq '/api/jobs' -and $method -eq 'GET') {
@@ -1949,6 +2009,22 @@ function Handle-ApiRequest {
         $state = [ordered]@{ settings = Get-AppSegment -Segment 'Settings' }
         $state = Save-SettingsRecord -State $state -Payload (Read-JsonBody -Request $Request)
         return (New-JsonResult $state.settings)
+    }
+
+    if ($path -eq '/api/workspace/preferences' -and $method -eq 'GET') {
+        $settings = Get-AppSegment -Segment 'Settings'
+        if ($null -eq $settings) { return (New-JsonResult ([ordered]@{})) }
+        return (New-JsonResult (Get-ObjectValue -Object $settings -Name 'workspacePreferences' -Default ([ordered]@{})))
+    }
+
+    if ($path -eq '/api/workspace/preferences' -and $method -eq 'PATCH') {
+        $settings = Get-AppSegment -Segment 'Settings'
+        if ($null -eq $settings) { $settings = [ordered]@{} }
+        $current = Get-ObjectValue -Object $settings -Name 'workspacePreferences' -Default ([ordered]@{})
+        $preferences = Merge-WorkspacePreferences -Current $current -Patch (Read-JsonBody -Request $Request)
+        Set-ObjectValue -Object $settings -Name 'workspacePreferences' -Value $preferences | Out-Null
+        Save-AppSegment -Segment 'Settings' -Data $settings -SkipSnapshots
+        return (New-JsonResult $preferences)
     }
 
     if ($path -eq '/api/activity' -and $method -eq 'GET') {

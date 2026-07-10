@@ -858,6 +858,15 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, store.patchSettings(tenantId, await readJson(req)));
   }
 
+  if (pathname === '/api/workspace/preferences') {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, await store.getWorkspacePreferences(tenantId));
+    }
+    if (req.method === 'PATCH') {
+      return sendJson(res, 200, await store.patchWorkspacePreferences(tenantId, await readJson(req)));
+    }
+  }
+
   if (pathname === '/api/setup/complete' && req.method === 'POST') {
     const payload = await readFormOrJson(req);
     const fields = payload.fields || payload;
@@ -911,12 +920,17 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname.startsWith('/api/tasks')) {
-    if (req.method === 'GET') {
-      return sendJson(res, 200, store.findTasks(tenantId, Object.fromEntries(url.searchParams)));
+    if (pathname === '/api/tasks' && req.method === 'GET') {
+      return sendJson(res, 200, await store.findTasks(tenantId, Object.fromEntries(url.searchParams)));
+    }
+    if (pathname === '/api/tasks' && req.method === 'POST') {
+      return sendJson(res, 201, await store.createTask(tenantId, await readJson(req)));
     }
     const match = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
     if (match && req.method === 'POST') {
-      return sendJson(res, 200, store.completeTask(tenantId, match[1]));
+      const task = await store.completeTask(tenantId, match[1]);
+      if (!task) return sendJson(res, 404, { error: 'Task not found' });
+      return sendJson(res, 200, task);
     }
   }
 

@@ -1695,6 +1695,22 @@ export function createStore() {
       return { ok: true, settings: { ...profile.settings } };
     },
 
+    async getWorkspacePreferences(tenantId) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const profile = getTenantProfile(tenantId);
+      return JSON.parse(JSON.stringify(profile.settings.workspacePreferences || {}));
+    },
+
+    async patchWorkspacePreferences(tenantId, patch) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const profile = getTenantProfile(tenantId);
+      profile.settings.workspacePreferences = sanitizeWorkspacePreferences(patch, profile.settings.workspacePreferences || {});
+      persistTenant(tenantId);
+      return profile.settings.workspacePreferences;
+    },
+
     completeSetup(tenantId, payload = {}, options = {}) {
       assertTenant(tenantId);
       const profile = getTenantProfile(tenantId);
@@ -1848,15 +1864,40 @@ export function createStore() {
       return paginate(activitiesForTenant(tenantId), query);
     },
 
-    findTasks(tenantId, query) {
+    async findTasks(tenantId, query) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
       const status = query.status || 'pending';
       return paginate(tasksForTenant(tenantId).filter(t => t.status === status), query);
     },
 
-    completeTask(tenantId, taskId) {
+    async createTask(tenantId, payload = {}) {
       assertTenant(tenantId);
-      const task = tasks.find((t) => t.id === taskId && t.tenantId === tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const summary = String(payload.summary || '').trim().slice(0, 240);
+      if (!summary) throw new Error('Task summary is required');
+      const requestedDueDate = new Date(payload.dueDate || Date.now() + 24 * 60 * 60 * 1000);
+      const task = {
+        id: `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        tenantId,
+        accountId: String(payload.accountId || '').slice(0, 120),
+        type: String(payload.type || 'follow_up').slice(0, 60),
+        status: 'pending',
+        summary,
+        dueDate: Number.isNaN(requestedDueDate.getTime()) ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : requestedDueDate.toISOString(),
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      tasks.push(task);
+      getTenantArray(tasksByTenant, tenantId).push(task);
+      persistTenant(tenantId);
+      return task;
+    },
+
+    async completeTask(tenantId, taskId) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const task = tasksForTenant(tenantId).find((item) => item.id === taskId);
       if (task) {
         task.status = 'completed';
         task.updatedAt = now();
@@ -4012,6 +4053,34 @@ function readPositiveInteger(value, fallback) {
 
 function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+const WORKSPACE_PREFERENCE_FIELDS = new Set([
+  'accountNotes',
+  'automationRules',
+  'customFields',
+  'customFieldValues',
+  'outreachSequences',
+  'activityLog',
+  'alertThresholds',
+]);
+
+function sanitizeWorkspacePreferences(input = {}, current = {}) {
+  const result = { ...current };
+  for (const [key, value] of Object.entries(input || {})) {
+    if (!WORKSPACE_PREFERENCE_FIELDS.has(key)) continue;
+    if (key === 'automationRules' || key === 'customFields') {
+      result[key] = Array.isArray(value) ? value.slice(0, 100) : [];
+    } else if (key === 'outreachSequences') {
+      result[key] = Array.isArray(value) ? value.slice(-1000) : [];
+    } else if (key === 'activityLog') {
+      result[key] = Array.isArray(value) ? value.slice(0, 500) : [];
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = value;
+    }
+  }
+  result.updatedAt = now();
+  return JSON.parse(JSON.stringify(result));
 }
 
 function stableIdentityKey(value) {

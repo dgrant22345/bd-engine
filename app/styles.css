@@ -5302,6 +5302,9 @@ textarea:focus-visible {
    ══════════════════════════════════════════════════ */
 .tasks-view { display: flex; flex-direction: column; gap: 24px; }
 .tasks-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.task-create-form { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(150px, 220px) auto; gap: 12px; align-items: end; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.task-create-form label { display: grid; gap: 6px; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
+.task-create-form input { width: 100%; }
 .tasks-tabs { display: flex; gap: 8px; }
 .tab-btn { border: none; background: transparent; padding: 6px 16px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; cursor: pointer; color: var(--muted); transition: all 0.2s; }
 .tab-btn.active { background: var(--accent); color: #fff; }
@@ -5321,6 +5324,12 @@ textarea:focus-visible {
 .task-item-info { flex: 1; }
 .task-item-info strong { display: block; font-size: 1rem; margin-bottom: 4px; color: var(--text); }
 .task-item-actions { display: flex; gap: 8px; align-items: center; }
+
+@media (max-width: 720px) {
+  .task-create-form { grid-template-columns: 1fr; }
+  .task-create-form .primary-button { width: 100%; }
+  .task-item-main { align-items: flex-start; flex-direction: column; }
+}
 
 .task-completed { opacity: 0.5; transform: scale(0.98); transition: all 0.6s ease; }
 
