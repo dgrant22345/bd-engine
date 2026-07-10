@@ -7,11 +7,12 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/store.js && node --check src/auth.js && node --check src/users.js && node --check src/billing.js && node --check src/relational-reads.js && node --check src/relational-writes.js && node --check scripts/backfill-relational.mjs && node --check scripts/check-relational-parity.mjs && node --check scripts/backup.mjs && node --check scripts/restore-backup.mjs && node --check scripts/smoke.mjs && node --check ../app/app.js && node --check ../app/local-api.js && node --check ../app/sw.js",
+    "check": "node --check src/server.js && node --check src/store.js && node --check src/auth.js && node --check src/users.js && node --check src/billing.js && node --check src/relational-reads.js && node --check src/relational-writes.js && node --check scripts/backfill-relational.mjs && node --check scripts/check-relational-parity.mjs && node --check scripts/verify-relational-canary.mjs && node --check scripts/backup.mjs && node --check scripts/restore-backup.mjs && node --check scripts/smoke.mjs && node --check ../app/app.js && node --check ../app/local-api.js && node --check ../app/sw.js",
     "test": "node --test test/*.test.js",
     "backup": "node scripts/backup.mjs",
     "backfill:relational": "node scripts/backfill-relational.mjs",
     "check:relational": "node scripts/check-relational-parity.mjs",
+    "verify:relational": "node scripts/verify-relational-canary.mjs",
     "restore": "node scripts/restore-backup.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
