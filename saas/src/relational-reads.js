@@ -59,6 +59,44 @@ export async function getTenantRelationalStats(tenantId) {
   return result?.rows?.[0] || null;
 }
 
+export async function findTenantAccountsRelational(tenantId, query = {}) {
+  if (!isDbReady()) return null;
+  const page = Math.max(1, Number(query.page || 1));
+  const pageSize = Math.max(1, Math.min(10000, Number(query.pageSize || 25)));
+  const offset = (page - 1) * pageSize;
+  const search = String(query.q || '').trim();
+  const params = [tenantId];
+  let searchSql = '';
+  if (search) {
+    params.push(`%${search.replace(/[\\%_]/g, '\\$&')}%`);
+    searchSql = ` AND (
+      display_name ILIKE $2 ESCAPE '\\' OR domain ILIKE $2 ESCAPE '\\' OR
+      industry ILIKE $2 ESCAPE '\\' OR location ILIKE $2 ESCAPE '\\' OR
+      notes ILIKE $2 ESCAPE '\\' OR COALESCE(raw->>'owner', '') ILIKE $2 ESCAPE '\\'
+    )`;
+  }
+  const countParams = [...params];
+  const limitIndex = params.length + 1;
+  const offsetIndex = params.length + 2;
+  params.push(pageSize, offset);
+  const [rowsResult, countResult] = await Promise.all([
+    dbQuery(
+      `SELECT raw FROM accounts
+       WHERE tenant_id = $1${searchSql}
+       ORDER BY target_score DESC, updated_at DESC, id ASC
+       LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      params
+    ),
+    dbQuery(`SELECT COUNT(*)::int AS total FROM accounts WHERE tenant_id = $1${searchSql}`, countParams),
+  ]);
+  return {
+    items: (rowsResult?.rows || []).map(rawOrRow),
+    page,
+    pageSize,
+    total: Number(countResult?.rows?.[0]?.total || 0),
+  };
+}
+
 export function compareTenantDataCounts(blobStats = {}, relationalStats = {}, includeContacts = true) {
   const fields = [
     ['accounts', 'accountCount', 'account_count'],

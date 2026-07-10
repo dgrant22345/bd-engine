@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -21,9 +21,27 @@ const RELATIONAL_READ_TENANTS = new Set(String(process.env.BD_RELATIONAL_READ_TE
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const RELATIONAL_SQL_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
 
 function relationalReadsEnabledForTenant(tenantId) {
   return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
+}
+
+function relationalSqlEnabledForTenant(tenantId) {
+  return RELATIONAL_SQL_TENANTS.has('*') || RELATIONAL_SQL_TENANTS.has(tenantId);
+}
+
+async function hasRelationalParity(tenantId, includeContacts = false) {
+  const { dbGetTenantDataStats } = await import('./db.js');
+  const [blobStats, relationalStats] = await Promise.all([
+    dbGetTenantDataStats(tenantId),
+    getTenantRelationalStats(tenantId),
+  ]);
+  if (!blobStats || !relationalStats) return false;
+  return compareTenantDataCounts(blobStats, relationalStats, includeContacts).matches;
 }
 
 const pastDate = (days) => {
@@ -1553,6 +1571,18 @@ export function createStore() {
 
     async findAccounts(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalSqlEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, false)) {
+            const result = await findTenantAccountsRelational(tenantId, query);
+            if (result) return result;
+          } else {
+            console.warn(`Relational account query fallback for ${tenantId}: parity check failed.`);
+          }
+        } catch (error) {
+          console.error(`Relational account query failed for ${tenantId}; using memory:`, error.message);
+        }
+      }
       await ensureDataLoaded(tenantId);
       return paginate(filterText(accountsForTenant(tenantId), query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']), query);
     },
