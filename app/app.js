@@ -5278,6 +5278,13 @@ async function renderAdminView() {
       : (stripeStatus.ready && stripeStatus.mode === 'test'
         ? 'Stripe is in test mode, so public paid checkout is disabled until live keys are set.'
         : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`));
+  const billingAccess = billing.billingAccess || {};
+  const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
+  const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
+  const billingPrimaryAction = billing.canManageBilling ? 'billing-portal' : 'billing-checkout';
+  const billingPrimaryLabel = billing.canManageBilling
+    ? (paymentAttentionRequired ? 'Update payment method' : 'Manage plan in Stripe')
+    : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled');
   const siteAnalyticsSection = canViewSiteAnalytics ? `
         ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
           <div class="metrics-grid metrics-grid--compact">
@@ -5381,15 +5388,15 @@ async function renderAdminView() {
           <div class="settings-grid">
             <div class="action-card">
               <p class="eyebrow">Current Plan: ${escapeHtml(billing.plan?.name || 'Trial')}</p>
-              <h4>Upgrade your workspace</h4>
+              <h4>${paymentAttentionRequired ? 'Payment needs attention' : 'Manage your workspace plan'}</h4>
               <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}${stripeReady && stripeMissing ? ` Missing optional plans: ${escapeHtml(stripeMissing)}` : ''}</p>
+              ${paymentAttentionRequired ? `<div class="billing-notice billing-notice--warning" role="status"><strong>Workspace access remains available during recovery.</strong><span>Update the payment method by ${escapeHtml(billingGraceDate || 'the grace deadline')}${billingAccess.graceDaysRemaining !== null && billingAccess.graceDaysRemaining !== undefined ? ` (${formatNumber(billingAccess.graceDaysRemaining)} day${billingAccess.graceDaysRemaining === 1 ? '' : 's'} remaining)` : ''}.</span></div>` : ''}
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
                   <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">
-                  <button class="primary-button" type="button" data-action="billing-checkout"${stripeReady ? '' : ' disabled'}>${billing.canManageBilling ? 'Change plan in Stripe' : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled')}</button>
-                  ${billing.canManageBilling ? '<button class="secondary-button" type="button" data-action="billing-portal">Manage billing</button>' : ''}
+                  <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${stripeReady || billing.canManageBilling ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>
                 </div>
               </div>
             </div>

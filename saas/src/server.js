@@ -5,8 +5,8 @@ import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
-import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired } from './billing.js';
+import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
@@ -393,19 +393,24 @@ function isTenantBillingBlocked(tenant, user = null) {
   if (isInternalOwner(user)) return false;
   if (tenant.plan === 'trial') return isTrialExpired(tenant);
   const status = String(tenant.status || '').toLowerCase();
-  return !['active', 'trialing', 'past_due'].includes(status);
+  if (status === 'past_due') return getBillingAccessStatus(tenant).accessBlocked;
+  return !['active', 'trialing'].includes(status);
 }
 
 function sendBillingRequired(res, tenant) {
   const status = String(tenant?.status || '').toLowerCase();
+  const billingAccess = getBillingAccessStatus(tenant);
   return sendJson(res, 402, {
-    error: status === 'canceled' || status === 'unpaid'
+    error: status === 'past_due'
+      ? 'The payment recovery period has ended. Update your payment method to restore workspace access.'
+      : status === 'canceled' || status === 'unpaid'
       ? 'Billing needs attention before this workspace can continue.'
       : 'Your trial has ended. Choose a plan to continue using BD Engine.',
     code: 'billing_required',
     billingRequired: true,
     plan: tenant?.plan || 'trial',
     status: tenant?.status || '',
+    billingGraceEndsAt: billingAccess.graceEndsAt,
     trialDaysRemaining: tenant ? getTrialDaysRemaining(tenant) : null,
   });
 }
@@ -616,6 +621,7 @@ self.addEventListener('activate', (event) => {
     const trialDaysRemaining = effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant);
     const usage = getUsageSummary(tenantId, effectivePlanId, await store.getUsageCounts(tenantId));
     const origin = getRequestOrigin(req);
+    const billingAccess = getBillingAccessStatus(tenant);
     return sendJson(res, 200, {
       plan,
       trialDaysRemaining,
@@ -623,6 +629,7 @@ self.addEventListener('activate', (event) => {
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
       tenant: getBillingTenantPayload(tenant, user),
+      billingAccess,
       referral: getReferralSummary(tenant, origin),
     });
   }
@@ -716,6 +723,7 @@ self.addEventListener('activate', (event) => {
       }
     }
     const origin = getRequestOrigin(req);
+    const billingAccess = getBillingAccessStatus(tenant);
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
       runtime: store.getRuntimeStatus(),
@@ -735,6 +743,7 @@ self.addEventListener('activate', (event) => {
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: getBillingTenantPayload(tenant, user),
+        billingAccess,
         referral: getReferralSummary(tenant, origin),
       },
     });
@@ -1123,11 +1132,13 @@ async function handleStripeBillingEvent(event) {
     if (!tenantId || !planId) return { updated: false, reason: 'missing checkout metadata' };
     const existingTenant = findTenantById(tenantId);
     const resolvedPlanId = existingTenant?.plan === ownerPlanId ? ownerPlanId : planId;
-    const tenant = updateTenant(tenantId, {
+    const tenant = await updateTenantPersisted(tenantId, {
       plan: resolvedPlanId,
       status: 'active',
       stripeCustomerId: getStripeId(object.customer),
       stripeSubscriptionId: getStripeId(object.subscription),
+      billingGraceEndsAt: '',
+      billingLastPaymentFailedAt: '',
     });
     const referral = await maybeGrantReferralCredit(tenant, object);
     const pendingReferralCredits = tenant ? await grantPendingReferralCreditsForReferrer(tenant) : [];
@@ -1146,12 +1157,19 @@ async function handleStripeBillingEvent(event) {
       stripeCustomerId: customerId,
       stripeSubscriptionId: object.id || '',
     };
+    if (updates.status === 'past_due') {
+      updates.billingGraceEndsAt = existingTenant?.billingGraceEndsAt || createBillingGraceDeadline();
+      updates.billingLastPaymentFailedAt = existingTenant?.billingLastPaymentFailedAt || new Date().toISOString();
+    } else if (['active', 'trialing'].includes(updates.status)) {
+      updates.billingGraceEndsAt = '';
+      updates.billingLastPaymentFailedAt = '';
+    }
     if (existingTenant?.plan === ownerPlanId) {
       updates.plan = ownerPlanId;
     } else if (planId) {
       updates.plan = planId;
     }
-    const tenant = updateTenant(tenantId, updates);
+    const tenant = await updateTenantPersisted(tenantId, updates);
     return { updated: Boolean(tenant), tenantId, planId: planId || tenant?.plan || '' };
   }
 
@@ -1161,18 +1179,21 @@ async function handleStripeBillingEvent(event) {
     if (!tenantId) return { updated: false, reason: 'workspace not found for canceled subscription' };
     const existingTenant = findTenantById(tenantId);
     if (existingTenant?.plan === ownerPlanId) {
-      const tenant = updateTenant(tenantId, {
+      const tenant = await updateTenantPersisted(tenantId, {
         status: 'active',
         plan: ownerPlanId,
         stripeCustomerId: customerId,
         stripeSubscriptionId: object.id || '',
+        billingGraceEndsAt: '',
+        billingLastPaymentFailedAt: '',
       });
       return { updated: Boolean(tenant), tenantId, status: 'active', planId: ownerPlanId, ownerProtected: true };
     }
-    const tenant = updateTenant(tenantId, {
+    const tenant = await updateTenantPersisted(tenantId, {
       status: 'canceled',
       stripeCustomerId: customerId,
       stripeSubscriptionId: object.id || '',
+      billingGraceEndsAt: '',
     });
     return { updated: Boolean(tenant), tenantId, status: 'canceled' };
   }
@@ -1181,10 +1202,12 @@ async function handleStripeBillingEvent(event) {
     const tenant = resolveTenantFromStripeInvoice(object);
     if (!tenant) return { updated: false, reason: 'workspace not found for failed invoice' };
     if (tenant.plan === ownerPlanId) return { updated: false, ownerProtected: true };
-    const updated = updateTenant(tenant.id, {
+    const updated = await updateTenantPersisted(tenant.id, {
       status: 'past_due',
       stripeCustomerId: getStripeId(object.customer) || tenant.stripeCustomerId || tenant.stripe_customer_id || '',
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+      billingGraceEndsAt: createBillingGraceDeadline(object),
+      billingLastPaymentFailedAt: new Date().toISOString(),
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status: 'past_due' };
   }
@@ -1194,10 +1217,12 @@ async function handleStripeBillingEvent(event) {
     if (!tenant) return { updated: false, reason: 'workspace not found for paid invoice' };
     if (tenant.plan === ownerPlanId) return { updated: false, ownerProtected: true };
     const status = tenant.plan === 'trial' ? tenant.status : 'active';
-    const updated = updateTenant(tenant.id, {
+    const updated = await updateTenantPersisted(tenant.id, {
       status,
       stripeCustomerId: getStripeId(object.customer) || tenant.stripeCustomerId || tenant.stripe_customer_id || '',
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+      billingGraceEndsAt: '',
+      billingLastPaymentFailedAt: '',
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status };
   }
@@ -1241,7 +1266,7 @@ async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {
       referredTenantId: referredTenant.id,
       referrerTenantId,
     });
-    updateTenant(referredTenant.id, {
+    await updateTenantPersisted(referredTenant.id, {
       referralCreditedAt: new Date().toISOString(),
       referralCreditTransactionId: transaction?.id || '',
     });

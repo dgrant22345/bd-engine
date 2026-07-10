@@ -17,6 +17,45 @@ function getStripeKeyMode(secretKey) {
 
 const stripeSecretKey = normalizeStripeSecretKey(process.env.STRIPE_SECRET_KEY);
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2023-10-16' }) : null;
+const DEFAULT_BILLING_GRACE_DAYS = 7;
+
+export function getBillingGraceDays() {
+  const configured = Number(process.env.BD_BILLING_GRACE_DAYS);
+  return Number.isFinite(configured) && configured >= 1 && configured <= 30
+    ? Math.floor(configured)
+    : DEFAULT_BILLING_GRACE_DAYS;
+}
+
+export function createBillingGraceDeadline(invoice = {}, nowMs = Date.now()) {
+  const standardDeadline = nowMs + getBillingGraceDays() * 24 * 60 * 60 * 1000;
+  const stripeRetryAt = Number(invoice.next_payment_attempt || 0) * 1000;
+  const retryDeadline = Number.isFinite(stripeRetryAt) && stripeRetryAt > nowMs
+    ? stripeRetryAt + 24 * 60 * 60 * 1000
+    : 0;
+  return new Date(Math.max(standardDeadline, retryDeadline)).toISOString();
+}
+
+export function getBillingAccessStatus(tenant = {}, nowMs = Date.now()) {
+  const status = String(tenant.status || '').toLowerCase();
+  if (status !== 'past_due') {
+    return {
+      paymentAttentionRequired: false,
+      accessBlocked: false,
+      graceEndsAt: '',
+      graceDaysRemaining: null,
+    };
+  }
+
+  const graceEndsAt = String(tenant.billingGraceEndsAt || tenant.billing_grace_ends_at || '');
+  const deadlineMs = Date.parse(graceEndsAt);
+  const validDeadline = Number.isFinite(deadlineMs) ? deadlineMs : nowMs;
+  return {
+    paymentAttentionRequired: true,
+    accessBlocked: nowMs >= validDeadline,
+    graceEndsAt,
+    graceDaysRemaining: Math.max(0, Math.ceil((validDeadline - nowMs) / (24 * 60 * 60 * 1000))),
+  };
+}
 
 export function isStripeConfigured() {
   return Boolean(stripe);

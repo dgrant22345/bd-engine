@@ -7,6 +7,10 @@ create table tenants (
   name text not null,
   plan text not null default 'trial',
   status text not null default 'trialing',
+  stripe_customer_id text,
+  stripe_subscription_id text,
+  billing_grace_ends_at timestamptz,
+  billing_last_payment_failed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

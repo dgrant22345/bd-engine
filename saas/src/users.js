@@ -122,6 +122,8 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     persona: persona || 'bd',
     stripeCustomerId: '',
     stripeSubscriptionId: '',
+    billingGraceEndsAt: '',
+    billingLastPaymentFailedAt: '',
     referralCode: makeUniqueReferralCode(),
     referredByTenantId: String(referredByTenantId || ''),
     referralCreditedAt: '',
@@ -232,6 +234,14 @@ export function updateTenant(tenantId, updates) {
   if (!tenant) return null;
   Object.assign(tenant, updates, { updatedAt: new Date().toISOString() });
   dbSaveTenant(tenant).catch(() => {});
+  return tenant;
+}
+
+export async function updateTenantPersisted(tenantId, updates) {
+  const tenant = tenants.get(tenantId);
+  if (!tenant) return null;
+  Object.assign(tenant, updates, { updatedAt: new Date().toISOString() });
+  await dbSaveTenant(tenant);
   return tenant;
 }
 

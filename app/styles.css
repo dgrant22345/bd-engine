@@ -3941,6 +3941,10 @@ a {
   content: 'Edit'; position: absolute; top: 2px; right: 4px;
   font-size: 0.62rem; color: var(--muted); opacity: 0.7;
 }
+
+.billing-notice { display: grid; gap: 4px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); font-size: 0.86rem; }
+.billing-notice--warning { border-color: color-mix(in srgb, var(--warning) 55%, var(--line)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
+.billing-notice span { color: var(--muted); }
 .inline-edit-input {
   width: 100%; padding: 4px 8px; border: 2px solid var(--accent);
   border-radius: 6px; font-size: 0.85rem; background: var(--surface);

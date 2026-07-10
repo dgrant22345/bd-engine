@@ -100,6 +100,8 @@ export async function initDb() {
         persona TEXT NOT NULL DEFAULT 'bd',
         stripe_customer_id TEXT NOT NULL DEFAULT '',
         stripe_subscription_id TEXT NOT NULL DEFAULT '',
+        billing_grace_ends_at TEXT NOT NULL DEFAULT '',
+        billing_last_payment_failed_at TEXT NOT NULL DEFAULT '',
         referral_code TEXT NOT NULL DEFAULT '',
         referred_by_tenant_id TEXT NOT NULL DEFAULT '',
         referral_credited_at TEXT NOT NULL DEFAULT '',
@@ -270,6 +272,11 @@ export async function initDb() {
     await pool.query(`
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_grace_ends_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_last_payment_failed_at TEXT NOT NULL DEFAULT '';
+      UPDATE tenants
+         SET billing_grace_ends_at = (NOW() + INTERVAL '7 days')::text
+       WHERE status = 'past_due' AND billing_grace_ends_at = '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_code TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referred_by_tenant_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_credited_at TEXT NOT NULL DEFAULT '';
@@ -537,8 +544,8 @@ export async function dbSaveTenant(tenant) {
   if (!dbReady) return;
   try {
     await pool.query(
-      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, billing_grace_ends_at, billing_last_payment_failed_at, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (id) DO UPDATE SET
          slug = EXCLUDED.slug,
          name = EXCLUDED.name,
@@ -547,6 +554,8 @@ export async function dbSaveTenant(tenant) {
          persona = EXCLUDED.persona,
          stripe_customer_id = EXCLUDED.stripe_customer_id,
          stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+         billing_grace_ends_at = EXCLUDED.billing_grace_ends_at,
+         billing_last_payment_failed_at = EXCLUDED.billing_last_payment_failed_at,
          referral_code = EXCLUDED.referral_code,
          referred_by_tenant_id = EXCLUDED.referred_by_tenant_id,
          referral_credited_at = EXCLUDED.referral_credited_at,
@@ -561,6 +570,8 @@ export async function dbSaveTenant(tenant) {
         tenant.persona || 'bd',
         tenant.stripeCustomerId || tenant.stripe_customer_id || '',
         tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+        tenant.billingGraceEndsAt || tenant.billing_grace_ends_at || '',
+        tenant.billingLastPaymentFailedAt || tenant.billing_last_payment_failed_at || '',
         tenant.referralCode || tenant.referral_code || '',
         tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
         tenant.referralCreditedAt || tenant.referral_credited_at || '',
@@ -571,6 +582,7 @@ export async function dbSaveTenant(tenant) {
     );
   } catch (err) {
     console.error('DB: Failed to save tenant:', err.message);
+    throw err;
   }
 }
 
@@ -587,6 +599,8 @@ export async function dbLoadAllTenants() {
       persona: r.persona,
       stripeCustomerId: r.stripe_customer_id || '',
       stripeSubscriptionId: r.stripe_subscription_id || '',
+      billingGraceEndsAt: r.billing_grace_ends_at || '',
+      billingLastPaymentFailedAt: r.billing_last_payment_failed_at || '',
       referralCode: r.referral_code || '',
       referredByTenantId: r.referred_by_tenant_id || '',
       referralCreditedAt: r.referral_credited_at || '',
