@@ -49,8 +49,8 @@ saas/
 │   └── cloud.css       # Premium dark SaaS design system
 ├── src/
 │   ├── server.js       # HTTP server with auth middleware & tenant routing
-│   ├── store.js        # In-memory data store (tenant-aware)
-│   ├── auth.js         # Session management, cookies, password hashing
+│   ├── store.js        # Tenant store adapter with guarded relational reads
+│   ├── auth.js         # Durable sessions, signed cookies, salted password hashing
 │   ├── users.js        # User & tenant CRUD, memberships
 │   └── billing.js      # Plan tiers, feature gating, usage metering
 ├── scripts/
@@ -61,16 +61,16 @@ saas/
 └── .env.example
 ```
 
-## What Is Not Production-Ready Yet
+## Remaining Production Work
 
-- Data is in-memory (needs PostgreSQL adapter)
-- Password hashing uses HMAC (needs bcrypt/argon2)
-- Sessions are in-memory (needs Redis)
-- Stripe billing is not connected
-- Email verification is not implemented
-- No production audit logging or rate limiting
-- No CI/CD pipeline
-- LinkedIn CSV cloud import needs file upload endpoint
+- The relational migration is still staged: the legacy tenant document remains
+  the write source of truth while relational tables are parity-checked canaries.
+- Transactional password-reset email requires `RESEND_API_KEY` and
+  `BD_EMAIL_FROM`; email verification is not yet enforced.
+- External uptime monitoring and alert routing must be configured outside the
+  app even though `/health` and error-reporting hooks are available.
+- Background operations are process-local. Finished entries are bounded, but
+  durable job resumption across deploys is still future work.
 
 ## Validation
 
@@ -110,7 +110,20 @@ npm run backfill:relational -- --dry-run
 npm run backfill:relational
 ```
 
-Set `BD_RELATIONAL_MIRROR=false` to temporarily disable mirror writes.
+Set `BD_RELATIONAL_MIRROR=false` to temporarily disable mirror writes. Guarded
+read and query canaries are controlled independently with:
+
+- `BD_RELATIONAL_READ_TENANTS`
+- `BD_RELATIONAL_SQL_TENANTS`
+- `BD_RELATIONAL_SQL_CONTACT_TENANTS`
+- `BD_RELATIONAL_SQL_JOB_TENANTS`
+
+Each accepts a comma-separated tenant ID list or `*`. A canary automatically
+falls back to the legacy source if count parity or the relational query fails.
+
+Resident workspace memory is bounded with `BD_RESIDENT_TENANT_LIMIT` (default
+8) and `BD_RESIDENT_TENANT_IDLE_MS` (default 5 minutes). Unsaved workspaces are
+never evicted, and eviction pauses while a background operation is active.
 
 ## Rollback
 

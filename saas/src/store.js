@@ -998,6 +998,9 @@ export async function flushPendingSaves() {
 }
 
 const loadedTenants = new Map(); // tenantId -> { core: boolean, contacts: boolean }
+const RESIDENT_TENANT_LIMIT = readPositiveInteger(process.env.BD_RESIDENT_TENANT_LIMIT, 8);
+const RESIDENT_TENANT_IDLE_MS = readPositiveInteger(process.env.BD_RESIDENT_TENANT_IDLE_MS, 5 * 60 * 1000);
+const BACKGROUND_JOB_RETENTION_MS = readPositiveInteger(process.env.BD_BACKGROUND_JOB_RETENTION_MS, 60 * 60 * 1000);
 const LARGE_WORKSPACE_LOAD_THRESHOLDS = Object.freeze({
   accounts: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_ACCOUNTS, 500),
   contacts: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_CONTACTS, 1000),
@@ -1005,6 +1008,63 @@ const LARGE_WORKSPACE_LOAD_THRESHOLDS = Object.freeze({
   configs: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_CONFIGS, 500),
   total: readPositiveInteger(process.env.BD_LARGE_WORKSPACE_TOTAL, 2500),
 });
+
+function hasActiveBackgroundJobs() {
+  return [...backgroundJobs.values()].some((job) => job?.status === 'queued' || job?.status === 'running');
+}
+
+function removeResidentTenant(tenantId) {
+  accountsByTenant.delete(tenantId);
+  contactsByTenant.delete(tenantId);
+  jobsByTenant.delete(tenantId);
+  configsByTenant.delete(tenantId);
+  activitiesByTenant.delete(tenantId);
+  tasksByTenant.delete(tenantId);
+  accounts = accounts.filter((item) => item.tenantId !== tenantId);
+  contacts = contacts.filter((item) => item.tenantId !== tenantId);
+  jobs = jobs.filter((item) => item.tenantId !== tenantId);
+  boardConfigs = boardConfigs.filter((item) => item.tenantId !== tenantId);
+  activities = activities.filter((item) => item.tenantId !== tenantId);
+  tasks = tasks.filter((item) => item.tenantId !== tenantId);
+  loadedTenants.delete(tenantId);
+}
+
+function evictIdleResidentTenants(protectedTenantId = '') {
+  if (loadedTenants.size <= RESIDENT_TENANT_LIMIT || hasActiveBackgroundJobs()) return 0;
+  const cutoff = Date.now() - RESIDENT_TENANT_IDLE_MS;
+  const candidates = [...loadedTenants.entries()]
+    .filter(([tenantId, status]) => tenantId !== protectedTenantId
+      && !pendingSaves.has(tenantId)
+      && Number(status.lastAccessAt || 0) <= cutoff)
+    .sort((a, b) => Number(a[1].lastAccessAt || 0) - Number(b[1].lastAccessAt || 0));
+  let evicted = 0;
+  for (const [tenantId] of candidates) {
+    if (loadedTenants.size <= RESIDENT_TENANT_LIMIT) break;
+    removeResidentTenant(tenantId);
+    evicted += 1;
+  }
+  if (evicted) console.log(`Store: Evicted ${evicted} idle workspace${evicted === 1 ? '' : 's'} from memory.`);
+  return evicted;
+}
+
+function pruneFinishedBackgroundJobs() {
+  const cutoff = Date.now() - BACKGROUND_JOB_RETENTION_MS;
+  let pruned = 0;
+  for (const [jobId, job] of backgroundJobs) {
+    if (!['completed', 'failed', 'cancelled'].includes(job?.status)) continue;
+    const finishedAt = new Date(job.finishedAt || job.updatedAt || 0).getTime();
+    if (!Number.isFinite(finishedAt) || finishedAt > cutoff) continue;
+    backgroundJobs.delete(jobId);
+    pruned += 1;
+  }
+  return pruned;
+}
+
+const residentCleanupTimer = setInterval(() => {
+  pruneFinishedBackgroundJobs();
+  evictIdleResidentTenants();
+}, 60 * 1000);
+residentCleanupTimer.unref?.();
 
 function countTenantWorkspaceItems(tenantId) {
   const counts = {
@@ -1042,9 +1102,13 @@ function isLargeWorkspaceDataset(counts) {
 async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (!isDbEnabled()) return;
   const status = loadedTenants.get(tenantId) || { core: false, contacts: false };
+  status.lastAccessAt = Date.now();
   
   // If we already have what we need, return immediately
-  if (status.core && (!needsContacts || status.contacts)) return;
+  if (status.core && (!needsContacts || status.contacts)) {
+    loadedTenants.set(tenantId, status);
+    return;
+  }
 
   const start = Date.now();
   const timings = {};
@@ -1155,6 +1219,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
   }
   
   loadedTenants.set(tenantId, status);
+  evictIdleResidentTenants(tenantId);
   const elapsedMs = Date.now() - start;
   console.log(`  Store: Data loaded for ${tenantId} in ${elapsedMs}ms`, timings);
   if (elapsedMs > 1000) {
