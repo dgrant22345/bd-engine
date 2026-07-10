@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
+import * as relationalQueries from './relational-queries.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1518,6 +1519,16 @@ export function createStore() {
 
     async findAccounts(tenantId, query) {
       assertTenant(tenantId);
+      // SQL-pushdown path (flag-gated, mirror must be backfilled for this tenant):
+      // serve the list straight from the relational mirror without loading the
+      // whole tenant blob into memory. Falls back to the in-memory scan on any error.
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          return await relationalQueries.findAccounts(tenantId, query);
+        } catch (err) {
+          console.error('Relational read fallback (accounts):', tenantId, err.message);
+        }
+      }
       await ensureDataLoaded(tenantId);
       return paginate(filterText(accountsForTenant(tenantId), query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']), query);
     },
@@ -1581,6 +1592,13 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          return await relationalQueries.findContacts(tenantId, query);
+        } catch (err) {
+          console.error('Relational read fallback (contacts):', tenantId, err.message);
+        }
+      }
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
       return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
     },
