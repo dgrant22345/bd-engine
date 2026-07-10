@@ -1479,9 +1479,25 @@ export function createStore() {
 
     async getDashboardExtended(tenantId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId, true); // introQueue reads contacts
-      const tenantAccounts = accountsForTenant(tenantId);
-      const tenantConfigs = configsForTenant(tenantId);
+      let tenantAccounts, tenantConfigs, tenantActivities, tenantContacts, lookupAccount;
+      if (relationalQueries.relationalReadsEnabled()) {
+        try {
+          const arrays = await relationalQueries.getDashboardExtendedArrays(tenantId);
+          ({ accounts: tenantAccounts, configs: tenantConfigs, activities: tenantActivities, contacts: tenantContacts } = arrays);
+          const accountMap = new Map(tenantAccounts.map((a) => [a.id, a]));
+          lookupAccount = (id) => accountMap.get(id);
+        } catch (err) {
+          console.error('Relational read fallback (dashboardExtended):', tenantId, err.message);
+        }
+      }
+      if (!tenantAccounts) {
+        await ensureDataLoaded(tenantId, true); // introQueue reads contacts
+        tenantAccounts = accountsForTenant(tenantId);
+        tenantConfigs = configsForTenant(tenantId);
+        tenantActivities = activitiesForTenant(tenantId);
+        tenantContacts = contactsForTenant(tenantId);
+        lookupAccount = (id) => accountById(id, tenantId);
+      }
       const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const unresolvedDashboardAccounts = unresolvedAccounts
         .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
@@ -1490,7 +1506,7 @@ export function createStore() {
         playbook: tenantAccounts.slice(0, 5).map(dashboardAccountSummary),
         overdueFollowUps: [],
         staleAccounts: unresolvedDashboardAccounts,
-        activityFeed: activitiesForTenant(tenantId).slice(0, 10),
+        activityFeed: tenantActivities.slice(0, 10),
         enrichmentFunnel: { resolved: 2, needsReview: 1, missing: 0 },
         alertQueue: tenantAccounts.slice(0, 3).map((item) => ({
           ...dashboardAccountSummary(item),
@@ -1503,7 +1519,7 @@ export function createStore() {
           .filter((item) => item.tenantId === tenantId && item.status === 'open')
           .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
           .map((item) => {
-            const itemAccount = accountById(item.accountId, tenantId);
+            const itemAccount = lookupAccount(item.accountId);
             return {
               accountId: item.accountId,
               displayName: itemAccount?.displayName || 'Account',
@@ -1514,7 +1530,7 @@ export function createStore() {
               relationshipStrengthScore: itemAccount?.relationshipStrengthScore || 0,
             };
           }),
-        introQueue: contactsForTenant(tenantId).slice(0, 3).map((item) => ({
+        introQueue: tenantContacts.slice(0, 3).map((item) => ({
           accountId: item.accountId,
           displayName: item.companyName,
           contactName: item.fullName,

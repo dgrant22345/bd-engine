@@ -72,6 +72,21 @@ function diffKeys(a, b) {
     (a.actionPlan.items || []).length === (b.actionPlan.items || []).length);
   check('recentlyDiscoveredBoards same length', a.recentlyDiscoveredBoards.length === b.recentlyDiscoveredBoards.length);
 
+  // ── getDashboardExtended ──────────────────────────────────────────────────
+  process.env.BD_RELATIONAL_READS = 'true';
+  const xSql = await s.getDashboardExtended(TENANT);
+  process.env.BD_RELATIONAL_READS = 'false';
+  const xMem = await s.getDashboardExtended(TENANT);
+  console.log('\n--- getDashboardExtended ---');
+  check('ext resolutionQueueTotal identical', xSql.resolutionQueueTotal === xMem.resolutionQueueTotal,
+    `sql=${xSql.resolutionQueueTotal} mem=${xMem.resolutionQueueTotal}`);
+  check('ext enrichmentFunnel identical', JSON.stringify(xSql.enrichmentFunnel) === JSON.stringify(xMem.enrichmentFunnel));
+  check('ext sequenceQueue identical (empty stub)', JSON.stringify(xSql.sequenceQueue) === JSON.stringify(xMem.sequenceQueue));
+  check('ext playbook same score distribution', eqScores(xSql.playbook, xMem.playbook, 'targetScore'));
+  check('ext staleAccounts same score distribution', eqScores(xSql.staleAccounts, xMem.staleAccounts, 'targetScore'));
+  check('ext introQueue same length', xSql.introQueue.length === xMem.introQueue.length);
+  check('ext activityFeed same length', xSql.activityFeed.length === xMem.activityFeed.length);
+
   console.log(`\n==== ${pass} pass / ${fail} fail ====  (differences are tie-order only; aggregates exact)`);
   await closeDb();
   process.exit(fail ? 1 : 0);

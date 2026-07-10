@@ -128,6 +128,24 @@ export async function getDashboardArrays(tenantId) {
   };
 }
 
+// Arrays for getDashboardExtended: accounts (score order), configs, activities
+// (occurredAt DESC like activitiesForTenant), contacts (priority order). store.js
+// builds an id→account map from `accounts` to replace accountById lookups.
+export async function getDashboardExtendedArrays(tenantId) {
+  const [accounts, configs, activities, contacts] = await Promise.all([
+    dbQuery('SELECT raw FROM accounts WHERE tenant_id = $1 ORDER BY target_score DESC, updated_at DESC, id ASC', [tenantId]),
+    dbQuery('SELECT raw FROM board_configs WHERE tenant_id = $1 ORDER BY updated_at DESC, id ASC', [tenantId]),
+    dbQuery('SELECT raw FROM activities WHERE tenant_id = $1 ORDER BY occurred_at DESC, id ASC', [tenantId]),
+    dbQuery('SELECT raw FROM contacts WHERE tenant_id = $1 ORDER BY priority_score DESC, updated_at DESC, id ASC', [tenantId]),
+  ]);
+  return {
+    accounts: accounts.rows.map((r) => r.raw),
+    configs: configs.rows.map((r) => r.raw),
+    activities: activities.rows.map((r) => r.raw),
+    contacts: contacts.rows.map((r) => r.raw),
+  };
+}
+
 // One account plus its related records, fetched by index. store.js keeps the
 // persona/action-plan shaping. Returns null if the account is not in the tenant.
 export async function getAccountDetailData(tenantId, accountId) {
