@@ -20,6 +20,9 @@ async function main() {
   const startedAt = Date.now();
   const bootstrap = await store.getBootstrap(tenantId, { includeFilters: true });
   const usage = await store.getUsageCounts(tenantId);
+  const accountQueryStartedAt = Date.now();
+  const accountPage = await store.findAccounts(tenantId, { page: 1, pageSize: 20 });
+  const accountQueryMs = Date.now() - accountQueryStartedAt;
   console.log(JSON.stringify({
     ok: true,
     tenantId,
@@ -27,6 +30,9 @@ async function main() {
     accounts: usage.accounts,
     contacts: usage.contacts,
     jobBoards: usage.jobBoards,
+    accountPageTotal: accountPage.total,
+    accountPageItems: accountPage.items.length,
+    accountQueryMs,
     elapsedMs: Date.now() - startedAt,
   }));
 }

@@ -25,6 +25,7 @@ const RELATIONAL_SQL_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_TENA
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const confirmedRelationalSqlTenants = new Set();
 
 function relationalReadsEnabledForTenant(tenantId) {
   return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
@@ -1575,7 +1576,13 @@ export function createStore() {
         try {
           if (await hasRelationalParity(tenantId, false)) {
             const result = await findTenantAccountsRelational(tenantId, query);
-            if (result) return result;
+            if (result) {
+              if (!confirmedRelationalSqlTenants.has(tenantId)) {
+                confirmedRelationalSqlTenants.add(tenantId);
+                console.log(`Relational SQL account queries active for ${tenantId}.`);
+              }
+              return result;
+            }
           } else {
             console.warn(`Relational account query fallback for ${tenantId}: parity check failed.`);
           }
