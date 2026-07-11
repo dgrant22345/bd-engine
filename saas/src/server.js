@@ -1424,10 +1424,13 @@ async function handlePasswordResetRequest(req, res) {
   const { email } = await readJson(req);
   const user = findUserByEmail(email);
   const emailConfigured = isEmailConfigured();
+  const exposeDevToken = shouldExposeDevResetToken();
   let resetUrl = '';
   let devToken = '';
 
-  if (user) {
+  // Do not accumulate unusable reset secrets in production when there is no
+  // delivery channel. Local development still receives a test token.
+  if (user && (emailConfigured || exposeDevToken)) {
     const { token, tokenHash } = createPasswordResetSecret();
     const record = {
       tokenHash,
@@ -1446,12 +1449,14 @@ async function handlePasswordResetRequest(req, res) {
         console.error('Password reset email failed:', error.message || error);
       }
     }
-    if (shouldExposeDevResetToken()) devToken = token;
+    if (exposeDevToken) devToken = token;
   }
 
   return sendJson(res, 202, {
     ok: true,
-    message: 'If an account exists for that email, a reset link will be sent shortly.',
+    message: emailConfigured
+      ? 'If an account exists for that email, a reset link will be sent shortly.'
+      : 'Password reset email is temporarily unavailable. Contact support@bdengine.io for account recovery.',
     emailConfigured,
     ...(devToken ? { resetToken: devToken, resetUrl } : {}),
   });

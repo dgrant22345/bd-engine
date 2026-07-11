@@ -200,7 +200,9 @@
           method: 'POST',
           body: JSON.stringify({ email }),
         });
-        state.resetMessage = data.message || 'If an account exists for that email, a reset link will be sent shortly.';
+        state.resetMessage = data.message || (data.emailConfigured
+          ? 'If an account exists for that email, a reset link will be sent shortly.'
+          : 'Password reset email is temporarily unavailable. Contact support@bdengine.io for account recovery.');
         if (data.resetToken) {
           state.resetToken = data.resetToken;
           state.view = 'reset';
@@ -488,7 +490,7 @@
               <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">HS</div>
                 <h3>Hiring Signals</h3>
-                <p>Track ATS activity across Greenhouse, Lever, Ashby, and 20+ platforms. Know when accounts are hiring before the competition.</p>
+                <p>Track public job activity across Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and compatible career pages.</p>
               </div>
               <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">SO</div>
@@ -503,7 +505,7 @@
               <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">ATS</div>
                 <h3>ATS Discovery</h3>
-                <p>Automatically discover and resolve ATS job boards for your target companies. No manual configuration required.</p>
+                <p>Automatically discover compatible public job boards, with manual URL entry and a review queue for sites that need help.</p>
               </div>
               <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">TA</div>
@@ -569,7 +571,7 @@
                   <li>CSV export</li>
                   <li>3 team members</li>
                 </ul>
-                <p class="pricing-upgrade">Pay when the dashboard tells the team which accounts to work and why. Device-only preferences and lightweight automations stay on each browser until team sync ships.</p>
+                <p class="pricing-upgrade">Workspace notes, sequences, custom fields, activity, and automation rules sync across team members. Personal display preferences stay on each device.</p>
                 <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
               </div>
             </div>

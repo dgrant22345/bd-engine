@@ -5485,11 +5485,15 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit job board source' : 'Add job board source'}`, 'Paste a Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite, or BambooHR board URL and BD Engine will auto-fill what it can.')}
+        ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit job board source' : 'Add job board source'}`, 'Paste a supported public job-board URL for live imports, or record an enterprise careers URL for manual tracking.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
+          <div class="source-support-note" role="note">
+            <strong>Live job imports:</strong> Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and compatible static career pages.
+            <span>Jobvite, iCIMS, and Taleo can be tracked here, but BD Engine cannot automatically import jobs from every board on those systems.</span>
+          </div>
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
-            ${renderField('ATS type', '<select name="atsType"><option value="">Unknown</option><option value="greenhouse">greenhouse</option><option value="lever">lever</option><option value="ashby">ashby</option><option value="smartrecruiters">smartrecruiters</option><option value="workday">workday</option><option value="jobvite">jobvite</option><option value="icims">icims</option><option value="taleo">taleo</option></select>')}
+            ${renderField('Job-board system', '<select name="atsType"><option value="">Unknown</option><optgroup label="Live import supported"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="ashby">Ashby</option><option value="smartrecruiters">SmartRecruiters</option><option value="workday">Workday</option><option value="custom_static">Compatible careers page</option></optgroup><optgroup label="Tracking only"><option value="jobvite">Jobvite - tracking only</option><option value="icims">iCIMS - tracking only</option><option value="taleo">Taleo - tracking only</option></optgroup></select>')}
             ${renderField('Board ID', '<input name="boardId" placeholder="Auto-detected from supported ATS URLs">')}
             ${renderField('Domain', '<input name="domain">')}
             ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://jobs.lever.co/company">')}
