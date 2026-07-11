@@ -3,6 +3,14 @@ import { dbQuery, isDbReady } from './db.js';
 const DISABLED = process.env.BD_RELATIONAL_MIRROR === 'false';
 const UPSERT_CONCURRENCY = Math.max(1, Math.min(32, Number(process.env.BD_RELATIONAL_UPSERT_CONCURRENCY) || 16));
 const syncCursors = new Map(); // tenantId -> section -> last updatedAt synced
+const SECTION_TABLES = Object.freeze({
+  accounts: 'accounts',
+  contacts: 'contacts',
+  jobs: 'jobs',
+  configs: 'board_configs',
+  activities: 'activities',
+  tasks: 'tasks',
+});
 
 function cursorFor(tenantId) {
   if (!syncCursors.has(tenantId)) syncCursors.set(tenantId, new Map());
@@ -129,7 +137,25 @@ async function upsertRows(tenantId, section, items, upsert) {
   return { changed: changed.length, total: items.length };
 }
 
-export async function syncTenantRelationalMirror(tenantId, data = {}) {
+async function reconcileRows(tenantId, section, items) {
+  const table = SECTION_TABLES[section];
+  if (!table) throw new Error(`Unknown relational section: ${section}`);
+  const ids = items.map((item) => item?.id).filter(Boolean);
+  const result = await dbQuery(
+    `DELETE FROM ${table} WHERE tenant_id = $1 AND NOT (id = ANY($2::text[]))`,
+    [tenantId, ids]
+  );
+  return result?.rowCount || 0;
+}
+
+export function primeTenantRelationalMirror(tenantId, data = {}) {
+  for (const section of Object.keys(SECTION_TABLES)) {
+    if (Array.isArray(data[section])) advanceCursor(tenantId, section, data[section]);
+  }
+  return { primed: true };
+}
+
+export async function syncTenantRelationalMirror(tenantId, data = {}, { reconcile = false } = {}) {
   if (DISABLED || !isDbReady()) return { skipped: true };
   const result = {};
   if (Array.isArray(data.accounts)) result.accounts = await upsertRows(tenantId, 'accounts', data.accounts, upsertAccount);
@@ -138,6 +164,12 @@ export async function syncTenantRelationalMirror(tenantId, data = {}) {
   if (Array.isArray(data.configs)) result.configs = await upsertRows(tenantId, 'configs', data.configs, upsertConfig);
   if (Array.isArray(data.activities)) result.activities = await upsertRows(tenantId, 'activities', data.activities, upsertActivity);
   if (Array.isArray(data.tasks)) result.tasks = await upsertRows(tenantId, 'tasks', data.tasks, upsertTask);
+  if (reconcile) {
+    result.deleted = {};
+    for (const section of ['tasks', 'activities', 'configs', 'jobs', 'contacts', 'accounts']) {
+      if (Array.isArray(data[section])) result.deleted[section] = await reconcileRows(tenantId, section, data[section]);
+    }
+  }
   return { ok: true, ...result };
 }
 

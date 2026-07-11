@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { dbLoadAllTenantData, dbLoadBackgroundJob, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
-import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
+import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
@@ -41,6 +41,10 @@ const RELATIONAL_USAGE_TENANTS = new Set(String(process.env.BD_RELATIONAL_USAGE_
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const RELATIONAL_WRITE_TENANTS = new Set(String(process.env.BD_RELATIONAL_WRITE_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
 const confirmedRelationalSqlTenants = new Set();
 const confirmedRelationalContactSqlTenants = new Set();
 const confirmedRelationalJobSqlTenants = new Set();
@@ -71,7 +75,12 @@ function relationalUsageEnabledForTenant(tenantId) {
   return RELATIONAL_USAGE_TENANTS.has('*') || RELATIONAL_USAGE_TENANTS.has(tenantId);
 }
 
+function relationalWritesPrimaryForTenant(tenantId) {
+  return RELATIONAL_WRITE_TENANTS.has(tenantId);
+}
+
 async function hasRelationalParity(tenantId, includeContacts = false) {
+  if (relationalWritesPrimaryForTenant(tenantId)) return true;
   const { dbGetTenantDataStats } = await import('./db.js');
   const [blobStats, relationalStats] = await Promise.all([
     dbGetTenantDataStats(tenantId),
@@ -1006,6 +1015,7 @@ function getTouchedJobCountFromResult(result = {}) {
 // ── Debounced persistence ────────────────────────────────────────────────────
 
 const pendingSaves = new Map();
+const saveRetryCounts = new Map();
 
 async function saveTenantNow(tenantId) {
   const profile = tenantProfiles.get(tenantId);
@@ -1028,21 +1038,40 @@ async function saveTenantNow(tenantId) {
     data.contacts = contactsByTenant.get(tenantId);
   }
 
-  await dbSaveTenantData(tenantId, data);
-  try {
-    await syncTenantRelationalMirror(tenantId, data);
-  } catch (err) {
-    console.error('Relational mirror sync error:', tenantId, err.message);
+  if (relationalWritesPrimaryForTenant(tenantId)) {
+    const syncResult = await syncTenantRelationalMirror(tenantId, data, { reconcile: true });
+    if (syncResult?.skipped) throw new Error('Relational primary write was skipped.');
+    const settingsResult = await dbSaveTenantData(tenantId, { settings: data.settings }, { throwOnError: true });
+    if (!settingsResult?.saved) throw new Error(`Workspace settings save failed: ${settingsResult?.reason || 'unknown error'}`);
+  } else {
+    await dbSaveTenantData(tenantId, data);
+    try {
+      await syncTenantRelationalMirror(tenantId, data);
+    } catch (err) {
+      console.error('Relational mirror sync error:', tenantId, err.message);
+    }
   }
+  saveRetryCounts.delete(tenantId);
+}
+
+function scheduleTenantSave(tenantId, delayMs) {
+  if (pendingSaves.has(tenantId)) clearTimeout(pendingSaves.get(tenantId));
+  pendingSaves.set(tenantId, setTimeout(() => {
+    pendingSaves.delete(tenantId);
+    saveTenantNow(tenantId).catch((error) => {
+      const attempt = (saveRetryCounts.get(tenantId) || 0) + 1;
+      saveRetryCounts.set(tenantId, attempt);
+      const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(5, attempt - 1)));
+      console.error(`Persist error for ${tenantId}; retrying in ${retryDelay}ms:`, error.message);
+      scheduleTenantSave(tenantId, retryDelay);
+    });
+  }, delayMs));
 }
 
 function persistTenant(tenantId) {
   if (!isDbEnabled()) return;
-  if (pendingSaves.has(tenantId)) clearTimeout(pendingSaves.get(tenantId));
-  pendingSaves.set(tenantId, setTimeout(() => {
-    pendingSaves.delete(tenantId);
-    saveTenantNow(tenantId).catch(err => console.error('Persist error:', err.message));
-  }, 500));
+  saveRetryCounts.delete(tenantId);
+  scheduleTenantSave(tenantId, 500);
 }
 
 // Debounced writes still pending at shutdown would otherwise be dropped on
@@ -1054,9 +1083,19 @@ export async function flushPendingSaves() {
     clearTimeout(pendingSaves.get(tenantId));
     pendingSaves.delete(tenantId);
   }
-  await Promise.all(tenantIds.map((tenantId) =>
-    saveTenantNow(tenantId).catch(err => console.error('Flush persist error:', tenantId, err.message))
-  ));
+  await Promise.all(tenantIds.map(async (tenantId) => {
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await saveTenantNow(tenantId);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      }
+    }
+    throw new Error(`Flush persist failed for ${tenantId}: ${lastError?.message || 'unknown error'}`);
+  }));
   await Promise.all([...backgroundJobs.values()].map((job) =>
     persistBackgroundJob(job).catch((err) => console.error('Flush background job error:', job.id, err.message))
   ));
@@ -1215,9 +1254,11 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
         getTenantRelationalStats(tenantId),
         dbLoadTenantSettings(tenantId),
       ]);
-      const parity = blobStats && relationalStats
-        ? compareTenantDataCounts(blobStats, relationalStats, needsContacts)
-        : { matches: false, mismatches: [{ entity: 'workspace', reason: 'stats unavailable' }] };
+      const parity = relationalWritesPrimaryForTenant(tenantId)
+        ? { matches: Boolean(relationalStats), mismatches: relationalStats ? [] : [{ entity: 'workspace', reason: 'relational stats unavailable' }] }
+        : blobStats && relationalStats
+          ? compareTenantDataCounts(blobStats, relationalStats, needsContacts)
+          : { matches: false, mismatches: [{ entity: 'workspace', reason: 'stats unavailable' }] };
       if (parity.matches && settings !== null) {
         const relationalData = await loadTenantRelationalData(tenantId, needsContacts);
         if (relationalData) {
@@ -1300,8 +1341,12 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
     }
     timings.mergeMs = Date.now() - mergeStartedAt;
     if (Object.keys(mirrorData).length) {
-      syncTenantRelationalMirror(tenantId, mirrorData)
-        .catch((err) => console.error('Relational mirror lazy backfill error:', tenantId, err.message));
+      if (readSource === 'relational') {
+        primeTenantRelationalMirror(tenantId, mirrorData);
+      } else {
+        syncTenantRelationalMirror(tenantId, mirrorData)
+          .catch((err) => console.error('Relational mirror lazy backfill error:', tenantId, err.message));
+      }
     }
   }
   

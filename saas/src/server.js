@@ -49,6 +49,10 @@ const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
 const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
+const RELATIONAL_WRITE_TENANTS = String(process.env.BD_RELATIONAL_WRITE_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => value && value !== '*');
 const relationalDeepCheckValues = String(process.env.BD_RELATIONAL_DEEP_CHECK_TENANTS || process.env.BD_RELATIONAL_READ_TENANTS || '')
   .split(',')
   .map((value) => value.trim())
@@ -210,7 +214,7 @@ async function refreshRelationalMirrorHealth() {
   if (!isDbReady()) return;
   const wasHealthy = relationalMirrorHealth.healthy;
   try {
-    const result = await dbCheckRelationalCountParity();
+    const result = await dbCheckRelationalCountParity(RELATIONAL_WRITE_TENANTS);
     if (!result) return;
     Object.assign(relationalMirrorHealth, result, { error: '' });
     if (!result.healthy) {
@@ -237,7 +241,7 @@ async function refreshRelationalContentHealth() {
   if (!isDbReady() || !RELATIONAL_DEEP_CHECK_CONFIGURED) return;
   const wasHealthy = relationalContentHealth.healthy;
   try {
-    const result = await dbCheckRelationalContentParity(RELATIONAL_DEEP_CHECK_TENANTS);
+    const result = await dbCheckRelationalContentParity(RELATIONAL_DEEP_CHECK_TENANTS, RELATIONAL_WRITE_TENANTS);
     if (!result) return;
     Object.assign(relationalContentHealth, result, { error: '' });
     if (!result.healthy) {
@@ -1849,6 +1853,7 @@ function getHealthPayload(includeDetails = false) {
     relationalContentWorkspaceCount: relationalContentHealth.workspaceCount,
     relationalContentMismatchCount: relationalContentHealth.mismatchCount,
     relationalContentCheckedAt: relationalContentHealth.checkedAt,
+    relationalPrimaryWorkspaceCount: RELATIONAL_WRITE_TENANTS.length,
   };
   const payload = {
     ok: true,

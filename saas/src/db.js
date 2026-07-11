@@ -666,8 +666,8 @@ export async function dbLoadAllMemberships() {
 
 // ── Tenant data persistence (accounts, contacts, jobs, etc.) ────────────────
 
-export async function dbSaveTenantData(tenantId, data) {
-  if (!dbReady) return;
+export async function dbSaveTenantData(tenantId, data, { throwOnError = false } = {}) {
+  if (!dbReady) return { saved: false, reason: 'database_not_ready' };
   try {
     // Only stringify if provided, otherwise pass null to trigger COALESCE in SQL
     const s = (v) => (v === undefined || v === null) ? null : JSON.stringify(v);
@@ -696,8 +696,11 @@ export async function dbSaveTenantData(tenantId, data) {
         new Date().toISOString(),
       ]
     );
+    return { saved: true };
   } catch (err) {
     console.error('DB: Failed to save tenant data for', tenantId, ':', err.message);
+    if (throwOnError) throw err;
+    return { saved: false, reason: err.message };
   }
 }
 
@@ -1208,13 +1211,14 @@ export async function dbSavePasswordResetToken(record) {
   }
 }
 
-export async function dbCheckRelationalCountParity() {
+export async function dbCheckRelationalCountParity(excludedTenantIds = []) {
   if (!dbReady) return null;
   const startedAt = Date.now();
+  const excluded = Array.isArray(excludedTenantIds) ? excludedTenantIds.filter(Boolean) : [];
   const result = await pool.query(`
     SELECT td.tenant_id
     FROM tenant_data td
-    WHERE
+    WHERE NOT (td.tenant_id = ANY($1::text[])) AND (
       CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN jsonb_array_length(td.accounts) ELSE 0 END
         <> (SELECT COUNT(*)::int FROM accounts r WHERE r.tenant_id = td.tenant_id)
       OR CASE WHEN jsonb_typeof(td.contacts) = 'array' THEN jsonb_array_length(td.contacts) ELSE 0 END
@@ -1227,9 +1231,13 @@ export async function dbCheckRelationalCountParity() {
         <> (SELECT COUNT(*)::int FROM activities r WHERE r.tenant_id = td.tenant_id)
       OR CASE WHEN jsonb_typeof(td.tasks) = 'array' THEN jsonb_array_length(td.tasks) ELSE 0 END
         <> (SELECT COUNT(*)::int FROM tasks r WHERE r.tenant_id = td.tenant_id)
+    )
     ORDER BY td.tenant_id
-  `);
-  const totalResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenant_data');
+  `, [excluded]);
+  const totalResult = await pool.query(
+    'SELECT COUNT(*)::int AS total FROM tenant_data WHERE NOT (tenant_id = ANY($1::text[]))',
+    [excluded]
+  );
   return {
     healthy: result.rows.length === 0,
     workspaceCount: Number(totalResult.rows[0]?.total || 0),
@@ -1257,14 +1265,16 @@ export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays
   };
 }
 
-export async function dbCheckRelationalContentParity(tenantIds = []) {
+export async function dbCheckRelationalContentParity(tenantIds = [], excludedTenantIds = []) {
   if (!dbReady) return null;
   const startedAt = Date.now();
   const scoped = Array.isArray(tenantIds) ? tenantIds.filter(Boolean) : [];
+  const excluded = Array.isArray(excludedTenantIds) ? excludedTenantIds.filter(Boolean) : [];
   const result = await pool.query(`
     SELECT td.tenant_id
     FROM tenant_data td
     WHERE ($1::text[] = '{}'::text[] OR td.tenant_id = ANY($1::text[]))
+      AND NOT (td.tenant_id = ANY($2::text[]))
       AND (
         EXISTS (
           SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN td.accounts ELSE '[]'::jsonb END) item
@@ -1293,10 +1303,12 @@ export async function dbCheckRelationalContentParity(tenantIds = []) {
         )
       )
     ORDER BY td.tenant_id
-  `, [scoped]);
+  `, [scoped, excluded]);
   const checkedResult = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM tenant_data WHERE ($1::text[] = '{}'::text[] OR tenant_id = ANY($1::text[]))`,
-    [scoped]
+    `SELECT COUNT(*)::int AS total FROM tenant_data
+     WHERE ($1::text[] = '{}'::text[] OR tenant_id = ANY($1::text[]))
+       AND NOT (tenant_id = ANY($2::text[]))`,
+    [scoped, excluded]
   );
   return {
     healthy: result.rows.length === 0,

@@ -729,6 +729,7 @@
             ${renderStatusCheck('Error alerts', checks.errorAlertsConfigured, checks.errorAlertsConfigured ? 'External alerts connected' : 'Set BD_ERROR_WEBHOOK')}
             ${renderStatusCheck('Data mirror', !checks.relationalMirrorConfigured || checks.relationalMirrorHealthy !== false, checks.relationalMirrorConfigured ? (checks.relationalMirrorCheckedAt ? `${checks.relationalMirrorWorkspaceCount || 0} workspaces checked; ${checks.relationalMirrorMismatchCount || 0} mismatches` : 'Initial check pending') : 'Not configured')}
             ${renderStatusCheck('Mirror content', !checks.relationalContentConfigured || checks.relationalContentHealthy !== false, checks.relationalContentConfigured ? (checks.relationalContentCheckedAt ? `${checks.relationalContentWorkspaceCount || 0} canaries checked; ${checks.relationalContentMismatchCount || 0} mismatches` : 'Initial check pending') : 'Not configured')}
+            ${renderStatusCheck('Relational primary', true, `${checks.relationalPrimaryWorkspaceCount || 0} workspaces enabled`)}
           </div>
           <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, startedAt: status.startedAt, uptimeSeconds: status.uptimeSeconds }, null, 2))}</pre>
         `;
