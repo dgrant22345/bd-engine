@@ -205,3 +205,81 @@ test('BambooHR embed URLs resolve to the JSON careers list', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('generic company identities do not probe unrelated public ATS slugs', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-generic-company';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Stealth Startup', domain: 'gmail.com' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Stealth Startup',
+    domain: 'gmail.com',
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response('', { status: 404 });
+  };
+
+  try {
+    const result = await store.runAtsDiscovery(tenantId, {
+      limit: 1,
+      discoveryConcurrency: 1,
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+    });
+    assert.equal(result.stats.mapped, 0);
+    assert.deepEqual(requestedUrls, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('name-only ATS matches require review before jobs can import', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-name-probe-review';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Rocket Labs' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Rocket Labs',
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('api.ashbyhq.com/posting-api/job-board/examplerocketlabs')) {
+      return new Response(JSON.stringify({ jobs: [{ id: 'job-1', title: 'Engineer' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('', { status: 404 });
+  };
+
+  try {
+    const result = await store.runAtsDiscovery(tenantId, {
+      limit: 1,
+      discoveryConcurrency: 1,
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+    });
+    assert.equal(result.stats.mapped, 0);
+    assert.equal(result.stats.suggested, 1);
+    const suggestion = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(suggestion.atsType, 'ashby');
+    assert.equal(suggestion.discoveryStatus, 'needs_review');
+    assert.equal(suggestion.reviewStatus, 'pending');
+    assert.equal(suggestion.active, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -2744,6 +2744,7 @@ export function createStore() {
       let checked = 0;
       let mapped = directResolved;
       let highConfidence = directResolved;
+      let suggested = 0;
       let unresolved = 0;
       const discoveryStartedAt = performance.now();
       const discoveryConcurrency = readPositiveInteger(options.discoveryConcurrency || options.concurrency, DEFAULT_ATS_DISCOVERY_CONCURRENCY);
@@ -2770,23 +2771,29 @@ export function createStore() {
         const match = settled.value?.match;
         try {
           if (match) {
+            const requiresReview = match.method === 'public_ats_probe';
             Object.assign(config, {
               atsType: match.atsType,
               ats: match.atsType,
               boardId: match.boardId,
               apiUrl: match.apiUrl,
               resolvedBoardUrl: match.resolvedBoardUrl,
-              discoveryStatus: 'resolved',
+              discoveryStatus: requiresReview ? 'needs_review' : 'resolved',
               discoveryMethod: match.method,
-              confidenceBand: 'high',
-              reviewStatus: 'approved',
-              active: true,
+              confidenceBand: requiresReview ? 'medium' : 'high',
+              reviewStatus: requiresReview ? 'pending' : 'approved',
+              active: !requiresReview,
               lastDiscoveryJobCount: match.jobCount,
               lastDiscoveryCheckedAt: now(),
               updatedAt: now(),
             });
-            mapped++;
-            highConfidence++;
+            if (requiresReview) {
+              suggested++;
+              unresolved++;
+            } else {
+              mapped++;
+              highConfidence++;
+            }
           } else {
             config.discoveryStatus = 'unresolved';
             config.discoveryMethod = 'public_ats_probe';
@@ -2817,7 +2824,9 @@ export function createStore() {
       if (timings.totalMs > 10000) {
         console.warn(`Slow ATS discovery: saas/src/store.js runAtsDiscovery ${timings.totalMs}ms`, timings);
       }
-      if (!mapped && checked) {
+      if (!mapped && suggested) {
+        warnings.push(`Found ${suggested} possible ATS board${suggested === 1 ? '' : 's'} by company-name matching. Review them before importing jobs.`);
+      } else if (!mapped && checked) {
         warnings.push('No public supported ATS boards were matched. Add a board ID manually for any company you know uses Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite, Workday, or BambooHR.');
       }
 
@@ -2826,6 +2835,7 @@ export function createStore() {
         mapped,
         discovered: mapped,
         highConfidence,
+        suggested,
         unresolved,
         directResolved,
         configsCreated: createdConfigs,
@@ -4726,7 +4736,9 @@ function repairKnownAtsIdentity(config = {}, options = {}) {
   const boardId = getConfigBoardId(config);
   if (!ATS_FETCHERS.has(atsType) || !boardId) return corrected;
   const directAtsUrl = getConfigAtsUrl(config);
-  const canApprove = options.approveDirect && Boolean(directAtsUrl);
+  const isUnreviewedNameProbe = config.discoveryMethod === 'public_ats_probe'
+    && normalizeKey(config.reviewStatus || '') !== 'approved';
+  const canApprove = options.approveDirect && Boolean(directAtsUrl) && !isUnreviewedNameProbe;
   let changed = corrected;
 
   if (normalizeAtsType(config.atsType || '') !== atsType) {
@@ -5128,24 +5140,27 @@ async function discoverAtsBoard(config) {
 
 function buildBoardCandidates(config) {
   const candidates = [];
-  const add = (value) => {
+  const add = (value, { preserve = false } = {}) => {
     const cleaned = String(value || '').trim().toLowerCase();
     if (!cleaned) return;
-    if (!candidates.includes(cleaned)) candidates.push(cleaned);
     const compact = cleaned.replace(/[^a-z0-9]/g, '');
-    if (compact && compact !== cleaned && !candidates.includes(compact)) candidates.push(compact);
+    if (preserve && !candidates.includes(cleaned)) candidates.push(cleaned);
+    if (compact && !candidates.includes(compact)) candidates.push(compact);
   };
   const directBoardId = getConfigBoardId(config);
-  if (!['unknown', 'n/a', 'none'].includes(normalizeKey(directBoardId))) add(directBoardId);
+  const hasDirectAtsEvidence = Boolean(getConfigAtsUrl(config)) || ATS_FETCHERS.has(normalizeAtsType(config.atsType || config.ats));
+  if (!['unknown', 'n/a', 'none'].includes(normalizeKey(directBoardId))) add(directBoardId, { preserve: hasDirectAtsEvidence });
   const domain = getUsableCompanyDomain(config.domain || config.canonicalDomain);
   const domainRoot = domain.split('.')[0] || '';
-  add(domainRoot);
+  add(domainRoot, { preserve: true });
   const companyName = normalizeKey(config.companyName);
-  add(companyName);
-  add(companyName.replace(/\([^)]*\)/g, ''));
-  add(companyName.replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|international)\b/g, ''));
-  const acronym = String(config.companyName || '').match(/\(([A-Za-z0-9-]{2,12})\)/)?.[1];
-  add(acronym);
+  if (!isGenericCompanyIdentity(companyName)) {
+    add(companyName);
+    add(companyName.replace(/\([^)]*\)/g, ''));
+    add(companyName.replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|international)\b/g, ''));
+    const acronym = String(config.companyName || '').match(/\(([A-Za-z0-9-]{2,12})\)/)?.[1];
+    add(acronym);
+  }
   return candidates.filter((value) => value.length >= 2).slice(0, 5);
 }
 
@@ -5183,12 +5198,18 @@ async function discoverAtsBoardFromCareersPages(config) {
 // to reach their careers page and detect the ATS. Skips names too short/generic
 // to yield a meaningful domain.
 function guessDomainsFromName(companyName) {
+  if (isGenericCompanyIdentity(companyName)) return [];
   const literalDomain = getUsableCompanyDomain(companyName);
   const slug = normalizeKey(companyName)
     .replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|the|a|of|and)\b/g, '')
     .replace(/[^a-z0-9]/g, '');
   if (slug.length < 3) return literalDomain ? [literalDomain] : [];
   return [literalDomain, `${slug}.com`, `${slug}.ca`, `${slug}.io`].filter(Boolean);
+}
+
+function isGenericCompanyIdentity(value) {
+  const normalized = normalizeKey(value).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(confidential( company)?|independent contractor|n a|nda( .*)?|not disclosed|private company|self employed|stealth( company| startup)?|undisclosed( company)?|freelance|freelancer)$/.test(normalized);
 }
 
 function buildCareerPageUrls(config = {}) {
@@ -5205,7 +5226,12 @@ function buildCareerPageUrls(config = {}) {
       // Ignore malformed URLs.
     }
   };
-  const directCareerUrl = getUsableCareerUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
+  const untrustedNameProbe = config.discoveryMethod === 'public_ats_probe'
+    && normalizeKey(config.reviewStatus || '') !== 'approved';
+  const directCareerSource = untrustedNameProbe
+    ? (config.careersUrl || config.sourceUrl || config.boardUrl || config.url)
+    : (config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
+  const directCareerUrl = getUsableCareerUrl(directCareerSource);
   add(directCareerUrl);
   const knownDomain = getUsableCompanyDomain(config.domain || config.canonicalDomain);
   const domains = knownDomain ? [knownDomain] : guessDomainsFromName(config.companyName);
