@@ -294,13 +294,18 @@ test('permanently missing ATS boards return to review after import', async () =>
     companyName: 'Closed Board Inc',
     atsType: 'lever',
     boardId: 'closed-board',
+    apiUrl: 'https://api.lever.co/v0/postings/closed-board?mode=json',
     discoveryStatus: 'resolved',
     reviewStatus: 'approved',
     active: true,
   });
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response('', { status: 404 });
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount++;
+    return new Response('', { status: 404 });
+  };
   try {
     const result = await store.importLiveJobs(tenantId, {
       plan: { displayName: 'Test', limits: { jobBoards: -1 } },
@@ -312,6 +317,14 @@ test('permanently missing ATS boards return to review after import', async () =>
     assert.equal(config.active, false);
     assert.equal(config.discoveryStatus, 'needs_review');
     assert.equal(config.reviewStatus, 'pending');
+
+    const rerun = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(rerun.stats.errors, 0);
+    assert.equal(rerun.stats.supportedConfigs, 0);
+    assert.equal(fetchCount, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

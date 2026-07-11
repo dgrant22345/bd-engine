@@ -4744,9 +4744,15 @@ function repairKnownAtsIdentity(config = {}, options = {}) {
   const boardId = getConfigBoardId(config);
   if (!ATS_FETCHERS.has(atsType) || !boardId) return corrected;
   const directAtsUrl = getConfigAtsUrl(config);
-  const isUnreviewedNameProbe = config.discoveryMethod === 'public_ats_probe'
-    && normalizeKey(config.reviewStatus || '') !== 'approved';
-  const canApprove = options.approveDirect && Boolean(directAtsUrl) && !isUnreviewedNameProbe;
+  const reviewStatus = normalizeKey(config.reviewStatus || '');
+  const isUnreviewedNameProbe = config.discoveryMethod === 'public_ats_probe' && reviewStatus !== 'approved';
+  const explicitlyRejected = reviewStatus === 'rejected';
+  const failedIdentity = normalizeKey(config.lastImportStatus || '') === 'failed';
+  const canApprove = options.approveDirect
+    && Boolean(directAtsUrl)
+    && !isUnreviewedNameProbe
+    && !explicitlyRejected
+    && !failedIdentity;
   let changed = corrected;
 
   if (normalizeAtsType(config.atsType || '') !== atsType) {
