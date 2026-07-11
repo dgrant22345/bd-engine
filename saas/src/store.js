@@ -1636,7 +1636,7 @@ export function createStore() {
                 console.log(`Relational usage queries active for ${tenantId}.`);
               }
               const profile = getTenantProfile(tenantId);
-              return { ...usage, users: Math.max(1, profile?.settings?.ownerRoster?.length || 1) };
+              return { ...usage, users: 1 };
             }
           } else {
             console.warn(`Relational usage fallback for ${tenantId}: parity check failed.`);
@@ -1654,7 +1654,7 @@ export function createStore() {
         accounts: tenantAccounts.length,
         contacts: tenantContacts.length,
         jobBoards: tenantConfigs.filter((item) => item.active !== false).length,
-        users: Math.max(1, profile?.settings?.ownerRoster?.length || 1),
+        users: 1,
       };
     },
 

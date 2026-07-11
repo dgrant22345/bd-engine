@@ -2938,7 +2938,7 @@ async function applyAccountPreset(presetId, options = {}) {
 
 function renderSavedFilters() {
   if (!appState.savedFilters.length) return '';
-  return `<div class="saved-filters-bar"><span class="muted small" title="Stored in this browser only — not yet synced across devices or team members">Saved views (this device):</span>${appState.savedFilters.map(f =>
+  return `<div class="saved-filters-bar"><span class="muted small" title="Stored in this browser only">Saved views (this device):</span>${appState.savedFilters.map(f =>
     `<span class="saved-filter-chip"><button class="ghost-button ghost-button--xs" data-action="load-saved-filter" data-name="${escapeAttr(f.name)}">${escapeHtml(f.name)}</button><button class="saved-filter-delete" data-action="delete-saved-filter" data-name="${escapeAttr(f.name)}" aria-label="Delete filter ${escapeAttr(f.name)}">&times;</button></span>`
   ).join('')}</div>`;
 }

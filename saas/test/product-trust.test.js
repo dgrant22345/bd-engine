@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { getPlan } from '../src/billing.js';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const appPath = new URL('../../app/app.js', import.meta.url);
@@ -15,9 +16,16 @@ test('public product claims match implemented job-board coverage and team sync',
   assert.doesNotMatch(landing, /no manual configuration required/i);
   assert.doesNotMatch(landing, /until team sync ships/i);
   assert.match(landing, /Greenhouse, Lever, Ashby, SmartRecruiters, Workday/);
-  assert.match(landing, /Workspace notes, sequences, custom fields, activity, and automation rules sync/);
+  assert.doesNotMatch(landing, /3 team members/i);
+  assert.doesNotMatch(landing, /Team Analytics/);
+  assert.match(landing, /Workspace sync across your devices/);
+  assert.match(landing, /Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account/);
   assert.match(app, /Live import supported/);
   assert.match(app, /Tracking only/);
+});
+
+test('Sales Professional does not advertise unavailable login seats', () => {
+  assert.equal(getPlan('sales').limits.users, 1);
 });
 
 test('password recovery gives users a next step when email delivery is unavailable', async () => {

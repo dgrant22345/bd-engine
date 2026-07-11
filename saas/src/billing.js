@@ -125,7 +125,7 @@ export const PLANS = {
     stripePriceEnv: 'STRIPE_PRICE_SALES',
     stripePriceId: process.env.STRIPE_PRICE_SALES || 'price_placeholder_sales',
     trialDays: 0,
-    limits: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 3, csvImports: -1 },
+    limits: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 },
     features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export'],
   },
   owner: {
