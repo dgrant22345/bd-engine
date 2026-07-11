@@ -602,8 +602,7 @@ async function route(req, res) {
   if (pathname === '/api/plans') {
     return sendJson(res, 200, {
       plans: Object.values(PLANS)
-        // Recruiting/BD only (#13): don't surface the frozen jobseeker plan.
-        .filter((p) => p.id !== ownerPlanId && p.id !== 'jobseeker')
+        .filter((p) => p.id !== ownerPlanId)
         .map((p) => ({
           id: p.id,
           name: p.name,
@@ -1572,9 +1571,7 @@ async function handleSignup(req, res) {
     return sendJson(res, 409, { error: userResult.error });
   }
 
-  // Create default workspace. Recruiting/BD is the only supported persona now
-  // (#13); the jobseeker path is frozen, so all new workspaces are 'bd'.
-  const userPersona = 'bd';
+  const userPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
   const workspaceDisplayName = workspaceName || `${userResult.user.name}'s Workspace`;
   const referrerTenant = findTenantByReferralCode(referralCode);
   const tenantResult = ensureTenantForUser(userResult.user, {

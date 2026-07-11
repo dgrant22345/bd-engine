@@ -22,6 +22,9 @@ test('public product claims match implemented job-board coverage and team sync',
   assert.match(landing, /Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account/);
   assert.match(app, /Live import supported/);
   assert.match(app, /Tracking only/);
+  assert.match(landing, /Find my next role/);
+  assert.match(landing, /Start job search/);
+  assert.match(app, /Job search workspace/);
 });
 
 test('Sales Professional does not advertise unavailable login seats', () => {

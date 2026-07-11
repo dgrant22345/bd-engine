@@ -2699,6 +2699,7 @@ function bindEvents() {
 async function loadBootstrap(force, options = {}) {
   appState.bootstrap = await window.bdLocalApi.loadBootstrap(appState, force, options);
   if (appState.bootstrap?.persona) appState.persona = normalizeAppPersona(appState.bootstrap.persona);
+  applyPersonaChrome();
   workspaceName.textContent = appState.bootstrap?.workspace?.name || 'BD Engine Workspace';
   window.bdLocalApi.setAlert('', appAlert);
   return appState.bootstrap;
@@ -2741,6 +2742,7 @@ async function loadSetupStatus(force = false) {
   }
   appState.setupStatus = await api('/api/setup/status', { skipCache: true });
   if (appState.setupStatus?.persona) appState.persona = normalizeAppPersona(appState.setupStatus.persona);
+  applyPersonaChrome();
   if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
     const existingName = appState.setupStatus.workspace.name;
     appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
@@ -2754,6 +2756,20 @@ function normalizeAppPersona(value) {
 
 function isJobSeekerPersona() {
   return normalizeAppPersona(appState.persona || appState.bootstrap?.persona || appState.setupStatus?.persona) === 'jobseeker';
+}
+
+function applyPersonaChrome() {
+  const jobSeeker = isJobSeekerPersona();
+  const accountLabel = document.querySelector('[data-route="accounts"] .nav-label');
+  const jobsLabel = document.querySelector('[data-route="jobs"] .nav-label');
+  const contactsLabel = document.querySelector('[data-route="contacts"] .nav-label');
+  const adminLabel = document.querySelector('[data-route="admin"] .nav-label');
+  const topbarEyebrow = document.querySelector('.topbar .eyebrow');
+  if (accountLabel) accountLabel.textContent = jobSeeker ? 'Companies' : 'Accounts';
+  if (jobsLabel) jobsLabel.textContent = jobSeeker ? 'Open roles' : 'Jobs';
+  if (contactsLabel) contactsLabel.textContent = jobSeeker ? 'Network' : 'Contacts';
+  if (adminLabel) adminLabel.textContent = jobSeeker ? 'Tools' : 'Admin';
+  if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Commercial revenue operating system';
 }
 
 function getFormValues(form) {
@@ -3424,7 +3440,7 @@ async function renderBillingRequiredView(error = {}) {
 
   const stripeStatus = billing?.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady);
-  const selectedPlanId = 'sales';
+  const selectedPlanId = isJobSeekerPersona() ? 'jobseeker' : 'sales';
   const canManageBilling = Boolean(billing?.canManageBilling);
   const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
   const stripeBillingMessage = stripeReady
@@ -3440,6 +3456,7 @@ async function renderBillingRequiredView(error = {}) {
         <p class="small muted">${escapeHtml(stripeBillingMessage)}</p>
         <div class="inline-field-stack" style="max-width: 420px;">
           <select id="billing-plan-select">
+            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
             <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
           </select>
           <div class="button-row">
@@ -4633,7 +4650,7 @@ async function renderDashboardView(options = {}) {
 
 async function renderAccountsView() {
   renderLoadingState('Accounts', 'Loading ranked target accounts...');
-  setViewTitle('Accounts');
+  setViewTitle(isJobSeekerPersona() ? 'Companies' : 'Accounts');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
   const filters = stateBootstrap.filters || { atsTypes: [], industries: [] };
   // Board view has no pagination, so a 20-row page would show ~4 cards per
@@ -5071,7 +5088,7 @@ async function renderAccountDetail(accountId) {
 }
 async function renderContactsView() {
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
-  setViewTitle('Contacts');
+  setViewTitle(isJobSeekerPersona() ? 'Network' : 'Contacts');
   const result = await api(`/api/contacts${buildQuery(appState.contactQuery)}`);
 
   appRoot.innerHTML = `
@@ -5106,7 +5123,7 @@ async function renderContactsView() {
 
 async function renderJobsView() {
   renderLoadingState('Jobs', 'Loading job activity...');
-  setViewTitle('Jobs');
+  setViewTitle(isJobSeekerPersona() ? 'Open roles' : 'Jobs');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
   const atsOptions = stateBootstrap.filters?.atsTypes || [];
@@ -5200,7 +5217,7 @@ function openAdminSection(sectionId) {
 
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
-  setViewTitle('Admin');
+  setViewTitle(isJobSeekerPersona() ? 'Tools' : 'Admin');
   appState.adminCollapsed['pipeline-ops'] = false;
   const batchQuery = {};
   const cq = appState.configQuery;
@@ -5388,6 +5405,7 @@ async function renderAdminView() {
               ${paymentAttentionRequired ? `<div class="billing-notice billing-notice--warning" role="status"><strong>Workspace access remains available during recovery.</strong><span>Update the payment method by ${escapeHtml(billingGraceDate || 'the grace deadline')}${billingAccess.graceDaysRemaining !== null && billingAccess.graceDaysRemaining !== undefined ? ` (${formatNumber(billingAccess.graceDaysRemaining)} day${billingAccess.graceDaysRemaining === 1 ? '' : 's'} remaining)` : ''}.</span></div>` : ''}
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
+                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
                   <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">

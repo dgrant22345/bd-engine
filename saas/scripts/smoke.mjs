@@ -26,6 +26,13 @@ await check('detailed status rejects anonymous requests', async () => {
   assert(response.status === 401, `expected 401, got ${response.status}`);
 });
 
+await check('public plans include sales and job seeker options', async () => {
+  const body = await getJson('/api/plans');
+  const planIds = (body.plans || []).map((plan) => plan.id);
+  assert(planIds.includes('sales'), 'public plans omitted Sales Professional');
+  assert(planIds.includes('jobseeker'), 'public plans omitted Job Seeker');
+});
+
 await mutationCheck('signup creates a session', async () => {
   const email = `smoke-auth-${Date.now()}@example.com`;
   authEmail = email;
@@ -260,7 +267,7 @@ await mutationCheck('sample workspace completes onboarding without overwriting d
   assert(secondResponse.status === 409, `second sample load should be blocked, got ${secondResponse.status}`);
 });
 
-await mutationCheck('frozen job seeker signup normalizes to the sales persona', async () => {
+await mutationCheck('job seeker signup preserves its persona across the app', async () => {
   const email = `smoke-jobseeker-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -276,14 +283,14 @@ await mutationCheck('frozen job seeker signup normalizes to the sales persona', 
   assert(response.status === 201, `signup returned ${response.status}`);
   const signupCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
   const signupBody = await response.json();
-  assert(signupBody.persona === 'bd', 'signup should normalize frozen jobseeker persona to bd');
-  assert(signupBody.tenant?.persona === 'bd', 'tenant should normalize frozen jobseeker persona to bd');
+  assert(signupBody.persona === 'jobseeker', 'signup should preserve the jobseeker persona');
+  assert(signupBody.tenant?.persona === 'jobseeker', 'tenant should preserve the jobseeker persona');
   const setup = await getJson('/api/setup/status', signupCookie);
-  assert(setup.persona === 'bd', '/api/setup/status should return bd persona');
+  assert(setup.persona === 'jobseeker', '/api/setup/status should return jobseeker persona');
   const me = await getJson('/api/auth/me', signupCookie);
-  assert(me.persona === 'bd', '/api/auth/me should return bd persona');
+  assert(me.persona === 'jobseeker', '/api/auth/me should return jobseeker persona');
   const bootstrap = await getJson('/api/bootstrap?includeFilters=true', signupCookie);
-  assert(bootstrap.persona === 'bd', '/api/bootstrap should return bd persona');
+  assert(bootstrap.persona === 'jobseeker', '/api/bootstrap should return jobseeker persona');
 });
 
 await mutationCheck('referral code tracks referred signup', async () => {

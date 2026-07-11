@@ -35,6 +35,8 @@
       referralCode: getInitialReferralCode(),
       resetToken: getInitialResetToken(),
       resetMessage: '',
+      persona: 'bd',
+      signupPersona: getInitialSignupPersona(),
     };
 
     function getInitialReferralCode() {
@@ -50,6 +52,10 @@
 
     function getInitialResetToken() {
       return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
+    }
+
+    function getInitialSignupPersona() {
+      return new URLSearchParams(window.location.search).get('persona') === 'jobseeker' ? 'jobseeker' : 'bd';
     }
 
     // ── API helper ────────────────────────────────────────────────────────
@@ -113,6 +119,7 @@
           state.referral = data.referral || null;
           state.demo = Boolean(data.demo);
           state.readOnly = Boolean(data.readOnly);
+          state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
           state.view = 'app';
         } else if (state.resetToken) {
           state.view = 'reset';
@@ -153,6 +160,7 @@
         state.referral = data.referral || null;
         state.demo = false;
         state.readOnly = false;
+        state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -180,6 +188,7 @@
         state.referral = data.referral || null;
         state.demo = false;
         state.readOnly = false;
+        state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -441,6 +450,7 @@
                 <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">Start free trial</button>
                 <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Try live demo'}</button>
               </div>
+              <button class="link-btn hero-persona-link" data-jobseeker-signup>Looking for your next role? Start in Job Search mode.</button>
               <p class="hero-note">No credit card required · 14-day trial includes 25 accounts, 100 contacts, and 50 ATS boards</p>
             </div>
             <div class="hero-visual">
@@ -574,6 +584,21 @@
                 <p class="pricing-upgrade">Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account across devices. Personal display preferences stay on each device.</p>
                 <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
               </div>
+              <div class="pricing-card">
+                <div class="pricing-badge">For job seekers</div>
+                <h3>Job Seeker</h3>
+                <div class="pricing-price"><span class="price-amount">$5</span><span class="price-period">/month</span></div>
+                <p class="pricing-fit">Best for prioritizing target companies, open roles, and warm contacts during an active search.</p>
+                <ul class="pricing-features">
+                  <li>200 target companies</li>
+                  <li>1,000 network contacts</li>
+                  <li>50 ATS job boards</li>
+                  <li>Job-search action plans</li>
+                  <li>50 CSV imports</li>
+                </ul>
+                <p class="pricing-upgrade">Use your own network and live hiring signals to decide where to focus each day.</p>
+                <button class="btn btn-primary btn-block" data-jobseeker-signup>Start job search</button>
+              </div>
             </div>
           </section>
 
@@ -596,6 +621,7 @@
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
       root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
       root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
+      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => { state.signupPersona = 'jobseeker'; state.view = 'signup'; render(); }));
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
@@ -880,6 +906,14 @@
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">
+                <label for="signup-persona">I want to</label>
+                <select id="signup-persona">
+                  <option value="bd" ${state.signupPersona === 'bd' ? 'selected' : ''}>Win recruiting or staffing clients</option>
+                  <option value="jobseeker" ${state.signupPersona === 'jobseeker' ? 'selected' : ''}>Find my next role</option>
+                </select>
+                <span class="form-help">This changes the dashboard, scoring priorities, action plans, and outreach language.</span>
+              </div>
+              <div class="form-group">
                 <label for="signup-name">Full name</label>
                 <input type="text" id="signup-name" placeholder="Jane Smith" autocomplete="name" required autofocus>
               </div>
@@ -906,8 +940,16 @@
           </div>
         </div>`;
 
-      // Recruiting/BD is the only persona now (#13).
-      const selectedPersona = 'bd';
+      const personaSelect = root.querySelector('#signup-persona');
+      const workspaceLabel = root.querySelector('#workspace-label');
+      const workspaceInput = root.querySelector('#signup-workspace');
+      const applySignupPersona = () => {
+        state.signupPersona = personaSelect?.value === 'jobseeker' ? 'jobseeker' : 'bd';
+        if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name' : 'Workspace name';
+        if (workspaceInput) workspaceInput.placeholder = state.signupPersona === 'jobseeker' ? 'My Job Search' : 'My Company';
+      };
+      personaSelect?.addEventListener('change', applySignupPersona);
+      applySignupPersona();
 
       root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -915,7 +957,7 @@
         const email = root.querySelector('#signup-email').value;
         const password = root.querySelector('#signup-password').value;
         const workspace = root.querySelector('#signup-workspace').value;
-        doSignup(email, password, name, workspace, selectedPersona);
+        doSignup(email, password, name, workspace, state.signupPersona);
       });
       root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
@@ -935,7 +977,7 @@
           <div class="cloud-trial-cta-copy">
             <span class="cloud-trial-cta-kicker">Free trial · ${escapeHtml(daysCopy)}</span>
             <strong>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} accounts, ${formatLimit(trialLimits.contacts)} contacts.</strong>
-            <span>Paid plans remove the trial clock; Sales Pro adds unlimited ATS boards, enrichment, CSV export, and team seats.</span>
+            <span>${state.persona === 'jobseeker' ? 'Job Seeker adds a larger search workspace and 50 CSV imports.' : 'Sales Pro adds unlimited ATS boards, enrichment, and CSV export.'}</span>
           </div>
           <div class="cloud-trial-cta-actions">
             <button class="btn btn-primary btn-sm" id="cloud-upgrade-btn">Upgrade plan</button>
