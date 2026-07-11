@@ -2042,13 +2042,22 @@ export function createStore() {
       return config;
     },
 
-    reviewConfig(tenantId, configId, payload) {
+    async reviewConfig(tenantId, configId, payload) {
       assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
       const config = boardConfigs.find((item) => item.tenantId === tenantId && item.id === configId);
       if (!config) return null;
-      config.reviewStatus = payload.action === 'reject' ? 'rejected' : 'approved';
-      config.active = payload.action !== 'reject';
-      config.updatedAt = now();
+      const rejected = payload.action === 'reject';
+      const timestamp = now();
+      config.reviewStatus = rejected ? 'rejected' : 'approved';
+      config.active = !rejected;
+      config.updatedAt = timestamp;
+      if (rejected) {
+        const tenantJobs = getTenantArray(jobsByTenant, tenantId);
+        deactivateJobsForConfig(config, tenantJobs, timestamp);
+        const accountItem = config.accountId ? accountById(config.accountId, tenantId) : null;
+        if (accountItem) refreshAccountHiringStats(accountItem, tenantJobs);
+      }
       persistTenant(tenantId);
       return config;
     },
@@ -2977,9 +2986,23 @@ export function createStore() {
       const activeConfigs = limitedImportConfigs.length;
       const unsupportedCount = activeTenantConfigs.length - importReadyConfigs.length;
       const needsResolutionConfigs = tenantConfigs.length - importReadyConfigs.length;
-      const supportedConfigs = limitedImportConfigs
+      const supportedCandidates = limitedImportConfigs
         .map((config) => ({ config, atsType: getConfigAtsType(config), boardId: getConfigBoardId(config) }))
         .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
+      const seenProviderBoards = new Set();
+      let duplicateBoardsSkipped = 0;
+      const supportedConfigs = supportedCandidates.filter(({ config, atsType, boardId }) => {
+        const providerKey = `${atsType}|${normalizeKey(boardId || config.resolvedBoardUrl || config.apiUrl)}`;
+        if (seenProviderBoards.has(providerKey)) {
+          duplicateBoardsSkipped++;
+          return false;
+        }
+        seenProviderBoards.add(providerKey);
+        return true;
+      });
+      if (duplicateBoardsSkipped) {
+        warnings.push(`${duplicateBoardsSkipped} duplicate ATS board configuration${duplicateBoardsSkipped === 1 ? ' was' : 's were'} skipped.`);
+      }
       if (!tenantConfigs.length) {
         warnings.push('No active ATS configs were found yet. Run setup/workflow first so the app can discover job boards for your accounts.');
       } else if (!supportedConfigs.length) {
@@ -3038,6 +3061,8 @@ export function createStore() {
             config.discoveryStatus = 'needs_review';
             config.reviewStatus = 'pending';
             config.confidenceBand = 'unresolved';
+            deactivateJobsForConfig(config, tenantJobs, now());
+            if (config.accountId) touchedAccountIds.add(config.accountId);
             warnings.push(`${config.companyName} returned ${message.match(/HTTP\s+\d+/i)?.[0] || 'a permanent not-found response'} and was moved back to ATS review.`);
           }
           config.updatedAt = now();
@@ -3149,6 +3174,7 @@ export function createStore() {
         autoDiscoveryUnresolved: autoDiscoveryStats?.unresolved || 0,
         importReadyConfigs: importReadyConfigs.length,
         supportedConfigs: supportedConfigs.length,
+        duplicateBoardsSkipped,
         fetched,
         kept,
         canadaKept: kept,
@@ -5991,6 +6017,19 @@ function refreshAccountHiringStats(item, tenantJobs) {
   item.dailyScore = item.targetScore;
   item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);
   item.updatedAt = now();
+}
+
+function deactivateJobsForConfig(config, tenantJobs, timestamp = now()) {
+  let deactivated = 0;
+  for (const jobItem of tenantJobs) {
+    if (jobItem.configId !== config.id || jobItem.active === false) continue;
+    jobItem.active = false;
+    jobItem.isNew = false;
+    jobItem.closedAt = jobItem.closedAt || timestamp;
+    jobItem.updatedAt = timestamp;
+    deactivated++;
+  }
+  return deactivated;
 }
 
 

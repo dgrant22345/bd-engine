@@ -1125,7 +1125,7 @@ self.addEventListener('activate', (event) => {
   const configActionMatch = pathname.match(/^\/api\/configs\/([^/]+)\/(resolve|review)$/);
   if (configActionMatch && req.method === 'POST') {
     if (configActionMatch[2] === 'review') {
-      const config = store.reviewConfig(tenantId, configActionMatch[1], await readJson(req));
+      const config = await store.reviewConfig(tenantId, configActionMatch[1], await readJson(req));
       if (!config) return sendJson(res, 404, { error: 'Config not found' });
       return sendJson(res, 200, config);
     }

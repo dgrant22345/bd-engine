@@ -85,7 +85,7 @@ test('live job import records a run and imports jobs from a ready board', async 
   const tenantId = 'tenant-live-job-import';
   addTenant(store, tenantId);
   const account = await store.addAccount(tenantId, { displayName: 'Acme Systems', domain: 'acme.example' });
-  store.addConfig(tenantId, {
+  const config = store.addConfig(tenantId, {
     accountId: account.id,
     companyName: 'Acme Systems',
     atsType: 'greenhouse',
@@ -116,6 +116,12 @@ test('live job import records a run and imports jobs from a ready board', async 
     assert.equal(result.stats.newJobs, 1);
     assert.match(result.importRun.id, /^imp-jobs-/);
     assert.equal((await store.findJobs(tenantId, { page: 1, pageSize: 20 })).total, 1);
+
+    await store.reviewConfig(tenantId, config.id, { action: 'reject' });
+    assert.equal((await store.findJobs(tenantId, { active: 'true', page: 1, pageSize: 20 })).total, 0);
+    const closedJob = (await store.findJobs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(closedJob.active, false);
+    assert.ok(closedJob.closedAt);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -325,6 +331,47 @@ test('permanently missing ATS boards return to review after import', async () =>
     assert.equal(rerun.stats.errors, 0);
     assert.equal(rerun.stats.supportedConfigs, 0);
     assert.equal(fetchCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('duplicate configs for the same provider board fetch only once', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-duplicate-board';
+  addTenant(store, tenantId);
+  const firstAccount = await store.addAccount(tenantId, { displayName: 'Acme Systems' });
+  const secondAccount = await store.addAccount(tenantId, { displayName: 'Acme Holdings' });
+  for (const account of [firstAccount, secondAccount]) {
+    store.addConfig(tenantId, {
+      accountId: account.id,
+      companyName: account.displayName,
+      atsType: 'greenhouse',
+      boardId: 'acme',
+      discoveryStatus: 'resolved',
+      reviewStatus: 'approved',
+      active: true,
+    });
+  }
+
+  let fetchCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetchCount++;
+    return new Response(JSON.stringify({
+      jobs: [{ id: 1, title: 'Account Executive', location: { name: 'Toronto, ON' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(fetchCount, 1);
+    assert.equal(result.stats.supportedConfigs, 1);
+    assert.equal(result.stats.duplicateBoardsSkipped, 1);
+    assert.equal(result.stats.newJobs, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
