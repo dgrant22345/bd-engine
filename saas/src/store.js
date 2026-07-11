@@ -45,6 +45,7 @@ const RELATIONAL_WRITE_TENANTS = new Set(String(process.env.BD_RELATIONAL_WRITE_
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const durableRelationalWriteTenants = new Set();
 const confirmedRelationalSqlTenants = new Set();
 const confirmedRelationalContactSqlTenants = new Set();
 const confirmedRelationalJobSqlTenants = new Set();
@@ -52,7 +53,7 @@ const confirmedRelationalConfigSqlTenants = new Set();
 const confirmedRelationalUsageTenants = new Set();
 
 function relationalReadsEnabledForTenant(tenantId) {
-  return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
+  return relationalWritesPrimaryForTenant(tenantId) || RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
 }
 
 function relationalSqlEnabledForTenant(tenantId) {
@@ -76,7 +77,16 @@ function relationalUsageEnabledForTenant(tenantId) {
 }
 
 function relationalWritesPrimaryForTenant(tenantId) {
-  return RELATIONAL_WRITE_TENANTS.has(tenantId);
+  return RELATIONAL_WRITE_TENANTS.has(tenantId) || durableRelationalWriteTenants.has(tenantId);
+}
+
+export function registerRelationalPrimaryTenant(tenantId) {
+  if (tenantId) durableRelationalWriteTenants.add(tenantId);
+  return relationalWritesPrimaryForTenant(tenantId);
+}
+
+export function getRelationalPrimaryTenantIds() {
+  return [...new Set([...RELATIONAL_WRITE_TENANTS, ...durableRelationalWriteTenants])].filter((tenantId) => tenantId && tenantId !== '*');
 }
 
 async function hasRelationalParity(tenantId, includeContacts = false) {
@@ -4341,6 +4351,7 @@ function assertTenant(tenantId) {
 
 function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
   if (!tenantId) return null;
+  if ((tenant.storageMode || tenant.storage_mode) === 'relational') registerRelationalPrimaryTenant(tenantId);
   const tenantPersona = readPersona(tenant?.persona || tenant?.settings?.persona);
   if (tenantProfiles.has(tenantId)) {
     const existing = tenantProfiles.get(tenantId);

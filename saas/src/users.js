@@ -109,7 +109,7 @@ export function setUserPassword(userId, password) {
   return { user };
 }
 
-export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '' }) {
+export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '', storageMode = 'legacy' }) {
   const id = `tenant-${randomUUID().slice(0, 8)}`;
   const normalizedSlug = makeUniqueTenantSlug(slug || name || id, id);
 
@@ -120,6 +120,7 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     plan,
     status: plan === 'trial' ? 'trialing' : 'active',
     persona: persona || 'bd',
+    storageMode: storageMode === 'relational' ? 'relational' : 'legacy',
     stripeCustomerId: '',
     stripeSubscriptionId: '',
     billingGraceEndsAt: '',
@@ -150,7 +151,7 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
   return { tenant };
 }
 
-export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial', referredByTenantId = '' } = {}) {
+export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial', referredByTenantId = '', storageMode = 'legacy' } = {}) {
   if (!user?.id) return { error: 'User not found.' };
 
   const userTenants = findTenantsForUser(user.id);
@@ -178,6 +179,7 @@ export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', 
     ownerUserId: user.id,
     persona,
     referredByTenantId,
+    storageMode,
   });
   if (result.error) return result;
 

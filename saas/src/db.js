@@ -98,6 +98,7 @@ export async function initDb() {
         plan TEXT NOT NULL DEFAULT 'trial',
         status TEXT NOT NULL DEFAULT 'trialing',
         persona TEXT NOT NULL DEFAULT 'bd',
+        storage_mode TEXT NOT NULL DEFAULT 'legacy',
         stripe_customer_id TEXT NOT NULL DEFAULT '',
         stripe_subscription_id TEXT NOT NULL DEFAULT '',
         billing_grace_ends_at TEXT NOT NULL DEFAULT '',
@@ -296,6 +297,7 @@ export async function initDb() {
       ALTER TABLE tenant_data ALTER COLUMN activities DROP NOT NULL;
       ALTER TABLE tenant_data ALTER COLUMN tasks DROP NOT NULL;
       ALTER TABLE tenant_data ALTER COLUMN settings DROP NOT NULL;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS storage_mode TEXT NOT NULL DEFAULT 'legacy';
       CREATE UNIQUE INDEX IF NOT EXISTS tenants_referral_code_idx ON tenants (referral_code) WHERE referral_code <> '';
       CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
       CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
@@ -562,14 +564,15 @@ export async function dbSaveTenant(tenant) {
   if (!dbReady) return;
   try {
     await pool.query(
-      `INSERT INTO tenants (id, slug, name, plan, status, persona, stripe_customer_id, stripe_subscription_id, billing_grace_ends_at, billing_last_payment_failed_at, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO tenants (id, slug, name, plan, status, persona, storage_mode, stripe_customer_id, stripe_subscription_id, billing_grace_ends_at, billing_last_payment_failed_at, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        ON CONFLICT (id) DO UPDATE SET
          slug = EXCLUDED.slug,
          name = EXCLUDED.name,
          plan = EXCLUDED.plan,
          status = EXCLUDED.status,
          persona = EXCLUDED.persona,
+         storage_mode = EXCLUDED.storage_mode,
          stripe_customer_id = EXCLUDED.stripe_customer_id,
          stripe_subscription_id = EXCLUDED.stripe_subscription_id,
          billing_grace_ends_at = EXCLUDED.billing_grace_ends_at,
@@ -586,6 +589,7 @@ export async function dbSaveTenant(tenant) {
         tenant.plan,
         tenant.status,
         tenant.persona || 'bd',
+        tenant.storageMode || tenant.storage_mode || 'legacy',
         tenant.stripeCustomerId || tenant.stripe_customer_id || '',
         tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
         tenant.billingGraceEndsAt || tenant.billing_grace_ends_at || '',
@@ -615,6 +619,7 @@ export async function dbLoadAllTenants() {
       plan: r.plan,
       status: r.status,
       persona: r.persona,
+      storageMode: r.storage_mode || 'legacy',
       stripeCustomerId: r.stripe_customer_id || '',
       stripeSubscriptionId: r.stripe_subscription_id || '',
       billingGraceEndsAt: r.billing_grace_ends_at || '',
@@ -1218,7 +1223,9 @@ export async function dbCheckRelationalCountParity(excludedTenantIds = []) {
   const result = await pool.query(`
     SELECT td.tenant_id
     FROM tenant_data td
-    WHERE NOT (td.tenant_id = ANY($1::text[])) AND (
+    WHERE NOT (td.tenant_id = ANY($1::text[]))
+      AND COALESCE((SELECT storage_mode FROM tenants WHERE id = td.tenant_id), 'legacy') <> 'relational'
+      AND (
       CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN jsonb_array_length(td.accounts) ELSE 0 END
         <> (SELECT COUNT(*)::int FROM accounts r WHERE r.tenant_id = td.tenant_id)
       OR CASE WHEN jsonb_typeof(td.contacts) = 'array' THEN jsonb_array_length(td.contacts) ELSE 0 END
@@ -1235,7 +1242,9 @@ export async function dbCheckRelationalCountParity(excludedTenantIds = []) {
     ORDER BY td.tenant_id
   `, [excluded]);
   const totalResult = await pool.query(
-    'SELECT COUNT(*)::int AS total FROM tenant_data WHERE NOT (tenant_id = ANY($1::text[]))',
+    `SELECT COUNT(*)::int AS total FROM tenant_data td
+     WHERE NOT (tenant_id = ANY($1::text[]))
+       AND COALESCE((SELECT storage_mode FROM tenants WHERE id = td.tenant_id), 'legacy') <> 'relational'`,
     [excluded]
   );
   return {
@@ -1275,6 +1284,7 @@ export async function dbCheckRelationalContentParity(tenantIds = [], excludedTen
     FROM tenant_data td
     WHERE ($1::text[] = '{}'::text[] OR td.tenant_id = ANY($1::text[]))
       AND NOT (td.tenant_id = ANY($2::text[]))
+      AND COALESCE((SELECT storage_mode FROM tenants WHERE id = td.tenant_id), 'legacy') <> 'relational'
       AND (
         EXISTS (
           SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN td.accounts ELSE '[]'::jsonb END) item
@@ -1307,7 +1317,8 @@ export async function dbCheckRelationalContentParity(tenantIds = [], excludedTen
   const checkedResult = await pool.query(
     `SELECT COUNT(*)::int AS total FROM tenant_data
      WHERE ($1::text[] = '{}'::text[] OR tenant_id = ANY($1::text[]))
-       AND NOT (tenant_id = ANY($2::text[]))`,
+       AND NOT (tenant_id = ANY($2::text[]))
+       AND COALESCE((SELECT storage_mode FROM tenants WHERE id = tenant_data.tenant_id), 'legacy') <> 'relational'`,
     [scoped, excluded]
   );
   return {
@@ -1318,6 +1329,12 @@ export async function dbCheckRelationalContentParity(tenantIds = [], excludedTen
     checkedAt: new Date().toISOString(),
     queryMs: Date.now() - startedAt,
   };
+}
+
+export async function dbLoadRelationalPrimaryTenantIds() {
+  if (!dbReady) return [];
+  const result = await pool.query("SELECT id FROM tenants WHERE storage_mode = 'relational' ORDER BY id");
+  return result.rows.map((row) => row.id).filter(Boolean);
 }
 
 export async function dbFindPasswordResetToken(tokenHash) {

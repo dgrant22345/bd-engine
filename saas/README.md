@@ -125,11 +125,14 @@ read and query canaries are controlled independently with:
 - `BD_RELATIONAL_USAGE_TENANTS`
 - `BD_RELATIONAL_DEEP_CHECK_TENANTS`
 - `BD_RELATIONAL_WRITE_TENANTS` (explicit tenant IDs only; `*` is not accepted)
+- `BD_RELATIONAL_WRITE_NEW_TENANTS` (`true` makes newly created workspaces relational-primary)
 
 The read, query, usage, and deep-check flags accept a comma-separated tenant ID
 list or `*`. The write flag requires explicit tenant IDs. Read canaries
 automatically fall back to the legacy source if parity or a relational query
 fails; write-primary workspaces fail and retry instead of risking split data.
+The new-workspace default is persisted on each tenant as `storage_mode`, so the
+chosen source of truth survives deploys and process restarts.
 
 Resident workspace memory is bounded with `BD_RESIDENT_TENANT_LIMIT` (default
 8) and `BD_RESIDENT_TENANT_IDLE_MS` (default 5 minutes). Unsaved workspaces are

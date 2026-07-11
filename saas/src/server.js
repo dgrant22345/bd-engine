@@ -3,11 +3,11 @@ import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { createStore } from './store.js';
+import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -49,10 +49,7 @@ const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
 const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
-const RELATIONAL_WRITE_TENANTS = String(process.env.BD_RELATIONAL_WRITE_TENANTS || '')
-  .split(',')
-  .map((value) => value.trim())
-  .filter((value) => value && value !== '*');
+const RELATIONAL_WRITE_NEW_TENANTS = process.env.BD_RELATIONAL_WRITE_NEW_TENANTS === 'true';
 const relationalDeepCheckValues = String(process.env.BD_RELATIONAL_DEEP_CHECK_TENANTS || process.env.BD_RELATIONAL_READ_TENANTS || '')
   .split(',')
   .map((value) => value.trim())
@@ -214,7 +211,7 @@ async function refreshRelationalMirrorHealth() {
   if (!isDbReady()) return;
   const wasHealthy = relationalMirrorHealth.healthy;
   try {
-    const result = await dbCheckRelationalCountParity(RELATIONAL_WRITE_TENANTS);
+    const result = await dbCheckRelationalCountParity(getRelationalPrimaryTenantIds());
     if (!result) return;
     Object.assign(relationalMirrorHealth, result, { error: '' });
     if (!result.healthy) {
@@ -241,7 +238,7 @@ async function refreshRelationalContentHealth() {
   if (!isDbReady() || !RELATIONAL_DEEP_CHECK_CONFIGURED) return;
   const wasHealthy = relationalContentHealth.healthy;
   try {
-    const result = await dbCheckRelationalContentParity(RELATIONAL_DEEP_CHECK_TENANTS, RELATIONAL_WRITE_TENANTS);
+    const result = await dbCheckRelationalContentParity(RELATIONAL_DEEP_CHECK_TENANTS, getRelationalPrimaryTenantIds());
     if (!result) return;
     Object.assign(relationalContentHealth, result, { error: '' });
     if (!result.healthy) {
@@ -391,6 +388,7 @@ async function initializeData() {
     const dbConnected = await initDb();
     if (dbConnected) {
       await loadUsersFromDb();
+      for (const tenantId of await dbLoadRelationalPrimaryTenantIds()) registerRelationalPrimaryTenant(tenantId);
       await loadSessionsFromDb();
       await store.loadFromDb();
     }
@@ -1579,6 +1577,7 @@ async function handleSignup(req, res) {
     persona: userPersona,
     plan: 'trial',
     referredByTenantId: referrerTenant?.id || '',
+    storageMode: RELATIONAL_WRITE_NEW_TENANTS ? 'relational' : 'legacy',
   });
 
   if (tenantResult.error) {
@@ -1719,7 +1718,13 @@ function handleMe(req, res) {
 
 async function handleCreateTenant(req, res, user) {
   const { name, slug } = await readJson(req);
-  const result = createTenant({ name, slug, plan: isInternalOwner(user) ? ownerPlanId : 'trial', ownerUserId: user.id });
+  const result = createTenant({
+    name,
+    slug,
+    plan: isInternalOwner(user) ? ownerPlanId : 'trial',
+    ownerUserId: user.id,
+    storageMode: RELATIONAL_WRITE_NEW_TENANTS ? 'relational' : 'legacy',
+  });
   if (result.error) {
     return sendJson(res, 409, { error: result.error });
   }
@@ -1855,7 +1860,8 @@ function getHealthPayload(includeDetails = false) {
     relationalContentWorkspaceCount: relationalContentHealth.workspaceCount,
     relationalContentMismatchCount: relationalContentHealth.mismatchCount,
     relationalContentCheckedAt: relationalContentHealth.checkedAt,
-    relationalPrimaryWorkspaceCount: RELATIONAL_WRITE_TENANTS.length,
+    relationalPrimaryWorkspaceCount: getRelationalPrimaryTenantIds().length,
+    relationalNewWorkspaceDefault: RELATIONAL_WRITE_NEW_TENANTS,
   };
   const payload = {
     ok: true,
