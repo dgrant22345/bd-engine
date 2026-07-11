@@ -3021,6 +3021,7 @@ export function createStore() {
 
         if (settled.status === 'rejected') {
           const message = settled.reason?.message || 'Unknown ATS fetch failure';
+          const permanentlyMissing = /HTTP\s+(404|410)\b/i.test(message);
           errors.push({ configId: config.id, companyName: config.companyName, atsType, error: message });
           importItems.push({
             entityType: 'board_config',
@@ -3032,6 +3033,13 @@ export function createStore() {
           });
           config.lastImportStatus = 'failed';
           config.lastImportError = message;
+          if (permanentlyMissing) {
+            config.active = false;
+            config.discoveryStatus = 'needs_review';
+            config.reviewStatus = 'pending';
+            config.confidenceBand = 'unresolved';
+            warnings.push(`${config.companyName} returned ${message.match(/HTTP\s+\d+/i)?.[0] || 'a permanent not-found response'} and was moved back to ATS review.`);
+          }
           config.updatedAt = now();
           continue;
         }

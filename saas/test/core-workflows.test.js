@@ -283,3 +283,36 @@ test('name-only ATS matches require review before jobs can import', async () => 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('permanently missing ATS boards return to review after import', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-missing-board';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Closed Board Inc' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Closed Board Inc',
+    atsType: 'lever',
+    boardId: 'closed-board',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('', { status: 404 });
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.errors, 1);
+    assert.match(result.warnings.join(' '), /moved back to ATS review/i);
+    const config = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(config.active, false);
+    assert.equal(config.discoveryStatus, 'needs_review');
+    assert.equal(config.reviewStatus, 'pending');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
