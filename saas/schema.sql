@@ -149,9 +149,22 @@ create table import_runs (
   finished_at timestamptz
 );
 
+create table background_jobs (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  type text not null default '',
+  status text not null default 'queued',
+  snapshot jsonb not null default '{}',
+  queued_at timestamptz,
+  started_at timestamptz,
+  finished_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 create index accounts_tenant_status_idx on accounts (tenant_id, status);
 create index contacts_tenant_account_idx on contacts (tenant_id, account_id);
 create index jobs_tenant_account_idx on jobs (tenant_id, account_id);
 create index activities_tenant_account_idx on activities (tenant_id, account_id, occurred_at desc);
 create index followups_tenant_due_idx on followups (tenant_id, status, due_at);
+create index background_jobs_tenant_updated_idx on background_jobs (tenant_id, updated_at desc, id);
 

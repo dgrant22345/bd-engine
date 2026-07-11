@@ -28,6 +28,7 @@ const TABLE_ORDER = [
   'import_runs',
   'import_run_items',
   'audit_log',
+  'background_jobs',
   'schema_migrations',
   'analytics_events',
   'sessions',
@@ -44,6 +45,7 @@ const GENERIC_ID_TABLES = new Set([
   'import_runs',
   'import_run_items',
   'audit_log',
+  'background_jobs',
   'schema_migrations',
 ]);
 

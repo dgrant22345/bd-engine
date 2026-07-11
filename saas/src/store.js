@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { dbSaveTenantData, dbLoadAllTenantData, dbRecordAuditLog, dbRecordImportRun, isDbEnabled } from './db.js';
+import { dbLoadAllTenantData, dbLoadBackgroundJob, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
 
@@ -931,6 +931,16 @@ activities.forEach(a => getTenantArray(activitiesByTenant, a.tenantId).push(a));
 tasks.forEach(t => getTenantArray(tasksByTenant, t.tenantId).push(t));
 
 const backgroundJobs = new Map();
+const persistedBackgroundJobSnapshots = new Map();
+
+async function persistBackgroundJob(job) {
+  if (!job?.id || !job.tenantId) return false;
+  const snapshot = JSON.stringify(job);
+  if (persistedBackgroundJobSnapshots.get(job.id) === snapshot) return true;
+  const result = await dbSaveBackgroundJob(job.tenantId, job);
+  if (result.recorded) persistedBackgroundJobSnapshots.set(job.id, snapshot);
+  return result.recorded;
+}
 
 function trackBackgroundJob(tenantId, job) {
   Object.defineProperty(job, 'tenantId', {
@@ -940,8 +950,32 @@ function trackBackgroundJob(tenantId, job) {
     writable: false,
   });
   backgroundJobs.set(job.id, job);
+  persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', error.message));
   return job;
 }
+
+function missingBackgroundJob(jobId) {
+  return {
+    id: jobId,
+    type: 'unknown',
+    status: 'failed',
+    summary: 'Job not found',
+    progressMessage: 'Job not found',
+    errorMessage: 'This operation is no longer available. Please run it again.',
+    queuedAt: null,
+    startedAt: null,
+    finishedAt: now(),
+    recordsAffected: 0,
+    result: null,
+  };
+}
+
+const backgroundJobSnapshotTimer = setInterval(() => {
+  for (const job of backgroundJobs.values()) {
+    persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', error.message));
+  }
+}, 2 * 1000);
+backgroundJobSnapshotTimer.unref?.();
 
 function getTrackedJobCountFromResult(result = {}) {
   return Number(result.stats?.activeTrackedJobs || result.stats?.imported || result.importRun?.stats?.imported || 0);
@@ -1005,6 +1039,9 @@ export async function flushPendingSaves() {
   await Promise.all(tenantIds.map((tenantId) =>
     saveTenantNow(tenantId).catch(err => console.error('Flush persist error:', tenantId, err.message))
   ));
+  await Promise.all([...backgroundJobs.values()].map((job) =>
+    persistBackgroundJob(job).catch((err) => console.error('Flush background job error:', job.id, err.message))
+  ));
   return tenantIds.length;
 }
 
@@ -1066,6 +1103,7 @@ function pruneFinishedBackgroundJobs() {
     const finishedAt = new Date(job.finishedAt || job.updatedAt || 0).getTime();
     if (!Number.isFinite(finishedAt) || finishedAt > cutoff) continue;
     backgroundJobs.delete(jobId);
+    persistedBackgroundJobSnapshots.delete(jobId);
     pruned += 1;
   }
   return pruned;
@@ -3395,24 +3433,27 @@ export function createStore() {
       return { ok: true, jobId, job };
     },
 
-    getBackgroundJob(tenantId, jobId) {
+    async getBackgroundJob(tenantId, jobId) {
       assertTenant(tenantId);
       const job = backgroundJobs.get(jobId);
       // Never invent a fake "completed" job for an unknown id — report the
       // truth so the UI shows a failure instead of a phantom success.
-      return job?.tenantId === tenantId ? job : {
-        id: jobId,
-        type: 'unknown',
-        status: 'failed',
-        summary: 'Job not found',
-        progressMessage: 'Job not found',
-        errorMessage: 'This job is no longer available. It may have been lost during a server restart — try running the action again.',
-        queuedAt: null,
-        startedAt: null,
-        finishedAt: now(),
-        recordsAffected: 0,
-        result: null,
-      };
+      if (job?.tenantId === tenantId) {
+        await persistBackgroundJob(job);
+        return job;
+      }
+      const persisted = await dbLoadBackgroundJob(tenantId, jobId);
+      if (!persisted) return missingBackgroundJob(jobId);
+      if (persisted.status === 'queued' || persisted.status === 'running') {
+        persisted.status = 'failed';
+        persisted.finishedAt = now();
+        persisted.updatedAt = persisted.finishedAt;
+        persisted.progressMessage = 'Interrupted by a service restart';
+        persisted.errorMessage = 'This operation was interrupted by a deployment or restart. Your saved workspace data is safe; please run the operation again.';
+      }
+      trackBackgroundJob(tenantId, persisted);
+      await persistBackgroundJob(persisted);
+      return persisted;
     },
 
     // ── Revenue Pipeline ──────────────────────────────────────────────────

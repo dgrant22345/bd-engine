@@ -32,6 +32,7 @@ const BASE_TABLES = [
   { name: 'import_runs', orderBy: 'tenant_id, started_at, id' },
   { name: 'import_run_items', orderBy: 'tenant_id, id' },
   { name: 'audit_log', orderBy: 'tenant_id, id' },
+  { name: 'background_jobs', orderBy: 'tenant_id, updated_at, id' },
   { name: 'schema_migrations', orderBy: 'id' },
   { name: 'analytics_events', orderBy: 'id' },
 ];

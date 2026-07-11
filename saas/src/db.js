@@ -488,6 +488,24 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260711_background_job_snapshots', 'Persist tenant-scoped background job status', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS background_jobs (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'queued',
+          snapshot JSONB NOT NULL DEFAULT '{}',
+          queued_at TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL DEFAULT '',
+          finished_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS background_jobs_tenant_updated_idx
+          ON background_jobs (tenant_id, updated_at DESC, id);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -805,6 +823,55 @@ export async function dbRecordAuditLog(entry = {}) {
   } catch (err) {
     console.error('DB: Failed to record audit log:', err.message);
     return { recorded: false, reason: err.message };
+  }
+}
+
+export async function dbSaveBackgroundJob(tenantId, job = {}) {
+  if (!dbReady || !tenantId || !job.id) return { recorded: false };
+  const updatedAt = job.updatedAt || job.finishedAt || job.startedAt || job.queuedAt || new Date().toISOString();
+  try {
+    await pool.query(
+      `INSERT INTO background_jobs (id, tenant_id, type, status, snapshot, queued_at, started_at, finished_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         type = EXCLUDED.type,
+         status = EXCLUDED.status,
+         snapshot = EXCLUDED.snapshot,
+         queued_at = EXCLUDED.queued_at,
+         started_at = EXCLUDED.started_at,
+         finished_at = EXCLUDED.finished_at,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        job.id,
+        tenantId,
+        job.type || '',
+        job.status || 'queued',
+        JSON.stringify(job),
+        job.queuedAt || '',
+        job.startedAt || '',
+        job.finishedAt || '',
+        updatedAt,
+      ]
+    );
+    return { recorded: true };
+  } catch (err) {
+    console.error('DB: Failed to save background job:', err.message);
+    return { recorded: false, reason: err.message };
+  }
+}
+
+export async function dbLoadBackgroundJob(tenantId, jobId) {
+  if (!dbReady || !tenantId || !jobId) return null;
+  try {
+    const result = await pool.query(
+      'SELECT snapshot FROM background_jobs WHERE tenant_id = $1 AND id = $2',
+      [tenantId, jobId]
+    );
+    return result.rows[0]?.snapshot || null;
+  } catch (err) {
+    console.error('DB: Failed to load background job:', err.message);
+    return null;
   }
 }
 
