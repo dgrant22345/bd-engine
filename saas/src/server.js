@@ -1721,6 +1721,7 @@ function getHealthPayload(includeDetails = false) {
     stripeMode: stripeStatus.mode,
     stripeMissing: stripeStatus.missing,
     emailConfigured: isEmailConfigured(),
+    errorAlertsConfigured: Boolean(ERROR_WEBHOOK),
   };
   const payload = {
     ok: true,

@@ -716,9 +716,8 @@
         </div>`;
       root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
       try {
-        const status = await api('/api/status');
+        const status = await api('/health');
         const checks = status.checks || {};
-        const metrics = status.metrics || {};
         const panel = root.querySelector('#status-panel');
         if (!panel) return;
         panel.innerHTML = `
@@ -727,9 +726,9 @@
             ${renderStatusCheck('Database', checks.databaseConfigured ? checks.databaseConnected : true, checks.databaseConfigured ? 'Configured' : 'In-memory mode')}
             ${renderStatusCheck('Stripe', checks.stripeCommercialReady, checks.stripeCommercialReady ? 'Live checkout ready' : (checks.stripeReady ? `Checkout is in ${checks.stripeMode || 'unknown'} mode` : `Missing ${(checks.stripeMissing || []).join(', ') || 'configuration'}`))}
             ${renderStatusCheck('Email', checks.emailConfigured, checks.emailConfigured ? 'Password reset emails ready' : 'Set RESEND_API_KEY and BD_EMAIL_FROM')}
-            ${renderStatusCheck('Requests', true, `${metrics.requestCount || 0} served`)}
+            ${renderStatusCheck('Error alerts', checks.errorAlertsConfigured, checks.errorAlertsConfigured ? 'External alerts connected' : 'Set BD_ERROR_WEBHOOK')}
           </div>
-          <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, metrics, lastError: status.lastError || null }, null, 2))}</pre>
+          <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, startedAt: status.startedAt, uptimeSeconds: status.uptimeSeconds }, null, 2))}</pre>
         `;
       } catch (err) {
         const panel = root.querySelector('#status-panel');
