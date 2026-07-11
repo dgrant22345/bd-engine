@@ -119,6 +119,7 @@ read and query canaries are controlled independently with:
 - `BD_RELATIONAL_SQL_JOB_TENANTS`
 - `BD_RELATIONAL_SQL_CONFIG_TENANTS`
 - `BD_RELATIONAL_USAGE_TENANTS`
+- `BD_RELATIONAL_DEEP_CHECK_TENANTS`
 
 Each accepts a comma-separated tenant ID list or `*`. A canary automatically
 falls back to the legacy source if count parity or the relational query fails.

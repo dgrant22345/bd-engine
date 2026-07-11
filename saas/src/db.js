@@ -1257,6 +1257,57 @@ export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays
   };
 }
 
+export async function dbCheckRelationalContentParity(tenantIds = []) {
+  if (!dbReady) return null;
+  const startedAt = Date.now();
+  const scoped = Array.isArray(tenantIds) ? tenantIds.filter(Boolean) : [];
+  const result = await pool.query(`
+    SELECT td.tenant_id
+    FROM tenant_data td
+    WHERE ($1::text[] = '{}'::text[] OR td.tenant_id = ANY($1::text[]))
+      AND (
+        EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN td.accounts ELSE '[]'::jsonb END) item
+          LEFT JOIN accounts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        ) OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.contacts) = 'array' THEN td.contacts ELSE '[]'::jsonb END) item
+          LEFT JOIN contacts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        ) OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.jobs) = 'array' THEN td.jobs ELSE '[]'::jsonb END) item
+          LEFT JOIN jobs r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        ) OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.configs) = 'array' THEN td.configs ELSE '[]'::jsonb END) item
+          LEFT JOIN board_configs r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        ) OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.activities) = 'array' THEN td.activities ELSE '[]'::jsonb END) item
+          LEFT JOIN activities r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        ) OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(td.tasks) = 'array' THEN td.tasks ELSE '[]'::jsonb END) item
+          LEFT JOIN tasks r ON r.tenant_id = td.tenant_id AND r.id = item->>'id'
+          WHERE r.id IS NULL OR r.raw IS DISTINCT FROM item
+        )
+      )
+    ORDER BY td.tenant_id
+  `, [scoped]);
+  const checkedResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM tenant_data WHERE ($1::text[] = '{}'::text[] OR tenant_id = ANY($1::text[]))`,
+    [scoped]
+  );
+  return {
+    healthy: result.rows.length === 0,
+    workspaceCount: Number(checkedResult.rows[0]?.total || 0),
+    mismatchCount: result.rows.length,
+    mismatchedTenantIds: result.rows.slice(0, 10).map((row) => row.tenant_id),
+    checkedAt: new Date().toISOString(),
+    queryMs: Date.now() - startedAt,
+  };
+}
+
 export async function dbFindPasswordResetToken(tokenHash) {
   if (!dbReady) return null;
   try {

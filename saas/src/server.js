@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalCountParity, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -49,6 +49,12 @@ const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
 const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
+const relationalDeepCheckValues = String(process.env.BD_RELATIONAL_DEEP_CHECK_TENANTS || process.env.BD_RELATIONAL_READ_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const RELATIONAL_DEEP_CHECK_TENANTS = relationalDeepCheckValues.includes('*') ? [] : relationalDeepCheckValues;
+const RELATIONAL_DEEP_CHECK_CONFIGURED = relationalDeepCheckValues.length > 0;
 const passwordResetTokens = new Map();
 const MAX_RATE_BUCKETS = Math.max(1000, Number(process.env.BD_MAX_RATE_BUCKETS) || 10000);
 const MAX_RESET_TOKEN_CACHE = Math.max(100, Number(process.env.BD_MAX_RESET_TOKEN_CACHE) || 5000);
@@ -169,6 +175,14 @@ const relationalMirrorHealth = {
   queryMs: 0,
   error: '',
 };
+const relationalContentHealth = {
+  healthy: null,
+  workspaceCount: 0,
+  mismatchCount: 0,
+  checkedAt: '',
+  queryMs: 0,
+  error: '',
+};
 
 // ── Error alerting ───────────────────────────────────────────────────────────
 // Optional: set BD_ERROR_WEBHOOK to a Slack/Discord/generic incoming-webhook URL
@@ -219,6 +233,33 @@ function startRelationalMirrorMonitor(startupPromise) {
   timer.unref?.();
 }
 
+async function refreshRelationalContentHealth() {
+  if (!isDbReady() || !RELATIONAL_DEEP_CHECK_CONFIGURED) return;
+  const wasHealthy = relationalContentHealth.healthy;
+  try {
+    const result = await dbCheckRelationalContentParity(RELATIONAL_DEEP_CHECK_TENANTS);
+    if (!result) return;
+    Object.assign(relationalContentHealth, result, { error: '' });
+    if (!result.healthy) {
+      console.error(`Relational mirror content drift: ${result.mismatchCount}/${result.workspaceCount} canary workspaces mismatched.`);
+      if (wasHealthy !== false) {
+        reportServerError(503, { method: 'MONITOR', url: '/relational-content-parity' }, new Error('Relational mirror content drift detected'));
+      }
+    }
+  } catch (error) {
+    relationalContentHealth.healthy = false;
+    relationalContentHealth.checkedAt = new Date().toISOString();
+    relationalContentHealth.error = 'Deep parity check unavailable';
+    console.error('Relational content health check failed:', error.message);
+  }
+}
+
+function startRelationalContentMonitor(startupPromise) {
+  startupPromise.then(() => refreshRelationalContentHealth()).catch(() => {});
+  const timer = setInterval(refreshRelationalContentHealth, 60 * 60 * 1000);
+  timer.unref?.();
+}
+
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -237,6 +278,7 @@ const mimeTypes = {
 async function startServer() {
   const startupPromise = initializeData();
   startRelationalMirrorMonitor(startupPromise);
+  startRelationalContentMonitor(startupPromise);
   startOperationalCleanup(startupPromise);
 
   const server = createServer(async (req, res) => {
@@ -1802,6 +1844,11 @@ function getHealthPayload(includeDetails = false) {
     relationalMirrorWorkspaceCount: relationalMirrorHealth.workspaceCount,
     relationalMirrorMismatchCount: relationalMirrorHealth.mismatchCount,
     relationalMirrorCheckedAt: relationalMirrorHealth.checkedAt,
+    relationalContentConfigured: RELATIONAL_DEEP_CHECK_CONFIGURED,
+    relationalContentHealthy: relationalContentHealth.healthy,
+    relationalContentWorkspaceCount: relationalContentHealth.workspaceCount,
+    relationalContentMismatchCount: relationalContentHealth.mismatchCount,
+    relationalContentCheckedAt: relationalContentHealth.checkedAt,
   };
   const payload = {
     ok: true,
