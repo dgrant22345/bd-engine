@@ -8,6 +8,7 @@ await check('health endpoint', async () => {
   const body = await getJson('/health');
   assert(body.ok === true, 'health did not return ok=true');
   assert(typeof body.checks?.errorAlertsConfigured === 'boolean', 'health omitted error alert readiness');
+  assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalMirrorHealthy'), 'health omitted relational mirror readiness');
 });
 
 await check('protected API rejects anonymous requests', async () => {

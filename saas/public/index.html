@@ -727,6 +727,7 @@
             ${renderStatusCheck('Stripe', checks.stripeCommercialReady, checks.stripeCommercialReady ? 'Live checkout ready' : (checks.stripeReady ? `Checkout is in ${checks.stripeMode || 'unknown'} mode` : `Missing ${(checks.stripeMissing || []).join(', ') || 'configuration'}`))}
             ${renderStatusCheck('Email', checks.emailConfigured, checks.emailConfigured ? 'Password reset emails ready' : 'Set RESEND_API_KEY and BD_EMAIL_FROM')}
             ${renderStatusCheck('Error alerts', checks.errorAlertsConfigured, checks.errorAlertsConfigured ? 'External alerts connected' : 'Set BD_ERROR_WEBHOOK')}
+            ${renderStatusCheck('Data mirror', !checks.relationalMirrorConfigured || checks.relationalMirrorHealthy !== false, checks.relationalMirrorConfigured ? (checks.relationalMirrorCheckedAt ? `${checks.relationalMirrorWorkspaceCount || 0} workspaces checked; ${checks.relationalMirrorMismatchCount || 0} mismatches` : 'Initial check pending') : 'Not configured')}
           </div>
           <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, startedAt: status.startedAt, uptimeSeconds: status.uptimeSeconds }, null, 2))}</pre>
         `;

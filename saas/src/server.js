@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalCountParity, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -122,6 +122,14 @@ const serverStats = {
   slowestRequest: null,
   lastError: null,
 };
+const relationalMirrorHealth = {
+  healthy: null,
+  workspaceCount: 0,
+  mismatchCount: 0,
+  checkedAt: '',
+  queryMs: 0,
+  error: '',
+};
 
 // ── Error alerting ───────────────────────────────────────────────────────────
 // Optional: set BD_ERROR_WEBHOOK to a Slack/Discord/generic incoming-webhook URL
@@ -145,6 +153,33 @@ function reportServerError(status, req, error) {
   }).catch(() => {});
 }
 
+async function refreshRelationalMirrorHealth() {
+  if (!isDbReady()) return;
+  const wasHealthy = relationalMirrorHealth.healthy;
+  try {
+    const result = await dbCheckRelationalCountParity();
+    if (!result) return;
+    Object.assign(relationalMirrorHealth, result, { error: '' });
+    if (!result.healthy) {
+      console.error(`Relational mirror count drift: ${result.mismatchCount}/${result.workspaceCount} workspaces mismatched.`);
+      if (wasHealthy !== false) {
+        reportServerError(503, { method: 'MONITOR', url: '/relational-parity' }, new Error('Relational mirror count drift detected'));
+      }
+    }
+  } catch (error) {
+    relationalMirrorHealth.healthy = false;
+    relationalMirrorHealth.checkedAt = new Date().toISOString();
+    relationalMirrorHealth.error = 'Parity check unavailable';
+    console.error('Relational mirror health check failed:', error.message);
+  }
+}
+
+function startRelationalMirrorMonitor(startupPromise) {
+  startupPromise.then(() => refreshRelationalMirrorHealth()).catch(() => {});
+  const timer = setInterval(refreshRelationalMirrorHealth, 5 * 60 * 1000);
+  timer.unref?.();
+}
+
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -162,6 +197,7 @@ const mimeTypes = {
 
 async function startServer() {
   const startupPromise = initializeData();
+  startRelationalMirrorMonitor(startupPromise);
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
@@ -1722,6 +1758,11 @@ function getHealthPayload(includeDetails = false) {
     stripeMissing: stripeStatus.missing,
     emailConfigured: isEmailConfigured(),
     errorAlertsConfigured: Boolean(ERROR_WEBHOOK),
+    relationalMirrorConfigured: isDbEnabled(),
+    relationalMirrorHealthy: relationalMirrorHealth.healthy,
+    relationalMirrorWorkspaceCount: relationalMirrorHealth.workspaceCount,
+    relationalMirrorMismatchCount: relationalMirrorHealth.mismatchCount,
+    relationalMirrorCheckedAt: relationalMirrorHealth.checkedAt,
   };
   const payload = {
     ok: true,

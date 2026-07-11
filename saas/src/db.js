@@ -1208,6 +1208,38 @@ export async function dbSavePasswordResetToken(record) {
   }
 }
 
+export async function dbCheckRelationalCountParity() {
+  if (!dbReady) return null;
+  const startedAt = Date.now();
+  const result = await pool.query(`
+    SELECT td.tenant_id
+    FROM tenant_data td
+    WHERE
+      CASE WHEN jsonb_typeof(td.accounts) = 'array' THEN jsonb_array_length(td.accounts) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM accounts r WHERE r.tenant_id = td.tenant_id)
+      OR CASE WHEN jsonb_typeof(td.contacts) = 'array' THEN jsonb_array_length(td.contacts) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM contacts r WHERE r.tenant_id = td.tenant_id)
+      OR CASE WHEN jsonb_typeof(td.jobs) = 'array' THEN jsonb_array_length(td.jobs) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM jobs r WHERE r.tenant_id = td.tenant_id)
+      OR CASE WHEN jsonb_typeof(td.configs) = 'array' THEN jsonb_array_length(td.configs) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM board_configs r WHERE r.tenant_id = td.tenant_id)
+      OR CASE WHEN jsonb_typeof(td.activities) = 'array' THEN jsonb_array_length(td.activities) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM activities r WHERE r.tenant_id = td.tenant_id)
+      OR CASE WHEN jsonb_typeof(td.tasks) = 'array' THEN jsonb_array_length(td.tasks) ELSE 0 END
+        <> (SELECT COUNT(*)::int FROM tasks r WHERE r.tenant_id = td.tenant_id)
+    ORDER BY td.tenant_id
+  `);
+  const totalResult = await pool.query('SELECT COUNT(*)::int AS total FROM tenant_data');
+  return {
+    healthy: result.rows.length === 0,
+    workspaceCount: Number(totalResult.rows[0]?.total || 0),
+    mismatchCount: result.rows.length,
+    mismatchedTenantIds: result.rows.slice(0, 10).map((row) => row.tenant_id),
+    checkedAt: new Date().toISOString(),
+    queryMs: Date.now() - startedAt,
+  };
+}
+
 export async function dbFindPasswordResetToken(tokenHash) {
   if (!dbReady) return null;
   try {
