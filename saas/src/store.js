@@ -2449,6 +2449,7 @@ export function createStore() {
       updateProgress(12, 'loaded', 'Loaded workspace data.');
       const tenantAccounts = accountsForTenant(tenantId).slice(0, accountLimit === -1 ? undefined : accountLimit);
       let tenantConfigs = boardConfigs.filter((item) => item.tenantId === tenantId);
+      const inferredDomainsByAccount = buildInferredDomainMap(tenantId);
       const warnings = [];
 
       if (accountLimit !== -1 && accountsForTenant(tenantId).length > accountLimit) {
@@ -2463,7 +2464,9 @@ export function createStore() {
           warnings.push(`ATS config creation stopped at the ${jobBoardLimit} board limit for the ${planName} plan.`);
           break;
         }
-        const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
+        const domain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
+          || inferredDomainsByAccount.get(item.id)
+          || '';
         const config = normalizeConfigPatch({
           id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           tenantId,
@@ -2495,14 +2498,16 @@ export function createStore() {
       let enriched = 0;
       const enrichStartedAt = performance.now();
       for (const item of tenantAccounts) {
-        const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
+        const domain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
+          || inferredDomainsByAccount.get(item.id)
+          || '';
         if (domain && !item.domain) item.domain = domain;
         if (domain && !item.canonicalDomain) item.canonicalDomain = domain;
         if (domain && !item.careersUrl) item.careersUrl = `https://${domain.replace(/^https?:\/\//, '')}/careers`;
         item.enrichmentStatus = domain ? 'enriched' : 'needs_review';
         item.enrichmentConfidence = domain ? 'high' : 'medium';
         item.updatedAt = now();
-        enriched++;
+        if (domain) enriched++;
       }
       timings.enrichmentMs = Math.round(performance.now() - enrichStartedAt);
       updateProgress(35, 'enrichment', `Enriched ${enriched}/${tenantAccounts.length} accounts.`);
@@ -2662,9 +2667,6 @@ export function createStore() {
       const timings = {};
       const warnings = [];
       const errors = [];
-      const importStartedAt = now();
-      const importRunId = `imp-jobs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const importItems = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
       const requestedLimitOption = Number(options.limit || 0);
@@ -2683,7 +2685,8 @@ export function createStore() {
         if (createdConfigs + tenantConfigs.length >= (jobBoardLimit === -1 ? Infinity : jobBoardLimit)) break;
         const normalizedName = normalizeKey(item.normalizedName || item.displayName);
         if (!normalizedName || existingConfigNames.has(normalizedName)) continue;
-        const inferredDomain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id);
+        const inferredDomain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
+          || inferDomainFromContacts(tenantId, item.id);
         const config = normalizeConfigPatch({
           id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           tenantId,
@@ -2734,7 +2737,8 @@ export function createStore() {
         });
       }
       const prioritizeStartedAt = performance.now();
-      candidates = prioritizeDiscoveryCandidates(candidates).slice(0, limit);
+      const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+      candidates = prioritizeDiscoveryCandidates(candidates, accountsById).slice(0, limit);
       timings.candidatePrioritizationMs = Math.round(performance.now() - prioritizeStartedAt);
 
       let checked = 0;
@@ -2898,6 +2902,9 @@ export function createStore() {
       const timings = {};
       const warnings = [];
       const errors = [];
+      const importStartedAt = now();
+      const importRunId = `imp-jobs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const importItems = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
 
@@ -3197,7 +3204,8 @@ export function createStore() {
       const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
       let totalUpdated = 0;
-      const domain = item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, accountId);
+      const domain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
+        || inferDomainFromContacts(tenantId, accountId);
       if (domain && !item.domain) { item.domain = domain; totalUpdated++; }
       if (domain && !item.canonicalDomain) { item.canonicalDomain = domain; totalUpdated++; }
       if (domain && !item.careersUrl) {
@@ -3457,6 +3465,8 @@ export function createStore() {
           for (const item of tenantAccounts) {
             const normalizedName = normalizeKey(item.normalizedName || item.displayName);
             if (!normalizedName || existingNames.has(normalizedName)) continue;
+            const domain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
+              || inferDomainFromContacts(tenantId, item.id);
             const config = normalizeConfigPatch({
               id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               tenantId,
@@ -3466,12 +3476,12 @@ export function createStore() {
               atsType: 'unknown',
               ats: 'unknown',
               boardId: '',
-              domain: item.domain || item.canonicalDomain || inferDomainFromContacts(tenantId, item.id),
-              careersUrl: item.careersUrl || '',
+              domain,
+              careersUrl: getUsableCareerUrl(item.careersUrl, item.displayName) || '',
               active: false,
               discoveryStatus: 'needs_review',
               reviewStatus: 'pending',
-              confidenceBand: item.domain || item.canonicalDomain || item.careersUrl ? 'medium' : 'unresolved',
+              confidenceBand: domain || getUsableCareerUrl(item.careersUrl, item.displayName) ? 'medium' : 'unresolved',
               source: 'configs_sync',
               createdAt: now(),
               updatedAt: now(),
@@ -4513,10 +4523,61 @@ function indexContactDedupeKeys(map, contactItem, companyKey = '') {
   }
 }
 
+const PERSONAL_EMAIL_DOMAIN_LABELS = new Set([
+  'aol', 'fastmail', 'gmail', 'gmx', 'hey', 'hotmail', 'icloud', 'live', 'mac',
+  'mail', 'me', 'msn', 'outlook', 'pm', 'proton', 'protonmail', 'webmail',
+  'yahoo', 'yandex', 'zoho',
+]);
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'bell.net', 'email.com', 'googlemail.com', 'shaw.ca', 'usa.net',
+]);
+
+function getUsableCompanyDomain(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    const emailHost = raw.includes('@') ? raw.split('@').pop() : raw;
+    const parsed = new URL(/^https?:\/\//i.test(emailHost) ? emailHost : `https://${emailHost}`);
+    const host = parsed.hostname.replace(/^www\./i, '').replace(/\.$/, '');
+    if (!host || !host.includes('.') || host === 'localhost' || /^\d+(?:\.\d+){3}$/.test(host)) return '';
+    const firstLabel = host.split('.')[0];
+    if (PERSONAL_EMAIL_DOMAINS.has(host) || PERSONAL_EMAIL_DOMAIN_LABELS.has(firstLabel)) return '';
+    return host;
+  } catch {
+    return '';
+  }
+}
+
+function getUsableCareerUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!detectAtsTypeFromUrl(parsed.toString()) && !getUsableCompanyDomain(parsed.hostname)) return '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
 function inferDomainFromContacts(tenantId, accountId) {
-  const contactItem = contacts.find((item) => item.tenantId === tenantId && item.accountId === accountId && item.email);
-  const domain = contactItem?.email?.split('@')[1] || '';
-  return domain && !domain.match(/gmail|yahoo|hotmail|outlook|icloud|aol|mail/i) ? domain : '';
+  for (const contactItem of contacts) {
+    if (contactItem.tenantId !== tenantId || contactItem.accountId !== accountId || !contactItem.email) continue;
+    const domain = getUsableCompanyDomain(contactItem.email);
+    if (domain) return domain;
+  }
+  return '';
+}
+
+function buildInferredDomainMap(tenantId) {
+  const domainsByAccount = new Map();
+  for (const contactItem of contacts) {
+    if (contactItem.tenantId !== tenantId || !contactItem.accountId || domainsByAccount.has(contactItem.accountId)) continue;
+    const domain = getUsableCompanyDomain(contactItem.email);
+    if (domain) domainsByAccount.set(contactItem.accountId, domain);
+  }
+  return domainsByAccount;
 }
 
 function daysSince(value) {
@@ -4580,16 +4641,33 @@ function getConfigAtsType(config = {}) {
   return detectAtsTypeFromUrl(getConfigAtsUrl(config));
 }
 
-function prioritizeDiscoveryCandidates(configs = []) {
-  return [...configs].sort((a, b) => getDiscoveryCandidateScore(b) - getDiscoveryCandidateScore(a));
+function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map()) {
+  return [...configs].sort((a, b) => {
+    const scoreDelta = getDiscoveryCandidateScore(b, accountsById.get(b.accountId))
+      - getDiscoveryCandidateScore(a, accountsById.get(a.accountId));
+    if (scoreDelta) return scoreDelta;
+    const checkedDelta = String(a.lastDiscoveryCheckedAt || '').localeCompare(String(b.lastDiscoveryCheckedAt || ''));
+    if (checkedDelta) return checkedDelta;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
-function getDiscoveryCandidateScore(config = {}) {
+function getDiscoveryCandidateScore(config = {}, accountItem = null) {
   let score = 0;
   if (getConfigAtsUrl(config)) score += 1000;
-  if (config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url) score += 500;
-  if (config.domain || config.canonicalDomain) score += 150;
+  if (getConfigUrlCandidates(config).some((value) => getUsableCareerUrl(value))) score += 500;
+  if (getUsableCompanyDomain(config.domain || config.canonicalDomain)) score += 150;
+  if (accountItem) {
+    score += Math.min(300, Math.max(0, Number(accountItem.targetScore || accountItem.dailyScore || 0)) * 3);
+    score += Math.min(100, Math.max(0, Number(accountItem.connectionCount || accountItem.contactCount || 0)) * 2);
+  }
   if (!config.lastDiscoveryCheckedAt) score += 80;
+  const lastCheckedMs = Date.parse(config.lastDiscoveryCheckedAt || '');
+  if (Number.isFinite(lastCheckedMs)) {
+    const ageMs = Date.now() - lastCheckedMs;
+    if (ageMs < 24 * 60 * 60 * 1000) score -= 350;
+    else if (ageMs < 7 * 24 * 60 * 60 * 1000) score -= 100;
+  }
   const status = normalizeKey(config.discoveryStatus || '');
   if (status === 'needs_review') score += 50;
   if (status === 'unresolved') score += 25;
@@ -4905,9 +4983,22 @@ async function fetchWorkdayJobs(config) {
 }
 
 async function fetchBamboohrJobs(config, boardId) {
-  const url = config.apiUrl || `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
-  const content = await fetchText(url);
-  return { jobs: parseBamboohrJobs(content) };
+  const url = getBambooCareersApiUrl(config, boardId);
+  const payload = await fetchJson(url);
+  return { jobs: firstArray(payload?.result, payload?.jobs, payload) };
+}
+
+function getBambooCareersApiUrl(config = {}, boardId = '') {
+  const bambooUrl = getConfigUrlCandidates(config).find((value) => /\.bamboohr\.com/i.test(value));
+  if (bambooUrl) {
+    try {
+      const parsed = new URL(bambooUrl);
+      return `${parsed.origin}/careers/list`;
+    } catch {
+      // Fall through to the board subdomain.
+    }
+  }
+  return `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
 }
 
 async function fetchStaticCareersJobs(config) {
@@ -5039,16 +5130,23 @@ function buildBoardCandidates(config) {
   const candidates = [];
   const add = (value) => {
     const cleaned = String(value || '').trim().toLowerCase();
-    if (cleaned && !candidates.includes(cleaned)) candidates.push(cleaned);
+    if (!cleaned) return;
+    if (!candidates.includes(cleaned)) candidates.push(cleaned);
+    const compact = cleaned.replace(/[^a-z0-9]/g, '');
+    if (compact && compact !== cleaned && !candidates.includes(compact)) candidates.push(compact);
   };
   const directBoardId = getConfigBoardId(config);
   if (!['unknown', 'n/a', 'none'].includes(normalizeKey(directBoardId))) add(directBoardId);
-  const domain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  const domain = getUsableCompanyDomain(config.domain || config.canonicalDomain);
   const domainRoot = domain.split('.')[0] || '';
   add(domainRoot);
-  add(normalizeKey(config.companyName).replace(/[^a-z0-9]/g, ''));
-  add(normalizeKey(config.companyName).replace(/\b(inc|incorporated|corp|corporation|ltd|llc|co|company|technologies|technology|systems|solutions|group)\b/g, '').replace(/[^a-z0-9]/g, ''));
-  return candidates.filter((value) => value.length >= 2);
+  const companyName = normalizeKey(config.companyName);
+  add(companyName);
+  add(companyName.replace(/\([^)]*\)/g, ''));
+  add(companyName.replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|international)\b/g, ''));
+  const acronym = String(config.companyName || '').match(/\(([A-Za-z0-9-]{2,12})\)/)?.[1];
+  add(acronym);
+  return candidates.filter((value) => value.length >= 2).slice(0, 5);
 }
 
 async function discoverAtsBoardFromCareersPages(config) {
@@ -5085,11 +5183,12 @@ async function discoverAtsBoardFromCareersPages(config) {
 // to reach their careers page and detect the ATS. Skips names too short/generic
 // to yield a meaningful domain.
 function guessDomainsFromName(companyName) {
+  const literalDomain = getUsableCompanyDomain(companyName);
   const slug = normalizeKey(companyName)
     .replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|the|a|of|and)\b/g, '')
     .replace(/[^a-z0-9]/g, '');
-  if (slug.length < 3) return [];
-  return [`${slug}.com`, `${slug}.ca`, `${slug}.io`];
+  if (slug.length < 3) return literalDomain ? [literalDomain] : [];
+  return [literalDomain, `${slug}.com`, `${slug}.ca`, `${slug}.io`].filter(Boolean);
 }
 
 function buildCareerPageUrls(config = {}) {
@@ -5106,8 +5205,9 @@ function buildCareerPageUrls(config = {}) {
       // Ignore malformed URLs.
     }
   };
-  add(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
-  const knownDomain = String(config.domain || config.canonicalDomain || '').replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+  const directCareerUrl = getUsableCareerUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
+  add(directCareerUrl);
+  const knownDomain = getUsableCompanyDomain(config.domain || config.canonicalDomain);
   const domains = knownDomain ? [knownDomain] : guessDomainsFromName(config.companyName);
   // Companies host careers on both paths (/careers) and subdomains
   // (careers.co, jobs.co) — measured that ~half of loadable sites hid the ATS
@@ -5435,14 +5535,22 @@ async function probeAtsUrl(config, atsUrl) {
     };
   }
   if (atsType === 'bamboohr') {
-    return {
-      atsType,
-      boardId,
-      apiUrl: atsUrl,
-      resolvedBoardUrl: atsUrl,
-      jobCount: 0,
-      method: 'careers_page_link',
-    };
+    const apiUrl = getBambooCareersApiUrl(tempConfig, boardId);
+    try {
+      const payload = await fetchJson(apiUrl, 8000);
+      const jobs = firstArray(payload?.result, payload?.jobs, payload);
+      if (!jobs.length) return null;
+      return {
+        atsType,
+        boardId,
+        apiUrl,
+        resolvedBoardUrl: apiUrl.replace(/\/careers\/list\/?$/i, '/careers'),
+        jobCount: jobs.length,
+        method: 'careers_page_link',
+      };
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -5676,11 +5784,14 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     };
   }
   if (atsType === 'bamboohr') {
-    const title = raw.title || raw.jobTitle || raw.name || '';
+    const title = raw.title || raw.jobTitle || raw.jobOpeningName || raw.name || '';
     if (!title) return null;
-    const location = [raw.location?.city, raw.location?.state, raw.location?.country].filter(Boolean).join(', ') || raw.location || '';
+    const location = [raw.location?.city, raw.location?.state || raw.location?.province, raw.location?.country].filter(Boolean).join(', ') || (typeof raw.location === 'string' ? raw.location : '');
     const postedAt = raw.postedDate || raw.createdDate || raw.datePosted || retrievedAt;
     const jobId = raw.id || raw.jobId || raw.requisitionId || title;
+    const bambooApiUrl = getBambooCareersApiUrl(config, getConfigBoardId(config));
+    const jobUrl = raw.url || raw.jobUrl || raw.applyUrl
+      || bambooApiUrl.replace(/\/careers\/list\/?$/i, `/careers/${encodeURIComponent(jobId)}`);
     return {
       tenantId: config.tenantId,
       accountId,
@@ -5688,14 +5799,14 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       title,
       companyName,
       location,
-      department: raw.department || '',
-      employmentType: raw.employmentType || raw.type || '',
+      department: raw.department || raw.departmentLabel || '',
+      employmentType: raw.employmentType || raw.employmentStatusLabel || raw.type || '',
       atsType,
       source: 'BambooHR',
       jobId: String(jobId),
       naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
-      jobUrl: raw.url || raw.jobUrl || raw.applyUrl || '',
-      url: raw.url || raw.jobUrl || raw.applyUrl || '',
+      jobUrl,
+      url: jobUrl,
       postedAt,
       retrievedAt,
       importedAt: retrievedAt,
