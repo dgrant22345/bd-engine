@@ -28,7 +28,12 @@ async function main() {
   const jobQueryStartedAt = Date.now();
   const jobPage = await store.findJobs(tenantId, { page: 1, pageSize: 20, active: 'true' });
   const jobQueryMs = Date.now() - jobQueryStartedAt;
+  const configQueryStartedAt = Date.now();
+  const configPage = await store.findConfigs(tenantId, { page: 1, pageSize: 20 });
+  const configQueryMs = Date.now() - configQueryStartedAt;
+  const usageStartedAt = Date.now();
   const usage = await store.getUsageCounts(tenantId);
+  const usageQueryMs = Date.now() - usageStartedAt;
   console.log(JSON.stringify({
     ok: true,
     tenantId,
@@ -45,6 +50,10 @@ async function main() {
     jobPageTotal: jobPage.total,
     jobPageItems: jobPage.items.length,
     jobQueryMs,
+    configPageTotal: configPage.total,
+    configPageItems: configPage.items.length,
+    configQueryMs,
+    usageQueryMs,
     elapsedMs: Date.now() - startedAt,
   }));
 }

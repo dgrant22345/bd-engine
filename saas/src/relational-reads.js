@@ -63,6 +63,24 @@ export async function getTenantRelationalStats(tenantId) {
   return result?.rows?.[0] || null;
 }
 
+export async function getTenantUsageCountsRelational(tenantId) {
+  if (!isDbReady()) return null;
+  const result = await dbQuery(
+    `SELECT
+       (SELECT COUNT(*)::int FROM accounts WHERE tenant_id = $1) AS accounts,
+       (SELECT COUNT(*)::int FROM contacts WHERE tenant_id = $1) AS contacts,
+       (SELECT COUNT(*)::int FROM board_configs WHERE tenant_id = $1 AND active IS NOT FALSE) AS job_boards`,
+    [tenantId]
+  );
+  const row = result?.rows?.[0];
+  if (!row) return null;
+  return {
+    accounts: Number(row.accounts || 0),
+    contacts: Number(row.contacts || 0),
+    jobBoards: Number(row.job_boards || 0),
+  };
+}
+
 export async function findTenantAccountsRelational(tenantId, query = {}) {
   if (!isDbReady()) return null;
   const page = Math.max(1, Number(query.page || 1));
@@ -129,6 +147,29 @@ export async function findTenantContactsRelational(tenantId, query = {}) {
       params
     ),
     dbQuery(`SELECT COUNT(*)::int AS total FROM contacts WHERE tenant_id = $1${searchSql}`, countParams),
+  ]);
+  return {
+    items: (rowsResult?.rows || []).map(rawOrRow),
+    page,
+    pageSize,
+    total: Number(countResult?.rows?.[0]?.total || 0),
+  };
+}
+
+export async function findTenantConfigsRelational(tenantId, query = {}) {
+  if (!isDbReady()) return null;
+  const page = Math.max(1, Number(query.page || 1));
+  const pageSize = Math.max(1, Math.min(10000, Number(query.pageSize || 25)));
+  const offset = (page - 1) * pageSize;
+  const [rowsResult, countResult] = await Promise.all([
+    dbQuery(
+      `SELECT raw FROM board_configs
+       WHERE tenant_id = $1
+       ORDER BY updated_at DESC, id ASC
+       LIMIT $2 OFFSET $3`,
+      [tenantId, pageSize, offset]
+    ),
+    dbQuery('SELECT COUNT(*)::int AS total FROM board_configs WHERE tenant_id = $1', [tenantId]),
   ]);
   return {
     items: (rowsResult?.rows || []).map(rawOrRow),

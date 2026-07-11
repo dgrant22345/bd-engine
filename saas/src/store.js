@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dbLoadAllTenantData, dbLoadBackgroundJob, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, findTenantAccountsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -33,9 +33,19 @@ const RELATIONAL_SQL_JOB_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean));
+const RELATIONAL_SQL_CONFIG_TENANTS = new Set(String(process.env.BD_RELATIONAL_SQL_CONFIG_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
+const RELATIONAL_USAGE_TENANTS = new Set(String(process.env.BD_RELATIONAL_USAGE_TENANTS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean));
 const confirmedRelationalSqlTenants = new Set();
 const confirmedRelationalContactSqlTenants = new Set();
 const confirmedRelationalJobSqlTenants = new Set();
+const confirmedRelationalConfigSqlTenants = new Set();
+const confirmedRelationalUsageTenants = new Set();
 
 function relationalReadsEnabledForTenant(tenantId) {
   return RELATIONAL_READ_TENANTS.has('*') || RELATIONAL_READ_TENANTS.has(tenantId);
@@ -51,6 +61,14 @@ function relationalContactSqlEnabledForTenant(tenantId) {
 
 function relationalJobSqlEnabledForTenant(tenantId) {
   return RELATIONAL_SQL_JOB_TENANTS.has('*') || RELATIONAL_SQL_JOB_TENANTS.has(tenantId);
+}
+
+function relationalConfigSqlEnabledForTenant(tenantId) {
+  return RELATIONAL_SQL_CONFIG_TENANTS.has('*') || RELATIONAL_SQL_CONFIG_TENANTS.has(tenantId);
+}
+
+function relationalUsageEnabledForTenant(tenantId) {
+  return RELATIONAL_USAGE_TENANTS.has('*') || RELATIONAL_USAGE_TENANTS.has(tenantId);
 }
 
 async function hasRelationalParity(tenantId, includeContacts = false) {
@@ -1540,6 +1558,25 @@ export function createStore() {
 
     async getUsageCounts(tenantId) {
       assertTenant(tenantId);
+      if (relationalUsageEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, true)) {
+            const usage = await getTenantUsageCountsRelational(tenantId);
+            if (usage) {
+              if (!confirmedRelationalUsageTenants.has(tenantId)) {
+                confirmedRelationalUsageTenants.add(tenantId);
+                console.log(`Relational usage queries active for ${tenantId}.`);
+              }
+              const profile = getTenantProfile(tenantId);
+              return { ...usage, users: Math.max(1, profile?.settings?.ownerRoster?.length || 1) };
+            }
+          } else {
+            console.warn(`Relational usage fallback for ${tenantId}: parity check failed.`);
+          }
+        } catch (error) {
+          console.error(`Relational usage query failed for ${tenantId}; using memory:`, error.message);
+        }
+      }
       await ensureDataLoaded(tenantId, true);
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantContacts = contactsForTenant(tenantId);
@@ -1869,8 +1906,26 @@ export function createStore() {
       return result;
     },
 
-    findConfigs(tenantId, query) {
+    async findConfigs(tenantId, query) {
       assertTenant(tenantId);
+      if (relationalConfigSqlEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, false)) {
+            const result = await findTenantConfigsRelational(tenantId, query);
+            if (result) {
+              if (!confirmedRelationalConfigSqlTenants.has(tenantId)) {
+                confirmedRelationalConfigSqlTenants.add(tenantId);
+                console.log(`Relational SQL config queries active for ${tenantId}.`);
+              }
+              return result;
+            }
+          } else {
+            console.warn(`Relational config query fallback for ${tenantId}: parity check failed.`);
+          }
+        } catch (error) {
+          console.error(`Relational config query failed for ${tenantId}; using memory:`, error.message);
+        }
+      }
       return paginate(boardConfigs.filter((item) => item.tenantId === tenantId), query);
     },
 

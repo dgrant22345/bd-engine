@@ -733,7 +733,7 @@ self.addEventListener('activate', (event) => {
       unresolvedQueue: store.getResolverQueue(tenantId, 'unresolved'),
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
       enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
-      configs: store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      configs: await store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
       analytics,
       canViewSiteAnalytics: canViewAnalytics,
       billing: {
@@ -849,7 +849,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/configs') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, store.findConfigs(tenantId, Object.fromEntries(url.searchParams)));
+      return sendJson(res, 200, await store.findConfigs(tenantId, Object.fromEntries(url.searchParams)));
     }
     if (req.method === 'POST') {
       return sendJson(res, 201, store.addConfig(tenantId, await readJson(req)));
