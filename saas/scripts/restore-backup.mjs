@@ -29,6 +29,7 @@ const TABLE_ORDER = [
   'import_run_items',
   'audit_log',
   'background_jobs',
+  'stripe_webhook_events',
   'schema_migrations',
   'analytics_events',
   'sessions',
@@ -267,6 +268,23 @@ async function upsertGenericById(client, table, rows) {
   }
 }
 
+async function upsertStripeWebhookEvents(client, rows) {
+  for (const row of rows) {
+    const columns = Object.keys(row).filter((key) => row[key] !== undefined);
+    if (!columns.includes('event_id')) continue;
+    const columnSql = columns.map(quoteIdent).join(', ');
+    const valueSql = columns.map((_, index) => `$${index + 1}`).join(', ');
+    const updateColumns = columns.filter((column) => column !== 'event_id');
+    const updateSql = updateColumns.length
+      ? `DO UPDATE SET ${updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(', ')}`
+      : 'DO NOTHING';
+    await client.query(
+      `INSERT INTO stripe_webhook_events (${columnSql}) VALUES (${valueSql}) ON CONFLICT (event_id) ${updateSql}`,
+      columns.map((column) => row[column])
+    );
+  }
+}
+
 async function restoreTable(client, table, rows) {
   if (!rows?.length) return;
   if (table === 'users') return upsertUsers(client, rows);
@@ -274,6 +292,7 @@ async function restoreTable(client, table, rows) {
   if (table === 'memberships') return upsertMemberships(client, rows);
   if (table === 'tenant_data') return upsertTenantData(client, rows);
   if (table === 'analytics_events') return upsertAnalyticsEvents(client, rows);
+  if (table === 'stripe_webhook_events') return upsertStripeWebhookEvents(client, rows);
   if (table === 'sessions') return upsertSessions(client, rows);
   if (table === 'password_reset_tokens') return upsertPasswordResetTokens(client, rows);
   if (GENERIC_ID_TABLES.has(table)) return upsertGenericById(client, table, rows);

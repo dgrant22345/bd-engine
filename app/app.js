@@ -383,10 +383,15 @@ const cmdActions = [
   { id: 'toggle-theme', label: 'Toggle theme', icon: '&#9789;', key: '', action: cycleTheme },
   { id: 'refresh', label: 'Refresh data', icon: '&#8635;', key: '', action: () => refreshBootstrapButton?.click() },
   { id: 'export-csv', label: 'Export current view as CSV', icon: '&#8615;', key: '', action: () => {
+    if (!hasPlanFeature('export')) {
+      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+      location.hash = '#/admin';
+      return;
+    }
     const v = appState.activeView;
-    if (v === 'accounts') document.querySelector('[data-action="exportAccountsCsv"]')?.click();
-    else if (v === 'contacts') document.querySelector('[data-action="exportContactsCsv"]')?.click();
-    else if (v === 'jobs') document.querySelector('[data-action="exportJobsCsv"]')?.click();
+    if (v === 'accounts') exportAccountsCsv();
+    else if (v === 'contacts') exportContactsCsv();
+    else if (v === 'jobs') exportJobsCsv();
     else showToast('Export not available for this view', 'warning');
   }},
   { id: 'focus-search', label: 'Focus search', icon: '&#128269;', key: '/', action: () => { searchInput?.focus(); } },
@@ -2082,6 +2087,11 @@ function bindEvents() {
       return;
     }
     if (actionName === 'export-csv') {
+      if (!hasPlanFeature('export')) {
+        showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+        location.hash = '#/admin';
+        return;
+      }
       const view = action.dataset.view;
       if (view === 'accounts') await exportAccountsCsv();
       if (view === 'contacts') await exportContactsCsv();
@@ -2439,6 +2449,11 @@ function bindEvents() {
       await renderAccountsView();
       return;
     }
+    if (actionName === 'upgrade-for-export') {
+      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+      location.hash = '#/admin';
+      return;
+    }
 
     if (form.id === 'task-create-form') {
       const payload = getFormValues(form);
@@ -2756,6 +2771,18 @@ function normalizeAppPersona(value) {
 
 function isJobSeekerPersona() {
   return normalizeAppPersona(appState.persona || appState.bootstrap?.persona || appState.setupStatus?.persona) === 'jobseeker';
+}
+
+function hasPlanFeature(feature) {
+  const features = appState.bootstrap?.session?.plan?.features;
+  return !Array.isArray(features) || features.includes(feature);
+}
+
+function renderExportButton(view) {
+  if (hasPlanFeature('export')) {
+    return `<button class="ghost-button" data-action="export-csv" data-view="${escapeAttr(view)}" aria-label="Export ${escapeAttr(view)} to CSV">Export CSV</button>`;
+  }
+  return '<button class="ghost-button" data-action="upgrade-for-export" type="button" title="Available on Sales Pro">Export CSV · Sales Pro</button>';
 }
 
 function applyPersonaChrome() {
@@ -3422,7 +3449,7 @@ function renderLoadingState(title, subtitle) {
 }
 
 function isBillingRequiredError(error) {
-  return Boolean(error && (error.status === 402 || error.billingRequired || error.code === 'billing_required'));
+  return Boolean(error && (error.billingRequired || error.code === 'billing_required'));
 }
 
 async function renderBillingRequiredView(error = {}) {
@@ -4703,7 +4730,7 @@ async function renderAccountsView() {
               <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view">&#9776; Table</button>
               <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view">&#9638; Board</button>
             </div>
-            <button class="ghost-button" data-action="export-csv" data-view="accounts" aria-label="Export accounts to CSV">Export CSV</button>
+            ${renderExportButton('accounts')}
             <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
             <span class="table-meta">${formatNumber(result.total)} tracked accounts</span>
           </div>
@@ -5108,7 +5135,7 @@ async function renderContactsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Contact intelligence</h3><p class="muted small">Your network ranked by company overlap and title relevance.</p></div><button class="ghost-button" data-action="export-csv" data-view="contacts" aria-label="Export contacts to CSV">Export CSV</button></div>
+      <div class="panel-header"><div><h3>Contact intelligence</h3><p class="muted small">Your network ranked by company overlap and title relevance.</p></div>${renderExportButton('contacts')}</div>
       <form id="contacts-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
@@ -5145,7 +5172,7 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate imported roles by company, ATS, and posting recency.</p></div><button class="ghost-button" data-action="export-csv" data-view="jobs" aria-label="Export jobs to CSV">Export CSV</button></div>
+      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate imported roles by company, ATS, and posting recency.</p></div>${renderExportButton('jobs')}</div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}

@@ -102,7 +102,7 @@ export const PLANS = {
     interval: null,
     trialDays: 14,
     limits: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
-    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import'],
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts'],
   },
   jobseeker: {
     id: 'jobseeker',
@@ -114,7 +114,7 @@ export const PLANS = {
     stripePriceId: process.env.STRIPE_PRICE_JOBSEEKER || 'price_placeholder_jobseeker',
     trialDays: 0,
     limits: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
-    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import'],
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts'],
   },
   sales: {
     id: 'sales',
@@ -159,6 +159,39 @@ export function isWithinLimit(planId, resource, currentCount) {
   const limit = getPlan(planId).limits[resource];
   if (limit === undefined || limit === -1) return true;
   return currentCount < limit;
+}
+
+export function getEntitlementDecision(planId, { feature = '', resource = '', currentCount = 0, increment = 1 } = {}) {
+  const plan = getPlan(planId);
+  if (feature && !hasFeature(plan.id, feature)) {
+    return {
+      allowed: false,
+      code: 'upgrade_required',
+      reason: 'feature',
+      feature,
+      planId: plan.id,
+      planName: plan.displayName,
+    };
+  }
+
+  const limit = resource ? plan.limits[resource] : undefined;
+  const current = Math.max(0, Number(currentCount) || 0);
+  const requested = Math.max(0, Number(increment) || 0);
+  if (limit !== undefined && limit !== -1 && current + requested > limit) {
+    return {
+      allowed: false,
+      code: 'plan_limit_reached',
+      reason: 'limit',
+      resource,
+      current,
+      limit,
+      requested,
+      planId: plan.id,
+      planName: plan.displayName,
+    };
+  }
+
+  return { allowed: true, planId: plan.id, planName: plan.displayName, feature, resource, current, limit };
 }
 
 export function getUsagePercent(planId, resource, currentCount) {

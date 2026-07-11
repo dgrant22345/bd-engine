@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -285,6 +285,15 @@ async function startServer() {
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
     res.bdAcceptsGzip = acceptsGzip(req);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    if ((process.env.BD_CLOUD_ENV || process.env.NODE_ENV) === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
     // CORS: only reflect known origins, and allow credentials so the session
     // cookie works. Same-origin app traffic needs none of this.
     const origin = req.headers.origin;
@@ -649,13 +658,27 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/billing/webhook' && req.method === 'POST') {
     const signature = req.headers['stripe-signature'];
     const payload = await readBody(req);
+    let event;
     try {
-      const event = handleWebhookEvent(payload, signature);
+      event = handleWebhookEvent(payload, signature);
+    } catch (err) {
+      return sendJson(res, 400, { error: 'Invalid Stripe webhook signature or payload.' });
+    }
+
+    try {
+      const claim = await dbClaimStripeWebhook(event.id, event.type);
+      if (!claim.acquired) {
+        return sendJson(res, 200, { received: true, duplicate: true });
+      }
       const result = await handleStripeBillingEvent(event);
+      await dbCompleteStripeWebhook(event.id);
       console.log('Received Stripe Event:', event.type, result);
       return sendJson(res, 200, { received: true, ...result });
     } catch (err) {
-      return sendJson(res, 400, { error: err.message });
+      await dbFailStripeWebhook(event.id, err).catch(() => {});
+      reportServerError(500, req, err);
+      console.error('Stripe webhook processing failed:', event.type, err.message);
+      return sendJson(res, 500, { error: 'Stripe webhook processing failed and can be retried.' });
     }
   }
 
@@ -708,6 +731,7 @@ self.addEventListener('activate', (event) => {
     tenant: getEffectiveTenant(tenant, user),
     user: safeUser(user),
     membership: { role: getEffectiveMembershipRole(membership, user) },
+    plan: getPublicPlanPayload(getPlan(getEffectivePlanId(tenant, user))),
     demo: isReadOnlyDemoSession(sessionData, tenant),
     readOnly: isReadOnlyDemoSession(sessionData, tenant),
   };
@@ -738,7 +762,7 @@ self.addEventListener('activate', (event) => {
     const effectivePlanId = getEffectivePlanId(tenant, user);
     const plan = getPlan(effectivePlanId);
     const trialDaysRemaining = effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant);
-    const usage = getUsageSummary(tenantId, effectivePlanId, await store.getUsageCounts(tenantId));
+    const usage = getUsageSummary(tenantId, effectivePlanId, await getTenantUsage(tenantId));
     const origin = getRequestOrigin(req);
     const billingAccess = getBillingAccessStatus(tenant);
     return sendJson(res, 200, {
@@ -858,7 +882,7 @@ self.addEventListener('activate', (event) => {
       billing: {
         plan: getPlan(effectivePlanId),
         trialDaysRemaining: effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant),
-        usage: getUsageSummary(tenantId, effectivePlanId, await store.getUsageCounts(tenantId)),
+        usage: getUsageSummary(tenantId, effectivePlanId, await getTenantUsage(tenantId)),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: getBillingTenantPayload(tenant, user),
@@ -912,6 +936,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/accounts') {
     if (req.method === 'POST') {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts' })) return;
       const item = await store.addAccount(tenantId, await readJson(req));
       return sendJson(res, 201, item);
     }
@@ -920,6 +945,7 @@ self.addEventListener('activate', (event) => {
 
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
   if (accountOutreachMatch && req.method === 'POST') {
+    if (!await requireEntitlement(res, tenant, user, { feature: 'outreach_drafts' })) return;
     const payload = await readJson(req);
     const draft = await store.createOutreachDraft(tenantId, accountOutreachMatch[1], payload);
     if (!draft) return sendJson(res, 404, { error: 'Account not found' });
@@ -949,6 +975,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/contacts') {
     if (req.method === 'POST') {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'contacts', resource: 'contacts' })) return;
       const item = await store.addContact(tenantId, await readJson(req));
       return sendJson(res, 201, item);
     }
@@ -971,6 +998,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 200, await store.findConfigs(tenantId, Object.fromEntries(url.searchParams)));
     }
     if (req.method === 'POST') {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'jobs', resource: 'jobBoards' })) return;
       return sendJson(res, 201, store.addConfig(tenantId, await readJson(req)));
     }
   }
@@ -1002,6 +1030,7 @@ self.addEventListener('activate', (event) => {
     const plan = getPlan(getEffectivePlanId(tenant, user));
 
     if (csvText) {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
       const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan });
       return sendJson(res, 202, {
         ok: true,
@@ -1074,6 +1103,7 @@ self.addEventListener('activate', (event) => {
   if (accountJobActionMatch) {
     const [, actionAccountId, action] = accountJobActionMatch;
     if (action === 'quick-enrich' && req.method === 'POST') {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'enrichment' })) return;
       const result = await store.accountQuickEnrich(tenantId, actionAccountId);
       if (!result) return sendJson(res, 404, { error: 'Account not found' });
       return sendJson(res, 200, result);
@@ -1082,6 +1112,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 202, store.startAccountResolution(tenantId, { accountId: actionAccountId, deep: false, label: 'ATS resolution' }));
     }
     if (action === 'deep-verify' && req.method === 'POST') {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'enrichment' })) return;
       return sendJson(res, 202, store.startAccountResolution(tenantId, { accountId: actionAccountId, deep: true, label: 'Deep verification' }));
     }
     if (action === 'quick-update' && (req.method === 'PATCH' || req.method === 'POST')) {
@@ -1130,6 +1161,7 @@ self.addEventListener('activate', (event) => {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const dryRun = isTruthy(fields.dryRun);
     if (!dryRun) {
+      if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
       return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan }));
     }
 
@@ -1204,6 +1236,7 @@ self.addEventListener('activate', (event) => {
 
   const draftMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/outreach-draft$/);
   if (draftMatch && req.method === 'POST') {
+    if (!await requireEntitlement(res, tenant, user, { feature: 'outreach_drafts' })) return;
     const draft = await store.createContactOutreachDraft(tenantId, draftMatch[1]);
     if (!draft) return sendJson(res, 404, { error: 'Contact not found' });
     return sendJson(res, 201, draft);
@@ -1457,6 +1490,45 @@ async function handlePasswordResetRequest(req, res) {
     emailConfigured,
     ...(devToken ? { resetToken: devToken, resetUrl } : {}),
   });
+}
+
+const entitlementLabels = {
+  accounts: 'accounts',
+  contacts: 'contacts',
+  jobBoards: 'active job boards',
+  csvImports: 'CSV imports',
+  enrichment: 'company enrichment',
+  outreach_drafts: 'outreach drafts',
+};
+
+async function getTenantUsage(tenantId) {
+  const usage = await store.getUsageCounts(tenantId);
+  return {
+    ...usage,
+    csvImports: await dbGetImportUsageCount(tenantId),
+  };
+}
+
+async function requireEntitlement(res, tenant, user, { feature = '', resource = '', increment = 1 } = {}) {
+  const planId = getEffectivePlanId(tenant, user);
+  const usage = resource ? await getTenantUsage(tenant.id) : {};
+  const decision = getEntitlementDecision(planId, {
+    feature,
+    resource,
+    currentCount: resource ? usage[resource] : 0,
+    increment,
+  });
+  if (decision.allowed) return true;
+
+  const label = entitlementLabels[feature || resource] || feature || resource || 'this action';
+  sendJson(res, 402, {
+    ...decision,
+    error: decision.reason === 'limit'
+      ? `Your ${decision.planName} plan includes up to ${decision.limit} ${label}. Upgrade to add more.`
+      : `${label[0].toUpperCase()}${label.slice(1)} is not included in your ${decision.planName} plan.`,
+    upgradeRequired: true,
+  });
+  return false;
 }
 
 async function handlePasswordResetConfirm(req, res) {

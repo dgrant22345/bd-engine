@@ -16,6 +16,7 @@ const { Pool } = pg;
 
 let pool = null;
 let dbReady = false;
+const memoryStripeWebhookEvents = new Map();
 
 // ── Connection ──────────────────────────────────────────────────────────────
 
@@ -142,6 +143,17 @@ export async function initDb() {
         user_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         day TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'processing',
+        attempts INTEGER NOT NULL DEFAULT 1,
+        error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        processed_at TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS sessions (
@@ -302,6 +314,7 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS analytics_events_day_idx ON analytics_events (day);
       CREATE INDEX IF NOT EXISTS analytics_events_visitor_idx ON analytics_events (visitor_id);
       CREATE INDEX IF NOT EXISTS analytics_events_created_at_idx ON analytics_events (created_at);
+      CREATE INDEX IF NOT EXISTS stripe_webhook_events_status_updated_idx ON stripe_webhook_events (status, updated_at);
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS normalized_name TEXT NOT NULL DEFAULT '';
@@ -508,6 +521,23 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260711_stripe_webhook_idempotency', 'Track Stripe webhook processing and retries', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+          event_id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'processing',
+          attempts INTEGER NOT NULL DEFAULT 1,
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          processed_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS stripe_webhook_events_status_updated_idx
+          ON stripe_webhook_events (status, updated_at);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -519,6 +549,72 @@ export async function initDb() {
 }
 
 // ── User persistence ────────────────────────────────────────────────────────
+
+export async function dbClaimStripeWebhook(eventId, eventType = '') {
+  if (!eventId) return { acquired: false, reason: 'missing_event_id' };
+  const now = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+  if (!dbReady) {
+    const existing = memoryStripeWebhookEvents.get(eventId);
+    const stale = existing?.status === 'processing' && existing.updatedAt < staleBefore;
+    if (existing && existing.status !== 'failed' && !stale) {
+      return { acquired: false, duplicate: true, status: existing.status };
+    }
+    const attempts = Number(existing?.attempts || 0) + 1;
+    memoryStripeWebhookEvents.set(eventId, { eventType, status: 'processing', attempts, updatedAt: now });
+    return { acquired: true, attempts, storage: 'memory' };
+  }
+
+  const result = await pool.query(
+    `INSERT INTO stripe_webhook_events (event_id, event_type, status, attempts, error, created_at, updated_at, processed_at)
+     VALUES ($1, $2, 'processing', 1, '', $3, $3, '')
+     ON CONFLICT (event_id) DO UPDATE SET
+       event_type = EXCLUDED.event_type,
+       status = 'processing',
+       attempts = stripe_webhook_events.attempts + 1,
+       error = '',
+       updated_at = EXCLUDED.updated_at
+     WHERE stripe_webhook_events.status = 'failed'
+        OR (stripe_webhook_events.status = 'processing' AND stripe_webhook_events.updated_at < $4)
+     RETURNING attempts`,
+    [eventId, eventType, now, staleBefore]
+  );
+  return result.rowCount
+    ? { acquired: true, attempts: Number(result.rows[0].attempts || 1), storage: 'postgres' }
+    : { acquired: false, duplicate: true };
+}
+
+export async function dbCompleteStripeWebhook(eventId) {
+  const now = new Date().toISOString();
+  if (!dbReady) {
+    const existing = memoryStripeWebhookEvents.get(eventId) || {};
+    memoryStripeWebhookEvents.set(eventId, { ...existing, status: 'completed', error: '', updatedAt: now, processedAt: now });
+    return;
+  }
+  await pool.query(
+    `UPDATE stripe_webhook_events
+     SET status = 'completed', error = '', updated_at = $2, processed_at = $2
+     WHERE event_id = $1`,
+    [eventId, now]
+  );
+}
+
+export async function dbFailStripeWebhook(eventId, error) {
+  const now = new Date().toISOString();
+  const message = String(error?.message || error || 'Webhook processing failed').slice(0, 1000);
+  if (!dbReady) {
+    const existing = memoryStripeWebhookEvents.get(eventId) || {};
+    memoryStripeWebhookEvents.set(eventId, { ...existing, status: 'failed', error: message, updatedAt: now });
+    return;
+  }
+  await pool.query(
+    `UPDATE stripe_webhook_events
+     SET status = 'failed', error = $2, updated_at = $3
+     WHERE event_id = $1`,
+    [eventId, message, now]
+  );
+}
 
 export async function dbSaveUser(user) {
   if (!dbReady) return;
@@ -806,6 +902,24 @@ export async function dbRecordImportRun(run = {}) {
   } catch (err) {
     console.error('DB: Failed to record import run:', err.message);
     return { recorded: false, reason: err.message };
+  }
+}
+
+export async function dbGetImportUsageCount(tenantId, runType = 'linkedin_csv') {
+  if (!dbReady || !tenantId) return 0;
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM import_runs
+       WHERE tenant_id = $1
+         AND run_type = $2
+         AND status IN ('completed', 'completed_with_warnings')`,
+      [tenantId, runType]
+    );
+    return Number(result.rows[0]?.count || 0);
+  } catch (err) {
+    console.error('DB: Failed to count import usage:', err.message);
+    return 0;
   }
 }
 
