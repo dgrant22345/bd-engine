@@ -4061,7 +4061,7 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
       contact_name: itemContact?.fullName || '',
       contact_title: itemContact?.title || '',
       template_key: template,
-      template_label: 'Job Seeker note',
+      template_label: 'Networking note',
       persona_label: itemContact?.title || 'Contact',
       subject_line: subjectLine,
       subject_options: [subjectLine, `Connecting regarding ${itemAccount.displayName}`, `Quick question about ${itemAccount.displayName}`],

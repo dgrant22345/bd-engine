@@ -256,7 +256,6 @@ a:hover { text-decoration: underline; }
 .btn:focus-visible,
 .nav-link:focus-visible,
 .link-btn:focus-visible,
-.persona-option:focus-visible,
 .cloud-avatar:focus-visible,
 .cloud-menu-item:focus-visible {
   outline: 3px solid rgba(129, 140, 248, 0.45);
@@ -1271,80 +1270,6 @@ a:hover { text-decoration: underline; }
   display: block;
   background: #0b1020;
 }
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   PERSONA TOGGLE (signup)
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.persona-toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.persona-option {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 96px;
-  padding: 16px 12px;
-  background: var(--bg-input);
-  border: 2px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition: all var(--transition);
-  font: inherit;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.persona-option:hover {
-  border-color: var(--accent);
-  background: var(--bg-card-hover);
-}
-
-.persona-option.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--text-primary);
-  box-shadow: 0 0 0 1px var(--accent), var(--shadow-glow);
-}
-
-.persona-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  min-height: 26px;
-  padding: 0 8px;
-  border: 1px solid rgba(129, 140, 248, 0.36);
-  border-radius: 999px;
-  background: rgba(99, 102, 241, 0.16);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: 0.08em;
-}
-
-.persona-label {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.persona-desc {
-  font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.3;
-}
-
-.persona-option.active .persona-desc {
-  color: var(--text-secondary);
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1392,8 +1317,21 @@ a:hover { text-decoration: underline; }
   .hero { padding: 32px 16px 48px; }
   .hero-title { font-size: 30px; }
   .hero-subtitle { font-size: 15px; }
-  .hero-visual { height: 300px; }
-  .hero-card { width: 220px; padding: 12px 16px; }
+  .hero-visual {
+    display: grid;
+    height: auto;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .hero-card,
+  .hero-card-1,
+  .hero-card-2,
+  .hero-card-3 {
+    position: static;
+    width: 100%;
+    padding: 14px 16px;
+    animation: none;
+  }
   .hero-stat-value { font-size: 18px; }
   .hero-cta { flex-direction: column; }
 
@@ -1406,8 +1344,13 @@ a:hover { text-decoration: underline; }
 
   .pricing { padding: 64px 16px; }
 
-  .landing-nav { padding: 12px 16px; }
-  .landing-nav-actions { gap: 8px; }
+  .landing-nav { padding: 10px 12px; gap: 8px; }
+  .landing-nav-brand { min-width: 0; gap: 8px; }
+  .landing-nav-brand .brand-text { font-size: 16px; white-space: nowrap; }
+  .landing-nav-actions { gap: 6px; margin-left: auto; }
+  .landing-nav-actions [data-trust-page] { display: none; }
+  .landing-nav-actions .nav-link { padding: 8px; font-size: 13px; }
+  .landing-nav-actions .btn { padding: 9px 12px; font-size: 13px; }
   .auth-card { padding: 28px 20px; }
 
   .cloud-topbar { padding: 0 12px; }

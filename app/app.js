@@ -4894,10 +4894,10 @@ async function renderAccountDetail(accountId) {
               <option value="follow_up" ${selected(suggestedOutreachTemplate, 'follow_up')}>Follow-up</option>
               <option value="re_engage" ${selected(suggestedOutreachTemplate, 're_engage')}>Re-open thread</option>
             </optgroup>
-            <optgroup label="Job Seeker & Networking">
-              <option value="job_intro" ${selected(suggestedOutreachTemplate, 'job_intro')}>Intro to Hiring Manager</option>
-              <option value="job_networking" ${selected(suggestedOutreachTemplate, 'job_networking')}>Networking / Coffee Chat</option>
-              <option value="job_referral" ${selected(suggestedOutreachTemplate, 'job_referral')}>Ask for Referral</option>
+            <optgroup label="Networking & Introductions">
+              <option value="job_intro" ${selected(suggestedOutreachTemplate, 'job_intro')}>Hiring leader introduction</option>
+              <option value="job_networking" ${selected(suggestedOutreachTemplate, 'job_networking')}>Networking conversation</option>
+              <option value="job_referral" ${selected(suggestedOutreachTemplate, 'job_referral')}>Request an introduction</option>
             </optgroup>
           </select>
           <select id="outreach-job-select" class="inline-select">
