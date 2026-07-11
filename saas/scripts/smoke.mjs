@@ -1,4 +1,8 @@
 const baseUrl = process.env.BD_CLOUD_SMOKE_URL || 'http://127.0.0.1:8787';
+const baseHostname = new URL(baseUrl).hostname;
+const allowMutations = ['127.0.0.1', 'localhost', '::1'].includes(baseHostname)
+  || process.env.BD_CLOUD_SMOKE_ALLOW_MUTATIONS === 'true';
+const mutationCheck = allowMutations ? check : skip;
 
 const checks = [];
 let cookie = '';
@@ -22,7 +26,7 @@ await check('detailed status rejects anonymous requests', async () => {
   assert(response.status === 401, `expected 401, got ${response.status}`);
 });
 
-await check('signup creates a session', async () => {
+await mutationCheck('signup creates a session', async () => {
   const email = `smoke-auth-${Date.now()}@example.com`;
   authEmail = email;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
@@ -42,7 +46,7 @@ await check('signup creates a session', async () => {
   assert(body.user?.email === email, 'signup returned unexpected user');
 });
 
-await check('password reset changes the account password', async () => {
+await mutationCheck('password reset changes the account password', async () => {
   const request = await fetch(`${baseUrl}/api/auth/password-reset/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -74,18 +78,18 @@ await check('password reset changes the account password', async () => {
   assert(newLogin.status === 200, `new password login returned ${newLogin.status}`);
 });
 
-await check('authenticated session can load bootstrap', async () => {
+await mutationCheck('authenticated session can load bootstrap', async () => {
   const body = await getJson('/api/bootstrap?includeFilters=true', cookie);
   assert(body.workspace?.name, 'bootstrap did not include workspace');
   assert(Array.isArray(body.ownerRoster), 'bootstrap did not include owner roster');
 });
 
-await check('authenticated status includes email readiness', async () => {
+await mutationCheck('authenticated status includes email readiness', async () => {
   const body = await getJson('/api/status', cookie);
   assert(typeof body.checks?.emailConfigured === 'boolean', '/api/status did not include emailConfigured');
 });
 
-await check('manual ATS URL creates an import-ready board config', async () => {
+await mutationCheck('manual ATS URL creates an import-ready board config', async () => {
   const response = await fetch(`${baseUrl}/api/configs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
@@ -105,7 +109,7 @@ await check('manual ATS URL creates an import-ready board config', async () => {
   assert(config.active === true, 'manual config was not active');
 });
 
-await check('privacy export and confirmed workspace delete work', async () => {
+await mutationCheck('privacy export and confirmed workspace delete work', async () => {
   const exportResponse = await fetch(`${baseUrl}/api/privacy/export`, {
     headers: { Cookie: cookie },
   });
@@ -174,7 +178,7 @@ await check('public demo opens a read-only synthetic workspace', async () => {
   assert(blockedBody.code === 'demo_read_only', 'demo mutation did not return demo_read_only');
 });
 
-await check('analytics visit records and summarizes visitors', async () => {
+await mutationCheck('analytics visit records and summarizes visitors', async () => {
   const visitorId = `smoke-visitor-${Date.now()}`;
   const response = await fetch(`${baseUrl}/api/analytics/visit`, {
     method: 'POST',
@@ -192,7 +196,7 @@ await check('analytics visit records and summarizes visitors', async () => {
   assert(Array.isArray(admin.analytics?.topSources), 'analytics summary did not include sources');
 });
 
-await check('new signup gets an empty first-run workspace', async () => {
+await mutationCheck('new signup gets an empty first-run workspace', async () => {
   const email = `smoke-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -212,7 +216,7 @@ await check('new signup gets an empty first-run workspace', async () => {
   assert(setup.workspaceName === 'Smoke Test Workspace', 'new workspace name was not preserved');
 });
 
-await check('sample workspace completes onboarding without overwriting data', async () => {
+await mutationCheck('sample workspace completes onboarding without overwriting data', async () => {
   const email = `smoke-sample-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -256,7 +260,7 @@ await check('sample workspace completes onboarding without overwriting data', as
   assert(secondResponse.status === 409, `second sample load should be blocked, got ${secondResponse.status}`);
 });
 
-await check('frozen job seeker signup normalizes to the sales persona', async () => {
+await mutationCheck('frozen job seeker signup normalizes to the sales persona', async () => {
   const email = `smoke-jobseeker-${Date.now()}@example.com`;
   const response = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -282,7 +286,7 @@ await check('frozen job seeker signup normalizes to the sales persona', async ()
   assert(bootstrap.persona === 'bd', '/api/bootstrap should return bd persona');
 });
 
-await check('referral code tracks referred signup', async () => {
+await mutationCheck('referral code tracks referred signup', async () => {
   const referrerEmail = `smoke-referrer-${Date.now()}@example.com`;
   const referrerResponse = await fetch(`${baseUrl}/api/auth/signup`, {
     method: 'POST',
@@ -318,7 +322,7 @@ await check('referral code tracks referred signup', async () => {
 });
 
 for (const item of checks) {
-  console.log(`${item.ok ? 'OK' : 'FAIL'} ${item.name}${item.error ? `: ${item.error}` : ''}`);
+  console.log(`${item.skipped ? 'SKIP' : item.ok ? 'OK' : 'FAIL'} ${item.name}${item.error ? `: ${item.error}` : ''}`);
 }
 
 if (checks.some((item) => !item.ok)) {
@@ -340,6 +344,10 @@ async function check(name, fn) {
   } catch (error) {
     checks.push({ name, ok: false, error: error.message || String(error) });
   }
+}
+
+async function skip(name) {
+  checks.push({ name, ok: true, skipped: true });
 }
 
 function assert(condition, message) {

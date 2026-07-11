@@ -81,6 +81,10 @@ npm run check
 npm run smoke
 ```
 
+Smoke tests against a non-local URL are read-only by default. Set
+`BD_CLOUD_SMOKE_ALLOW_MUTATIONS=true` only for a disposable environment where
+test signups and workspace changes are expected.
+
 ## Backups and Recovery
 
 Create a compressed Postgres backup from the `saas` folder:
