@@ -18,6 +18,24 @@ async function main() {
   });
   const requestedTenant = arg('--tenant');
   const deep = process.argv.includes('--deep');
+  const includePrimary = process.argv.includes('--include-primary');
+  const configuredPrimary = String(process.env.BD_RELATIONAL_WRITE_TENANTS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value && value !== '*');
+  const params = [];
+  const conditions = [];
+  if (requestedTenant) {
+    params.push(requestedTenant);
+    conditions.push(`td.tenant_id = $${params.length}`);
+  }
+  if (!includePrimary) {
+    conditions.push("COALESCE(t.storage_mode, 'legacy') <> 'relational'");
+    if (configuredPrimary.length) {
+      params.push(configuredPrimary);
+      conditions.push(`NOT (td.tenant_id = ANY($${params.length}::text[]))`);
+    }
+  }
   const deepColumns = deep ? `,
          (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.accounts, '[]'::jsonb)) item JOIN accounts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_accounts,
          (SELECT COUNT(*)::int FROM jsonb_array_elements(COALESCE(td.contacts, '[]'::jsonb)) item JOIN contacts r ON r.tenant_id = td.tenant_id AND r.id = item->>'id' WHERE r.raw IS DISTINCT FROM item) AS content_contacts,
@@ -43,9 +61,10 @@ async function main() {
          (SELECT COUNT(*)::int FROM tasks WHERE tenant_id = td.tenant_id) AS relational_tasks
          ${deepColumns}
        FROM tenant_data td
-       ${requestedTenant ? 'WHERE td.tenant_id = $1' : ''}
+       JOIN tenants t ON t.id = td.tenant_id
+       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
        ORDER BY td.tenant_id`,
-      requestedTenant ? [requestedTenant] : []
+      params
     );
     let mismatchCount = 0;
     for (const row of result.rows) {
