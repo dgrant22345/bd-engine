@@ -4837,6 +4837,8 @@ function applyKnownBoardCorrection(config = {}) {
     boardKey === 'lightspeedhq'
   );
   if (!looksLikeLightspeedCommerce) return false;
+  const preserveReviewDecision = normalizeKey(config.reviewStatus || '') === 'rejected'
+    || normalizeKey(config.lastImportStatus || '') === 'failed';
 
   let changed = false;
   const apply = (field, value) => {
@@ -4854,11 +4856,13 @@ function applyKnownBoardCorrection(config = {}) {
   apply('sourceUrl', 'https://www.lightspeedhq.com/careers/openings/');
   apply('resolvedBoardUrl', 'https://www.lightspeedhq.com/careers/openings/');
   apply('apiUrl', 'https://www.lightspeedhq.com/careers/openings/');
-  apply('discoveryStatus', 'resolved');
+  if (!preserveReviewDecision) apply('discoveryStatus', 'resolved');
   apply('discoveryMethod', 'known_static_careers_page');
-  apply('reviewStatus', 'approved');
-  apply('confidenceBand', 'high');
-  apply('active', true);
+  if (!preserveReviewDecision) {
+    apply('reviewStatus', 'approved');
+    apply('confidenceBand', 'high');
+    apply('active', true);
+  }
   if (!config.notes || String(config.notes).includes('Greenhouse')) {
     apply('notes', 'Lightspeed Commerce jobs are listed on a static careers page; the old Greenhouse lightspeedhq board is stale.');
   }

@@ -376,3 +376,36 @@ test('duplicate configs for the same provider board fetch only once', async () =
     globalThis.fetch = originalFetch;
   }
 });
+
+test('known board corrections never override an explicit rejection', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-known-board-rejection';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Lightspeed HQ' });
+  const config = store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Lightspeed HQ',
+    active: true,
+  });
+  await store.reviewConfig(tenantId, config.id, { action: 'reject' });
+
+  let fetchCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetchCount++;
+    return new Response('', { status: 404 });
+  };
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.supportedConfigs, 0);
+    assert.equal(fetchCount, 0);
+    const rejected = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(rejected.reviewStatus, 'rejected');
+    assert.equal(rejected.active, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
