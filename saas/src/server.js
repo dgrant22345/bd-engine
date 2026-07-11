@@ -864,7 +864,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/settings' && req.method === 'POST') {
-    return sendJson(res, 200, store.patchSettings(tenantId, await readJson(req)));
+    return sendJson(res, 200, await store.patchSettings(tenantId, await readJson(req)));
   }
 
   if (pathname === '/api/workspace/preferences') {

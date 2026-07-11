@@ -1166,6 +1166,25 @@ function isLargeWorkspaceDataset(counts) {
     || counts.total >= LARGE_WORKSPACE_LOAD_THRESHOLDS.total;
 }
 
+async function ensureTenantSettingsLoaded(tenantId) {
+  if (!isDbEnabled()) return;
+  const status = loadedTenants.get(tenantId) || { core: false, contacts: false, settings: false };
+  status.lastAccessAt = Date.now();
+  if (status.settings) {
+    loadedTenants.set(tenantId, status);
+    return;
+  }
+  const { dbLoadTenantSettings } = await import('./db.js');
+  const settings = await dbLoadTenantSettings(tenantId);
+  const profile = tenantProfiles.get(tenantId);
+  if (profile && settings && Object.keys(settings).length) {
+    profile.settings = { ...profile.settings, ...settings };
+    profile.persona = normalizePersona(settings.persona || profile.persona);
+  }
+  status.settings = true;
+  loadedTenants.set(tenantId, status);
+}
+
 async function ensureDataLoaded(tenantId, needsContacts = false) {
   if (!isDbEnabled()) return;
   const status = loadedTenants.get(tenantId) || { core: false, contacts: false };
@@ -1265,6 +1284,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
       }
 
       status.core = true;
+      status.settings = true;
     }
     
     if (needsContacts && !status.contacts) {
@@ -1508,10 +1528,13 @@ export function createStore() {
       const startedAt = performance.now();
       const timings = {};
       const loadStartedAt = performance.now();
-      await ensureDataLoaded(tenantId);
+      await ensureTenantSettingsLoaded(tenantId);
+      let profile = getTenantProfile(tenantId);
+      const needsWorkspaceData = !profile.settings.setupComplete;
+      if (needsWorkspaceData) await ensureDataLoaded(tenantId);
       timings.loadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
-      const profile = getTenantProfile(tenantId);
+      profile = getTenantProfile(tenantId);
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
       const tenantContacts = contactsForTenant(tenantId);
@@ -1531,7 +1554,7 @@ export function createStore() {
         workspaceName: profile.workspace.name,
         persona,
         user: profile.settings.user,
-        readiness: buildWorkspaceReadiness(persona, tenantAccounts, tenantJobs, tenantContacts, tenantConfigs),
+        ...(needsWorkspaceData ? { readiness: buildWorkspaceReadiness(persona, tenantAccounts, tenantJobs, tenantContacts, tenantConfigs) } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
       const elapsedMs = Math.round(performance.now() - startedAt);
@@ -1595,7 +1618,8 @@ export function createStore() {
       const startedAt = performance.now();
       const timings = {};
       const loadStartedAt = performance.now();
-      await ensureDataLoaded(tenantId, false); // Don't need contacts for bootstrap
+      if (includeFilters) await ensureDataLoaded(tenantId, false);
+      else await ensureTenantSettingsLoaded(tenantId);
       timings.loadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
       const profile = getTenantProfile(tenantId);
@@ -1974,8 +1998,9 @@ export function createStore() {
       return config;
     },
 
-    patchSettings(tenantId, patch) {
+    async patchSettings(tenantId, patch) {
       assertTenant(tenantId);
+      await ensureTenantSettingsLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
       Object.assign(profile.settings, pickPatch(patch, [
         'minCompanyConnections',
@@ -1992,14 +2017,14 @@ export function createStore() {
 
     async getWorkspacePreferences(tenantId) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId, false);
+      await ensureTenantSettingsLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
       return JSON.parse(JSON.stringify(profile.settings.workspacePreferences || {}));
     },
 
     async patchWorkspacePreferences(tenantId, patch) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId, false);
+      await ensureTenantSettingsLoaded(tenantId);
       const profile = getTenantProfile(tenantId);
       profile.settings.workspacePreferences = sanitizeWorkspacePreferences(patch, profile.settings.workspacePreferences || {});
       persistTenant(tenantId);
