@@ -2258,11 +2258,6 @@ function bindEvents() {
       return;
     }
 
-    if (actionName === 'cancel-background-job') {
-      await cancelBackgroundJob(action.dataset.id);
-      return;
-    }
-
     if (actionName === 'expand-enrichment-row') {
       const row = document.getElementById(`enrichment-edit-${action.dataset.id}`);
       if (row) row.classList.toggle('hidden');
@@ -6207,7 +6202,6 @@ function renderBackgroundJobItem(job) {
       <p class="job-card__body">${escapeHtml(job.progressMessage || job.summary || 'Waiting for work to start.')}</p>
       <div class="inline-header">
         <span class="small muted">${job.startedAt ? `Started ${formatDate(job.startedAt)}` : `Queued ${formatDate(job.queuedAt)}`}${hasRecordsAffected ? ` · ${formatNumber(job.recordsAffected)} ${recordsLabel}` : ''}</span>
-        ${job.status === 'queued' ? `<button class="ghost-button" data-action="cancel-background-job" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       ${job.errorMessage ? `<p class="small muted">${escapeHtml(job.errorMessage)}</p>` : ''}
     </article>
@@ -6828,14 +6822,6 @@ async function reviewConfig(configId, decision) {
   invalidateAppData();
   await renderAdminView();
   window.bdLocalApi.setAlert(`Config ${decision}d.`, appAlert);
-}
-
-async function cancelBackgroundJob(jobId) {
-  if (!jobId) return;
-  await api(`/api/background-jobs/${jobId}/cancel`, { method: 'POST', body: JSON.stringify({}) });
-  const runtime = await loadRuntimeStatus(true);
-  hydrateAdminRuntimePanels(runtime);
-  showToast('Queued background job cancelled.', 'info');
 }
 
 document.addEventListener('change', (event) => {

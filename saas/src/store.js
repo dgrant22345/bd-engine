@@ -932,6 +932,17 @@ tasks.forEach(t => getTenantArray(tasksByTenant, t.tenantId).push(t));
 
 const backgroundJobs = new Map();
 
+function trackBackgroundJob(tenantId, job) {
+  Object.defineProperty(job, 'tenantId', {
+    value: tenantId,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  backgroundJobs.set(job.id, job);
+  return job;
+}
+
 function getTrackedJobCountFromResult(result = {}) {
   return Number(result.stats?.activeTrackedJobs || result.stats?.imported || result.importRun?.stats?.imported || 0);
 }
@@ -2221,7 +2232,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         const updateProgress = (progress, stage, message) => {
@@ -2445,7 +2456,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         try {
@@ -2671,7 +2682,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         try {
@@ -3050,7 +3061,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         const startedAt = performance.now();
@@ -3199,7 +3210,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         try {
@@ -3259,7 +3270,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         try {
@@ -3314,7 +3325,8 @@ export function createStore() {
       return { ok: true, jobId, job };
     },
 
-    createCompletedJob(id, result = {}) {
+    createCompletedJob(tenantId, id, result = {}) {
+      assertTenant(tenantId);
       const job = {
         id: id || `cloud-job-${Date.now()}`,
         type: 'cloud-stub',
@@ -3327,7 +3339,7 @@ export function createStore() {
         recordsAffected: getTrackedJobCountFromResult(result) || result.count || result.accountCount || 0,
         result,
       };
-      backgroundJobs.set(job.id, job);
+      trackBackgroundJob(tenantId, job);
       return { ok: true, jobId: job.id, job };
     },
 
@@ -3346,7 +3358,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       setImmediate(async () => {
         try {
@@ -3383,10 +3395,12 @@ export function createStore() {
       return { ok: true, jobId, job };
     },
 
-    getBackgroundJob(jobId) {
+    getBackgroundJob(tenantId, jobId) {
+      assertTenant(tenantId);
+      const job = backgroundJobs.get(jobId);
       // Never invent a fake "completed" job for an unknown id — report the
       // truth so the UI shows a failure instead of a phantom success.
-      return backgroundJobs.get(jobId) || {
+      return job?.tenantId === tenantId ? job : {
         id: jobId,
         type: 'unknown',
         status: 'failed',
@@ -3419,7 +3433,7 @@ export function createStore() {
         recordsAffected: 0,
         result: null,
       };
-      backgroundJobs.set(jobId, job);
+      trackBackgroundJob(tenantId, job);
 
       (async () => {
         const pipelineStartedAt = performance.now();

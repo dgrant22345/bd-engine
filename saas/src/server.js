@@ -1047,7 +1047,7 @@ self.addEventListener('activate', (event) => {
 
   const pipelineStatusMatch = pathname.match(/^\/api\/admin\/pipeline\/status\/([^/]+)$/);
   if (pipelineStatusMatch && req.method === 'GET') {
-    const job = store.getBackgroundJob(pipelineStatusMatch[1]);
+    const job = store.getBackgroundJob(tenantId, pipelineStatusMatch[1]);
     return sendJson(res, 200, job);
   }
 
@@ -1079,8 +1079,8 @@ self.addEventListener('activate', (event) => {
   }
 
   const backgroundJobMatch = pathname.match(/^\/api\/background-jobs\/([^/]+)$/);
-  if (backgroundJobMatch) {
-    return sendJson(res, 200, store.getBackgroundJob(backgroundJobMatch[1]));
+  if (backgroundJobMatch && req.method === 'GET') {
+    return sendJson(res, 200, store.getBackgroundJob(tenantId, backgroundJobMatch[1]));
   }
 
   const draftMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/outreach-draft$/);
