@@ -1240,6 +1240,23 @@ export async function dbCheckRelationalCountParity() {
   };
 }
 
+export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays = 14 } = {}) {
+  if (!dbReady) return null;
+  const nowIso = new Date().toISOString();
+  const jobCutoff = new Date(Date.now() - Math.max(1, Number(backgroundJobRetentionDays) || 14) * 86400000).toISOString();
+  const [sessions, resetTokens, backgroundJobs] = await Promise.all([
+    pool.query('DELETE FROM sessions WHERE expires_at < $1', [nowIso]),
+    pool.query("DELETE FROM password_reset_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
+    pool.query("DELETE FROM background_jobs WHERE status IN ('completed', 'failed', 'cancelled') AND finished_at <> '' AND finished_at < $1", [jobCutoff]),
+  ]);
+  return {
+    sessions: sessions.rowCount || 0,
+    resetTokens: resetTokens.rowCount || 0,
+    backgroundJobs: backgroundJobs.rowCount || 0,
+    cleanedAt: nowIso,
+  };
+}
+
 export async function dbFindPasswordResetToken(tokenHash) {
   if (!dbReady) return null;
   try {

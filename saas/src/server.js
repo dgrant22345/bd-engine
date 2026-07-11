@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalCountParity, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalCountParity, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -50,6 +50,8 @@ const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
 const PUBLIC_DEMO_WORKSPACE = 'BD Engine Demo Workspace';
 const passwordResetTokens = new Map();
+const MAX_RATE_BUCKETS = Math.max(1000, Number(process.env.BD_MAX_RATE_BUCKETS) || 10000);
+const MAX_RESET_TOKEN_CACHE = Math.max(100, Number(process.env.BD_MAX_RESET_TOKEN_CACHE) || 5000);
 
 // Restrict CORS to known origins instead of "*" (which also can't carry the
 // session cookie). Same-origin app requests are unaffected.
@@ -73,9 +75,7 @@ function clientIp(req) {
 // Fixed-window limiter. Returns true when the caller is OVER the limit.
 function rateLimitExceeded(key, max, windowMs) {
   const nowMs = Date.now();
-  if (rateBuckets.size > 10000) {
-    for (const [k, v] of rateBuckets) if (nowMs >= v.resetAt) rateBuckets.delete(k);
-  }
+  if (rateBuckets.size >= MAX_RATE_BUCKETS) pruneEphemeralMemory(nowMs);
   const bucket = rateBuckets.get(key);
   if (!bucket || nowMs >= bucket.resetAt) {
     rateBuckets.set(key, { count: 1, resetAt: nowMs + windowMs });
@@ -83,6 +83,45 @@ function rateLimitExceeded(key, max, windowMs) {
   }
   bucket.count += 1;
   return bucket.count > max;
+}
+
+function pruneEphemeralMemory(nowMs = Date.now()) {
+  for (const [key, bucket] of rateBuckets) {
+    if (nowMs >= Number(bucket.resetAt || 0)) rateBuckets.delete(key);
+  }
+  if (rateBuckets.size > MAX_RATE_BUCKETS) {
+    const overflow = [...rateBuckets.entries()]
+      .sort((a, b) => Number(a[1].resetAt || 0) - Number(b[1].resetAt || 0))
+      .slice(0, rateBuckets.size - MAX_RATE_BUCKETS);
+    for (const [key] of overflow) rateBuckets.delete(key);
+  }
+  for (const [tokenHash, record] of passwordResetTokens) {
+    if (record.usedAt || new Date(record.expiresAt || 0).getTime() <= nowMs) passwordResetTokens.delete(tokenHash);
+  }
+  if (passwordResetTokens.size > MAX_RESET_TOKEN_CACHE) {
+    const overflow = [...passwordResetTokens.entries()]
+      .sort((a, b) => new Date(a[1].createdAt || 0).getTime() - new Date(b[1].createdAt || 0).getTime())
+      .slice(0, passwordResetTokens.size - MAX_RESET_TOKEN_CACHE);
+    for (const [tokenHash] of overflow) passwordResetTokens.delete(tokenHash);
+  }
+}
+
+async function runOperationalCleanup() {
+  pruneEphemeralMemory();
+  if (!isDbReady()) return;
+  try {
+    await dbPruneExpiredOperationalData();
+  } catch (error) {
+    console.error('Operational cleanup failed:', error.message);
+  }
+}
+
+function startOperationalCleanup(startupPromise) {
+  startupPromise.then(() => runOperationalCleanup()).catch(() => {});
+  const memoryTimer = setInterval(pruneEphemeralMemory, 10 * 60 * 1000);
+  const databaseTimer = setInterval(runOperationalCleanup, 60 * 60 * 1000);
+  memoryTimer.unref?.();
+  databaseTimer.unref?.();
 }
 
 function isReadOnlyDemoSession(sessionData, tenant) {
@@ -198,6 +237,7 @@ const mimeTypes = {
 async function startServer() {
   const startupPromise = initializeData();
   startRelationalMirrorMonitor(startupPromise);
+  startOperationalCleanup(startupPromise);
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
@@ -1391,8 +1431,7 @@ async function handlePasswordResetConfirm(req, res) {
     return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
   }
 
-  const usedRecord = { ...record, usedAt: new Date().toISOString() };
-  passwordResetTokens.set(tokenHash, usedRecord);
+  passwordResetTokens.delete(tokenHash);
   await dbMarkPasswordResetTokenUsed(tokenHash);
   return sendJson(res, 200, { ok: true, message: 'Password reset. You can now log in.' });
 }
@@ -1780,6 +1819,8 @@ function getHealthPayload(includeDetails = false) {
       averageDurationMs,
       slowestRequest: serverStats.slowestRequest,
       memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      rateLimitBuckets: rateBuckets.size,
+      resetTokenCacheEntries: passwordResetTokens.size,
     };
     payload.lastError = serverStats.lastError;
   }
