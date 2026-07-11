@@ -140,6 +140,9 @@ never evicted, and eviction pauses while a background operation is active.
 
 ## Rollback
 
+Production backup, restore, relational rollback, cleanup, and release procedures
+are documented in [OPERATIONS.md](./OPERATIONS.md).
+
 This experiment started from tag:
 
 ```powershell
