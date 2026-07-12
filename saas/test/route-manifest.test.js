@@ -27,13 +27,10 @@ const shellPath = new URL('../public/index.html', import.meta.url);
 const serverPath = new URL('../src/server.js', import.meta.url);
 
 // Audited dead/unsupported visible actions (P0.2). CG-004 implemented accounts
-// bulk/import; ticket CG-005 (workbook, local enrichment, Sheets sync) owns the rest.
-const KNOWN_DEFERRED = [
-  '/api/import/workbook',
-  '/api/enrichment/run',
-  '/api/enrichment/run-local',
-  '/api/google-sheets/sync-configs',
-];
+// bulk/import; CG-005 removed the workbook / local-enrichment / Sheets-sync
+// frontend code. Keep this EMPTY — every visible action must have an
+// implemented route. Add entries only with a ticket that owns the removal.
+const KNOWN_DEFERRED = [];
 
 function extractFrontendPaths(source) {
   const paths = new Set();

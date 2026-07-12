@@ -2149,11 +2149,6 @@ function bindEvents() {
       return;
     }
 
-    if (actionName === 'reseed-workbook') {
-      await reseedWorkbook(action.dataset.path || '');
-      return;
-    }
-
     if (actionName === 'run-live-import') {
       await runLiveImport(action);
       return;
@@ -2174,23 +2169,8 @@ function bindEvents() {
       return;
     }
 
-    if (actionName === 'run-local-enrichment') {
-      await runLocalEnrichment();
-      return;
-    }
-
-    if (actionName === 'run-enrichment') {
-      await runEnrichment();
-      return;
-    }
-
     if (actionName === 'run-target-score-rollout') {
       await runTargetScoreRollout(action);
-      return;
-    }
-
-    if (actionName === 'sync-google-sheets') {
-      await runGoogleSheetSync();
       return;
     }
 
@@ -6450,16 +6430,6 @@ function resetConfigForm() {
   if (form.active) form.active.value = 'true';
 }
 
-async function reseedWorkbook(path) {
-  await withButtonState('[data-action="reseed-workbook"]', 'Importing workbook...', async () => {
-    const accepted = await api('/api/import/workbook', { method: 'POST', body: JSON.stringify({ workbookPath: path || appState.bootstrap.defaults.workbookPath }) });
-    showToast('Workbook import queued.', 'success');
-    const job = await watchBackgroundJob(accepted.jobId, { label: 'Workbook import' });
-    const stats = job?.result?.stats || job?.result?.importRun?.stats || {};
-    window.bdLocalApi.setAlert(`Workbook import finished: ${formatNumber(stats.companies || 0)} companies, ${formatNumber(stats.contacts || 0)} contacts, ${formatNumber(stats.jobs || 0)} jobs.`, appAlert);
-  });
-}
-
 async function runLiveImport(buttonEl) {
   await withButtonState(buttonEl || '[data-action="run-live-import"]', 'Running import...', async () => {
     const accepted = await api('/api/import/jobs', {
@@ -6544,54 +6514,6 @@ async function watchPipelineProgress(jobId) {
       break;
     }
     await new Promise(r => setTimeout(r, 1000));
-  }
-}
-
-async function runLocalEnrichment() {
-  const button = document.querySelector('[data-action="run-local-enrichment"]');
-  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
-  try {
-    const limit = Number(document.getElementById('enrichment-limit')?.value || 5000);
-    const forceRefresh = (document.getElementById('enrichment-force-refresh')?.value || 'false') === 'true';
-    const accepted = await api('/api/enrichment/run-local', {
-      method: 'POST',
-      body: JSON.stringify({ limit, forceRefresh }),
-    });
-    showToast('Fast local enrich queued.', 'success');
-    const job = await watchBackgroundJob(accepted.jobId, { label: 'Fast local enrichment' });
-    const result = job?.result || {};
-    const stats = result?.stats || {};
-    const timings = result?.timings || {};
-    const totalDuration = Number(timings.localMs || 0) + Number(timings.snapshotMs || 0);
-    window.bdLocalApi.setAlert(
-      `Fast local enrich updated ${formatNumber(stats.totalUpdated || 0)} rows in ${formatNumber(totalDuration)}ms. Domains from contacts: ${formatNumber(stats.contactEmailDomainApplied || 0)}, config domains: ${formatNumber(stats.boardConfigDomainApplied || 0)}, careers URLs: ${formatNumber(stats.boardConfigCareersApplied || 0)}, sibling lifts: ${formatNumber(stats.siblingPropagationApplied || 0)}, config lifts: ${formatNumber(stats.boardConfigSiblingApplied || 0)}.`,
-      appAlert
-    );
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Fast local enrich'; }
-  }
-}
-
-async function runEnrichment() {
-  const button = document.querySelector('[data-action="run-enrichment"]');
-  if (button) { button.disabled = true; button.textContent = 'Queueing...'; }
-  try {
-    const limit = Number(document.getElementById('enrichment-limit')?.value || 50);
-    const forceRefresh = (document.getElementById('enrichment-force-refresh')?.value || 'false') === 'true';
-    const accepted = await api('/api/enrichment/run', {
-      method: 'POST',
-      body: JSON.stringify({ limit, forceRefresh }),
-    });
-    showToast('Deep verification queued.', 'success');
-    const job = await watchBackgroundJob(accepted.jobId, { label: 'Deep verification' });
-    const stats = job?.result?.stats || {};
-    const timings = job?.result?.timings || {};
-    window.bdLocalApi.setAlert(
-      `Deep verification checked ${formatNumber(stats.checked || 0)} companies. Verified ${formatNumber(stats.verified || 0)}, enriched ${formatNumber(stats.enriched || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}. Probe work took ${formatNumber(timings.enrichmentMs || 0)}ms.`,
-      appAlert
-    );
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Deep verify'; }
   }
 }
 
@@ -6725,23 +6647,6 @@ async function deepVerifyAccount(accountId) {
 function getSpreadsheetId() {
   const input = document.getElementById('google-sheet-id');
   return (input?.value || appState.bootstrap?.defaults?.spreadsheetId || '').trim();
-}
-
-async function runGoogleSheetSync() {
-  const button = document.querySelector('[data-action="sync-google-sheets"]');
-  if (button) { button.disabled = true; button.textContent = 'Syncing...'; }
-  try {
-    const spreadsheetId = getSpreadsheetId();
-    const accepted = await api('/api/google-sheets/sync-configs', {
-      method: 'POST',
-      body: JSON.stringify({ spreadsheetId }),
-    });
-    showToast('Google Sheet sync queued.', 'success');
-    const job = await watchBackgroundJob(accepted.jobId, { label: 'Google Sheet sync', refreshRoute: false });
-    window.bdLocalApi.setAlert(`Live sheet sync complete: ${formatNumber(job?.result?.writtenRows || 0)} rows written for ${formatNumber(job?.result?.targetCompanies || 0)} companies.`, appAlert);
-  } finally {
-    if (button) { button.disabled = false; button.textContent = 'Sync Google Sheet'; }
-  }
 }
 
 async function runFullBdEngine() {
