@@ -13,6 +13,7 @@
     "backup": "node scripts/backup.mjs",
     "backfill:relational": "node scripts/backfill-relational.mjs",
     "check:relational": "node scripts/check-relational-parity.mjs",
+    "check:integrity": "node scripts/semantic-integrity.mjs",
     "verify:relational": "node scripts/verify-relational-canary.mjs",
     "verify:relational-write": "node scripts/verify-relational-write-canary.mjs",
     "snapshot:legacy": "node scripts/snapshot-relational-to-legacy.mjs",
