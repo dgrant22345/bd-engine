@@ -1663,16 +1663,44 @@ function renderDashboardCharts(accounts) {
     </section>`;
 }
 
+// CG-013: forward uncaught client errors to the server so operators learn
+// about broken buttons before customers report them. Throttled per session;
+// best-effort (never throws, never blocks the UI).
+let clientErrorReportCount = 0;
+let lastClientErrorReportAt = 0;
+function reportClientError(error, context = {}) {
+  try {
+    const nowMs = Date.now();
+    if (clientErrorReportCount >= 5 || nowMs - lastClientErrorReportAt < 10000) return;
+    clientErrorReportCount += 1;
+    lastClientErrorReportAt = nowMs;
+    const body = JSON.stringify({
+      message: String(error?.message || error || 'unknown error').slice(0, 500),
+      stack: String(error?.stack || '').slice(0, 1000),
+      route: location.hash || location.pathname,
+      action: String(context.action || ''),
+    });
+    fetch('/api/client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* reporting must never break the app */ }
+}
+
 window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
   if (isBillingRequiredError(event.reason)) {
     renderBillingRequiredView(event.reason);
     return;
   }
+  reportClientError(event.reason, { action: 'unhandledrejection' });
   window.bdLocalApi.handleError(event.reason, appAlert);
 });
 
 window.addEventListener('error', (event) => {
+  reportClientError(event.error || event.message, { action: 'window.onerror' });
   window.bdLocalApi.handleError(event.error || event.message, appAlert);
 });
 

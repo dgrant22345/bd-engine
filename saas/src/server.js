@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
@@ -195,15 +196,23 @@ const relationalContentHealth = {
 // to get real-time alerts on 5xx errors. No dependency, no paid service; a no-op
 // when unset. Throttled so a burst can't spam the channel.
 const ERROR_WEBHOOK = String(process.env.BD_ERROR_WEBHOOK || '').trim();
+// Release identifier for correlating an alert with the deployed commit.
+const RELEASE = String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.BD_RELEASE || 'dev').slice(0, 12);
 let lastErrorAlertAt = 0;
 const ERROR_ALERT_MIN_INTERVAL_MS = 60 * 1000;
 
-function reportServerError(status, req, error) {
+function reportServerError(status, req, error, { kind = 'SERVER' } = {}) {
   if (!ERROR_WEBHOOK) return;
   const nowMs = Date.now();
   if (nowMs - lastErrorAlertAt < ERROR_ALERT_MIN_INTERVAL_MS) return;
   lastErrorAlertAt = nowMs;
-  const text = `🚨 BD Engine ${status} on ${req.method} ${(req.url || '').split('?')[0]} — ${error?.message || 'error'}`;
+  const route = (req.url || '').split('?')[0];
+  const context = [
+    `release ${RELEASE}`,
+    req.requestId ? `request ${req.requestId}` : '',
+    req.tenantId ? `workspace ${req.tenantId}` : '',
+  ].filter(Boolean).join(', ');
+  const text = `🚨 BD Engine ${kind} ${status} on ${req.method} ${route} — ${error?.message || 'error'} (${context})`;
   fetch(ERROR_WEBHOOK, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -313,6 +322,9 @@ async function startServer() {
       res.end();
       return;
     }
+    // Correlates a customer report, the server log line, and the alert (CG-013).
+    req.requestId = randomUUID();
+    res.setHeader('X-Request-Id', req.requestId);
     try {
       if (!isHealthRequest(req)) {
         await startupPromise;
@@ -325,14 +337,18 @@ async function startServer() {
         at: new Date().toISOString(),
         method: req.method,
         url: req.url,
+        requestId: req.requestId,
         message: error.message || 'Unexpected server error',
       };
       // Never leak internal error text to clients on 5xx; 4xx messages are
       // intentional (validation, not-found) so keep those.
       if (status >= 500) {
-        console.error(`  ${status} on ${req.method} ${req.url}:`, error.message);
+        console.error(`  ${status} on ${req.method} ${req.url} [${req.requestId}]:`, error.message);
         reportServerError(status, req, error);
-        sendJson(res, status, { error: 'Something went wrong on our end. Please try again.' });
+        sendJson(res, status, {
+          error: 'Something went wrong on our end. Please try again.',
+          requestId: req.requestId,
+        });
       } else {
         sendJson(res, status, { error: error.message || 'Request failed' });
       }
@@ -607,6 +623,38 @@ async function route(req, res) {
 
   // ── Auth endpoints (public, rate-limited) ─────────────────────────────────
 
+  // CG-013: synthetic failure for verifying the alert pipeline end to end.
+  // Only exists when BD_ENABLE_SYNTHETIC_ERROR=true (never set in production).
+  if (pathname === '/api/debug/synthetic-error' && process.env.BD_ENABLE_SYNTHETIC_ERROR === 'true') {
+    throw new Error('Synthetic server error for alert verification');
+  }
+
+  // CG-013: client-error intake. The SPA's global error handlers post here so
+  // operators learn about broken buttons before customers report them. Public
+  // (errors can happen pre-login) but tightly rate limited and truncated.
+  if (pathname === '/api/client-error' && req.method === 'POST') {
+    if (rateLimitExceeded(`client-error:${clientIp(req)}`, 10, 60 * 1000)) {
+      return sendJson(res, 429, { error: 'Too many error reports.' });
+    }
+    const payload = await readJson(req);
+    const report = {
+      message: String(payload.message || 'unknown client error').slice(0, 500),
+      route: String(payload.route || '').slice(0, 200),
+      action: String(payload.action || '').slice(0, 100),
+      stack: String(payload.stack || '').slice(0, 1000),
+    };
+    const sessionData = extractSession(req);
+    if (sessionData?.tenantId) req.tenantId = sessionData.tenantId;
+    console.error(`  CLIENT ERROR on ${report.route || '(unknown route)'} [${req.requestId}]: ${report.message}`);
+    reportServerError('error', {
+      method: 'UI',
+      url: report.route || '/app',
+      requestId: req.requestId,
+      tenantId: req.tenantId,
+    }, new Error(`${report.message}${report.action ? ` (action: ${report.action})` : ''}`), { kind: 'CLIENT' });
+    return sendJson(res, 202, { ok: true, requestId: req.requestId });
+  }
+
   if (pathname === '/api/auth/signup' && req.method === 'POST') {
     if (rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many sign-ups from this network. Please wait a few minutes and try again.' });
@@ -757,6 +805,9 @@ self.addEventListener('activate', (event) => {
   if (!membership) {
     return sendJson(res, 403, { error: 'You are not a member of this workspace.' });
   }
+
+  // Workspace context for error reports/alerts (CG-013).
+  req.tenantId = tenantId;
 
   // Build session object compatible with existing frontend
   tenant = ensureInternalOwnerEntitlement(tenant, user);
@@ -1958,6 +2009,7 @@ function recordRequestMetric(req, res, elapsedMs) {
 }
 
 function getHealthPayload(includeDetails = false) {
+  const release = RELEASE;
   const uptimeSeconds = Math.round((Date.now() - serverStartedAt.getTime()) / 1000);
   const averageDurationMs = serverStats.requestCount
     ? Math.round(serverStats.totalDurationMs / serverStats.requestCount)
@@ -1992,6 +2044,7 @@ function getHealthPayload(includeDetails = false) {
     ok: true,
     app: 'bd-engine-cloud',
     mode: process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development',
+    release,
     startedAt: serverStartedAt.toISOString(),
     uptimeSeconds,
     checks,
