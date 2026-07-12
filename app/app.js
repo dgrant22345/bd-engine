@@ -3032,7 +3032,7 @@ function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolut
         <span class="workflow-card__step">2</span>
         <div class="workflow-card__copy">
           <strong>Recent role triggers</strong>
-          <span>${formatNumber(freshJobs)} jobs in 24h</span>
+          <span>${pluralize(freshJobs, 'job')} in 24h</span>
         </div>
         <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="fresh-roles" data-navigate="accounts">Open lane</button>
       </article>
@@ -4362,7 +4362,7 @@ async function renderDashboardView(options = {}) {
             <h3>Pending Tasks & Reminders</h3>
             <p class="muted small">Your automated follow-up queue.</p>
           </div>
-          <span class="badge badge--warning">${taskList.length} tasks</span>
+          <span class="badge badge--warning">${pluralize(taskList.length, 'task')}</span>
         </div>
         <div class="task-list">
           ${taskList.map(task => `
@@ -7676,6 +7676,11 @@ function formatNumber(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return String(value || '');
   return numeric.toLocaleString();
+}
+
+function pluralize(count, singular, plural = `${singular}s`) {
+  const numeric = Number(count || 0);
+  return `${formatNumber(numeric)} ${numeric === 1 ? singular : plural}`;
 }
 
 function formatDate(value) {

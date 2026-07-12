@@ -707,6 +707,30 @@ function mergeTenantItems(persisted = [], inMemory = []) {
   return merged;
 }
 
+// CG-009: sample/demo account rollups must be derived from the sample records
+// themselves — a stored count that disagrees with the visible jobs/contacts is
+// a trust failure (P0.3), and hard-coded demo numbers were exactly that.
+function applyDerivedSampleCounts(accountList, contactList, jobList) {
+  const dayMs = 86400000;
+  const seniorLevels = new Set(['director', 'vp', 'head', 'chief', 'c_level', 'cxo', 'founder', 'partner']);
+  for (const item of accountList) {
+    const accountJobs = jobList.filter((jobItem) => jobItem.accountId === item.id);
+    const activeJobs = accountJobs.filter((jobItem) => jobItem.active !== false);
+    const ageDays = (jobItem) => (Date.now() - new Date(jobItem.postedAt || 0).getTime()) / dayMs;
+    item.jobCount = activeJobs.length;
+    item.openRoleCount = activeJobs.length;
+    item.newRoleCount7d = activeJobs.filter((jobItem) => ageDays(jobItem) <= 7).length;
+    item.jobsLast30Days = accountJobs.filter((jobItem) => ageDays(jobItem) <= 30).length;
+    item.jobsLast90Days = accountJobs.filter((jobItem) => ageDays(jobItem) <= 90).length;
+    const accountContacts = contactList.filter((contactItem) => contactItem.accountId === item.id);
+    item.connectionCount = accountContacts.length;
+    item.talentContactCount = accountContacts.filter((contactItem) => contactItem.isTalentLeader).length;
+    item.seniorContactCount = accountContacts.filter(
+      (contactItem) => seniorLevels.has(String(contactItem.seniority || '').toLowerCase())
+    ).length;
+  }
+}
+
 function buildSampleWorkspaceData(tenantId, persona = 'bd') {
   const isJobSeeker = normalizePersona(persona) === 'jobseeker';
   const id = (slug) => `sample-${tenantId}-${slug}`;
@@ -846,6 +870,7 @@ function buildSampleWorkspaceData(tenantId, persona = 'bd') {
   const sampleTasks = [
     { id: id('task-sample'), tenantId, accountId: id('northstar'), title: isJobSeeker ? 'Draft Priya referral ask' : 'Send Priya hiring-signal follow-up', dueDate: futureDate(2), status: 'pending', priority: 'high', createdAt: now(), updatedAt: now() },
   ];
+  applyDerivedSampleCounts(sampleAccounts, sampleContacts, sampleJobs);
   return { accounts: sampleAccounts, contacts: sampleContacts, jobs: sampleJobs, configs: sampleConfigs, activities: sampleActivities, tasks: sampleTasks };
 }
 
@@ -957,6 +982,10 @@ let boardConfigs = [
 
 let activities = [];
 let tasks = [];
+
+// The local dev seed workspace claimed hard-coded rollups too — derive them
+// from the seed records so the first thing a developer sees is coherent.
+applyDerivedSampleCounts(accounts, contacts, jobs);
 let followups = [];
 
 // Populate maps from seed data
