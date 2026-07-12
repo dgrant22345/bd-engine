@@ -26,11 +26,9 @@ const appPath = new URL('../../app/app.js', import.meta.url);
 const shellPath = new URL('../public/index.html', import.meta.url);
 const serverPath = new URL('../src/server.js', import.meta.url);
 
-// Audited dead/unsupported visible actions (P0.2). Tickets CG-004 (accounts
-// bulk/import) and CG-005 (workbook, local enrichment, Sheets sync) own these.
+// Audited dead/unsupported visible actions (P0.2). CG-004 implemented accounts
+// bulk/import; ticket CG-005 (workbook, local enrichment, Sheets sync) owns the rest.
 const KNOWN_DEFERRED = [
-  '/api/accounts/bulk',
-  '/api/accounts/import',
   '/api/import/workbook',
   '/api/enrichment/run',
   '/api/enrichment/run-local',

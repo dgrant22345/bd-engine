@@ -947,6 +947,26 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, await store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
   }
 
+  // Static account collection actions — must be routed before the /:accountId
+  // param matcher below, which would otherwise swallow them as account ids.
+  if (pathname === '/api/accounts/bulk' && req.method === 'PATCH') {
+    const payload = await readJson(req);
+    if (!Array.isArray(payload.ids) || !payload.ids.length) {
+      return sendJson(res, 400, { error: 'Provide the account ids to update.' });
+    }
+    return sendJson(res, 200, await store.bulkUpdateAccounts(tenantId, payload));
+  }
+
+  if (pathname === '/api/accounts/import' && req.method === 'POST') {
+    const payload = await readJson(req);
+    const rows = store.parseAccountImportText(payload.text);
+    if (!rows.length) {
+      return sendJson(res, 400, { error: 'Paste one company per line, or CSV with a company column.' });
+    }
+    if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts', increment: rows.length })) return;
+    return sendJson(res, 200, await store.importAccountsList(tenantId, payload.text));
+  }
+
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
   if (accountOutreachMatch && req.method === 'POST') {
     if (!await requireEntitlement(res, tenant, user, { feature: 'outreach_drafts' })) return;

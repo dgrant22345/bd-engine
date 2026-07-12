@@ -2493,13 +2493,28 @@ function bindEvents() {
 
     if (form.id === 'account-import-form') {
       const payload = getFormValues(form);
-      const result = await api('/api/accounts/import', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      let result;
+      try {
+        result = await api('/api/accounts/import', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        showToast(`Import failed: ${error.message || error}`, 'error', 7000);
+        return;
+      }
       invalidateAppData();
       await renderAccountsView();
-      window.bdLocalApi.setAlert(`Imported ${formatNumber(result.count || 0)} target accounts.`, appAlert);
+      const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+      let message = `Imported ${formatNumber(result.count || 0)} target accounts.`;
+      if (skipped.length) {
+        const preview = skipped.slice(0, 3)
+          .map((row) => `line ${row.line}${row.company ? ` (${row.company})` : ''}: ${row.reason === 'duplicate' ? 'already in workspace' : row.reason}`)
+          .join('; ');
+        message += ` Skipped ${skipped.length}: ${preview}${skipped.length > 3 ? '…' : ''}`;
+        showToast(message, 'warning', 9000);
+      }
+      window.bdLocalApi.setAlert(message, appAlert);
       return;
     }
 
@@ -6937,13 +6952,24 @@ async function applyBulkUpdate() {
     showToast('Select a status, priority, owner, or tags to apply.', 'warning');
     return;
   }
-  await api('/api/accounts/bulk', {
-    method: 'PATCH',
-    body: JSON.stringify({ ids, ...patch }),
-  });
+  let result;
+  try {
+    result = await api('/api/accounts/bulk', {
+      method: 'PATCH',
+      body: JSON.stringify({ ids, ...patch }),
+    });
+  } catch (error) {
+    showToast(`Bulk update failed: ${error.message || error}`, 'error', 7000);
+    return;
+  }
   invalidateAppData();
   await renderAccountsView();
-  showToast('Updated ' + ids.length + ' accounts.', 'success');
+  const failed = Array.isArray(result.failed) ? result.failed : [];
+  if (failed.length) {
+    showToast(`Updated ${result.updated || 0} accounts; ${failed.length} could not be found.`, 'warning', 7000);
+  } else {
+    showToast(`Updated ${result.updated || 0} accounts.`, 'success');
+  }
 }
 
 async function generateSmartOutreachLegacy(accountId, buttonEl) {

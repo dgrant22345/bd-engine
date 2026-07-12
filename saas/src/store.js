@@ -3832,6 +3832,103 @@ export function createStore() {
       return item;
     },
 
+    // Bulk-edit selected accounts (status/priority/owner/addTags). Applies the
+    // patch per id and reports failed rows instead of failing the whole batch.
+    async bulkUpdateAccounts(tenantId, payload = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
+      const ids = Array.isArray(payload.ids) ? payload.ids.filter(Boolean) : [];
+      const patch = pickPatch(payload, ['status', 'priority', 'owner']);
+      const addTags = Array.isArray(payload.addTags)
+        ? payload.addTags.map((tag) => String(tag).trim()).filter(Boolean)
+        : [];
+      const failed = [];
+      let updated = 0;
+      for (const accountId of ids) {
+        const item = accountById(accountId, tenantId);
+        if (!item || item.tenantId !== tenantId) {
+          failed.push({ id: accountId, reason: 'not_found' });
+          continue;
+        }
+        Object.assign(item, patch);
+        if (addTags.length) {
+          item.tags = [...new Set([...(Array.isArray(item.tags) ? item.tags : []), ...addTags])];
+        }
+        item.updatedAt = now();
+        updated += 1;
+      }
+      if (updated) persistTenant(tenantId);
+      return { updated, failed };
+    },
+
+    // Parse a pasted target list (one company per line, or CSV with a header
+    // row containing "company"). Rows may set domain, careers_url, priority,
+    // owner, notes, status. Duplicates (by normalized name) and blank rows are
+    // reported per line, never silently dropped.
+    parseAccountImportText(text) {
+      const raw = String(text || '');
+      const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      const headerLine = lines.find((line) => line.trim());
+      const looksLikeCsv = Boolean(headerLine)
+        && headerLine.includes(',')
+        && /(^|,)\s*"?company"?\s*(,|$)/i.test(headerLine);
+      if (looksLikeCsv) {
+        return parseCSV(raw).map((row, index) => ({
+          line: index + 2, // 1-based, after the header row
+          company: (row.company || row.Company || '').trim(),
+          domain: (row.domain || '').trim(),
+          careersUrl: (row.careers_url || row.careersUrl || '').trim(),
+          priority: (row.priority || '').trim(),
+          owner: (row.owner || '').trim(),
+          notes: (row.notes || '').trim(),
+          status: (row.status || '').trim(),
+        }));
+      }
+      return lines
+        .map((line, index) => ({ line: index + 1, company: line.trim() }))
+        .filter((row) => row.company);
+    },
+
+    // Import a pasted target list. Creates accounts for new companies, skips
+    // duplicates/invalid rows with per-row reasons, persists once at the end.
+    async importAccountsList(tenantId, text) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
+      const rows = this.parseAccountImportText(text);
+      const existing = new Set(
+        accountsForTenant(tenantId).map((item) => item.normalizedName).filter(Boolean)
+      );
+      const skipped = [];
+      const created = [];
+      for (const row of rows) {
+        if (!row.company) {
+          skipped.push({ line: row.line, reason: 'missing_company' });
+          continue;
+        }
+        const key = normalizeKey(row.company);
+        if (existing.has(key)) {
+          skipped.push({ line: row.line, company: row.company, reason: 'duplicate' });
+          continue;
+        }
+        const item = await this.addAccount(tenantId, {
+          displayName: row.company,
+          domain: row.domain || '',
+          careersUrl: row.careersUrl || '',
+          priority: row.priority || '',
+          owner: row.owner || '',
+          notes: row.notes || '',
+          status: row.status || 'new',
+        }, true);
+        existing.add(key);
+        created.push(item);
+      }
+      if (created.length) {
+        getTenantArray(accountsByTenant, tenantId).sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
+        persistTenant(tenantId);
+      }
+      return { count: created.length, skipped, total: rows.length };
+    },
+
     // ── Contact creation ──────────────────────────────────────────────────
 
     async addContact(tenantId, payload, _skipPersist = false) {
