@@ -416,6 +416,16 @@ function startPeriodicPipelineRunner() {
 let startupComplete = false;
 let startupError = '';
 
+function getCurrentReadiness() {
+  return getReadinessDecision({
+    isProduction: (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production',
+    startupComplete,
+    startupError,
+    dbEnabled: isDbEnabled(),
+    dbReady: isDbReady(),
+  });
+}
+
 async function initializeData() {
   try {
     const dbConnected = await initDb();
@@ -599,8 +609,11 @@ async function route(req, res) {
 
   // Health checks stay public for Railway. Detailed status is authenticated
   // below because it can expose runtime metrics and recent error context.
+  // CG-016: the public health surface is availability-only. Configuration,
+  // environment, and infrastructure detail live behind auth on /api/status.
   if (pathname === '/health' || pathname === '/api/health') {
-    return sendJson(res, 200, getHealthPayload(false));
+    const decision = getCurrentReadiness();
+    return sendJson(res, 200, { ok: decision.ready, status: decision.ready ? 'operational' : 'degraded' });
   }
 
   // CG-011: liveness proves only that the event loop responds.
@@ -610,15 +623,11 @@ async function route(req, res) {
 
   // CG-011/012: readiness is the deploy gate — 503 when production lacks
   // durable persistence or startup failed. Railway's health check points here.
+  // The detailed reason is logged, not published (CG-016).
   if (pathname === '/readyz') {
-    const decision = getReadinessDecision({
-      isProduction: (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production',
-      startupComplete,
-      startupError,
-      dbEnabled: isDbEnabled(),
-      dbReady: isDbReady(),
-    });
-    return sendJson(res, decision.ready ? 200 : 503, decision.ready ? { ok: true } : { ok: false, reason: decision.reason });
+    const decision = getCurrentReadiness();
+    if (!decision.ready) console.error(`Readiness check failed: ${decision.reason}`);
+    return sendJson(res, decision.ready ? 200 : 503, { ok: decision.ready });
   }
 
   // ── Auth endpoints (public, rate-limited) ─────────────────────────────────

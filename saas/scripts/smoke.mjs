@@ -8,12 +8,14 @@ const checks = [];
 let cookie = '';
 let authEmail = '';
 
-await check('health endpoint', async () => {
+await check('public health is availability-only (no internals leak)', async () => {
   const body = await getJson('/health');
   assert(body.ok === true, 'health did not return ok=true');
-  assert(typeof body.checks?.errorAlertsConfigured === 'boolean', 'health omitted error alert readiness');
-  assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalMirrorHealthy'), 'health omitted relational mirror readiness');
-  assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalContentHealthy'), 'health omitted relational content readiness');
+  assert(body.status === 'operational', `expected operational, got ${body.status}`);
+  // CG-016: configuration/environment/infrastructure detail must not be public.
+  for (const leak of ['checks', 'mode', 'release', 'startedAt', 'databaseConnected', 'stripeMode']) {
+    assert(!Object.prototype.hasOwnProperty.call(body, leak), `public /health leaks "${leak}"`);
+  }
 });
 
 await check('liveness and readiness probes respond', async () => {
@@ -99,9 +101,12 @@ await mutationCheck('authenticated session can load bootstrap', async () => {
   assert(Array.isArray(body.ownerRoster), 'bootstrap did not include owner roster');
 });
 
-await mutationCheck('authenticated status includes email readiness', async () => {
+await mutationCheck('authenticated status includes operator detail', async () => {
   const body = await getJson('/api/status', cookie);
   assert(typeof body.checks?.emailConfigured === 'boolean', '/api/status did not include emailConfigured');
+  assert(typeof body.checks?.errorAlertsConfigured === 'boolean', '/api/status did not include error alert readiness');
+  assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalMirrorHealthy'), '/api/status omitted relational mirror readiness');
+  assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalContentHealthy'), '/api/status omitted relational content readiness');
 });
 
 await mutationCheck('manual ATS URL creates an import-ready board config', async () => {

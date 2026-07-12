@@ -737,38 +737,32 @@
           </nav>
           <main class="trust-main">
             <p class="hero-badge">System status</p>
-            <h1>Production health</h1>
-            <p class="trust-intro">A sanitized status view for launch checks. It reports service configuration and health without exposing secrets or workspace data.</p>
-            <div id="status-panel" class="status-panel">Loading status...</div>
+            <h1>Service status</h1>
+            <p class="trust-intro">Current availability of BD Engine Cloud. If something looks wrong that is not reflected here, email support@bdengine.io.</p>
+            <div id="status-panel" class="status-panel">Checking status...</div>
           </main>
         </div>`;
       root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
       try {
+        // CG-016: the public health surface is availability-only; operator
+        // configuration detail lives behind sign-in on /api/status.
         const status = await api('/health');
-        const checks = status.checks || {};
+        const operational = status.ok === true && status.status === 'operational';
         const panel = root.querySelector('#status-panel');
         if (!panel) return;
         panel.innerHTML = `
           <div class="status-grid">
-            ${renderStatusCheck('Server', checks.server, `Uptime ${Math.round((status.uptimeSeconds || 0) / 60)}m`)}
-            ${renderStatusCheck('Database', checks.databaseConfigured ? checks.databaseConnected : true, checks.databaseConfigured ? 'Configured' : 'In-memory mode')}
-            ${renderStatusCheck('Stripe', checks.stripeCommercialReady, checks.stripeCommercialReady ? 'Live checkout ready' : (checks.stripeReady ? `Checkout is in ${checks.stripeMode || 'unknown'} mode` : `Missing ${(checks.stripeMissing || []).join(', ') || 'configuration'}`))}
-            ${renderStatusCheck('Email', checks.emailConfigured, checks.emailConfigured ? 'Password reset emails ready' : 'Set RESEND_API_KEY and BD_EMAIL_FROM')}
-            ${renderStatusCheck('Error alerts', checks.errorAlertsConfigured, checks.errorAlertsConfigured ? 'External alerts connected' : 'Set BD_ERROR_WEBHOOK')}
-            ${renderStatusCheck('Data mirror', !checks.relationalMirrorConfigured || checks.relationalMirrorHealthy !== false, checks.relationalMirrorConfigured ? (checks.relationalMirrorCheckedAt ? `${checks.relationalMirrorWorkspaceCount || 0} workspaces checked; ${checks.relationalMirrorMismatchCount || 0} mismatches` : 'Initial check pending') : 'Not configured')}
-            ${renderStatusCheck('Mirror content', !checks.relationalContentConfigured || checks.relationalContentHealthy !== false, checks.relationalContentConfigured ? (checks.relationalContentCheckedAt ? `${checks.relationalContentWorkspaceCount || 0} canaries checked; ${checks.relationalContentMismatchCount || 0} mismatches` : 'Initial check pending') : 'Not configured')}
-            ${renderStatusCheck('Relational primary', true, `${checks.relationalPrimaryWorkspaceCount || 0} workspaces enabled; new workspace default ${checks.relationalNewWorkspaceDefault ? 'on' : 'off'}`)}
+            ${renderStatusCheck('BD Engine Cloud', operational, operational ? 'All systems operational' : 'Service is degraded — we are working on it')}
           </div>
-          <pre class="status-json">${escapeHtml(JSON.stringify({ mode: status.mode, startedAt: status.startedAt, uptimeSeconds: status.uptimeSeconds }, null, 2))}</pre>
         `;
       } catch (err) {
         const panel = root.querySelector('#status-panel');
-        if (panel) panel.innerHTML = `<div class="auth-error">Status check failed: ${escapeHtml(err.message || err)}</div>`;
+        if (panel) panel.innerHTML = '<div class="auth-error">We could not reach the service just now. Please try again shortly or email support@bdengine.io.</div>';
       }
     }
 
     function renderStatusCheck(label, ok, detail) {
-      return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'OK' : 'Needs setup'}</span><small>${escapeHtml(detail || '')}</small></article>`;
+      return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'Operational' : 'Degraded'}</span><small>${escapeHtml(detail || '')}</small></article>`;
     }
 
     // ── Login page ────────────────────────────────────────────────────────
