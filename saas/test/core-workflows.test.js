@@ -212,6 +212,104 @@ test('BambooHR embed URLs resolve to the JSON careers list', async () => {
   }
 });
 
+test('Workable boards import jobs from the documented public careers endpoint', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-workable-import';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Works' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Works',
+    atsType: 'workable',
+    careersUrl: 'https://apply.workable.com/example-works/',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(JSON.stringify({
+      jobs: [{
+        title: 'Product Designer',
+        shortcode: 'ABC123',
+        employment_type: 'Full-time',
+        department: 'Product',
+        url: 'https://apply.workable.com/j/ABC123',
+        published_on: new Date().toISOString().slice(0, 10),
+        city: 'Toronto',
+        state: 'Ontario',
+        country: 'Canada',
+      }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.newJobs, 1);
+    assert.deepEqual(requestedUrls, ['https://www.workable.com/api/accounts/example-works?details=true']);
+    const imported = (await store.findJobs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(imported.source, 'Workable');
+    assert.equal(imported.title, 'Product Designer');
+    assert.equal(imported.location, 'Toronto, Ontario, Canada');
+    assert.equal(imported.jobUrl, 'https://apply.workable.com/j/ABC123');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('outreach drafts use verified role context and return real alternate angles', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-outreach-quality';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Acme Systems' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Acme Systems',
+    atsType: 'greenhouse',
+    boardId: 'acme',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    jobs: [{
+      id: 202,
+      title: 'Senior Data Engineer',
+      location: { name: 'Toronto, ON' },
+      absolute_url: 'https://boards.greenhouse.io/acme/jobs/202',
+      updated_at: new Date().toISOString(),
+    }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    const draft = await store.createOutreachDraft(tenantId, account.id, {
+      contactName: 'Dana Chen',
+      contactTitle: 'VP Talent',
+      template: 'talent_partner',
+      includeVariants: true,
+    });
+    assert.match(draft.message_body, /Senior Data Engineer/);
+    assert.match(draft.message_body, /VP Talent/);
+    assert.doesNotMatch(draft.message_body, /recent growth|10 minutes next week|compare notes/i);
+    assert.equal(draft.variants.length, 2);
+    assert.deepEqual(draft.variants.map((item) => item.template_key), ['hiring_manager', 'executive']);
+    assert.ok(draft.linkedin_message.length < 400);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('generic company identities do not probe unrelated public ATS slugs', async () => {
   const store = createStore();
   const tenantId = 'tenant-generic-company';

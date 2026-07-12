@@ -141,7 +141,11 @@ function isMutationMethod(method) {
 
 function canDemoSessionUsePath(pathname, method) {
   if (!isMutationMethod(method)) return true;
-  return pathname === '/api/auth/logout';
+  if (pathname === '/api/auth/logout') return true;
+  // Draft generation is read-only: it derives copy from existing sample data
+  // and does not persist activity, tasks, or account changes.
+  return /^\/api\/accounts\/[^/]+\/generate-outreach$/.test(pathname)
+    && String(method || '').toUpperCase() === 'POST';
 }
 
 function sendDemoReadOnly(res) {

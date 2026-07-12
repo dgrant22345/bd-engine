@@ -2297,9 +2297,21 @@ export function createStore() {
       const detail = await this.getAccountDetail(tenantId, accountId);
       const detailLoadMs = Math.round(performance.now() - detailStartedAt);
       if (!detail) return null;
-      const selectedContact = selectContact(detail.contacts, payload.contactName);
+      const selectedContact = selectContact(detail.contacts, payload.contactName)
+        || (payload.contactName || payload.contactTitle ? {
+          fullName: payload.contactName || '',
+          firstName: String(payload.contactName || '').trim().split(/\s+/)[0] || '',
+          title: payload.contactTitle || '',
+        } : null);
       const template = payload.template || (this.getPersona(tenantId) === 'jobseeker' ? 'job_intro' : 'cold');
-      const draft = buildDraft({ account: detail.account, contact: selectedContact, jobs: detail.jobs, template, jobId: payload.jobId });
+      const draft = buildDraft({
+        account: detail.account,
+        contact: selectedContact,
+        jobs: detail.jobs,
+        template,
+        jobId: payload.jobId,
+        includeVariants: payload.includeVariants === true,
+      });
       draft.timings = {
         ...(draft.timings || {}),
         detailLoadMs,
@@ -4196,117 +4208,207 @@ function normalizeConfigPatch(input) {
   return output;
 }
 
-function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJobs, template, jobId }) {
-  const specificJob = jobId ? accountJobs.find(j => j.id === jobId) : null;
-  const roles = accountJobs.slice(0, 3).map((item) => item.title);
-  const roleList = specificJob ? specificJob.title : roles.join(', ');
-  
-  const firstName = itemContact?.firstName || itemContact?.fullName?.split(' ')[0] || 'there';
-  
-  if (template === 'job_intro' || template === 'job_networking' || template === 'job_referral') {
-    const jobMention = specificJob ? `the ${specificJob.title} position` : `the open roles`;
-    let subjectLine = `Interested in ${itemAccount.displayName} - ${jobMention}`;
-    let messageBody = [];
-    
-    if (template === 'job_intro') {
-      subjectLine = `${specificJob ? specificJob.title + ' role' : 'Opportunities'} at ${itemAccount.displayName}`;
-      messageBody = [
-        `Hi ${firstName},`,
-        '',
-        `I saw that ${itemAccount.displayName} is hiring for ${jobMention} and wanted to reach out directly.`,
-        '',
-        `Given your role as ${itemContact?.title || 'a leader on the team'}, I'd love to connect and share a bit about my background and how it aligns with what you're building.`,
-        '',
-        'Do you have 10 minutes next week for a quick intro?',
-      ];
-    } else if (template === 'job_networking') {
-      subjectLine = `Connecting - ${itemContact?.title || 'Team'} at ${itemAccount.displayName}`;
-      messageBody = [
-        `Hi ${firstName},`,
-        '',
-        `I've been following ${itemAccount.displayName}'s recent growth and noticed you are hiring for ${jobMention}.`,
-        '',
-        `I am actively exploring new opportunities in this space and would love to hear your perspective on the team's direction.`,
-        '',
-        'Would you be open to a quick 15-minute coffee chat or virtual intro next week?',
-      ];
-    } else if (template === 'job_referral') {
-      subjectLine = `Question about ${itemAccount.displayName} - ${jobMention}`;
-      messageBody = [
-        `Hi ${firstName},`,
-        '',
-        `I'm preparing to apply for ${jobMention} at ${itemAccount.displayName}.`,
-        '',
-        `I noticed your background in a similar space and thought you might have some insight into the team culture and what the hiring manager is looking for.`,
-        '',
-        'Would you be open to chatting briefly or passing my resume along if it looks like a fit?',
-      ];
-    }
-    
-    const linkedinMessage = `Hi ${firstName}, saw ${itemAccount.displayName} is hiring for ${jobMention}. I'm exploring new roles and would love to connect and learn more about your team.`;
-    
+function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJobs = [], template, jobId, includeVariants = false }) {
+  const templateKey = template || 'cold';
+  const specificJob = jobId ? accountJobs.find((item) => item.id === jobId) : null;
+  const roles = unique(accountJobs.map((item) => String(item.title || '').trim()).filter(Boolean)).slice(0, 3);
+  const locations = unique(accountJobs.map((item) => String(item.location || '').trim()).filter(Boolean)).slice(0, 2);
+  const companyName = itemAccount.displayName || itemAccount.companyName || 'the company';
+  const firstName = itemContact?.firstName || itemContact?.fullName?.trim().split(/\s+/)[0] || 'there';
+  const contactTitle = String(itemContact?.title || '').trim();
+  const jobLabel = specificJob?.title || roles[0] || 'an open role';
+  const roleSignal = specificJob
+    ? `${jobLabel}${specificJob.location ? ` in ${specificJob.location}` : ''}`
+    : roles.length
+      ? `${roles.join(', ')}${locations.length ? ` across ${locations.join(' and ')}` : ''}`
+      : '';
+  const activeRoleCount = Number(itemAccount.openRoleCount || accountJobs.length || 0);
+  const signalSentence = roleSignal
+    ? `${companyName} is currently hiring for ${roleSignal}.`
+    : `${companyName} is on my target list, although I do not have a verified open role to reference yet.`;
+
+  const draft = isJobSeekerTemplate(templateKey)
+    ? buildJobSeekerDraft({ companyName, firstName, contactTitle, templateKey, jobLabel, roleSignal, specificJob })
+    : buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount });
+
+  const result = {
+    account_id: itemAccount.id,
+    contact_name: itemContact?.fullName || '',
+    contact_title: contactTitle,
+    template_key: templateKey,
+    persona_label: contactTitle || (isJobSeekerTemplate(templateKey) ? 'Company contact' : 'Hiring stakeholder'),
+    signal_focus: roleSignal,
+    company_snippet: signalSentence,
+    timings: { generatedMs: 1 },
+    ...draft,
+    variants: [],
+  };
+
+  if (includeVariants) {
+    const variantKeys = isJobSeekerTemplate(templateKey)
+      ? ['job_intro', 'job_networking', 'job_referral']
+      : ['talent_partner', 'hiring_manager', 'executive'];
+    result.variants = variantKeys
+      .filter((key) => key !== templateKey)
+      .slice(0, 3)
+      .map((key) => buildDraft({
+        account: itemAccount,
+        contact: itemContact,
+        jobs: accountJobs,
+        template: key,
+        jobId,
+        includeVariants: false,
+      }));
+  }
+  return result;
+}
+
+function isJobSeekerTemplate(template) {
+  return ['job_intro', 'job_networking', 'job_referral'].includes(template);
+}
+
+function buildJobSeekerDraft({ companyName, firstName, contactTitle, templateKey, jobLabel, roleSignal, specificJob }) {
+  const verifiedRole = Boolean(roleSignal);
+  const rolePhrase = verifiedRole ? `the ${jobLabel} role` : 'future opportunities';
+  const contactContext = contactTitle ? `Given your work as ${contactTitle}, ` : '';
+  const base = {
+    why_now: verifiedRole ? `${companyName} has a verified opening for ${roleSignal}.` : `No verified opening is available, so this draft avoids claiming one.`,
+    contact_hook: contactTitle ? `${contactTitle} is the known relationship context.` : 'No contact role is available; keep the request directional.',
+    signal_focus: roleSignal,
+    suggested_next_step: 'Personalize one sentence about your relevant experience before sending.',
+  };
+
+  if (templateKey === 'job_networking') {
     return {
-      account_id: itemAccount.id,
-      contact_name: itemContact?.fullName || '',
-      contact_title: itemContact?.title || '',
-      template_key: template,
-      template_label: 'Networking note',
-      persona_label: itemContact?.title || 'Contact',
-      subject_line: subjectLine,
-      subject_options: [subjectLine, `Connecting regarding ${itemAccount.displayName}`, `Quick question about ${itemAccount.displayName}`],
-      message_body: messageBody.join('\n'),
-      linkedin_message: linkedinMessage,
-      follow_up_message: `Hi ${firstName}, just floating this to the top of your inbox. Let me know if you have time to chat!`,
-      call_opener: `Hi ${firstName}, calling regarding ${jobMention} at ${itemAccount.displayName}.`,
-      why_now: `Applying for ${jobMention}`,
-      contact_hook: `You are reaching out to ${itemContact?.title || 'someone'} at the company.`,
-      angle_summary: `Job seeker intro focusing on ${jobMention}.`,
-      signal_focus: specificJob ? specificJob.title : roles.join(', '),
-      suggested_next_step: 'Send email and connect on LinkedIn.',
-      company_snippet: `${itemAccount.displayName} is hiring for ${jobMention}.`,
-      timings: { generatedMs: 1 },
-      variants: [],
+      ...base,
+      template_label: 'Networking question',
+      subject_line: `${companyName}: a question about ${jobLabel}`,
+      subject_options: [`${companyName}: a question about ${jobLabel}`, `Your perspective on ${companyName}`, `Quick question about the team`],
+      message_body: [
+        `Hi ${firstName},`, '',
+        verifiedRole ? `I came across ${rolePhrase} at ${companyName}.` : `I am interested in the work at ${companyName} and am researching where my experience could be relevant.`, '',
+        `${contactContext}I would value your perspective on one thing: what does the team tend to prioritize when evaluating people for this kind of work?`, '',
+        'Even a quick reply would be genuinely helpful.',
+      ].join('\n'),
+      linkedin_message: `Hi ${firstName}, ${verifiedRole ? `I came across ${rolePhrase} at ${companyName}` : `I am researching ${companyName}`}. What does the team tend to value most in candidates for this kind of work? Even a quick reply would help.`,
+      follow_up_message: `Hi ${firstName}, following up once in case you have a quick perspective on what ${companyName} values for ${jobLabel} candidates. No worries if timing is tight.`,
+      call_opener: `I am researching ${rolePhrase} at ${companyName} and hoped to ask what the team values most in candidates.`,
+      angle_summary: 'Ask one easy, informed question instead of requesting a meeting immediately.',
     };
   }
 
-  // Fallback to original B2B Sales logic for other templates
-  const openRoleLine = roles.length
-    ? `${itemAccount.displayName} has live roles showing up, including ${roleList}.`
-    : `${itemAccount.displayName} has hiring movement worth watching.`;
-  const persona = template === 'executive' ? 'commercial urgency' : template === 'hiring_manager' ? 'team bandwidth' : 'recruiting bandwidth';
-  const subjectLine = `${itemAccount.displayName} hiring signal`;
-  const messageBody = [
-    `Hi ${firstName},`,
-    '',
-    `${openRoleLine} I help recruiting teams turn that kind of demand into a cleaner shortlist and warmer outreach.`,
-    '',
-    `Given your role as ${itemContact?.title || 'a leader on the team'}, I thought it may be useful to compare notes on ${persona} and where outside help could remove bottlenecks.`,
-    '',
-    'Open to a quick conversation next week?',
-  ].join('\n');
-  const linkedinMessage = `Hi ${firstName}, noticed ${itemAccount.displayName} is hiring around ${roleList || 'priority roles'}. I help teams prioritize recruiting outreach around live hiring signals. Worth comparing notes?`;
+  if (templateKey === 'job_referral') {
+    return {
+      ...base,
+      template_label: 'Referral path',
+      subject_line: `${jobLabel} at ${companyName}`,
+      subject_options: [`${jobLabel} at ${companyName}`, `A quick fit check before I apply`, `Question about the ${jobLabel} role`],
+      message_body: [
+        `Hi ${firstName},`, '',
+        verifiedRole ? `I am considering an application for ${rolePhrase} at ${companyName}.` : `I am considering ${companyName} for my next move.`, '',
+        `${contactContext}would you be comfortable sharing whether this is the right team to approach? If my background looks relevant after I apply, I would also appreciate any guidance on the referral process.`, '',
+        'Thanks for considering it.',
+      ].join('\n'),
+      linkedin_message: `Hi ${firstName}, I am considering ${verifiedRole ? `the ${jobLabel} role` : 'future roles'} at ${companyName}. Would you be comfortable pointing me toward the right team or referral process?`,
+      follow_up_message: `Hi ${firstName}, one quick follow-up on the ${jobLabel} opportunity. A pointer to the right team would be plenty; no need for a meeting.`,
+      call_opener: `I am considering ${rolePhrase} at ${companyName} and wanted to confirm the right team or referral path.`,
+      angle_summary: 'Ask for direction first and make any referral request conditional on genuine fit.',
+    };
+  }
 
   return {
-    account_id: itemAccount.id,
-    contact_name: itemContact?.fullName || '',
-    contact_title: itemContact?.title || '',
-    template_key: template || 'cold',
-    template_label: 'Cloud tailored note',
-    persona_label: itemContact?.title || 'Contact',
-    subject_line: subjectLine,
-    subject_options: [subjectLine, `Hiring support for ${itemAccount.displayName}`, `${itemAccount.displayName} talent bandwidth`],
+    ...base,
+    template_label: 'Role introduction',
+    subject_line: verifiedRole ? `${jobLabel} at ${companyName}` : `Interest in ${companyName}`,
+    subject_options: [verifiedRole ? `${jobLabel} at ${companyName}` : `Interest in ${companyName}`, `Question for the ${jobLabel} team`, `Exploring ${companyName}`],
+    message_body: [
+      `Hi ${firstName},`, '',
+      verifiedRole ? `I found ${rolePhrase} at ${companyName} and it caught my attention.` : `I am exploring future opportunities at ${companyName}.`, '',
+      `${contactContext}could you point me to the person who owns hiring for this area? I will keep the introduction concise and apply through the normal process.`, '',
+      'Thank you for any direction you can share.',
+    ].join('\n'),
+    linkedin_message: `Hi ${firstName}, ${verifiedRole ? `I found the ${jobLabel} role at ${companyName}` : `I am exploring ${companyName}`}. Could you point me to the person who owns hiring for this area? I will keep it concise.`,
+    follow_up_message: `Hi ${firstName}, following up once on my note about ${rolePhrase}. A name or team to contact would be more than enough.`,
+    call_opener: `I am calling about ${rolePhrase} at ${companyName} and hoped you could direct me to the right hiring contact.`,
+    angle_summary: 'Request a low-effort introduction to the right owner without overstating your fit.',
+  };
+}
+
+function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount }) {
+  const hasVerifiedSignal = Boolean(roleSignal);
+  const roleReference = hasVerifiedSignal ? roleSignal : 'your current hiring priorities';
+  const roleCountText = activeRoleCount > 1 ? `${activeRoleCount} visible openings` : roleReference;
+  const approaches = {
+    executive: {
+      label: 'Executive capacity note',
+      subject: `${companyName}: hiring capacity`,
+      value: `When several roles are open at once, leadership usually feels the cost in delivery time before it appears in recruiting metrics.`,
+      question: `Is hiring capacity affecting any near-term delivery commitments?`,
+      angle: 'Connect visible hiring demand to delivery risk, without assuming there is a problem.',
+    },
+    hiring_manager: {
+      label: 'Hiring manager note',
+      subject: `${roleReference} at ${companyName}`,
+      value: `I help hiring managers reduce screening time and reach a credible shortlist without adding more coordination to the team.`,
+      question: `Is shortlist quality or interview bandwidth the tighter constraint right now?`,
+      angle: 'Focus on the manager workload created by active roles.',
+    },
+    talent_partner: {
+      label: 'Talent partner note',
+      subject: `${companyName}: ${roleCountText}`,
+      value: `I help recruiting teams prioritize hard-to-fill searches and add qualified conversations where the existing pipeline is thin.`,
+      question: `Are any of these searches proving harder to cover than the others?`,
+      angle: 'Offer focused capacity around the hardest role, not a generic recruiting pitch.',
+    },
+    warm_intro: {
+      label: 'Warm relationship note',
+      subject: `Quick question about ${companyName}'s hiring`,
+      value: `I work with teams that need extra search capacity around a small number of priority roles.`,
+      question: `Would you be comfortable pointing me to whoever owns recruiting for this area?`,
+      angle: 'Use the relationship to ask for direction, not to force a sales meeting.',
+    },
+    follow_up: {
+      label: 'Useful follow-up',
+      subject: `Re: ${companyName}: ${roleCountText}`,
+      value: `One practical place I could help is a quick market map for the role that is consuming the most search time.`,
+      question: `Would a short sample map be useful, or is this not a priority now?`,
+      angle: 'Add a concrete offer and an easy way to decline.',
+    },
+    re_engage: {
+      label: 'Re-engagement note',
+      subject: `Worth revisiting at ${companyName}?`,
+      value: hasVerifiedSignal ? `I noticed the hiring picture now includes ${roleReference}.` : `I wanted to check whether hiring priorities have changed since we last connected.`,
+      question: `Worth reopening the conversation, or should I close the loop for now?`,
+      angle: 'Reopen with a current signal and give the recipient a clean out.',
+    },
+    cold: {
+      label: 'Hiring signal note',
+      subject: `${companyName}: ${roleCountText}`,
+      value: `I help teams add targeted search capacity when a priority role is not producing enough qualified conversations.`,
+      question: `Which of these roles, if any, is consuming the most recruiting time?`,
+      angle: 'Lead with the verified role signal and ask a diagnostic question.',
+    },
+  };
+  const approach = approaches[templateKey] || approaches.cold;
+  const contactLine = contactTitle ? `Given your role as ${contactTitle}, I thought this might sit close to your team.` : 'I thought this might sit close to your team.';
+  const messageBody = [
+    `Hi ${firstName},`, '',
+    hasVerifiedSignal ? signalSentence : `I am reaching out about hiring at ${companyName}.`, '',
+    approach.value, contactLine, '',
+    approach.question,
+  ].join('\n');
+  return {
+    template_label: approach.label,
+    subject_line: approach.subject,
+    subject_options: [approach.subject, `${roleReference} at ${companyName}`, `A question about hiring at ${companyName}`],
     message_body: messageBody,
-    linkedin_message: linkedinMessage,
-    follow_up_message: `Hi ${firstName}, circling back on my note about ${itemAccount.displayName}'s hiring priorities. Worth a quick chat?`,
-    call_opener: `I was reaching out because ${itemAccount.displayName} has ${accountJobs.length || 'several'} active hiring signals and I wanted to understand where recruiting bandwidth is tightest.`,
-    why_now: itemAccount.targetScoreExplanation || itemAccount.recommendedAction || '',
-    contact_hook: itemContact?.title ? `${itemContact.title} appears close to the hiring and recruiting workflow.` : '',
-    angle_summary: `Lead with ${persona} and the visible role demand.`,
-    signal_focus: roles.join(', '),
-    suggested_next_step: 'Send email and LinkedIn note, then follow up in one week.',
-    company_snippet: `${itemAccount.displayName} is a ${itemAccount.industry || 'target'} account with ${itemAccount.openRoleCount || accountJobs.length} open roles.`,
-    timings: { generatedMs: 1 },
-    variants: [],
+    linkedin_message: `Hi ${firstName}, ${hasVerifiedSignal ? `noticed ${companyName} is hiring for ${roleReference}` : `I am reaching out about hiring at ${companyName}`}. ${approach.question}`,
+    follow_up_message: `Hi ${firstName}, one quick follow-up on ${roleReference}. ${templateKey === 'follow_up' ? 'Happy to send a short sample market map, or close the loop if this is not a priority.' : 'If it is not a priority right now, a quick no is completely fine.'}`,
+    call_opener: `${signalSentence} I wanted to understand whether sourcing coverage or interview bandwidth is the tighter constraint.`,
+    why_now: hasVerifiedSignal ? signalSentence : 'No verified role signal is available; the draft does not claim one.',
+    contact_hook: contactTitle ? `${contactTitle} is the known reason this contact may be relevant.` : 'No contact title is available, so the note keeps the assumption light.',
+    angle_summary: approach.angle,
+    suggested_next_step: 'Review the factual role signal, send the shortest suitable channel, and follow up once.',
   };
 }
 
@@ -4637,6 +4739,7 @@ const ATS_FETCHERS = new Map([
   ['jobvite', fetchJobviteJobs],
   ['workday', fetchWorkdayJobs],
   ['bamboohr', fetchBamboohrJobs],
+  ['workable', fetchWorkableJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
@@ -4649,6 +4752,7 @@ function normalizeAtsType(value) {
   if (normalized.includes('jobvite')) return 'jobvite';
   if (normalized.includes('workday') || normalized.includes('myworkdayjobs')) return 'workday';
   if (normalized.includes('bamboohr')) return 'bamboohr';
+  if (normalized.includes('workable')) return 'workable';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -4663,6 +4767,7 @@ function detectAtsTypeFromUrl(value) {
   if (url.includes('jobvite.com')) return 'jobvite';
   if (url.includes('myworkdayjobs.com')) return 'workday';
   if (url.includes('bamboohr.com')) return 'bamboohr';
+  if (url.includes('workable.com')) return 'workable';
   return '';
 }
 
@@ -4751,6 +4856,8 @@ function getConfigBoardId(config = {}) {
   for (const sourceUrl of getConfigUrlCandidates(config)) {
     const bamboo = String(sourceUrl).match(/https?:\/\/([^./]+)\.bamboohr\.com/i);
     if (bamboo) return decodeURIComponent(bamboo[1]);
+    const workable = String(sourceUrl).match(/(?:apply\.)?workable\.com\/(?:api\/accounts\/)?([^/?#]+)/i);
+    if (workable && !['api', 'j', 'jobs', 'www'].includes(workable[1].toLowerCase())) return decodeURIComponent(workable[1]);
   }
   return '';
 }
@@ -5042,6 +5149,18 @@ async function fetchBamboohrJobs(config, boardId) {
   const url = getBambooCareersApiUrl(config, boardId);
   const payload = await fetchJson(url);
   return { jobs: firstArray(payload?.result, payload?.jobs, payload) };
+}
+
+async function fetchWorkableJobs(config, boardId) {
+  const url = getWorkableJobsApiUrl(config, boardId);
+  const payload = await fetchJson(url);
+  return { jobs: firstArray(payload?.jobs, payload) };
+}
+
+function getWorkableJobsApiUrl(config = {}, boardId = '') {
+  const apiUrl = String(config.apiUrl || '');
+  if (/workable\.com\/api\/accounts\//i.test(apiUrl)) return setUrlSearchParams(apiUrl, { details: 'true' });
+  return `https://www.workable.com/api/accounts/${encodeURIComponent(boardId)}?details=true`;
 }
 
 function getBambooCareersApiUrl(config = {}, boardId = '') {
@@ -5622,6 +5741,24 @@ async function probeAtsUrl(config, atsUrl) {
       return null;
     }
   }
+  if (atsType === 'workable') {
+    const apiUrl = getWorkableJobsApiUrl(tempConfig, boardId);
+    try {
+      const payload = await fetchJson(apiUrl, 8000);
+      const jobs = firstArray(payload?.jobs, payload);
+      if (!jobs.length) return null;
+      return {
+        atsType,
+        boardId,
+        apiUrl,
+        resolvedBoardUrl: `https://apply.workable.com/${encodeURIComponent(boardId)}/`,
+        jobCount: jobs.length,
+        method: 'careers_page_link',
+      };
+    } catch {
+      return null;
+    }
+  }
   return null;
 }
 
@@ -5873,6 +6010,41 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       employmentType: raw.employmentType || raw.employmentStatusLabel || raw.type || '',
       atsType,
       source: 'BambooHR',
+      jobId: String(jobId),
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'workable') {
+    const title = raw.title || raw.full_title || '';
+    if (!title) return null;
+    const firstLocation = Array.isArray(raw.locations) ? raw.locations[0] : null;
+    const location = [
+      raw.city || firstLocation?.city,
+      raw.state || firstLocation?.region,
+      raw.country || firstLocation?.country,
+    ].filter(Boolean).join(', ') || (raw.telecommuting ? 'Remote' : '');
+    const postedAt = raw.published_on || raw.created_at || retrievedAt;
+    const jobId = raw.shortcode || raw.id || raw.code || title;
+    const jobUrl = raw.url || raw.shortlink || raw.application_url || '';
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || raw.function || '',
+      employmentType: raw.employment_type || raw.employmentType || '',
+      atsType,
+      source: 'Workable',
       jobId: String(jobId),
       naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
       jobUrl,

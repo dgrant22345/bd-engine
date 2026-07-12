@@ -4955,7 +4955,7 @@ async function renderAccountDetail(accountId) {
             <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
           </div>
         </div>
-        <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick the contact and angle you want, then generate a note built from live hiring signals, the likely pain point, and the best route into the account.'}</div>
+        <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick a contact and message angle. The draft will use verified hiring signals, the selected role, and known relationship context without inventing company pain points.'}</div>
       </div>
     </div>
 
@@ -5538,7 +5538,7 @@ async function renderAdminView() {
           </div>
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
-            ${renderField('Job-board system', '<select name="atsType"><option value="">Unknown</option><optgroup label="Live import supported"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="ashby">Ashby</option><option value="smartrecruiters">SmartRecruiters</option><option value="workday">Workday</option><option value="custom_static">Compatible careers page</option></optgroup><optgroup label="Tracking only"><option value="jobvite">Jobvite - tracking only</option><option value="icims">iCIMS - tracking only</option><option value="taleo">Taleo - tracking only</option></optgroup></select>')}
+            ${renderField('Job-board system', '<select name="atsType"><option value="">Unknown</option><optgroup label="Live import supported"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="ashby">Ashby</option><option value="smartrecruiters">SmartRecruiters</option><option value="workday">Workday</option><option value="bamboohr">BambooHR</option><option value="workable">Workable</option><option value="jobvite">Jobvite</option><option value="custom_static">Compatible careers page</option></optgroup><optgroup label="Tracking only"><option value="icims">iCIMS - tracking only</option><option value="taleo">Taleo - tracking only</option></optgroup></select>')}
             ${renderField('Board ID', '<input name="boardId" placeholder="Auto-detected from supported ATS URLs">')}
             ${renderField('Domain', '<input name="domain">')}
             ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://jobs.lever.co/company">')}
@@ -7018,6 +7018,12 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
 
 function getOutreachTemplateMeta(template) {
   switch ((template || 'cold').toLowerCase()) {
+    case 'job_intro':
+      return { label: 'Role introduction', buttonLabel: 'Generate role introduction' };
+    case 'job_networking':
+      return { label: 'Networking question', buttonLabel: 'Generate networking note' };
+    case 'job_referral':
+      return { label: 'Introduction request', buttonLabel: 'Generate introduction request' };
     case 'talent_partner':
       return { label: 'Talent / recruiter note', buttonLabel: 'Generate recruiter note' };
     case 'hiring_manager':
