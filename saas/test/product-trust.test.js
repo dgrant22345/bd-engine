@@ -39,13 +39,44 @@ test('password recovery gives users a next step when email delivery is unavailab
   assert.match(landing, /support@bdengine\.io/);
 });
 
-test('every literal UI action is routed to a click handler', async () => {
+// Handler extraction: the delegated click handler declares `actionName`; the
+// delegated submit handler must never reference it (it is out of scope there and
+// throws ReferenceError before any form logic runs — CG-001).
+async function readDelegatedHandlers() {
   const app = await readFile(appPath, 'utf8');
+  const clickStart = app.indexOf("document.addEventListener('click', async (event)");
+  const submitStart = app.indexOf("document.addEventListener('submit', async (event)");
+  assert.ok(clickStart >= 0, 'delegated click handler not found');
+  assert.ok(submitStart > clickStart, 'delegated submit handler not found after click handler');
+  const submitEnd = app.indexOf('\n  });', submitStart);
+  assert.ok(submitEnd > submitStart, 'submit handler end not found');
+  return {
+    app,
+    clickHandler: app.slice(clickStart, submitStart),
+    submitHandler: app.slice(submitStart, submitEnd),
+  };
+}
+
+test('every literal UI action is routed to the click handler scope, not just anywhere in the file', async () => {
+  const { app, clickHandler } = await readDelegatedHandlers();
   const actions = [...app.matchAll(/data-action=["']([^"'$<{]+)["']/g)].map((match) => match[1]);
   for (const action of new Set(actions)) {
     const escaped = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    assert.match(app, new RegExp(`actionName\\s*===\\s*['"]${escaped}['"]|case\\s+['"]${escaped}['"]`), `Missing handler for ${action}`);
+    assert.match(
+      clickHandler,
+      new RegExp(`actionName\\s*===\\s*['"]${escaped}['"]|case\\s+['"]${escaped}['"]`),
+      `Missing click handler for ${action} (a branch outside the click handler scope does not count)`
+    );
   }
+});
+
+test('form submit handler never references click-handler locals (regression: CG-001)', async () => {
+  const { submitHandler } = await readDelegatedHandlers();
+  assert.doesNotMatch(
+    submitHandler,
+    /\bactionName\b/,
+    'submit handler references actionName, which is declared in the click handler — every non-setup form submit throws ReferenceError before doing any work'
+  );
 });
 
 test('the read-only demo can showcase outreach generation without enabling edits', async () => {

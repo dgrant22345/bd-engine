@@ -2098,6 +2098,11 @@ function bindEvents() {
       if (view === 'jobs') await exportJobsCsv();
       return;
     }
+    if (actionName === 'upgrade-for-export') {
+      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+      location.hash = '#/admin';
+      return;
+    }
     if (actionName === 'apply-enrichment-filter') {
       applyEnrichmentFilters();
       return;
@@ -2447,11 +2452,6 @@ function bindEvents() {
     if (form.id === 'accounts-filter-form') {
       appState.accountQuery = { ...appState.accountQuery, page: 1, ...getFormValues(form) };
       await renderAccountsView();
-      return;
-    }
-    if (actionName === 'upgrade-for-export') {
-      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
-      location.hash = '#/admin';
       return;
     }
 
