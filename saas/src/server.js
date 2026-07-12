@@ -9,6 +9,7 @@ import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUse
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
+import { getReadinessDecision } from './readiness.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -396,6 +397,9 @@ function startPeriodicPipelineRunner() {
   }, interval);
 }
 
+let startupComplete = false;
+let startupError = '';
+
 async function initializeData() {
   try {
     const dbConnected = await initDb();
@@ -405,15 +409,22 @@ async function initializeData() {
       await loadSessionsFromDb();
       await store.loadFromDb();
     }
+    startupComplete = true;
   } catch (error) {
-    console.error('Startup data initialization failed:', error.message || error);
+    // Keep the process alive so /livez responds, but readiness stays 503 —
+    // the deployment must not go active without durable persistence (CG-011).
+    startupError = String(error.message || error);
+    console.error('Startup data initialization failed:', startupError);
   }
 }
 
 function isHealthRequest(req) {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
-    return url.pathname === '/health' || url.pathname === '/api/health';
+    // Probe endpoints must answer during startup instead of blocking on it:
+    // /livez proves the event loop; /readyz reports "startup incomplete" (503).
+    return url.pathname === '/health' || url.pathname === '/api/health'
+      || url.pathname === '/livez' || url.pathname === '/readyz';
   } catch {
     return false;
   }
@@ -574,6 +585,24 @@ async function route(req, res) {
   // below because it can expose runtime metrics and recent error context.
   if (pathname === '/health' || pathname === '/api/health') {
     return sendJson(res, 200, getHealthPayload(false));
+  }
+
+  // CG-011: liveness proves only that the event loop responds.
+  if (pathname === '/livez') {
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // CG-011/012: readiness is the deploy gate — 503 when production lacks
+  // durable persistence or startup failed. Railway's health check points here.
+  if (pathname === '/readyz') {
+    const decision = getReadinessDecision({
+      isProduction: (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production',
+      startupComplete,
+      startupError,
+      dbEnabled: isDbEnabled(),
+      dbReady: isDbReady(),
+    });
+    return sendJson(res, decision.ready ? 200 : 503, decision.ready ? { ok: true } : { ok: false, reason: decision.reason });
   }
 
   // ── Auth endpoints (public, rate-limited) ─────────────────────────────────

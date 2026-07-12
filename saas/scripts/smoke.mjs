@@ -16,6 +16,14 @@ await check('health endpoint', async () => {
   assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalContentHealthy'), 'health omitted relational content readiness');
 });
 
+await check('liveness and readiness probes respond', async () => {
+  const live = await fetch(`${baseUrl}/livez`);
+  assert(live.status === 200, `livez expected 200, got ${live.status}`);
+  const ready = await fetch(`${baseUrl}/readyz`);
+  // Local/dev in-memory mode is intentionally ready; production requires the DB.
+  assert(ready.status === 200, `readyz expected 200, got ${ready.status}: ${await ready.text()}`);
+});
+
 await check('protected API rejects anonymous requests', async () => {
   const response = await fetch(`${baseUrl}/api/bootstrap`);
   assert(response.status === 401, `expected 401, got ${response.status}`);
