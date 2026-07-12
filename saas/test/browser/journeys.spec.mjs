@@ -1,0 +1,231 @@
+/**
+ * CG-002: browser journey harness. Real Chromium drives the real server
+ * (in-memory mode, port 8788 via playwright.config.mjs webServer).
+ *
+ * Contract: every journey fails if the page raises ANY uncaught exception or
+ * unhandled rejection — the executable version of "every button responds".
+ *
+ * Notes on app structure encoded here:
+ * - A fresh signup is gated inside the first-run setup wizard (profile → team →
+ *   import → launch); other routes render setup until it completes.
+ * - Inputs use native `required`, so empty submits are blocked by the browser.
+ *   Whitespace values pass native validation and exercise the app's own
+ *   trim-validation toasts.
+ * - Outreach generation lives in a modal opened by [data-action="select-contact-outreach"].
+ */
+import { test as base, expect } from '@playwright/test';
+
+const test = base.extend({
+  page: async ({ page }, use) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    await use(page);
+    expect(errors, 'uncaught page errors during journey').toEqual([]);
+  },
+});
+
+let signupCounter = 0;
+async function signup(page, { persona = 'bd' } = {}) {
+  signupCounter += 1;
+  const email = `journey-${Date.now()}-${signupCounter}@example.com`;
+  await page.goto('/');
+  await page.click('#nav-signup');
+  if (persona !== 'bd') await page.selectOption('#signup-persona', persona);
+  await page.fill('#signup-name', 'Journey Tester');
+  await page.fill('#signup-email', email);
+  await page.fill('#signup-password', 'journey-password-1');
+  await page.fill('#signup-workspace', 'Journey Workspace');
+  await page.click('#signup-form button[type="submit"]');
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  return { email, app: page.frameLocator('iframe.cloud-app-frame') };
+}
+
+// Walk the first-run wizard to a completed workspace: profile → team →
+// skip import (completes setup) → open dashboard when offered.
+async function fillProfileForm(profile) {
+  // Fields are not reliably prefilled after signup; native `required` would
+  // silently block the submit, so always fill all three.
+  await profile.locator('#setup-workspace-name').fill('Journey Workspace');
+  await profile.locator('#setup-user-name').fill('Journey Tester');
+  await profile.locator('#setup-user-email').fill('journey-setup@example.com');
+}
+
+async function completeSetup(page, app) {
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await fillProfileForm(profile);
+  await profile.locator('button[type="submit"]').click();
+  const team = app.locator('#setup-team-form');
+  await expect(team).toBeVisible({ timeout: 10000 });
+  await team.locator('button[type="submit"]').click();
+  const skip = app.locator('[data-action="setup-skip-import"]');
+  await expect(skip).toBeVisible({ timeout: 10000 });
+  await skip.click();
+  const openDashboard = app.locator('[data-action="setup-open-dashboard"]');
+  try {
+    await openDashboard.waitFor({ state: 'visible', timeout: 10000 });
+    await openDashboard.click();
+  } catch {
+    // Some flows land on the dashboard directly after completion.
+  }
+  await expect(app.locator('#setup-profile-form')).toHaveCount(0, { timeout: 10000 });
+  // Opening the dashboard can queue the product tour, whose overlay intercepts
+  // all pointer events — end it before the journey continues.
+  const endTour = app.locator('[data-action="end-tour"]');
+  try {
+    await endTour.waitFor({ state: 'visible', timeout: 4000 });
+    await endTour.click();
+    await app.locator('.tour-overlay').waitFor({ state: 'detached', timeout: 5000 });
+  } catch {
+    // No tour queued for this flow.
+  }
+}
+
+async function startDemo(page) {
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  return page.frameLocator('iframe.cloud-app-frame');
+}
+
+async function gotoAppRoute(page, route) {
+  await page.evaluate((hash) => {
+    const frame = document.querySelector('iframe.cloud-app-frame');
+    frame.contentWindow.location.hash = hash;
+  }, route);
+}
+
+test('demo journey: read-only demo opens and dashboard renders', async ({ page }) => {
+  const app = await startDemo(page);
+  await expect(app.locator('body')).toContainText(/dashboard|pipeline|account/i, { timeout: 15000 });
+});
+
+test('signup journey: new account reaches the app workspace', async ({ page }) => {
+  const { app } = await signup(page);
+  await expect(app.locator('body')).toContainText(/setup|workspace|dashboard/i, { timeout: 15000 });
+});
+
+test('setup journey: whitespace-only workspace name is rejected visibly', async ({ page }) => {
+  const { app } = await signup(page);
+  const profileForm = app.locator('#setup-profile-form');
+  await expect(profileForm).toBeVisible({ timeout: 15000 });
+  // Whitespace passes native `required` and must hit the app's trim validation.
+  await fillProfileForm(profileForm);
+  await profileForm.locator('#setup-workspace-name').fill('   ');
+  await profileForm.locator('button[type="submit"]').click();
+  await expect(app.locator('.toast').first()).toContainText(/required/i, { timeout: 5000 });
+});
+
+test('setup journey: wizard completes through to the dashboard', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/dashboard');
+  await expect(app.locator('body')).toContainText(/dashboard|account|signal|readiness/i, { timeout: 15000 });
+});
+
+test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/tasks');
+  const form = app.locator('#task-create-form');
+  await expect(form).toBeVisible({ timeout: 15000 });
+  // Whitespace summary passes native required and must show the app's warning
+  // toast (this exact submit path used to throw ReferenceError — CG-001).
+  // Target the warning toast specifically — a success toast from setup
+  // completion can still be on screen.
+  await form.locator('input[name="summary"]').fill('   ');
+  await form.locator('button[type="submit"]').click();
+  await expect(app.locator('.toast--warning').first()).toContainText(/description|task/i, { timeout: 5000 });
+  // Toasts overlay the form and intercept pointer events; let them clear.
+  await expect(app.locator('.toast')).toHaveCount(0, { timeout: 10000 });
+  // Valid summary → task appears in the list.
+  await form.locator('input[name="summary"]').fill('Follow up with journey account');
+  await form.locator('button[type="submit"]').click();
+  await expect(app.locator('.tasks-content')).toContainText('Follow up with journey account', { timeout: 10000 });
+});
+
+test('filter journey: contacts filter narrows results without errors', async ({ page }) => {
+  await startDemo(page);
+  await gotoAppRoute(page, '#/contacts');
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  const form = app.locator('#contacts-filter-form');
+  await expect(form).toBeVisible({ timeout: 15000 });
+  const rowsBefore = await app.locator('table tbody tr').count();
+  await form.locator('input[name="q"]').fill('director');
+  await form.locator('button[type="submit"]').first().click();
+  await expect
+    .poll(async () => app.locator('table tbody tr').count(), { timeout: 10000 })
+    .toBeLessThanOrEqual(rowsBefore);
+});
+
+test('account journey: accounts list renders and account detail opens', async ({ page }) => {
+  await startDemo(page);
+  await gotoAppRoute(page, '#/accounts');
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('table tbody tr').first()).toBeVisible({ timeout: 15000 });
+  await app.locator('[data-action="open-account"]').first().click();
+  await expect(app.locator('body')).toContainText(/contacts|jobs|outreach|score/i, { timeout: 10000 });
+});
+
+test('message journey: outreach modal generates grounded content in the demo', async ({ page }) => {
+  await startDemo(page);
+  await gotoAppRoute(page, '#/accounts');
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await app.locator('[data-action="open-account"]').first().click();
+  // Outreach generation lives in a modal; open it via a mapped contact.
+  const openModal = app.locator('[data-action="select-contact-outreach"]').first();
+  await expect(openModal).toBeVisible({ timeout: 10000 });
+  await openModal.click();
+  const generate = app.locator('#generate-outreach-button');
+  await expect(generate).toBeVisible({ timeout: 10000 });
+  await generate.click();
+  await expect(app.locator('#outreach-modal-backdrop')).toContainText(/subject|copy/i, { timeout: 15000 });
+});
+
+test('import journey: setup CSV upload previews connections without errors', async ({ page }) => {
+  const { app } = await signup(page);
+  // Advance to the import step: profile → team → import.
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await fillProfileForm(profile);
+  await profile.locator('button[type="submit"]').click();
+  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  const fileInput = app.locator('#setup-csv-file');
+  await expect(app.locator('[data-action="setup-browse-csv"]')).toBeVisible({ timeout: 10000 });
+  const csv = [
+    'First Name,Last Name,Company,Position,Email Address,Connected On',
+    'Jane,Doe,Journey Robotics,VP Engineering,jane@journeyrobotics.com,01 Jan 2026',
+    'John,Roe,Journey Robotics,CTO,john@journeyrobotics.com,02 Jan 2026',
+  ].join('\n');
+  await fileInput.setInputFiles({ name: 'connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await expect(app.locator('body')).toContainText(/connections\.csv|2 connection|preview/i, { timeout: 15000 });
+});
+
+test('billing journey: billing page opens from the account menu', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await page.click('#cloud-avatar-btn');
+  await page.click('#cloud-billing-btn');
+  await expect(app.locator('body')).toContainText(/plan|billing|trial/i, { timeout: 15000 });
+});
+
+test('privacy journey: workspace data export responds from the account menu', async ({ page }) => {
+  await signup(page);
+  await page.click('#cloud-avatar-btn');
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
+    page.click('#cloud-export-btn'),
+  ]);
+  if (!download) {
+    // Export may render inline instead of downloading; either way the page must respond visibly.
+    await expect(page.locator('body')).toContainText(/export|download|data/i, { timeout: 10000 });
+  }
+});
+
+test('logout journey: logging out returns to the landing page', async ({ page }) => {
+  await signup(page);
+  await page.click('#cloud-avatar-btn');
+  await page.click('#cloud-logout-btn');
+  await expect(page.locator('#nav-signup')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('iframe.cloud-app-frame')).toHaveCount(0);
+});

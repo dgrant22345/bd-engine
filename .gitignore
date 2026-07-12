@@ -42,3 +42,7 @@ saas-store-scratch.js
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Playwright artifacts
+saas/test-results/
+saas/playwright-report/
