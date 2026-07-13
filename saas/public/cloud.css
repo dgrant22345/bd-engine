@@ -1161,6 +1161,7 @@ a:hover { text-decoration: underline; }
 }
 
 .cloud-menu-item {
+  display: block;
   width: 100%;
   text-align: left;
   background: none;
@@ -1171,10 +1172,47 @@ a:hover { text-decoration: underline; }
   padding: 10px 16px;
   cursor: pointer;
   transition: all var(--transition);
+  text-decoration: none;
 }
 
 .cloud-menu-item:hover {
   background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.cloud-verification-status {
+  margin-top: 5px;
+  color: var(--amber) !important;
+  font-weight: 600;
+}
+
+.cloud-verification-status.is-verified {
+  color: var(--green) !important;
+}
+
+.cloud-account-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 20px;
+  border-bottom: 1px solid rgba(59, 130, 246, 0.28);
+  background: rgba(30, 64, 175, 0.18);
+  color: var(--text-secondary);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.cloud-notice-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cloud-notice-close:hover {
   color: var(--text-primary);
 }
 

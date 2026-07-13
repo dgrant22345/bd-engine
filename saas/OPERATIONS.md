@@ -7,6 +7,7 @@ Run these before pushing a production change:
 ```powershell
 npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
+npm.cmd --prefix saas run test:browser
 $env:BD_CLOUD_SMOKE_URL='http://127.0.0.1:8787'
 npm.cmd --prefix saas run smoke
 ```
@@ -85,7 +86,9 @@ Review the complete dry-run manifest and create a verified backup first.
 
 The app reports these in the authenticated status screen:
 
-- `RESEND_API_KEY` and `BD_EMAIL_FROM` enable password-reset delivery.
+- `RESEND_API_KEY` and `BD_EMAIL_FROM` enable password-reset and advisory
+  email-verification delivery. Confirm both flows against a real inbox after
+  changing either setting.
 - `BD_ERROR_WEBHOOK` enables immediate server-error alerts.
 - An external uptime monitor should poll `/health` and alert on non-200 results.
 - Privacy and Terms copy requires legal review before broad commercial launch.

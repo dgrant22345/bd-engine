@@ -1,6 +1,6 @@
 # BD Engine Cloud
 
-Hosted SaaS prototype for BD Engine.
+Hosted multi-tenant SaaS application for BD Engine.
 
 This folder is intentionally separate from the local Windows app. The goal is to create a clean cloud path while preserving the working installer/local edition.
 
@@ -18,7 +18,7 @@ Open <http://localhost:8787>.
 
 Use the signup flow on the landing page to create a trial workspace.
 
-## What This Prototype Includes
+## Product Capabilities
 
 ### Phase 1 (Complete)
 - The same static v0 frontend used by the local Windows app, mounted under `/app/`
@@ -61,12 +61,14 @@ saas/
 └── .env.example
 ```
 
-## Remaining Production Work
+## Production Dependencies
 
-- The relational migration is still staged: the legacy tenant document remains
-  the write source of truth while relational tables are parity-checked canaries.
-- Transactional password-reset email requires `RESEND_API_KEY` and
-  `BD_EMAIL_FROM`; email verification is not yet enforced.
+- New workspaces can use relational-primary storage with guarded legacy
+  snapshots for rollback. Existing legacy workspaces remain supported and can
+  be migrated individually after parity checks.
+- Transactional password-reset and advisory email-verification delivery require
+  `RESEND_API_KEY` and `BD_EMAIL_FROM`. When they are absent, the app does not
+  issue unusable verification tokens or hide account-recovery limitations.
 - External uptime monitoring and alert routing must be configured outside the
   app even though `/health` and error-reporting hooks are available.
 - LinkedIn and live ATS imports persist resumable queue descriptors and recover
@@ -104,9 +106,10 @@ The full runbook lives in `docs/disaster-recovery.md`.
 
 ## Relational Migration
 
-The app still uses the existing tenant JSONB row as the production source of
-truth, but writes now also mirror loaded workspace records into relational
-tables for the larger data-model migration.
+The app supports both legacy tenant-document storage and relational-primary
+storage. Mirror writes and parity checks provide a guarded migration path for
+existing workspaces; newly created workspaces can default to relational-primary
+storage with `BD_RELATIONAL_WRITE_NEW_TENANTS=true`.
 
 Backfill existing workspaces after deploying the mirror tables:
 

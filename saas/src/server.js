@@ -6,10 +6,10 @@ import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
-import { createUser, authenticateUser, setUserPassword, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail } from './email.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed } from './db.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -45,6 +45,7 @@ const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
 const PASSWORD_RESET_MAX = Number(process.env.BD_PASSWORD_RESET_MAX) > 0 ? Number(process.env.BD_PASSWORD_RESET_MAX) : 5;
 const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
@@ -59,6 +60,7 @@ const relationalDeepCheckValues = String(process.env.BD_RELATIONAL_DEEP_CHECK_TE
 const RELATIONAL_DEEP_CHECK_TENANTS = relationalDeepCheckValues.includes('*') ? [] : relationalDeepCheckValues;
 const RELATIONAL_DEEP_CHECK_CONFIGURED = relationalDeepCheckValues.length > 0;
 const passwordResetTokens = new Map();
+const emailVerificationTokens = new Map();
 const MAX_RATE_BUCKETS = Math.max(1000, Number(process.env.BD_MAX_RATE_BUCKETS) || 10000);
 const MAX_RESET_TOKEN_CACHE = Math.max(100, Number(process.env.BD_MAX_RESET_TOKEN_CACHE) || 5000);
 
@@ -106,6 +108,9 @@ function pruneEphemeralMemory(nowMs = Date.now()) {
   }
   for (const [tokenHash, record] of passwordResetTokens) {
     if (record.usedAt || new Date(record.expiresAt || 0).getTime() <= nowMs) passwordResetTokens.delete(tokenHash);
+  }
+  for (const [tokenHash, record] of emailVerificationTokens) {
+    if (record.usedAt || new Date(record.expiresAt || 0).getTime() <= nowMs) emailVerificationTokens.delete(tokenHash);
   }
   if (passwordResetTokens.size > MAX_RESET_TOKEN_CACHE) {
     const overflow = [...passwordResetTokens.entries()]
@@ -719,6 +724,13 @@ async function route(req, res) {
     return handlePasswordResetConfirm(req, res);
   }
 
+  if (pathname === '/api/auth/email-verification/confirm' && req.method === 'POST') {
+    if (rateLimitExceeded(`email-verification-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 4, PASSWORD_RESET_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many verification attempts. Please wait a few minutes and try again.' });
+    }
+    return handleEmailVerificationConfirm(req, res);
+  }
+
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
     return handleLogout(req, res);
   }
@@ -856,6 +868,24 @@ self.addEventListener('activate', (event) => {
     readOnly: isReadOnlyDemoSession(sessionData, tenant),
   };
   store.ensureTenant(tenant, session.user);
+
+  if (pathname === '/api/auth/email-verification/request' && req.method === 'POST') {
+    if (rateLimitExceeded(`email-verification:${user.id}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many verification emails requested. Please wait before trying again.' });
+    }
+    if (user.emailVerifiedAt) {
+      return sendJson(res, 200, { ok: true, verified: true, message: 'Your email address is already verified.' });
+    }
+    const result = await issueEmailVerification(req, user);
+    return sendJson(res, result.sent ? 202 : 503, {
+      ok: result.sent,
+      verified: false,
+      emailConfigured: result.emailConfigured,
+      message: result.sent
+        ? `Verification email sent to ${user.email}.`
+        : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+    });
+  }
 
   if (isReadOnlyDemoSession(sessionData, tenant) && !canDemoSessionUsePath(pathname, req.method)) {
     return sendDemoReadOnly(res);
@@ -1708,6 +1738,50 @@ async function handlePasswordResetConfirm(req, res) {
   return sendJson(res, 200, { ok: true, message: 'Password reset. You can now log in.' });
 }
 
+async function issueEmailVerification(req, user) {
+  const emailConfigured = isEmailConfigured();
+  if (!user || user.emailVerifiedAt || !emailConfigured) {
+    return { sent: false, emailConfigured, alreadyVerified: Boolean(user?.emailVerifiedAt) };
+  }
+  const { token, tokenHash } = createPasswordResetSecret();
+  const record = {
+    tokenHash,
+    userId: user.id,
+    expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString(),
+    usedAt: '',
+    createdAt: new Date().toISOString(),
+  };
+  emailVerificationTokens.set(tokenHash, record);
+  await dbSaveEmailVerificationToken(record);
+  const verificationUrl = `${getRequestOrigin(req)}/?verify=${encodeURIComponent(token)}`;
+  try {
+    const delivery = await sendEmailVerificationEmail({
+      to: user.email,
+      name: user.name,
+      verificationUrl,
+    });
+    return { sent: Boolean(delivery?.sent), emailConfigured };
+  } catch (error) {
+    console.error('Email verification delivery failed:', error.message || error);
+    return { sent: false, emailConfigured };
+  }
+}
+
+async function handleEmailVerificationConfirm(req, res) {
+  const { token } = await readJson(req);
+  if (!token) return sendJson(res, 400, { error: 'Verification token is required.' });
+  const tokenHash = hashPasswordResetToken(token);
+  const record = emailVerificationTokens.get(tokenHash) || await dbFindEmailVerificationToken(tokenHash);
+  if (!record || record.usedAt || new Date(record.expiresAt).getTime() < Date.now()) {
+    return sendJson(res, 400, { error: 'This verification link is invalid or expired.' });
+  }
+  const result = await markUserEmailVerified(record.userId);
+  if (result.error) return sendJson(res, 400, { error: 'This verification link is invalid or expired.' });
+  emailVerificationTokens.delete(tokenHash);
+  await dbMarkEmailVerificationTokenUsed(tokenHash);
+  return sendJson(res, 200, { ok: true, verified: true, message: 'Email verified. Your account is ready.' });
+}
+
 async function handleStartDemo(req, res) {
   let user = findUserByEmail(PUBLIC_DEMO_EMAIL);
   if (!user) {
@@ -1814,6 +1888,7 @@ async function handleSignup(req, res) {
   store.ensureTenant(tenantResult.tenant, userResult.user);
   store.setPersona(tenantId, userPersona);
   await persistUserWorkspace(userResult.user, tenantResult.tenant);
+  const verification = await issueEmailVerification(req, userResult.user);
   const { cookie } = createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
 
@@ -1825,6 +1900,8 @@ async function handleSignup(req, res) {
     trialDaysRemaining: getTrialDaysRemaining(tenantResult.tenant),
     persona: userPersona,
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
+    emailVerificationAvailable: verification.emailConfigured,
+    verificationEmailSent: verification.sent,
   });
 }
 
@@ -1871,6 +1948,7 @@ async function handleLogin(req, res) {
     referral: getReferralSummary(primaryTenant, getRequestOrigin(req)),
     persona,
     workspaceRecovered,
+    emailVerificationAvailable: isEmailConfigured(),
   });
 }
 
@@ -1937,6 +2015,7 @@ function handleMe(req, res) {
     billingRequired,
     referral: getReferralSummary(tenant, getRequestOrigin(req)),
     persona,
+    emailVerificationAvailable: isEmailConfigured(),
   });
 }
 

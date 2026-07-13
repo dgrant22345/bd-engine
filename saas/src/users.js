@@ -74,6 +74,7 @@ export function createUser({ email, name, password }) {
     name: String(name || '').trim() || normalized.split('@')[0],
     passwordHash: hashPassword(password),
     status: 'active',
+    emailVerifiedAt: '',
     createdAt: now(),
     updatedAt: now(),
   };
@@ -106,6 +107,17 @@ export function setUserPassword(userId, password) {
   user.passwordHash = hashPassword(password);
   user.updatedAt = now();
   dbSaveUser(user).catch(() => {});
+  return { user };
+}
+
+export async function markUserEmailVerified(userId) {
+  const user = findUserById(userId);
+  if (!user) return { error: 'User not found.' };
+  if (!user.emailVerifiedAt) {
+    user.emailVerifiedAt = now();
+    user.updatedAt = now();
+    await dbSaveUser(user);
+  }
   return { user };
 }
 

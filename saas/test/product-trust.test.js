@@ -39,6 +39,13 @@ test('password recovery gives users a next step when email delivery is unavailab
   assert.match(landing, /support@bdengine\.io/);
 });
 
+test('authenticated shell exposes actionable support and verification states', async () => {
+  const landing = await readFile(landingPath, 'utf8');
+  assert.match(landing, /mailto:support@bdengine\.io/);
+  assert.match(landing, /Email verified/);
+  assert.match(landing, /Send verification email/);
+});
+
 // Handler extraction: the delegated click handler declares `actionName`; the
 // delegated submit handler must never reference it (it is out of scope there and
 // throws ReferenceError before any form logic runs — CG-001).

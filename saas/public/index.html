@@ -35,6 +35,9 @@
       referralCode: getInitialReferralCode(),
       resetToken: getInitialResetToken(),
       resetMessage: '',
+      verificationToken: getInitialVerificationToken(),
+      verificationMessage: '',
+      emailVerificationAvailable: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
     };
@@ -52,6 +55,10 @@
 
     function getInitialResetToken() {
       return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
+    }
+
+    function getInitialVerificationToken() {
+      return String(new URLSearchParams(window.location.search).get('verify') || '').trim();
     }
 
     function getInitialSignupPersona() {
@@ -108,6 +115,22 @@
     async function checkAuth() {
       cleanupServiceWorkers();
       trackPageVisit().catch(() => {});
+      if (state.verificationToken) {
+        try {
+          const verification = await api('/api/auth/email-verification/confirm', {
+            method: 'POST',
+            body: JSON.stringify({ token: state.verificationToken }),
+          });
+          state.verificationMessage = verification.message || 'Email verified.';
+        } catch (error) {
+          state.verificationMessage = error.message || 'This verification link is invalid or expired.';
+        } finally {
+          state.verificationToken = '';
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('verify');
+          window.history?.replaceState?.({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+        }
+      }
       try {
         const data = await api('/api/auth/me');
         if (data.authenticated) {
@@ -120,6 +143,7 @@
           state.demo = Boolean(data.demo);
           state.readOnly = Boolean(data.readOnly);
           state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
+          state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
           state.view = 'app';
         } else if (state.resetToken) {
           state.view = 'reset';
@@ -161,6 +185,7 @@
         state.demo = false;
         state.readOnly = false;
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
+        state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -189,6 +214,10 @@
         state.demo = false;
         state.readOnly = false;
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
+        state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+        if (data.verificationEmailSent) {
+          state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
+        }
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -279,9 +308,28 @@
       state.referral = null;
       state.demo = false;
       state.readOnly = false;
+      state.emailVerificationAvailable = false;
       state.view = 'landing';
       state.error = '';
       render();
+    }
+
+    async function doRequestEmailVerification() {
+      state.busy = true;
+      state.verificationMessage = '';
+      render();
+      try {
+        const data = await api('/api/auth/email-verification/request', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        state.verificationMessage = data.message || 'Verification email sent.';
+      } catch (error) {
+        state.verificationMessage = error.message || 'Verification email could not be sent.';
+      } finally {
+        state.busy = false;
+        render();
+      }
     }
 
     async function exitDemoToSignup() {
@@ -989,6 +1037,10 @@
       const trialUpgradeBanner = state.demo
         ? `<div class="cloud-demo-banner"><strong>Read-only demo workspace</strong><span>This uses synthetic data. Create a free trial to import your own LinkedIn connections and edit records.</span><button class="btn btn-primary btn-sm" data-demo-signup>Start free trial</button></div>`
         : renderTrialUpgradeBanner();
+      const verificationNotice = state.verificationMessage
+        ? `<div class="cloud-account-notice" role="status"><span>${escapeHtml(state.verificationMessage)}</span><button class="cloud-notice-close" id="cloud-notice-close" type="button" aria-label="Dismiss message">Close</button></div>`
+        : '';
+      const emailVerified = Boolean(state.user?.emailVerifiedAt);
 
       root.innerHTML = `
         <div class="cloud-shell">
@@ -1011,10 +1063,13 @@
                   <div class="cloud-user-info">
                     <strong>${escapeHtml(state.user?.name || '')}</strong>
                     <span>${escapeHtml(state.user?.email || '')}</span>
+                    ${state.demo ? '' : `<span class="cloud-verification-status ${emailVerified ? 'is-verified' : ''}">${emailVerified ? 'Email verified' : 'Email not verified'}</span>`}
                   </div>
                   <hr>
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
+                  ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
                   <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Export my data</button>
+                  <a class="cloud-menu-item" href="mailto:support@bdengine.io?subject=BD%20Engine%20support" role="menuitem">Contact support</a>
                   ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
                   <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
@@ -1022,6 +1077,7 @@
             </div>
           </div>
           ${trialUpgradeBanner}
+          ${verificationNotice}
           <div class="cloud-app-container">
             <iframe class="cloud-app-frame" title="BD Engine workspace" src="/app/#/dashboard"></iframe>
           </div>
@@ -1042,6 +1098,14 @@
       root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
         doExportData();
         setUserMenuOpen(false);
+      });
+      root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
+        setUserMenuOpen(false);
+        doRequestEmailVerification();
+      });
+      root.querySelector('#cloud-notice-close')?.addEventListener('click', () => {
+        state.verificationMessage = '';
+        render();
       });
       root.querySelector('[data-demo-signup]')?.addEventListener('click', exitDemoToSignup);
       root.querySelector('#cloud-demo-signup-menu-btn')?.addEventListener('click', exitDemoToSignup);

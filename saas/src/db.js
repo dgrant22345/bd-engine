@@ -82,6 +82,7 @@ export async function initDb() {
         name TEXT NOT NULL DEFAULT '',
         password_hash TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
+        email_verified_at TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -175,6 +176,16 @@ export async function initDb() {
       );
       CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens (user_id);
       CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_idx ON password_reset_tokens (expires_at);
+
+      CREATE TABLE IF NOT EXISTS email_verification_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS email_verification_tokens_user_idx ON email_verification_tokens (user_id);
+      CREATE INDEX IF NOT EXISTS email_verification_tokens_expires_idx ON email_verification_tokens (expires_at);
 
       CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -538,6 +549,21 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260713_email_verification', 'Add advisory email verification lifecycle', async (client) => {
+      await client.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TEXT NOT NULL DEFAULT '';
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+          token_hash TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS email_verification_tokens_user_idx ON email_verification_tokens (user_id);
+        CREATE INDEX IF NOT EXISTS email_verification_tokens_expires_idx ON email_verification_tokens (expires_at);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -620,15 +646,16 @@ export async function dbSaveUser(user) {
   if (!dbReady) return;
   try {
     await pool.query(
-      `INSERT INTO users (id, email, name, password_hash, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO users (id, email, name, password_hash, status, email_verified_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (id) DO UPDATE SET
          email = EXCLUDED.email,
          name = EXCLUDED.name,
          password_hash = EXCLUDED.password_hash,
          status = EXCLUDED.status,
+         email_verified_at = EXCLUDED.email_verified_at,
          updated_at = EXCLUDED.updated_at`,
-      [user.id, user.email, user.name, user.passwordHash, user.status, user.createdAt, user.updatedAt]
+      [user.id, user.email, user.name, user.passwordHash, user.status, user.emailVerifiedAt || '', user.createdAt, user.updatedAt]
     );
   } catch (err) {
     console.error('DB: Failed to save user:', err.message);
@@ -645,6 +672,7 @@ export async function dbLoadAllUsers() {
       name: r.name,
       passwordHash: r.password_hash,
       status: r.status,
+      emailVerifiedAt: r.email_verified_at || '',
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -1415,14 +1443,16 @@ export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays
   if (!dbReady) return null;
   const nowIso = new Date().toISOString();
   const jobCutoff = new Date(Date.now() - Math.max(1, Number(backgroundJobRetentionDays) || 14) * 86400000).toISOString();
-  const [sessions, resetTokens, backgroundJobs] = await Promise.all([
+  const [sessions, resetTokens, verificationTokens, backgroundJobs] = await Promise.all([
     pool.query('DELETE FROM sessions WHERE expires_at < $1', [nowIso]),
     pool.query("DELETE FROM password_reset_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
+    pool.query("DELETE FROM email_verification_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
     pool.query("DELETE FROM background_jobs WHERE status IN ('completed', 'failed', 'cancelled') AND finished_at <> '' AND finished_at < $1", [jobCutoff]),
   ]);
   return {
     sessions: sessions.rowCount || 0,
     resetTokens: resetTokens.rowCount || 0,
+    verificationTokens: verificationTokens.rowCount || 0,
     backgroundJobs: backgroundJobs.rowCount || 0,
     cleanedAt: nowIso,
   };
@@ -1519,6 +1549,55 @@ export async function dbMarkPasswordResetTokenUsed(tokenHash) {
     await pool.query('UPDATE password_reset_tokens SET used_at = $2 WHERE token_hash = $1', [tokenHash, new Date().toISOString()]);
   } catch (err) {
     console.error('DB: Failed to mark password reset token used:', err.message);
+  }
+}
+
+export async function dbSaveEmailVerificationToken(record) {
+  if (!dbReady) return;
+  try {
+    await pool.query('DELETE FROM email_verification_tokens WHERE user_id = $1 OR expires_at < $2 OR used_at <> $3', [
+      record.userId,
+      new Date().toISOString(),
+      '',
+    ]);
+    await pool.query(
+      `INSERT INTO email_verification_tokens (token_hash, user_id, expires_at, used_at, created_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [record.tokenHash, record.userId, record.expiresAt, record.usedAt || '', record.createdAt]
+    );
+  } catch (err) {
+    console.error('DB: Failed to save email verification token:', err.message);
+  }
+}
+
+export async function dbFindEmailVerificationToken(tokenHash) {
+  if (!dbReady) return null;
+  try {
+    const { rows } = await pool.query(
+      'SELECT token_hash, user_id, expires_at, used_at, created_at FROM email_verification_tokens WHERE token_hash = $1',
+      [tokenHash]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      tokenHash: row.token_hash,
+      userId: row.user_id,
+      expiresAt: row.expires_at,
+      usedAt: row.used_at || '',
+      createdAt: row.created_at,
+    };
+  } catch (err) {
+    console.error('DB: Failed to find email verification token:', err.message);
+    return null;
+  }
+}
+
+export async function dbMarkEmailVerificationTokenUsed(tokenHash) {
+  if (!dbReady) return;
+  try {
+    await pool.query('UPDATE email_verification_tokens SET used_at = $2 WHERE token_hash = $1', [tokenHash, new Date().toISOString()]);
+  } catch (err) {
+    console.error('DB: Failed to mark email verification token used:', err.message);
   }
 }
 
