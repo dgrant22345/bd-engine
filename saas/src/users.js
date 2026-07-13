@@ -196,6 +196,10 @@ export function findTenantById(tenantId) {
   return tenants.get(tenantId) || null;
 }
 
+export function listTenants() {
+  return [...tenants.values()].map((tenant) => ({ ...tenant }));
+}
+
 export function findTenantBySlug(slug) {
   const normalized = normalizeTenantSlug(slug, '');
   if (!normalized) return null;
