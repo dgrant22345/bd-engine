@@ -4472,6 +4472,30 @@ a {
   display: grid;
   gap: 14px;
 }
+.setup-target-selection {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.setup-target-selection .panel-header {
+  align-items: start;
+}
+.setup-target-selection .panel-header h4 {
+  margin: 0 0 4px;
+}
+.setup-target-table {
+  min-width: 620px;
+}
+.setup-target-table th:first-child,
+.setup-target-table td:first-child {
+  width: 64px;
+  text-align: center;
+}
+.setup-target-table input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
 .setup-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(100px, 1fr));

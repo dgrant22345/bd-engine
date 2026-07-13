@@ -107,6 +107,7 @@ const appState = {
   setupCsvFile: null, setupCsvContent: '',
   setupCsvFileName: '',
   setupPreview: null,
+  setupTrackedCompanies: [],
   setupResult: null,
   setupImportJobId: '',
   setupProgressMessage: '',
@@ -2048,6 +2049,7 @@ function bindEvents() {
       appState.setupCsvContent = '';
       appState.setupCsvFileName = '';
       appState.setupPreview = null;
+      appState.setupTrackedCompanies = [];
       await completeSetupWizard();
       return;
     }
@@ -2057,6 +2059,22 @@ function bindEvents() {
     }
     if (actionName === 'setup-preview-csv') {
       await previewSetupCsv();
+      return;
+    }
+    if (actionName === 'setup-select-recommended') {
+      const companies = Array.isArray(appState.setupPreview?.companies) ? appState.setupPreview.companies : [];
+      appState.setupTrackedCompanies = companies
+        .filter((company) => !company.overLimit && (company.alreadyTracked || company.recommended))
+        .map((company) => company.key);
+      await renderSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-clear-targets') {
+      const companies = Array.isArray(appState.setupPreview?.companies) ? appState.setupPreview.companies : [];
+      appState.setupTrackedCompanies = companies
+        .filter((company) => company.alreadyTracked)
+        .map((company) => company.key);
+      await renderSetupWizard();
       return;
     }
     if (actionName === 'setup-complete') {
@@ -3859,7 +3877,7 @@ function renderSetupStepContent(stepKey) {
           <button class="secondary-button" type="button" data-action="setup-back">Back</button>
           <button class="secondary-button" type="button" data-action="setup-preview-csv" ${hasCsv && !appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>
           <button class="ghost-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Skip import</button>
-          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy ? 'disabled' : ''}>${appState.setupBusy ? 'Starting...' : 'Finish setup'}</button>
+          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy || (hasCsv && !appState.setupPreview) ? 'disabled' : ''}>${appState.setupBusy ? 'Starting...' : hasCsv && !appState.setupPreview ? 'Preview before finishing' : 'Finish setup'}</button>
         </div>
       </div>
     `;
@@ -3935,6 +3953,53 @@ function renderSetupProgress(title, message) {
   `;
 }
 
+function renderSetupTargetSelection(preview) {
+  const companies = Array.isArray(preview?.companies) ? preview.companies : [];
+  if (!companies.length) return '';
+  const selected = new Set(appState.setupTrackedCompanies || []);
+  const selectedCount = companies.filter((company) => (
+    company.alreadyTracked || selected.has(company.key)
+  )).length;
+  const rows = companies.map((company) => {
+    const checked = company.alreadyTracked || selected.has(company.key);
+    const disabled = company.alreadyTracked || company.overLimit;
+    const status = company.alreadyTracked
+      ? 'Already tracked'
+      : company.overLimit
+        ? 'Plan limit'
+        : company.recommended
+          ? 'Recommended'
+          : 'Network only';
+    return '<tr>'
+      + '<td><input class="setup-target-checkbox" type="checkbox" value="' + escapeAttr(company.key) + '"'
+      + (checked ? ' checked' : '')
+      + (disabled ? ' disabled' : '')
+      + ' aria-label="Track ' + escapeAttr(company.companyName) + '"></td>'
+      + '<td><strong>' + escapeHtml(company.companyName) + '</strong><div class="small muted">'
+      + escapeHtml(company.domain || 'Domain not found') + '</div></td>'
+      + '<td>' + formatNumber(company.contactCount || 0) + '</td>'
+      + '<td><span class="status-pill">' + escapeHtml(status) + '</span><div class="small muted">'
+      + escapeHtml(company.rankReason || '') + '</div></td>'
+      + '</tr>';
+  }).join('');
+  return '<section id="setup-target-selection" class="setup-target-selection">'
+    + '<div class="panel-header"><div><h4>Choose tracked targets</h4>'
+    + '<p class="muted small">Tracked companies receive job-board discovery and refreshes. Unselected employers remain searchable in your network.</p>'
+    + '</div><strong id="setup-target-count">' + formatNumber(selectedCount) + ' selected</strong></div>'
+    + '<div class="button-row"><button class="ghost-button" type="button" data-action="setup-select-recommended">Select recommended</button>'
+    + '<button class="ghost-button" type="button" data-action="setup-clear-targets">Clear optional</button></div>'
+    + '<div class="table-scroll"><table class="table setup-target-table">'
+    + '<thead><tr><th>Track</th><th>Company</th><th>Contacts</th><th>Why</th></tr></thead>'
+    + '<tbody>' + rows + '</tbody></table></div></section>';
+}
+
+function syncSetupTrackedCompaniesFromDom() {
+  const checked = document.querySelectorAll('.setup-target-checkbox:checked');
+  appState.setupTrackedCompanies = Array.from(checked).map((input) => input.value).filter(Boolean);
+  const count = document.getElementById('setup-target-count');
+  if (count) count.textContent = formatNumber(appState.setupTrackedCompanies.length) + ' selected';
+}
+
 function renderSetupPreview() {
   const preview = appState.setupPreview;
   if (!preview) {
@@ -3945,6 +4010,7 @@ function renderSetupPreview() {
   const rows = Array.isArray(preview.preview) ? preview.preview : [];
   return `
     <div class="setup-preview">
+      ${renderSetupTargetSelection(preview)}
       <div class="setup-summary-grid">
         <div><strong>${formatNumber(stats.imported || 0)}</strong><span>New</span></div>
         <div><strong>${formatNumber(stats.updated || 0)}</strong><span>Updates</span></div>
@@ -4042,6 +4108,7 @@ async function handleSetupCsvFile(file) {
   appState.setupCsvContent = '';
   appState.setupCsvFileName = file.name;
   appState.setupPreview = null;
+  appState.setupTrackedCompanies = [];
 
   await renderSetupWizard();
   showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
@@ -4051,6 +4118,9 @@ async function postConnectionsCsvFile(file, options = {}) {
   params.set('dryRun', options.dryRun ? 'true' : 'false');
   params.set('useEmptyState', options.useEmptyState ? 'true' : 'false');
   params.set('fileName', options.fileName || file?.name || 'Connections.csv');
+  for (const company of options.trackedCompanies || []) {
+    params.append('trackedCompany', company);
+  }
   const endpoint = options.preview ? '/api/import/connections-csv/preview' : '/api/import/connections-csv';
   return api(`${endpoint}?${params.toString()}`, {
     method: 'POST',
@@ -4076,6 +4146,10 @@ async function previewSetupCsv() {
       useEmptyState: true,
       fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
     });
+    const companies = Array.isArray(appState.setupPreview?.companies) ? appState.setupPreview.companies : [];
+    appState.setupTrackedCompanies = companies
+      .filter((company) => company.selected && !company.overLimit)
+      .map((company) => company.key);
 
     showToast('Preview ready.', 'success');
   } catch (error) {
@@ -4090,6 +4164,7 @@ async function previewSetupCsv() {
 
 async function completeSetupWizard() {
   persistSetupDraftFromDom();
+  if (appState.setupPreview) syncSetupTrackedCompaniesFromDom();
   const draft = appState.setupDraft;
 
   if (!draft.workspaceName.trim() || !draft.userName.trim() || !draft.userEmail.trim()) {
@@ -4124,6 +4199,7 @@ async function completeSetupWizard() {
         dryRun: false,
         useEmptyState: false,
         fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
+        trackedCompanies: appState.setupTrackedCompanies,
       });
       const jobId = accepted.jobId || accepted.job?.id;
       const stats = accepted.stats || {};
@@ -4222,6 +4298,7 @@ async function loadSetupSampleWorkspace() {
     appState.setupCsvContent = '';
     appState.setupCsvFileName = '';
     appState.setupPreview = null;
+    appState.setupTrackedCompanies = [];
     invalidateAppData();
     showToast('Sample workspace loaded.', 'success');
   } catch (error) {
@@ -6822,6 +6899,10 @@ async function reviewConfig(configId, decision) {
 }
 
 document.addEventListener('change', (event) => {
+  if (event.target.classList.contains('setup-target-checkbox')) {
+    syncSetupTrackedCompaniesFromDom();
+    return;
+  }
   if (event.target.id === 'setup-csv-file') {
     void handleSetupCsvFile(event.target.files?.[0]);
     return;

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parse as parseCsvSync } from 'csv-parse/sync';
 import { dbLoadAllTenantData, dbLoadBackgroundJob, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
@@ -4045,12 +4046,27 @@ export function createStore() {
       await ensureDataLoaded(tenantId, true);
       const dryRun = Boolean(options.dryRun);
       const plan = options.plan || { limits: {} };
+      const trackedCompaniesProvided = Array.isArray(options.trackedCompanies);
+      const selectedTrackedCompanies = new Set(
+        (trackedCompaniesProvided ? options.trackedCompanies : [])
+          .map((value) => normalizeKey(value))
+          .filter(Boolean)
+      );
       const timestamp = now();
       const importRunId = `imp-linkedin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const sourceHash = hashText(csvText || '');
       const importItems = [];
       
-      const rows = parseCSV(csvText || '');
+      let rows;
+      try {
+        rows = parseCSV(csvText || '');
+      } catch (error) {
+        return {
+          error: error.message,
+          code: error.code || 'invalid_csv',
+          expectedHeaders: ['First Name', 'Last Name', 'Company', 'Position'],
+        };
+      }
       if (!String(csvText || '').trim()) {
         return {
           error: 'CSV file is empty. Upload the Connections.csv export from LinkedIn.',
@@ -4093,19 +4109,18 @@ export function createStore() {
 
         const compKey = normalizeKey(company);
         if (!companyMap.has(compKey)) {
+          const emailDomain = email ? email.split('@')[1] || '' : '';
           companyMap.set(compKey, {
             displayName: company,
             contacts: [],
-            domain: email ? email.split('@')[1] || '' : '',
+            domain: getUsableCompanyDomain(emailDomain),
           });
         }
 
         const companyEntry = companyMap.get(compKey);
         if (email && !companyEntry.domain) {
           const domain = email.split('@')[1] || '';
-          if (domain && !domain.match(/gmail|yahoo|hotmail|outlook|icloud|aol|mail/i)) {
-            companyEntry.domain = domain;
-          }
+          companyEntry.domain = getUsableCompanyDomain(domain);
         }
 
         companyEntry.contacts.push({
@@ -4154,7 +4169,15 @@ export function createStore() {
         existingAccountsMap.set(normalizeKey(a.displayName), a);
       }
 
-      for (const [normName, companyData] of companyMap) {
+      const companyCandidates = rankLinkedInCompanyCandidates(
+        companyMap,
+        existingAccountsMap,
+        remainingNewAccounts
+      );
+
+      for (const candidate of companyCandidates) {
+        const normName = candidate.key;
+        const companyData = companyMap.get(normName);
         let existingAccount = existingAccountsMap.get(normName);
 
         if (!existingAccount) {
@@ -4177,7 +4200,7 @@ export function createStore() {
               connectionCount: 0,
               // DATA-101: bulk-imported employers are network companies, not
               // refreshable targets, until the user selects them.
-              tracked: false,
+              tracked: selectedTrackedCompanies.has(normName),
               createdAt: timestamp,
               updatedAt: timestamp,
             });
@@ -4190,6 +4213,7 @@ export function createStore() {
           accountsCreated++;
         } else {
           if (!dryRun) {
+            if (selectedTrackedCompanies.has(normName)) existingAccount.tracked = true;
             existingAccount.updatedAt = timestamp;
           }
           accountsUpdated++;
@@ -4328,6 +4352,12 @@ export function createStore() {
         planLimitedSkipped,
         missingNameRows: skippedMissingName,
         missingCompanyRows: skippedMissingCompany,
+        trackedTargetsSelected: companyCandidates.filter((candidate) => (
+          !candidate.overLimit
+          && (candidate.alreadyTracked || selectedTrackedCompanies.has(candidate.key))
+        )).length,
+        recommendedTargets: companyCandidates.filter((candidate) => candidate.recommended).length,
+        companiesPreviewed: companyCandidates.length,
       };
 
       if (!dryRun) {
@@ -4352,12 +4382,40 @@ export function createStore() {
         });
       }
 
+      const preview = companyCandidates.flatMap((candidate) => {
+        const companyData = companyMap.get(candidate.key);
+        return companyData.contacts.map((contactItem) => {
+          const duplicate = contactDedupeKeys({
+            fullName: contactItem.fullName,
+            email: contactItem.email,
+            linkedinUrl: contactItem.linkedinUrl,
+            companyName: contactItem.company,
+          }, candidate.key).some((key) => existingContactsMap.has(key));
+          return {
+            action: candidate.overLimit ? 'Plan limit' : duplicate ? 'Existing' : 'Import',
+            fullName: contactItem.fullName,
+            companyName: contactItem.company,
+            title: contactItem.position,
+            email: contactItem.email,
+            connectedOn: contactItem.connectedOn,
+            message: candidate.overLimit ? 'This company is outside the current account allowance.' : '',
+          };
+        });
+      }).slice(0, 20);
+
       return {
         ok: true,
         dryRun,
         stats,
         summary: stats,
         warnings,
+        preview,
+        companies: companyCandidates.map((candidate) => ({
+          ...candidate,
+          selected: candidate.alreadyTracked
+            || selectedTrackedCompanies.has(candidate.key)
+            || (dryRun && !trackedCompaniesProvided && candidate.recommended),
+        })),
       };
     },
   };
@@ -5182,6 +5240,61 @@ function configMatchesAccount(config = {}, account = {}) {
 // existing workspaces keep their current behavior until curated.
 function isTrackedTarget(item) {
   return Boolean(item) && item.tracked !== false;
+}
+
+function rankLinkedInCompanyCandidates(companyMap, existingAccountsMap, availableAccountSlots) {
+  const candidates = [...companyMap.entries()].map(([key, company]) => {
+    const existingAccount = existingAccountsMap.get(key) || null;
+    const seniorContactCount = company.contacts.filter((contactItem) => (
+      ['executive', 'vp', 'director'].includes(classifySeniority(contactItem.position))
+    )).length;
+    const talentContactCount = company.contacts.filter((contactItem) => isTalentTitle(contactItem.position)).length;
+    const rankScore = Math.min(100, (
+      company.contacts.length * 5
+      + seniorContactCount * 12
+      + talentContactCount * 18
+      + (company.domain ? 5 : 0)
+    ));
+    const reasons = [];
+    if (talentContactCount) reasons.push(talentContactCount + ' talent contact' + (talentContactCount === 1 ? '' : 's'));
+    if (seniorContactCount) reasons.push(seniorContactCount + ' senior contact' + (seniorContactCount === 1 ? '' : 's'));
+    if (!reasons.length) reasons.push(company.contacts.length + ' connection' + (company.contacts.length === 1 ? '' : 's'));
+    return {
+      key,
+      companyName: company.displayName,
+      domain: company.domain || '',
+      contactCount: company.contacts.length,
+      seniorContactCount,
+      talentContactCount,
+      rankScore,
+      rankReason: reasons.join(', '),
+      existing: Boolean(existingAccount),
+      alreadyTracked: isTrackedTarget(existingAccount),
+      overLimit: false,
+      recommended: false,
+    };
+  });
+
+  candidates.sort((a, b) => (
+    Number(b.alreadyTracked) - Number(a.alreadyTracked)
+    || b.rankScore - a.rankScore
+    || b.contactCount - a.contactCount
+    || a.companyName.localeCompare(b.companyName)
+  ));
+
+  let remainingSlots = availableAccountSlots;
+  let recommendationsRemaining = 10;
+  for (const candidate of candidates) {
+    if (!candidate.existing) {
+      candidate.overLimit = remainingSlots <= 0;
+      if (!candidate.overLimit && Number.isFinite(remainingSlots)) remainingSlots -= 1;
+    }
+    if (!candidate.overLimit && !candidate.alreadyTracked && recommendationsRemaining > 0) {
+      candidate.recommended = true;
+      recommendationsRemaining -= 1;
+    }
+  }
+  return candidates;
 }
 
 // Resolve a board config back to its account: by explicit link first, then by
@@ -6397,55 +6510,42 @@ function deactivateJobsForConfig(config, tenantJobs, timestamp = now()) {
 // ── CSV parser ───────────────────────────────────────────────────────────────
 
 function parseCSV(text) {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length < 2) return [];
+  try {
+    const records = parseCsvSync(String(text || ''), {
+      bom: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+      trim: true,
+      max_record_size: 1_000_000,
+    });
+    if (records.length < 2) return [];
 
-  // LinkedIn CSVs sometimes have BOM or notes at the top — find the header row
-  let headerIndex = 0;
-  for (let i = 0; i < Math.min(5, lines.length); i++) {
-    if (lines[i].toLowerCase().includes('first name') || lines[i].toLowerCase().includes('company')) {
-      headerIndex = i;
-      break;
-    }
-  }
-
-  const headers = splitCSVLine(lines[headerIndex]);
-  const rows = [];
-  for (let i = headerIndex + 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const values = splitCSVLine(line);
-    const row = {};
-    for (let j = 0; j < headers.length; j++) {
-      row[headers[j].trim()] = (values[j] || '').trim();
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
-function splitCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
+    let headerIndex = 0;
+    for (let index = 0; index < Math.min(10, records.length); index += 1) {
+      const headerText = records[index]
+        .map((value) => String(value || '').toLowerCase())
+        .join(' ');
+      if (headerText.includes('first name') || headerText.includes('company')) {
+        headerIndex = index;
+        break;
       }
-    } else if (ch === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += ch;
     }
+
+    const headers = records[headerIndex].map((value) => String(value || '').trim());
+    return records.slice(headerIndex + 1).map((values) => {
+      const row = {};
+      for (let index = 0; index < headers.length; index += 1) {
+        row[headers[index]] = String(values[index] || '').trim();
+      }
+      return row;
+    });
+  } catch (cause) {
+    const error = new Error('CSV could not be parsed. Check the file format and try the original export again.');
+    error.status = 400;
+    error.code = 'invalid_csv';
+    error.cause = cause;
+    throw error;
   }
-  result.push(current);
-  return result;
 }
 
 // ── Contact classification ───────────────────────────────────────────────────

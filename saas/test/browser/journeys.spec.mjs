@@ -182,7 +182,7 @@ test('message journey: outreach modal generates grounded content in the demo', a
   await expect(app.locator('#outreach-modal-backdrop')).toContainText(/subject|copy/i, { timeout: 15000 });
 });
 
-test('import journey: setup CSV upload previews connections without errors', async ({ page }) => {
+test('import journey: setup preview selects tracked targets and preserves network companies', async ({ page }) => {
   const { app } = await signup(page);
   // Advance to the import step: profile → team → import.
   const profile = app.locator('#setup-profile-form');
@@ -196,9 +196,37 @@ test('import journey: setup CSV upload previews connections without errors', asy
     'First Name,Last Name,Company,Position,Email Address,Connected On',
     'Jane,Doe,Journey Robotics,VP Engineering,jane@journeyrobotics.com,01 Jan 2026',
     'John,Roe,Journey Robotics,CTO,john@journeyrobotics.com,02 Jan 2026',
+    'Nina,Net,Network Only LLC,Developer,nina@gmail.com,03 Jan 2026',
   ].join('\n');
   await fileInput.setInputFiles({ name: 'connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
-  await expect(app.locator('body')).toContainText(/connections\.csv|2 connection|preview/i, { timeout: 15000 });
+  await expect(app.locator('body')).toContainText(/connections\.csv|3 connection|preview/i, { timeout: 15000 });
+
+  await app.locator('[data-action="setup-preview-csv"]').click();
+  const selection = app.locator('#setup-target-selection');
+  await expect(selection).toBeVisible({ timeout: 15000 });
+  await expect(selection).toContainText('Journey Robotics');
+  await expect(selection).toContainText('Network Only LLC');
+
+  const trackedTarget = selection.locator('.setup-target-checkbox[value="journey robotics"]');
+  const networkOnly = selection.locator('.setup-target-checkbox[value="network only llc"]');
+  await expect(trackedTarget).toBeChecked();
+  await expect(networkOnly).toBeChecked();
+  await networkOnly.uncheck();
+  await expect(app.locator('#setup-target-count')).toContainText('1 selected');
+
+  await expect(app.locator('.toast')).toHaveCount(0, { timeout: 10000 });
+  await app.locator('[data-action="setup-complete"]').click();
+
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/accounts?q=Journey%20Robotics&page=1&pageSize=5');
+    const result = await response.json();
+    return result.items?.[0]?.tracked;
+  }, { timeout: 15000 }).toBe(true);
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/accounts?q=Network%20Only&page=1&pageSize=5');
+    const result = await response.json();
+    return result.items?.[0]?.tracked;
+  }, { timeout: 15000 }).toBe(false);
 });
 
 test('billing journey: billing page opens from the account menu', async ({ page }) => {

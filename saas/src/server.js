@@ -1141,10 +1141,11 @@ self.addEventListener('activate', (event) => {
     const fields = payload.fields || payload;
     const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || '';
     const plan = getPlan(getEffectivePlanId(tenant, user));
+    const trackedCompanies = Array.isArray(fields.trackedCompanies) ? fields.trackedCompanies : [];
 
     if (csvText) {
       if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
-      const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan });
+      const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies });
       return sendJson(res, 202, {
         ok: true,
         setupComplete: false,
@@ -1256,7 +1257,7 @@ self.addEventListener('activate', (event) => {
   // ── LinkedIn CSV import (real) ─────────────────────────────────────────
   if (pathname === '/api/import/connections-csv/preview' && req.method === 'POST') {
     const payload = await readFormOrJson(req);
-    const csvText = payload.files?.connectionsCsv?.content || payload.fields?.csvContent || payload.csvContent || '';
+    const csvText = payload.files?.connectionsCsv?.content || payload.fields?.csvContent || payload.csvContent || payload.text || '';
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const result = await store.importLinkedInCSV(tenantId, csvText, {
       dryRun: true,
@@ -1273,14 +1274,19 @@ self.addEventListener('activate', (event) => {
 
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const dryRun = isTruthy(fields.dryRun);
+    const trackedCompanies = [
+      ...url.searchParams.getAll('trackedCompany'),
+      ...(Array.isArray(fields.trackedCompanies) ? fields.trackedCompanies : []),
+    ];
     if (!dryRun) {
       if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
-      return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan }));
+      return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies }));
     }
 
     const result = await store.importLinkedInCSV(tenantId, csvText, {
       dryRun,
       plan,
+      trackedCompanies,
     });
     if (result.error) return sendJson(res, 400, result);
     return sendJson(res, 200, result);

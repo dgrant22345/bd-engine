@@ -25,6 +25,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "csv-parse": "^7.0.1",
     "pg": "^8.20.0",
     "stripe": "^22.1.0"
   },
