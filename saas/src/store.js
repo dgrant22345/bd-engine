@@ -141,6 +141,12 @@ function account(input) {
     location: '',
     status: 'new',
     outreachStatus: 'not_started',
+    // DATA-101: tracked targets get discovery/refresh; network companies
+    // (imported employers the user has not selected) do not. Explicit
+    // creation implies intent, so the factory defaults to tracked; bulk
+    // LinkedIn imports override this to false. Legacy records without the
+    // field are grandfathered as tracked (isTrackedTarget).
+    tracked: true,
     targetScore: 0,
     dailyScore: 0,
     priorityTier: 'C',
@@ -1923,6 +1929,9 @@ export function createStore() {
       const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
       Object.assign(item, pickPatch(patch, ['status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt', 'owner']));
+      if (Object.prototype.hasOwnProperty.call(patch, 'tracked')) {
+        item.tracked = patch.tracked === true || patch.tracked === 'true';
+      }
       item.updatedAt = now();
       persistTenant(tenantId);
       return item;
@@ -2732,6 +2741,9 @@ export function createStore() {
       const existingConfigNames = new Set(tenantConfigs.map((item) => normalizeKey(item.normalizedCompanyName || item.companyName)));
       let createdConfigs = 0;
       for (const item of tenantAccounts) {
+        // DATA-101: only tracked targets get discovery configs — an imported
+        // network of 12k employers must not become a 12k-company scrape queue.
+        if (!isTrackedTarget(item)) continue;
         if (createdConfigs + tenantConfigs.length >= (jobBoardLimit === -1 ? Infinity : jobBoardLimit)) break;
         const normalizedName = normalizeKey(item.normalizedName || item.displayName);
         if (!normalizedName || existingConfigNames.has(normalizedName)) continue;
@@ -2781,6 +2793,19 @@ export function createStore() {
       const cappedByPlan = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
       const limit = Math.min(cappedByPlan, DEFAULT_ATS_MAX_DISCOVERY_BATCH);
       let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected');
+      // DATA-101: probe only tracked targets' boards. Configs that resolve to
+      // an untracked (network) account are skipped; configs with no matching
+      // account keep working (they were created deliberately).
+      const trackFilterById = new Map(tenantAccounts.map((item) => [item.id, item]));
+      const trackFilterByName = new Map(
+        tenantAccounts
+          .filter((item) => item.normalizedName)
+          .map((item) => [item.normalizedName, item])
+      );
+      candidates = candidates.filter((item) => {
+        const owner = accountForConfig(item, trackFilterById, trackFilterByName);
+        return !owner || isTrackedTarget(owner);
+      });
       if (onlyMissing && !forceRefresh) {
         candidates = candidates.filter((item) => {
           return !isResolvedBoardConfig(item) || item.discoveryStatus === 'needs_review' || item.discoveryStatus === 'unresolved';
@@ -2985,7 +3010,19 @@ export function createStore() {
       timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
       if (directResolvedConfigs) persistTenant(tenantId);
 
-      let activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
+      // DATA-101: refresh only tracked targets' boards; network companies are
+      // not part of the paid refresh surface. Unmatched configs keep working.
+      const importAccountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+      const importAccountsByName = new Map(
+        tenantAccounts
+          .filter((item) => item.normalizedName)
+          .map((item) => [item.normalizedName, item])
+      );
+      let activeTenantConfigs = tenantConfigs.filter((item) => {
+        if (item.active === false) return false;
+        const owner = accountForConfig(item, importAccountsById, importAccountsByName);
+        return !owner || isTrackedTarget(owner);
+      });
       let importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
       let autoDiscoveryStats = null;
       const autoDiscoverEnabled = options.autoDiscover !== false && options.autoDiscover !== 'false';
@@ -3868,6 +3905,9 @@ export function createStore() {
       await ensureDataLoaded(tenantId);
       const ids = Array.isArray(payload.ids) ? payload.ids.filter(Boolean) : [];
       const patch = pickPatch(payload, ['status', 'priority', 'owner']);
+      if (Object.prototype.hasOwnProperty.call(payload, 'tracked')) {
+        patch.tracked = payload.tracked === true || payload.tracked === 'true';
+      }
       const addTags = Array.isArray(payload.addTags)
         ? payload.addTags.map((tag) => String(tag).trim()).filter(Boolean)
         : [];
@@ -4135,6 +4175,9 @@ export function createStore() {
               displayName: companyData.displayName,
               domain: companyData.domain,
               connectionCount: 0,
+              // DATA-101: bulk-imported employers are network companies, not
+              // refreshable targets, until the user selects them.
+              tracked: false,
               createdAt: timestamp,
               updatedAt: timestamp,
             });
@@ -5131,6 +5174,22 @@ function configMatchesAccount(config = {}, account = {}) {
     ...(Array.isArray(account.aliases) ? account.aliases : []),
   ].map((value) => normalizeKey(value)).filter(Boolean);
   return Boolean(configName && accountNames.includes(configName));
+}
+
+// DATA-101: tracked targets are the accounts the user selected for fresh
+// hiring intelligence; network companies are everything else from imports.
+// Records created before the field existed are grandfathered as tracked so
+// existing workspaces keep their current behavior until curated.
+function isTrackedTarget(item) {
+  return Boolean(item) && item.tracked !== false;
+}
+
+// Resolve a board config back to its account: by explicit link first, then by
+// normalized company name (real production configs predate account_id links).
+function accountForConfig(config, accountsById, accountsByName) {
+  if (config.accountId && accountsById.has(config.accountId)) return accountsById.get(config.accountId);
+  const key = normalizeKey(config.normalizedCompanyName || config.companyName || '');
+  return key ? accountsByName.get(key) : undefined;
 }
 
 function getAccountsNeedingResolution(tenantAccounts = [], tenantConfigs = []) {
