@@ -127,6 +127,12 @@ await mutationCheck('manual ATS URL creates an import-ready board config', async
   assert(config.resolvedBoardUrl === 'https://job-boards.greenhouse.io/smokemanualboard', 'resolved board URL was not preserved');
   assert(config.reviewStatus === 'approved', 'manual config was not approved');
   assert(config.active === true, 'manual config was not active');
+
+  const exact = await getJson(`/api/configs/${config.id}`, cookie);
+  assert(exact.id === config.id, 'exact config lookup returned the wrong board');
+  const diagnostics = await getJson('/api/ingestion/diagnostics', cookie);
+  assert(diagnostics.coverageSummary?.importReady === 1, 'coverage diagnostics did not count the import-ready board');
+  assert(diagnostics.coverageCategories?.ready_not_run === 1, 'coverage diagnostics did not explain the unrefreshed board');
 });
 
 await mutationCheck('privacy export and confirmed workspace delete work', async () => {

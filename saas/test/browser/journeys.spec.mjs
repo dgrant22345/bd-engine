@@ -101,6 +101,7 @@ test('demo journey: read-only demo opens and dashboard renders', async ({ page }
   await gotoAppRoute(page, '#/admin');
   await expect(app.locator('.ingestion-health')).toContainText('Demo data', { timeout: 15000 });
   await expect(app.locator('.ingestion-health')).toContainText('Automatic refresh is off in the read-only demo');
+  await expect(app.locator('.coverage-health')).toContainText('3 of 3 tracked companies', { timeout: 15000 });
 });
 
 test('signup journey: new account reaches the app workspace', async ({ page }) => {
@@ -136,6 +137,8 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await expect(health).toContainText('Last successful refresh');
   await expect(health).toContainText('Next automatic refresh');
   await expect(health).toContainText(/Due now|[A-Z][a-z]{2} \d{1,2}/);
+  await expect(app.locator('.coverage-health')).toContainText('Ready sources');
+  await expect(app.locator('.coverage-health')).toContainText('Highest-priority coverage fixes');
 });
 
 test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {

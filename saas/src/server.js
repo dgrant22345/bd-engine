@@ -990,6 +990,7 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
       runtime: await store.getRuntimeStatus(tenantId),
+      ingestionDiagnostics: await store.getIngestionDiagnostics(tenantId),
       targetScoreRollout: store.getTargetScoreRollout(tenantId),
       resolverReport: store.getResolverReport(tenantId),
       enrichmentReport: store.getEnrichmentReport(tenantId),
@@ -1144,6 +1145,11 @@ self.addEventListener('activate', (event) => {
   }
 
   const configMatch = pathname.match(/^\/api\/configs\/([^/]+)$/);
+  if (configMatch && req.method === 'GET') {
+    const config = await store.getConfig(tenantId, configMatch[1]);
+    if (!config) return sendJson(res, 404, { error: 'Config not found' });
+    return sendJson(res, 200, config);
+  }
   if (configMatch && req.method === 'PATCH') {
     const config = store.patchConfig(tenantId, configMatch[1], await readJson(req));
     if (!config) return sendJson(res, 404, { error: 'Config not found' });

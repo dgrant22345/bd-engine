@@ -1772,6 +1772,9 @@ export function createStore() {
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
+      const trackedAccounts = tenantAccounts.filter(isTrackedTarget);
+      const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+      const accountsByName = new Map(tenantAccounts.map((item) => [normalizeKey(item.normalizedName || item.displayName), item]));
       const activeConfigs = tenantConfigs.filter((item) => item.active !== false);
       const importReadyConfigs = activeConfigs.filter(isImportReadyConfig);
       const supportedConfigs = importReadyConfigs
@@ -1780,6 +1783,48 @@ export function createStore() {
       const linkedCareerConfigs = tenantConfigs.filter((config) => detectAtsTypeFromUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.apiUrl || config.url || ''));
       const latestLaunch = activitiesForTenant(tenantId).find((item) => item.type === 'launch_workflow') || null;
       const latestImport = activitiesForTenant(tenantId).find((item) => item.type === 'live_job_import') || null;
+      const coverageRows = tenantConfigs.map((config) => {
+        const category = classifyBoardCoverage(config);
+        const accountItem = accountForConfig(config, accountsById, accountsByName);
+        const meta = BOARD_COVERAGE_META[category];
+        let detail = meta.action;
+        if (category === 'failed') detail = getBoardCoverageFailureDetail(config);
+        if (category === 'tracking_only') detail = `${config.atsType || config.ats || 'This provider'} does not expose a supported public job feed.`;
+        if (category === 'careers_page_only') {
+          detail = getConfigUrlCandidates(config).map((value) => getUsableCareerUrl(value)).find(Boolean) || meta.action;
+        }
+        if (category === 'discovery_needed') detail = `Company domain: ${config.domain || config.canonicalDomain}`;
+        if (category === 'missing_identity') detail = 'No usable company domain or careers URL is saved yet.';
+        return {
+          config,
+          accountItem,
+          category,
+          label: meta.label,
+          recommendedAction: meta.action,
+          detail,
+          targetScore: Number(accountItem?.targetScore || accountItem?.dailyScore || 0),
+        };
+      });
+      const coverageCategories = countValues(coverageRows.map((item) => item.category));
+      const issuePriorities = {
+        failed: 0,
+        needs_review: 1,
+        empty: 2,
+        careers_page_only: 3,
+        discovery_needed: 4,
+        missing_identity: 5,
+        tracking_only: 6,
+      };
+      const coverageIssues = coverageRows
+        .filter((item) => Object.prototype.hasOwnProperty.call(issuePriorities, item.category))
+        .sort((a, b) => (
+          issuePriorities[a.category] - issuePriorities[b.category]
+          || b.targetScore - a.targetScore
+          || String(a.config.companyName || '').localeCompare(String(b.config.companyName || ''))
+        ));
+      const readyCoveragePercent = trackedAccounts.length
+        ? Math.round((importReadyConfigs.length / trackedAccounts.length) * 1000) / 10
+        : 0;
 
       timings.totalMs = Math.round(performance.now() - startedAt);
       if (timings.totalMs > 500) {
@@ -1789,6 +1834,7 @@ export function createStore() {
       return {
         counts: {
           accounts: tenantAccounts.length,
+          trackedCompanies: trackedAccounts.length,
           jobs: tenantJobs.length,
           activeJobs: tenantJobs.filter((item) => item.active !== false).length,
           configs: tenantConfigs.length,
@@ -1798,6 +1844,38 @@ export function createStore() {
           needsResolutionConfigs: tenantConfigs.length - importReadyConfigs.length,
           linkedCareerConfigs: linkedCareerConfigs.length,
         },
+        coverageSummary: {
+          trackedCompanies: trackedAccounts.length,
+          sourceCount: tenantConfigs.length,
+          importReady: importReadyConfigs.length,
+          readyCoveragePercent,
+          successful: coverageCategories.healthy || 0,
+          readyNotRun: coverageCategories.ready_not_run || 0,
+          failed: coverageCategories.failed || 0,
+          empty: coverageCategories.empty || 0,
+          needsReview: coverageCategories.needs_review || 0,
+          needsCompanyDetails: (coverageCategories.missing_identity || 0)
+            + (coverageCategories.discovery_needed || 0)
+            + (coverageCategories.careers_page_only || 0),
+          trackingOnly: coverageCategories.tracking_only || 0,
+          rejected: coverageCategories.rejected || 0,
+          totalIssues: coverageIssues.length,
+        },
+        coverageCategories,
+        coverageIssues: coverageIssues.slice(0, 12).map((item) => ({
+          configId: item.config.id,
+          accountId: item.accountItem?.id || item.config.accountId || '',
+          companyName: item.config.companyName || item.accountItem?.displayName || 'Unknown company',
+          atsType: getConfigAtsType(item.config) || normalizeAtsType(item.config.atsType || item.config.ats) || 'unknown',
+          category: item.category,
+          label: item.label,
+          detail: item.detail,
+          recommendedAction: item.recommendedAction,
+          targetScore: item.targetScore,
+          active: item.config.active !== false,
+          careersUrl: item.config.careersUrl || item.config.resolvedBoardUrl || '',
+          lastCheckedAt: item.config.lastCheckedAt || item.config.lastResolutionAttemptAt || '',
+        })),
         byAtsType: countValues(tenantConfigs.map((config) => getConfigAtsType(config) || 'unknown')),
         byDiscoveryStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.discoveryStatus || 'missing'))),
         byReviewStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.reviewStatus || 'missing'))),
@@ -2290,10 +2368,16 @@ export function createStore() {
       return paginate(boardConfigs.filter((item) => item.tenantId === tenantId), query);
     },
 
+    async getConfig(tenantId, configId) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      return boardConfigs.find((item) => item.tenantId === tenantId && item.id === configId) || null;
+    },
+
     addConfig(tenantId, payload) {
       assertTenant(tenantId);
       const config = normalizeConfigPatch({
-        id: `cfg-${Date.now()}`,
+        id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
         companyName: payload.companyName || 'New company',
         normalizedCompanyName: normalizeKey(payload.companyName || 'New company'),
@@ -5412,6 +5496,50 @@ const ATS_FETCHERS = new Map([
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
+const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'phenom']);
+const BOARD_COVERAGE_META = {
+  healthy: {
+    label: 'Importing successfully',
+    action: 'No action needed.',
+  },
+  ready_not_run: {
+    label: 'Ready for first refresh',
+    action: 'Import the latest jobs.',
+  },
+  failed: {
+    label: 'Refresh failed',
+    action: 'Check the saved board URL, then retry the job refresh.',
+  },
+  empty: {
+    label: 'No open jobs returned',
+    action: 'Confirm the board URL or leave it until the company posts another role.',
+  },
+  needs_review: {
+    label: 'Match needs review',
+    action: 'Review the match before using it for live jobs.',
+  },
+  tracking_only: {
+    label: 'Tracking only',
+    action: 'Keep the careers link for reference or replace it with a supported public board.',
+  },
+  careers_page_only: {
+    label: 'Careers page needs a source',
+    action: 'Add a supported public board URL or try the compatible careers-page option.',
+  },
+  discovery_needed: {
+    label: 'Ready for board search',
+    action: 'Run job-board discovery for this company.',
+  },
+  missing_identity: {
+    label: 'Company details missing',
+    action: 'Add the company domain or careers URL, then retry discovery.',
+  },
+  rejected: {
+    label: 'Rejected match',
+    action: 'No action unless you want to review this decision.',
+  },
+};
+
 function normalizeAtsType(value) {
   const normalized = normalizeKey(value).replace(/[^a-z0-9]/g, '');
   if (normalized.includes('greenhouse')) return 'greenhouse';
@@ -5663,6 +5791,37 @@ function isResolvedBoardConfig(config = {}) {
 
 function isImportReadyConfig(config = {}) {
   return config.active !== false && isResolvedBoardConfig(config);
+}
+
+function classifyBoardCoverage(config = {}) {
+  const importStatus = normalizeKey(config.lastImportStatus || 'never');
+  const reviewStatus = normalizeKey(config.reviewStatus || '');
+  const explicitAtsType = normalizeAtsType(config.atsType || config.ats);
+  const atsType = getConfigAtsType(config) || explicitAtsType;
+  const boardId = getConfigBoardId(config);
+  const supported = ATS_FETCHERS.has(atsType);
+  const importReady = isImportReadyConfig(config);
+
+  if (reviewStatus === 'rejected') return 'rejected';
+  if (importStatus === 'failed') return 'failed';
+  if (importReady) {
+    if (importStatus === 'empty') return 'empty';
+    if (importStatus === 'success') return 'healthy';
+    return 'ready_not_run';
+  }
+  if (supported && boardId) return 'needs_review';
+  if (TRACKING_ONLY_ATS_TYPES.has(explicitAtsType)) return 'tracking_only';
+  if (getConfigUrlCandidates(config).some((value) => getUsableCareerUrl(value))) return 'careers_page_only';
+  if (getUsableCompanyDomain(config.domain || config.canonicalDomain)) return 'discovery_needed';
+  return 'missing_identity';
+}
+
+function getBoardCoverageFailureDetail(config = {}) {
+  const error = String(config.lastImportError || config.lastDiscoveryError || '');
+  if (/HTTP\s+(404|410)\b/i.test(error)) return 'The saved job board is no longer available.';
+  if (/timed?\s*out|timeout/i.test(error)) return 'The job board took too long to respond.';
+  if (/ENOTFOUND|ECONNREFUSED|fetch failed|network/i.test(error)) return 'The job board could not be reached.';
+  return 'The latest refresh did not complete. Check the saved board URL and try again.';
 }
 
 function configMatchesAccount(config = {}, account = {}) {

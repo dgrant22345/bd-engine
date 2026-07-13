@@ -902,6 +902,33 @@ a {
   color: var(--ink-muted);
 }
 
+.coverage-health {
+  display: grid;
+  gap: 18px;
+}
+
+.coverage-health__header {
+  align-items: flex-start;
+}
+
+.coverage-health__header p {
+  margin: 5px 0 0;
+}
+
+.coverage-health__detail {
+  max-width: 34rem;
+  margin-top: 5px;
+  white-space: normal;
+}
+
+.table--coverage td:nth-child(1) {
+  min-width: 12rem;
+}
+
+.table--coverage td:nth-child(3) {
+  min-width: 15rem;
+}
+
 .inline-split {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

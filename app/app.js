@@ -2162,7 +2162,7 @@ function bindEvents() {
     }
 
     if (actionName === 'edit-config') {
-      populateConfigForm(action.dataset.id);
+      await populateConfigForm(action.dataset.id);
       return;
     }
 
@@ -2178,6 +2178,7 @@ function bindEvents() {
 
     if (actionName === 'new-config') {
       resetConfigForm();
+      openAdminSection('ats-config-form');
       return;
     }
 
@@ -5375,6 +5376,7 @@ async function renderAdminView() {
   window.bdLocalApi.setAlert('', appAlert);
   const configs = batch.configs;
   const runtime = batch.runtime;
+  const ingestionDiagnostics = batch.ingestionDiagnostics || {};
   appState.runtimeStatus = runtime;
   const targetScoreRollout = batch.targetScoreRollout || {};
   appState.targetScoreRollout = targetScoreRollout;
@@ -5556,6 +5558,9 @@ async function renderAdminView() {
       </div>
 
       <div class="two-column">
+        ${renderCollapsibleStart('coverage-health', 'Job coverage health', 'See which companies can refresh jobs now, what is blocking the rest, and the next action to take.')}
+          ${renderJobCoverageHealth(ingestionDiagnostics)}
+        ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('ats-config-records', 'Job board coverage', 'Board matches, manual overrides, and import readiness for tracked companies.')}
           <form id="configs-filter-form" class="filter-grid filter-grid--compact">
             ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
@@ -6349,6 +6354,68 @@ function renderIngestionHealthPanel(runtime) {
   `;
 }
 
+function coverageIssueTone(category) {
+  if (category === 'failed') return 'danger';
+  if (category === 'empty' || category === 'needs_review') return 'warning';
+  if (category === 'discovery_needed' || category === 'careers_page_only') return 'accent';
+  return 'neutral';
+}
+
+function renderJobCoverageHealth(diagnostics = {}) {
+  const summary = diagnostics.coverageSummary || {};
+  const issues = Array.isArray(diagnostics.coverageIssues) ? diagnostics.coverageIssues : [];
+  const tracked = Number(summary.trackedCompanies || 0);
+  const ready = Number(summary.importReady || 0);
+  const issueCount = Number(summary.totalIssues || 0);
+  const coverageCopy = tracked
+    ? `${formatNumber(ready)} of ${formatNumber(tracked)} tracked companies have a refresh-ready job source.`
+    : 'Track companies to begin finding job sources.';
+
+  return `
+    <div class="coverage-health">
+      <div class="inline-header coverage-health__header">
+        <div>
+          <strong>${escapeHtml(coverageCopy)}</strong>
+          <p class="small muted">${formatNumber(summary.readyCoveragePercent || 0)}% ready for automatic job refresh</p>
+        </div>
+        ${renderStatusPill(issueCount ? `${formatNumber(issueCount)} to improve` : 'Coverage healthy', issueCount ? 'warning' : 'success')}
+      </div>
+      <div class="metrics-grid metrics-grid--compact">
+        ${renderMetricCard('Ready sources', ready, `${formatNumber(summary.readyNotRun || 0)} have not run yet`)}
+        ${renderMetricCard('Refreshed successfully', summary.successful || 0, 'Sources returning usable live jobs')}
+        ${renderMetricCard('Need company details', summary.needsCompanyDetails || 0, 'Add a domain or careers page to continue')}
+        ${renderMetricCard('Need review', summary.needsReview || 0, 'Matches waiting for confirmation')}
+        ${renderMetricCard('Refresh issues', Number(summary.failed || 0) + Number(summary.empty || 0), `${formatNumber(summary.failed || 0)} failed / ${formatNumber(summary.empty || 0)} returned no open jobs`)}
+        ${renderMetricCard('Tracking only', summary.trackingOnly || 0, 'Saved careers pages without automatic imports')}
+      </div>
+      <div class="inline-header">
+        <div><strong>Highest-priority coverage fixes</strong><p class="small muted">Ranked by issue severity and account score.</p></div>
+        <div class="button-row button-row--wrap">
+          <button class="ghost-button" type="button" data-action="run-discovery">Find missing boards</button>
+          <button class="secondary-button" type="button" data-action="run-live-import">Refresh ready sources</button>
+        </div>
+      </div>
+      ${issues.length ? `
+        <div class="table-scroll"><table class="table table--coverage">
+          <thead><tr><th>Company</th><th>Coverage issue</th><th>What to do next</th><th>Actions</th></tr></thead>
+          <tbody>${issues.map((item) => `
+            <tr>
+              <td><strong>${escapeHtml(item.companyName || '')}</strong><div class="small muted">Target score ${formatNumber(item.targetScore || 0)}${item.atsType && item.atsType !== 'unknown' ? ` / ${escapeHtml(humanize(item.atsType))}` : ''}</div></td>
+              <td>${renderStatusPill(item.label || humanize(item.category), coverageIssueTone(item.category))}<div class="small muted coverage-health__detail">${escapeHtml(item.detail || '')}</div></td>
+              <td>${escapeHtml(item.recommendedAction || '')}</td>
+              <td><div class="button-row button-row--wrap">
+                <button class="ghost-button ghost-button--xs" type="button" data-action="edit-config" data-id="${escapeAttr(item.configId || '')}">Edit source</button>
+                ${item.category === 'needs_review' ? `<button class="ghost-button ghost-button--xs" type="button" data-action="retry-config-resolution" data-id="${escapeAttr(item.configId || '')}">Check again</button>` : ''}
+                ${item.accountId ? `<button class="ghost-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(item.accountId)}">Open company</button>` : ''}
+              </div></td>
+            </tr>
+          `).join('')}</tbody>
+        </table></div>
+      ` : renderEmptyState({ icon: 'OK', title: 'Job coverage looks healthy', copy: 'All tracked job sources are ready, intentionally excluded, or importing successfully.', compact: true })}
+    </div>
+  `;
+}
+
 function renderBackgroundJobItem(job) {
   const tone = job.status === 'completed'
     ? 'success'
@@ -6532,11 +6599,10 @@ function renderAccountSortSelect(currentValue) {
   `;
 }
 
-function populateConfigForm(id) {
+async function populateConfigForm(id) {
   appState.configEditingId = id;
-  api(`/api/configs${buildQuery({ page: 1, pageSize: 200 })}`).then((result) => {
-    const config = result.items.find((item) => item.id === id);
-    if (!config) return;
+  try {
+    const config = await api(`/api/configs/${id}`);
     const form = document.getElementById('config-form');
     if (!form) return;
     form.companyName.value = config.companyName || '';
@@ -6547,7 +6613,10 @@ function populateConfigForm(id) {
     form.source.value = config.source || '';
     form.active.value = String(Boolean(config.active));
     form.notes.value = config.notes || '';
-  });
+    openAdminSection('ats-config-form');
+  } catch (error) {
+    showToast(error.message || 'The job source could not be opened.', 'error');
+  }
 }
 
 function resetConfigForm() {
