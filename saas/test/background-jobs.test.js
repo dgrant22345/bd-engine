@@ -18,8 +18,8 @@ test('background job status is scoped to its workspace', async () => {
   store.ensureTenant({ id: ownerTenantId, name: 'Owner workspace' }, { id: 'owner-user' });
   store.ensureTenant({ id: otherTenantId, name: 'Other workspace' }, { id: 'other-user' });
 
-  const created = store.createCompletedJob(ownerTenantId, 'job-private', { count: 1 });
-  assert.equal((await store.getBackgroundJob(ownerTenantId, created.jobId)).status, 'completed');
+  const created = store.startTargetScoreRollout(ownerTenantId, { limit: 1, maxBatches: 1 });
+  assert.equal((await waitForFinishedJob(store, ownerTenantId, created.jobId)).status, 'completed');
 
   const hidden = await store.getBackgroundJob(otherTenantId, created.jobId);
   assert.equal(hidden.status, 'failed');

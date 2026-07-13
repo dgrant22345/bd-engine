@@ -3989,24 +3989,6 @@ export function createStore() {
       return { ok: true, jobId, job };
     },
 
-    createCompletedJob(tenantId, id, result = {}) {
-      assertTenant(tenantId);
-      const job = {
-        id: id || `cloud-job-${Date.now()}`,
-        type: 'cloud-stub',
-        status: 'completed',
-        summary: 'Cloud prototype stub',
-        progressMessage: 'Completed',
-        queuedAt: now(),
-        startedAt: now(),
-        finishedAt: now(),
-        recordsAffected: getTrackedJobCountFromResult(result) || result.count || result.accountCount || 0,
-        result,
-      };
-      trackBackgroundJob(tenantId, job);
-      return { ok: true, jobId: job.id, job };
-    },
-
     async startLinkedInCsvImport(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
       const jobId = `linkedin-csv-${Date.now()}`;

@@ -86,6 +86,9 @@ Review the complete dry-run manifest and create a verified backup first.
 
 The app reports these in the authenticated status screen:
 
+- `BD_INTERNAL_OWNER_EMAILS` grants internal owner entitlements; keep this in
+  deployment configuration and never hardcode privileged identities.
+- `BD_ANALYTICS_ADMIN_EMAILS` controls access to site analytics.
 - `RESEND_API_KEY` and `BD_EMAIL_FROM` enable password-reset and advisory
   email-verification delivery. Confirm both flows against a real inbox after
   changing either setting.

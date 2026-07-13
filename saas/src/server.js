@@ -8,9 +8,10 @@ import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTe
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
+import { buildMutationAuditEntry } from './request-audit.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -23,7 +24,6 @@ const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS ||
 const internalOwnerEmails = new Set(parseEmailList([
   process.env.BD_INTERNAL_OWNER_EMAILS,
   process.env.BD_OWNER_EMAILS,
-  'dgrant22@gmail.com',
 ].join(',')));
 const configuredAnalyticsAdminEmails = parseEmailList(process.env.BD_ANALYTICS_ADMIN_EMAILS);
 const analyticsAdminEmails = new Set(parseEmailList([
@@ -360,6 +360,15 @@ async function startServer() {
     } finally {
       const elapsedMs = Math.round(performance.now() - startedAt);
       recordRequestMetric(req, res, elapsedMs);
+      const auditEntry = buildMutationAuditEntry({
+        method: req.method,
+        statusCode: res.statusCode,
+        tenantId: req.tenantId,
+        userId: req.actorUserId,
+        url: req.url,
+        requestId: req.requestId,
+      });
+      if (auditEntry) await dbRecordAuditLog(auditEntry);
       console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
     }
   });
@@ -856,6 +865,7 @@ self.addEventListener('activate', (event) => {
 
   // Workspace context for error reports/alerts (CG-013).
   req.tenantId = tenantId;
+  req.actorUserId = user.id;
 
   // Build session object compatible with existing frontend
   tenant = ensureInternalOwnerEntitlement(tenant, user);
