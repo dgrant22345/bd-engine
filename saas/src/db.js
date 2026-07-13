@@ -17,6 +17,8 @@ const { Pool } = pg;
 let pool = null;
 let dbReady = false;
 const memoryStripeWebhookEvents = new Map();
+const memorySupportTickets = new Map();
+let memorySupportMessageId = 0;
 
 // ── Connection ──────────────────────────────────────────────────────────────
 
@@ -564,6 +566,50 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260713_support_tickets', 'Add customer support ticket lifecycle', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS support_tickets (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          created_by_user_id TEXT NOT NULL,
+          assigned_to_user_id TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT 'other'
+            CHECK (category IN ('job_discovery', 'data_import', 'outreach', 'billing', 'account', 'feedback', 'other')),
+          subject TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'new'
+            CHECK (status IN ('new', 'open', 'waiting_on_customer', 'resolved', 'closed')),
+          priority TEXT NOT NULL DEFAULT 'normal'
+            CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+          page_url TEXT NOT NULL DEFAULT '',
+          user_agent TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS support_ticket_messages (
+          id BIGSERIAL PRIMARY KEY,
+          ticket_id TEXT NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          author_user_id TEXT NOT NULL DEFAULT '',
+          author_type TEXT NOT NULL DEFAULT 'customer'
+            CHECK (author_type IN ('customer', 'support', 'system')),
+          body TEXT NOT NULL,
+          internal BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS support_tickets_tenant_created_idx
+          ON support_tickets (tenant_id, created_at DESC, id);
+        CREATE INDEX IF NOT EXISTS support_tickets_creator_created_idx
+          ON support_tickets (created_by_user_id, created_at DESC, id);
+        CREATE INDEX IF NOT EXISTS support_tickets_status_updated_idx
+          ON support_tickets (status, updated_at DESC, id);
+        CREATE INDEX IF NOT EXISTS support_ticket_messages_ticket_created_idx
+          ON support_ticket_messages (ticket_id, created_at, id);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -974,6 +1020,253 @@ export async function dbRecordAuditLog(entry = {}) {
     console.error('DB: Failed to record audit log:', err.message);
     return { recorded: false, reason: err.message };
   }
+}
+
+function mapSupportTicket(row = {}) {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id ?? row.tenantId ?? '',
+    createdByUserId: row.created_by_user_id ?? row.createdByUserId ?? '',
+    assignedToUserId: row.assigned_to_user_id ?? row.assignedToUserId ?? '',
+    category: row.category || 'other',
+    subject: row.subject || '',
+    status: row.status || 'new',
+    priority: row.priority || 'normal',
+    pageUrl: row.page_url ?? row.pageUrl ?? '',
+    userAgent: row.user_agent ?? row.userAgent ?? '',
+    createdAt: row.created_at ?? row.createdAt ?? '',
+    updatedAt: row.updated_at ?? row.updatedAt ?? '',
+    resolvedAt: row.resolved_at ?? row.resolvedAt ?? '',
+  };
+}
+
+function mapSupportMessage(row = {}) {
+  return {
+    id: String(row.id),
+    ticketId: row.ticket_id ?? row.ticketId ?? '',
+    tenantId: row.tenant_id ?? row.tenantId ?? '',
+    authorUserId: row.author_user_id ?? row.authorUserId ?? '',
+    authorType: row.author_type ?? row.authorType ?? 'customer',
+    body: row.body || '',
+    internal: Boolean(row.internal),
+    createdAt: row.created_at ?? row.createdAt ?? '',
+  };
+}
+
+export async function dbCreateSupportTicket(ticket = {}, initialMessage = {}) {
+  const normalizedTicket = mapSupportTicket(ticket);
+  const normalizedMessage = mapSupportMessage(initialMessage);
+  if (!dbReady || !pool) {
+    const message = { ...normalizedMessage, id: String(++memorySupportMessageId) };
+    memorySupportTickets.set(normalizedTicket.id, { ...normalizedTicket, messages: [message] });
+    return { ...normalizedTicket, messages: [message] };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO support_tickets
+        (id, tenant_id, created_by_user_id, assigned_to_user_id, category, subject, status, priority, page_url, user_agent, created_at, updated_at, resolved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        normalizedTicket.id, normalizedTicket.tenantId, normalizedTicket.createdByUserId,
+        normalizedTicket.assignedToUserId, normalizedTicket.category, normalizedTicket.subject,
+        normalizedTicket.status, normalizedTicket.priority, normalizedTicket.pageUrl,
+        normalizedTicket.userAgent, normalizedTicket.createdAt, normalizedTicket.updatedAt,
+        normalizedTicket.resolvedAt,
+      ]
+    );
+    const inserted = await client.query(
+      `INSERT INTO support_ticket_messages
+        (ticket_id, tenant_id, author_user_id, author_type, body, internal, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [
+        normalizedTicket.id, normalizedTicket.tenantId, normalizedMessage.authorUserId,
+        normalizedMessage.authorType, normalizedMessage.body, normalizedMessage.internal,
+        normalizedMessage.createdAt,
+      ]
+    );
+    await client.query('COMMIT');
+    return { ...normalizedTicket, messages: [mapSupportMessage(inserted.rows[0])] };
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function dbListSupportTickets({ tenantId = '', createdByUserId = '', allTenants = false, status = '', limit = 50 } = {}) {
+  const boundedLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+  if (!dbReady || !pool) {
+    return [...memorySupportTickets.values()]
+      .filter((ticket) => allTenants || ticket.tenantId === tenantId)
+      .filter((ticket) => !createdByUserId || ticket.createdByUserId === createdByUserId)
+      .filter((ticket) => !status || ticket.status === status)
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .slice(0, boundedLimit)
+      .map((ticket) => ({ ...ticket, messages: ticket.messages.map((message) => ({ ...message })) }));
+  }
+
+  const params = [];
+  const where = [];
+  if (!allTenants) {
+    params.push(tenantId);
+    where.push(`tenant_id = $${params.length}`);
+  }
+  if (createdByUserId) {
+    params.push(createdByUserId);
+    where.push(`created_by_user_id = $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    where.push(`status = $${params.length}`);
+  }
+  params.push(boundedLimit);
+  const ticketsResult = await pool.query(
+    `SELECT * FROM support_tickets
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY updated_at DESC, id DESC
+     LIMIT $${params.length}`,
+    params
+  );
+  if (!ticketsResult.rows.length) return [];
+  const ticketIds = ticketsResult.rows.map((row) => row.id);
+  const messagesResult = await pool.query(
+    `SELECT * FROM support_ticket_messages
+     WHERE ticket_id = ANY($1::text[])
+     ORDER BY created_at, id`,
+    [ticketIds]
+  );
+  const messagesByTicket = new Map();
+  for (const row of messagesResult.rows) {
+    const message = mapSupportMessage(row);
+    if (!messagesByTicket.has(message.ticketId)) messagesByTicket.set(message.ticketId, []);
+    messagesByTicket.get(message.ticketId).push(message);
+  }
+  return ticketsResult.rows.map((row) => {
+    const ticket = mapSupportTicket(row);
+    return { ...ticket, messages: messagesByTicket.get(ticket.id) || [] };
+  });
+}
+
+export async function dbGetSupportTicket(ticketId, { tenantId = '', createdByUserId = '', allTenants = false } = {}) {
+  if (!dbReady || !pool) {
+    const ticket = memorySupportTickets.get(ticketId);
+    if (!ticket || (!allTenants && ticket.tenantId !== tenantId)) return null;
+    if (createdByUserId && ticket.createdByUserId !== createdByUserId) return null;
+    return { ...ticket, messages: ticket.messages.map((message) => ({ ...message })) };
+  }
+
+  const params = [ticketId];
+  const where = ['id = $1'];
+  if (!allTenants) {
+    params.push(tenantId);
+    where.push(`tenant_id = $${params.length}`);
+  }
+  if (createdByUserId) {
+    params.push(createdByUserId);
+    where.push(`created_by_user_id = $${params.length}`);
+  }
+  const ticketResult = await pool.query(`SELECT * FROM support_tickets WHERE ${where.join(' AND ')}`, params);
+  if (!ticketResult.rows.length) return null;
+  const messagesResult = await pool.query(
+    'SELECT * FROM support_ticket_messages WHERE ticket_id = $1 ORDER BY created_at, id',
+    [ticketId]
+  );
+  return {
+    ...mapSupportTicket(ticketResult.rows[0]),
+    messages: messagesResult.rows.map(mapSupportMessage),
+  };
+}
+
+export async function dbAddSupportTicketMessage({ ticketId, tenantId = '', authorUserId = '', authorType = 'customer', body = '', internal = false, allTenants = false } = {}) {
+  const nowIso = new Date().toISOString();
+  if (!dbReady || !pool) {
+    const ticket = memorySupportTickets.get(ticketId);
+    if (!ticket || (!allTenants && ticket.tenantId !== tenantId)) return null;
+    const message = mapSupportMessage({
+      id: String(++memorySupportMessageId), ticketId, tenantId: ticket.tenantId,
+      authorUserId, authorType, body, internal, createdAt: nowIso,
+    });
+    ticket.messages.push(message);
+    ticket.updatedAt = nowIso;
+    if (!internal && authorType === 'customer' && ['resolved', 'closed', 'waiting_on_customer'].includes(ticket.status)) ticket.status = 'open';
+    if (!internal && authorType === 'support' && ['new', 'open'].includes(ticket.status)) ticket.status = 'waiting_on_customer';
+    return { ...ticket, messages: ticket.messages.map((item) => ({ ...item })) };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ticketResult = await client.query(
+      `SELECT * FROM support_tickets WHERE id = $1${allTenants ? '' : ' AND tenant_id = $2'} FOR UPDATE`,
+      allTenants ? [ticketId] : [ticketId, tenantId]
+    );
+    if (!ticketResult.rows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const ticket = mapSupportTicket(ticketResult.rows[0]);
+    await client.query(
+      `INSERT INTO support_ticket_messages
+        (ticket_id, tenant_id, author_user_id, author_type, body, internal, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [ticketId, ticket.tenantId, authorUserId, authorType, body, internal, nowIso]
+    );
+    let nextStatus = ticket.status;
+    if (!internal && authorType === 'customer' && ['resolved', 'closed', 'waiting_on_customer'].includes(nextStatus)) nextStatus = 'open';
+    if (!internal && authorType === 'support' && ['new', 'open'].includes(nextStatus)) nextStatus = 'waiting_on_customer';
+    const updatedResult = await client.query(
+      `UPDATE support_tickets
+       SET status = $2, updated_at = $3, resolved_at = CASE WHEN $2 = 'resolved' THEN $3 ELSE resolved_at END
+       WHERE id = $1
+       RETURNING *`,
+      [ticketId, nextStatus, nowIso]
+    );
+    const messagesResult = await client.query(
+      'SELECT * FROM support_ticket_messages WHERE ticket_id = $1 ORDER BY created_at, id',
+      [ticketId]
+    );
+    await client.query('COMMIT');
+    return {
+      ...mapSupportTicket(updatedResult.rows[0]),
+      messages: messagesResult.rows.map(mapSupportMessage),
+    };
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function dbUpdateSupportTicket(ticketId, updates = {}) {
+  const ticket = memorySupportTickets.get(ticketId);
+  const nowIso = new Date().toISOString();
+  if (!dbReady || !pool) {
+    if (!ticket) return null;
+    Object.assign(ticket, updates, { updatedAt: nowIso });
+    if (updates.status === 'resolved') ticket.resolvedAt = nowIso;
+    if (updates.status && updates.status !== 'resolved') ticket.resolvedAt = '';
+    return { ...ticket, messages: ticket.messages.map((message) => ({ ...message })) };
+  }
+
+  const result = await pool.query(
+    `UPDATE support_tickets
+     SET status = $2,
+         priority = $3,
+         assigned_to_user_id = $4,
+         updated_at = $5,
+         resolved_at = CASE WHEN $2 = 'resolved' THEN $5 WHEN $2 <> 'resolved' THEN '' ELSE resolved_at END
+     WHERE id = $1
+     RETURNING tenant_id`,
+    [ticketId, updates.status, updates.priority, updates.assignedToUserId || '', nowIso]
+  );
+  if (!result.rows.length) return null;
+  return dbGetSupportTicket(ticketId, { tenantId: result.rows[0].tenant_id });
 }
 
 export async function dbSaveBackgroundJob(tenantId, job = {}) {

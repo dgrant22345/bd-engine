@@ -38,6 +38,7 @@
       verificationToken: getInitialVerificationToken(),
       verificationMessage: '',
       emailVerificationAvailable: false,
+      canManageSupport: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
     };
@@ -144,6 +145,7 @@
           state.readOnly = Boolean(data.readOnly);
           state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
           state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+          state.canManageSupport = Boolean(data.canManageSupport);
           state.view = 'app';
         } else if (state.resetToken) {
           state.view = 'reset';
@@ -186,6 +188,7 @@
         state.readOnly = false;
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+        state.canManageSupport = Boolean(data.canManageSupport);
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -215,6 +218,7 @@
         state.readOnly = false;
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+        state.canManageSupport = Boolean(data.canManageSupport);
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
@@ -289,6 +293,7 @@
         state.referral = data.referral || null;
         state.demo = true;
         state.readOnly = true;
+        state.canManageSupport = false;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -309,6 +314,7 @@
       state.demo = false;
       state.readOnly = false;
       state.emailVerificationAvailable = false;
+      state.canManageSupport = false;
       state.view = 'landing';
       state.error = '';
       render();
@@ -1005,6 +1011,270 @@
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
     }
 
+    const supportStatusLabels = {
+      new: 'New',
+      open: 'In progress',
+      waiting_on_customer: 'Waiting for you',
+      resolved: 'Resolved',
+      closed: 'Closed',
+    };
+
+    const supportCategoryLabels = {
+      job_discovery: 'Job and ATS discovery',
+      data_import: 'Import or data issue',
+      outreach: 'Outreach drafts',
+      billing: 'Billing or subscription',
+      account: 'Account access',
+      feedback: 'Product feedback',
+      other: 'Something else',
+    };
+
+    function formatSupportDate(value) {
+      const date = new Date(value || '');
+      if (Number.isNaN(date.getTime())) return '';
+      return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    }
+
+    function supportMessagesHtml(messages = []) {
+      return messages.map((message) => `
+        <div class="support-message ${message.authorType === 'support' ? 'is-support' : ''} ${message.internal ? 'is-internal' : ''}">
+          <div class="support-message-meta">
+            <strong>${message.internal ? 'Internal note' : (message.authorType === 'support' ? 'BD Engine support' : 'You')}</strong>
+            <span>${escapeHtml(formatSupportDate(message.createdAt))}</span>
+          </div>
+          <p>${escapeHtml(message.body).replace(/\n/g, '<br>')}</p>
+        </div>`).join('');
+    }
+
+    function supportTicketHtml(ticket, { operator = false, open = false } = {}) {
+      const status = supportStatusLabels[ticket.status] || ticket.status || 'New';
+      const category = supportCategoryLabels[ticket.category] || 'Support request';
+      const requester = operator
+        ? `<span>${escapeHtml(ticket.requester?.email || ticket.createdByUserId || 'Unknown requester')} · ${escapeHtml(ticket.workspaceName || ticket.tenantId || '')}</span>`
+        : `<span>${escapeHtml(category)} · Updated ${escapeHtml(formatSupportDate(ticket.updatedAt))}</span>`;
+      const operatorControls = operator ? `
+        <div class="support-triage-controls">
+          <label>Status
+            <select data-ticket-status>
+              ${Object.entries(supportStatusLabels).map(([value, label]) => `<option value="${value}" ${ticket.status === value ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+          </label>
+          <label>Priority
+            <select data-ticket-priority>
+              ${['low', 'normal', 'high', 'urgent'].map((value) => `<option value="${value}" ${ticket.priority === value ? 'selected' : ''}>${value.charAt(0).toUpperCase() + value.slice(1)}</option>`).join('')}
+            </select>
+          </label>
+          <button class="btn btn-secondary btn-sm" type="button" data-support-save="${escapeHtml(ticket.id)}">Save</button>
+        </div>` : '';
+      const replyControls = operator ? `
+        <form class="support-reply-form" data-support-operator-reply="${escapeHtml(ticket.id)}">
+          <label for="operator-reply-${escapeHtml(ticket.id)}">Reply or internal note</label>
+          <textarea id="operator-reply-${escapeHtml(ticket.id)}" name="body" rows="3" maxlength="5000" placeholder="Write a clear next step..." required></textarea>
+          <div class="support-form-actions">
+            <label class="support-check"><input type="checkbox" name="internal"> Internal note</label>
+            <button class="btn btn-primary btn-sm" type="submit">Send</button>
+          </div>
+        </form>` : `
+        ${['resolved', 'closed'].includes(ticket.status) ? '<p class="support-resolution-note">Need more help? Replying will reopen this request.</p>' : ''}
+        <form class="support-reply-form" data-support-reply="${escapeHtml(ticket.id)}">
+          <label for="support-reply-${escapeHtml(ticket.id)}">Add a reply</label>
+          <textarea id="support-reply-${escapeHtml(ticket.id)}" name="body" rows="3" maxlength="5000" placeholder="Add any details that may help..." required></textarea>
+          <div class="support-form-actions"><button class="btn btn-primary btn-sm" type="submit">Send reply</button></div>
+        </form>`;
+      return `
+        <details class="support-ticket" data-support-ticket="${escapeHtml(ticket.id)}" ${open ? 'open' : ''}>
+          <summary>
+            <span class="support-ticket-title"><strong>${escapeHtml(ticket.subject)}</strong>${requester}</span>
+            <span class="support-status status-${escapeHtml(ticket.status)}">${escapeHtml(status)}</span>
+          </summary>
+          <div class="support-ticket-detail">
+            ${operatorControls}
+            <div class="support-conversation">${supportMessagesHtml(ticket.messages)}</div>
+            ${replyControls}
+          </div>
+        </details>`;
+    }
+
+    function openSupportCenter({ operator = false } = {}) {
+      root.querySelector('.support-backdrop')?.remove();
+      root.insertAdjacentHTML('beforeend', `
+        <div class="support-backdrop" data-support-close-backdrop>
+          <section class="support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
+            <header class="support-modal-header">
+              <div><span class="support-eyebrow">Help and support</span><h2 id="support-title">Support center</h2></div>
+              <button class="support-close" type="button" data-support-close aria-label="Close support center">Close</button>
+            </header>
+            ${state.canManageSupport ? `<nav class="support-tabs" aria-label="Support views">
+              <button type="button" data-support-tab="customer" class="${operator ? '' : 'is-active'}">My requests</button>
+              <button type="button" data-support-tab="operator" class="${operator ? 'is-active' : ''}">Support inbox</button>
+            </nav>` : ''}
+            <div class="support-modal-body" data-support-body><div class="support-loading"><span class="btn-spinner"></span> Loading support requests...</div></div>
+          </section>
+        </div>`);
+      const backdrop = root.querySelector('.support-backdrop');
+      const onKeydown = (event) => { if (event.key === 'Escape') close(); };
+      const close = () => {
+        document.removeEventListener('keydown', onKeydown);
+        backdrop?.remove();
+      };
+      backdrop.querySelector('[data-support-close]')?.addEventListener('click', close);
+      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+      document.addEventListener('keydown', onKeydown);
+      backdrop.querySelector('[data-support-close]')?.focus();
+      backdrop.querySelector('[data-support-tab="customer"]')?.addEventListener('click', () => loadCustomerSupport(backdrop));
+      backdrop.querySelector('[data-support-tab="operator"]')?.addEventListener('click', () => loadOperatorSupport(backdrop));
+      if (operator && state.canManageSupport) loadOperatorSupport(backdrop);
+      else loadCustomerSupport(backdrop);
+    }
+
+    function setSupportTab(backdrop, tab) {
+      backdrop.querySelectorAll('[data-support-tab]').forEach((button) => button.classList.toggle('is-active', button.dataset.supportTab === tab));
+    }
+
+    async function loadCustomerSupport(backdrop, notice = '') {
+      setSupportTab(backdrop, 'customer');
+      const body = backdrop.querySelector('[data-support-body]');
+      body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading your requests...</div>';
+      try {
+        const data = await api('/api/support/tickets');
+        const tickets = data.tickets || [];
+        body.innerHTML = `
+          ${notice ? `<div class="support-notice" role="status">${escapeHtml(notice)}</div>` : ''}
+          <div class="support-customer-layout">
+            <form class="support-compose" data-support-create>
+              <div><h3>How can we help?</h3><p>Share what you expected and what happened. We will keep the conversation here.</p></div>
+              <label for="support-category">Topic</label>
+              <select id="support-category" name="category">${Object.entries(supportCategoryLabels).map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('')}</select>
+              <label for="support-subject">Subject</label>
+              <input id="support-subject" name="subject" maxlength="120" placeholder="A short summary" required>
+              <label for="support-description">Details</label>
+              <textarea id="support-description" name="body" rows="7" maxlength="5000" placeholder="What were you trying to do? What did you see instead?" required></textarea>
+              <div class="support-form-actions"><button class="btn btn-primary" type="submit">Send request</button></div>
+              <p class="support-email-fallback">Cannot use this form? <a href="mailto:support@bdengine.io?subject=BD%20Engine%20support">Email support@bdengine.io</a>.</p>
+            </form>
+            <section class="support-history" aria-labelledby="support-history-title">
+              <div class="support-section-heading"><div><h3 id="support-history-title">Your requests</h3><p>${tickets.length ? `${tickets.length} recent request${tickets.length === 1 ? '' : 's'}` : 'Updates and replies will appear here.'}</p></div></div>
+              ${tickets.length ? tickets.map((ticket, index) => supportTicketHtml(ticket, { open: index === 0 })).join('') : `
+                <div class="support-empty"><strong>No support requests yet</strong><p>Use the form when you hit a blocker, have a billing question, or want to share feedback.</p></div>`}
+            </section>
+          </div>`;
+        wireCustomerSupportForms(backdrop);
+      } catch (error) {
+        body.innerHTML = `<div class="support-error" role="alert"><strong>Support requests could not load.</strong><p>${escapeHtml(error.message)}</p><a href="mailto:support@bdengine.io?subject=BD%20Engine%20support">Email support instead</a></div>`;
+      }
+    }
+
+    function wireCustomerSupportForms(backdrop) {
+      backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Sending...';
+        try {
+          const frame = root.querySelector('.cloud-app-frame');
+          const pageUrl = frame?.contentWindow?.location?.href || frame?.src || window.location.href;
+          const data = await api('/api/support/tickets', {
+            method: 'POST',
+            body: JSON.stringify({
+              category: form.elements.category.value,
+              subject: form.elements.subject.value,
+              body: form.elements.body.value,
+              pageUrl,
+            }),
+          });
+          await loadCustomerSupport(backdrop, data.message || 'Your request was sent.');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Send request';
+          form.querySelector('.support-inline-error')?.remove();
+          form.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+        }
+      });
+      backdrop.querySelectorAll('[data-support-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const ticketId = event.currentTarget.dataset.supportReply;
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Sending...';
+        try {
+          const data = await api(`/api/support/tickets/${ticketId}/messages`, {
+            method: 'POST', body: JSON.stringify({ body: event.currentTarget.elements.body.value }),
+          });
+          await loadCustomerSupport(backdrop, data.message || 'Reply sent.');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Send reply';
+          event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+        }
+      }));
+    }
+
+    async function loadOperatorSupport(backdrop, requestedStatus = '', notice = '') {
+      setSupportTab(backdrop, 'operator');
+      const body = backdrop.querySelector('[data-support-body]');
+      body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading support inbox...</div>';
+      try {
+        const query = requestedStatus ? `?status=${encodeURIComponent(requestedStatus)}` : '';
+        const data = await api('/api/support/admin/tickets' + query);
+        const tickets = data.tickets || [];
+        body.innerHTML = `
+          ${notice ? `<div class="support-notice" role="status">${escapeHtml(notice)}</div>` : ''}
+          <section class="support-operator">
+            <div class="support-section-heading">
+              <div><h3>Support inbox</h3><p>${tickets.length} request${tickets.length === 1 ? '' : 's'} in this view</p></div>
+              <label>Filter by status
+                <select data-support-filter>
+                  <option value="">All requests</option>
+                  ${Object.entries(supportStatusLabels).map(([value, label]) => `<option value="${value}" ${requestedStatus === value ? 'selected' : ''}>${label}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            ${tickets.length ? tickets.map((ticket, index) => supportTicketHtml(ticket, { operator: true, open: index === 0 })).join('') : '<div class="support-empty"><strong>Inbox clear</strong><p>No requests match this status.</p></div>'}
+          </section>`;
+        wireOperatorSupportForms(backdrop, requestedStatus);
+      } catch (error) {
+        body.innerHTML = `<div class="support-error" role="alert"><strong>Support inbox could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
+      }
+    }
+
+    function wireOperatorSupportForms(backdrop, requestedStatus) {
+      backdrop.querySelector('[data-support-filter]')?.addEventListener('change', (event) => loadOperatorSupport(backdrop, event.currentTarget.value));
+      backdrop.querySelectorAll('[data-support-save]').forEach((button) => button.addEventListener('click', async (event) => {
+        const ticket = event.currentTarget.closest('[data-support-ticket]');
+        event.currentTarget.disabled = true;
+        try {
+          const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportSave}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              status: ticket.querySelector('[data-ticket-status]').value,
+              priority: ticket.querySelector('[data-ticket-priority]').value,
+            }),
+          });
+          await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Request updated.');
+        } catch (error) {
+          event.currentTarget.disabled = false;
+          ticket.querySelector('.support-inline-error')?.remove();
+          ticket.querySelector('.support-ticket-detail').insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+        }
+      }));
+      backdrop.querySelectorAll('[data-support-operator-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        button.disabled = true;
+        try {
+          const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportOperatorReply}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ body: event.currentTarget.elements.body.value, internal: event.currentTarget.elements.internal.checked }),
+          });
+          await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Message added.');
+        } catch (error) {
+          button.disabled = false;
+          event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+        }
+      }));
+    }
+
     function renderTrialUpgradeBanner() {
       if (!isTrialPlan()) return '';
       const trialLimits = getPlanLimits('trial');
@@ -1069,7 +1339,8 @@
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
                   ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
                   <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Export my data</button>
-                  <a class="cloud-menu-item" href="mailto:support@bdengine.io?subject=BD%20Engine%20support" role="menuitem">Contact support</a>
+                  <button class="cloud-menu-item" id="cloud-support-btn" type="button" role="menuitem">Support center</button>
+                  ${state.canManageSupport ? '<button class="cloud-menu-item" id="cloud-support-inbox-btn" type="button" role="menuitem">Support inbox</button>' : ''}
                   ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
                   <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
@@ -1102,6 +1373,14 @@
       root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
         setUserMenuOpen(false);
         doRequestEmailVerification();
+      });
+      root.querySelector('#cloud-support-btn')?.addEventListener('click', () => {
+        setUserMenuOpen(false);
+        openSupportCenter();
+      });
+      root.querySelector('#cloud-support-inbox-btn')?.addEventListener('click', () => {
+        setUserMenuOpen(false);
+        openSupportCenter({ operator: true });
       });
       root.querySelector('#cloud-notice-close')?.addEventListener('click', () => {
         state.verificationMessage = '';

@@ -28,6 +28,8 @@ const TABLE_ORDER = [
   'import_runs',
   'import_run_items',
   'audit_log',
+  'support_tickets',
+  'support_ticket_messages',
   'background_jobs',
   'stripe_webhook_events',
   'schema_migrations',
@@ -46,6 +48,8 @@ const GENERIC_ID_TABLES = new Set([
   'import_runs',
   'import_run_items',
   'audit_log',
+  'support_tickets',
+  'support_ticket_messages',
   'background_jobs',
   'schema_migrations',
 ]);
@@ -263,7 +267,7 @@ async function upsertGenericById(client, table, rows) {
       })
     );
   }
-  if (rows.length && ['analytics_events', 'import_run_items', 'audit_log'].includes(table)) {
+  if (rows.length && ['analytics_events', 'import_run_items', 'audit_log', 'support_ticket_messages'].includes(table)) {
     await client.query(`SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${quoteIdent(table)}), 1))`);
   }
 }

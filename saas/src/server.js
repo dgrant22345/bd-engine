@@ -8,10 +8,11 @@ import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTe
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
+import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -30,6 +31,11 @@ const analyticsAdminEmails = new Set(parseEmailList([
   ...configuredAnalyticsAdminEmails,
   ...internalOwnerEmails,
 ].join(',')));
+const configuredSupportAdminEmails = parseEmailList(process.env.BD_SUPPORT_ADMIN_EMAILS);
+const supportAdminEmails = new Set(parseEmailList([
+  ...configuredSupportAdminEmails,
+  ...internalOwnerEmails,
+].join(',')));
 const ownerPlanId = 'owner';
 
 // ── Abuse / DoS guards ───────────────────────────────────────────────────────
@@ -46,6 +52,9 @@ const PASSWORD_RESET_MAX = Number(process.env.BD_PASSWORD_RESET_MAX) > 0 ? Numbe
 const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+const SUPPORT_CREATE_MAX = Number(process.env.BD_SUPPORT_CREATE_MAX) > 0 ? Number(process.env.BD_SUPPORT_CREATE_MAX) : 10;
+const SUPPORT_REPLY_MAX = Number(process.env.BD_SUPPORT_REPLY_MAX) > 0 ? Number(process.env.BD_SUPPORT_REPLY_MAX) : 30;
+const SUPPORT_WINDOW_MS = 60 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
@@ -505,6 +514,12 @@ function canViewSiteAnalytics(user) {
   return analyticsAdminEmails.has(String(user?.email || '').trim().toLowerCase());
 }
 
+function canManageSupport(user) {
+  const isProduction = (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production';
+  if (!isProduction && configuredSupportAdminEmails.length === 0) return true;
+  return supportAdminEmails.has(String(user?.email || '').trim().toLowerCase());
+}
+
 function isInternalOwner(user) {
   return internalOwnerEmails.has(String(user?.email || '').trim().toLowerCase());
 }
@@ -894,6 +909,115 @@ self.addEventListener('activate', (event) => {
       message: result.sent
         ? `Verification email sent to ${user.email}.`
         : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+    });
+  }
+
+  if (pathname === '/api/support/tickets') {
+    if (req.method === 'GET') {
+      const tickets = await dbListSupportTickets({ tenantId, createdByUserId: user.id, limit: 50 });
+      return sendJson(res, 200, { tickets: tickets.map((ticket) => publicSupportTicket(ticket)) });
+    }
+    if (req.method === 'POST') {
+      if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
+      if (rateLimitExceeded(`support-create:${user.id}`, SUPPORT_CREATE_MAX, SUPPORT_WINDOW_MS)) {
+        return sendJson(res, 429, { error: 'You have sent several support requests recently. Reply to an existing request or try again later.' });
+      }
+      const validation = validateSupportTicketInput(await readJson(req));
+      if (validation.error) return sendJson(res, 400, { error: validation.error });
+      const createdAt = new Date().toISOString();
+      const ticketId = `support-${randomUUID().slice(0, 12)}`;
+      const ticket = await dbCreateSupportTicket({
+        id: ticketId,
+        tenantId,
+        createdByUserId: user.id,
+        category: validation.value.category,
+        subject: validation.value.subject,
+        status: 'new',
+        priority: 'normal',
+        pageUrl: validation.value.pageUrl,
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+        createdAt,
+        updatedAt: createdAt,
+      }, {
+        ticketId,
+        tenantId,
+        authorUserId: user.id,
+        authorType: 'customer',
+        body: validation.value.body,
+        internal: false,
+        createdAt,
+      });
+      return sendJson(res, 201, {
+        ticket: publicSupportTicket(ticket),
+        message: 'Your request was sent. You can follow its progress here.',
+      });
+    }
+  }
+
+  const supportReplyMatch = pathname.match(/^\/api\/support\/tickets\/([^/]+)\/messages$/);
+  if (supportReplyMatch && req.method === 'POST') {
+    if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
+    if (rateLimitExceeded(`support-reply:${user.id}`, SUPPORT_REPLY_MAX, SUPPORT_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many support replies were sent recently. Please wait and try again.' });
+    }
+    const accessible = await dbGetSupportTicket(supportReplyMatch[1], { tenantId, createdByUserId: user.id });
+    if (!accessible) {
+      return sendJson(res, 404, { error: 'Support request not found.' });
+    }
+    const validation = validateSupportReplyInput(await readJson(req));
+    if (validation.error) return sendJson(res, 400, { error: validation.error });
+    const ticket = await dbAddSupportTicketMessage({
+      ticketId: supportReplyMatch[1],
+      tenantId,
+      authorUserId: user.id,
+      authorType: 'customer',
+      body: validation.value.body,
+    });
+    return sendJson(res, 201, { ticket: publicSupportTicket(ticket), message: 'Reply sent.' });
+  }
+
+  if (pathname === '/api/support/admin/tickets' && req.method === 'GET') {
+    if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    const requestedStatus = String(url.searchParams.get('status') || '');
+    const status = SUPPORT_STATUSES.has(requestedStatus) ? requestedStatus : '';
+    const tickets = await dbListSupportTickets({ allTenants: true, status, limit: 100 });
+    return sendJson(res, 200, {
+      tickets: tickets.map((ticket) => ({
+        ...publicSupportTicket(ticket, { operator: true }),
+        workspaceName: findTenantById(ticket.tenantId)?.name || ticket.tenantId,
+        requester: safeUser(findUserById(ticket.createdByUserId)),
+      })),
+    });
+  }
+
+  const supportAdminTicketMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)$/);
+  if (supportAdminTicketMatch && req.method === 'PATCH') {
+    if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    const current = await dbGetSupportTicket(supportAdminTicketMatch[1], { allTenants: true });
+    if (!current) return sendJson(res, 404, { error: 'Support request not found.' });
+    const validation = validateSupportAdminUpdate(await readJson(req), current);
+    if (validation.error) return sendJson(res, 400, { error: validation.error });
+    const ticket = await dbUpdateSupportTicket(current.id, validation.value);
+    return sendJson(res, 200, { ticket: publicSupportTicket(ticket, { operator: true }), message: 'Support request updated.' });
+  }
+
+  const supportAdminReplyMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)\/messages$/);
+  if (supportAdminReplyMatch && req.method === 'POST') {
+    if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    const validation = validateSupportReplyInput(await readJson(req));
+    if (validation.error) return sendJson(res, 400, { error: validation.error });
+    const ticket = await dbAddSupportTicketMessage({
+      ticketId: supportAdminReplyMatch[1],
+      authorUserId: user.id,
+      authorType: 'support',
+      body: validation.value.body,
+      internal: validation.value.internal,
+      allTenants: true,
+    });
+    if (!ticket) return sendJson(res, 404, { error: 'Support request not found.' });
+    return sendJson(res, 201, {
+      ticket: publicSupportTicket(ticket, { operator: true }),
+      message: validation.value.internal ? 'Internal note added.' : 'Reply sent.',
     });
   }
 
@@ -1919,6 +2043,7 @@ async function handleSignup(req, res) {
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
     emailVerificationAvailable: verification.emailConfigured,
     verificationEmailSent: verification.sent,
+    canManageSupport: canManageSupport(userResult.user),
   });
 }
 
@@ -1966,6 +2091,7 @@ async function handleLogin(req, res) {
     persona,
     workspaceRecovered,
     emailVerificationAvailable: isEmailConfigured(),
+    canManageSupport: canManageSupport(result.user),
   });
 }
 
@@ -2033,6 +2159,7 @@ function handleMe(req, res) {
     referral: getReferralSummary(tenant, getRequestOrigin(req)),
     persona,
     emailVerificationAvailable: isEmailConfigured(),
+    canManageSupport: canManageSupport(user),
   });
 }
 

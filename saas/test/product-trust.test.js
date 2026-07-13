@@ -42,6 +42,9 @@ test('password recovery gives users a next step when email delivery is unavailab
 test('authenticated shell exposes actionable support and verification states', async () => {
   const landing = await readFile(landingPath, 'utf8');
   assert.match(landing, /mailto:support@bdengine\.io/);
+  assert.match(landing, /Support center/);
+  assert.match(landing, /Your requests/);
+  assert.match(landing, /Support inbox/);
   assert.match(landing, /Email verified/);
   assert.match(landing, /Send verification email/);
 });
