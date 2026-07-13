@@ -1003,37 +1003,44 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/admin/bootstrap') {
-    const bootstrapData = await store.getBootstrap(tenantId, { includeFilters: true, session });
     const canViewAnalytics = canViewSiteAnalytics(user);
     const effectivePlanId = getEffectivePlanId(tenant, user);
-    let analytics = null;
-    if (canViewAnalytics) {
-      const analyticsStartedAt = performance.now();
-      analytics = await dbGetAnalyticsSummary(30);
-      const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
-      if (analyticsElapsedMs > 250) {
-        console.warn(`Slow analytics summary: saas/src/db.js dbGetAnalyticsSummary ${analyticsElapsedMs}ms`);
-      }
+    const analyticsStartedAt = performance.now();
+    const [bootstrapData, runtime, ingestionDiagnostics, analytics] = await Promise.all([
+      store.getBootstrap(tenantId, { includeFilters: true, session }),
+      store.getRuntimeStatus(tenantId),
+      store.getIngestionDiagnostics(tenantId),
+      canViewAnalytics ? dbGetAnalyticsSummary(30) : Promise.resolve(null),
+    ]);
+    const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
+    if (canViewAnalytics && analyticsElapsedMs > 250) {
+      console.warn(`Slow analytics summary: saas/src/db.js dbGetAnalyticsSummary ${analyticsElapsedMs}ms`);
     }
+    // Diagnostics hydrates the complete workspace used by the synchronous
+    // resolver reports below. Independent paged reads can then run together.
+    const [configs, tenantUsage] = await Promise.all([
+      store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      getTenantUsage(tenantId),
+    ]);
     const origin = getRequestOrigin(req);
     const billingAccess = getBillingAccessStatus(tenant);
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
-      runtime: await store.getRuntimeStatus(tenantId),
-      ingestionDiagnostics: await store.getIngestionDiagnostics(tenantId),
+      runtime,
+      ingestionDiagnostics,
       targetScoreRollout: store.getTargetScoreRollout(tenantId),
       resolverReport: store.getResolverReport(tenantId),
       enrichmentReport: store.getEnrichmentReport(tenantId),
       unresolvedQueue: store.getResolverQueue(tenantId, 'unresolved'),
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
       enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
-      configs: await store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      configs,
       analytics,
       canViewSiteAnalytics: canViewAnalytics,
       billing: {
         plan: getPlan(effectivePlanId),
         trialDaysRemaining: effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant),
-        usage: getUsageSummary(tenantId, effectivePlanId, await getTenantUsage(tenantId)),
+        usage: getUsageSummary(tenantId, effectivePlanId, tenantUsage),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         tenant: getBillingTenantPayload(tenant, user),

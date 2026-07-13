@@ -81,6 +81,43 @@ export async function getTenantUsageCountsRelational(tenantId) {
   };
 }
 
+export async function getTenantFiltersRelational(tenantId) {
+  if (!isDbReady()) return null;
+  const [accountResult, configResult] = await Promise.all([
+    dbQuery(
+      `SELECT
+         ARRAY_AGG(DISTINCT industry) FILTER (WHERE industry <> '') AS industries,
+         ARRAY_AGG(DISTINCT status) FILTER (WHERE status <> '') AS statuses,
+         ARRAY_AGG(DISTINCT outreach_status) FILTER (WHERE outreach_status <> '') AS outreach_statuses
+       FROM accounts WHERE tenant_id = $1`,
+      [tenantId]
+    ),
+    dbQuery(
+      `SELECT
+         ARRAY_AGG(DISTINCT COALESCE(NULLIF(raw->>'ats', ''), NULLIF(raw->>'atsType', ''), NULLIF(ats_type, '')))
+           FILTER (WHERE COALESCE(NULLIF(raw->>'ats', ''), NULLIF(raw->>'atsType', ''), NULLIF(ats_type, '')) IS NOT NULL) AS ats_types,
+         ARRAY_AGG(DISTINCT discovery_status) FILTER (WHERE discovery_status <> '') AS config_discovery_statuses,
+         ARRAY_AGG(DISTINCT raw->>'confidenceBand') FILTER (WHERE COALESCE(raw->>'confidenceBand', '') <> '') AS config_confidence_bands,
+         ARRAY_AGG(DISTINCT review_status) FILTER (WHERE review_status <> '') AS config_review_statuses
+       FROM board_configs WHERE tenant_id = $1`,
+      [tenantId]
+    ),
+  ]);
+  const accountRow = accountResult?.rows?.[0];
+  const configRow = configResult?.rows?.[0];
+  if (!accountRow || !configRow) return null;
+  const sorted = (values) => (values || []).sort((a, b) => String(a).localeCompare(String(b)));
+  return {
+    atsTypes: sorted(configRow.ats_types),
+    industries: sorted(accountRow.industries),
+    statuses: sorted(accountRow.statuses),
+    outreachStatuses: sorted(accountRow.outreach_statuses),
+    configDiscoveryStatuses: sorted(configRow.config_discovery_statuses),
+    configConfidenceBands: sorted(configRow.config_confidence_bands),
+    configReviewStatuses: sorted(configRow.config_review_statuses),
+  };
+}
+
 export async function findTenantAccountsRelational(tenantId, query = {}) {
   if (!isDbReady()) return null;
   const page = Math.max(1, Number(query.page || 1));

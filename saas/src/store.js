@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -2030,8 +2030,21 @@ export function createStore() {
       const startedAt = performance.now();
       const timings = {};
       const loadStartedAt = performance.now();
-      if (includeFilters) await ensureDataLoaded(tenantId, false);
-      else await ensureTenantSettingsLoaded(tenantId);
+      let filters = null;
+      if (includeFilters && relationalWritesPrimaryForTenant(tenantId)) {
+        [filters] = await Promise.all([
+          getTenantFiltersRelational(tenantId),
+          ensureTenantSettingsLoaded(tenantId),
+        ]);
+      } else if (includeFilters) {
+        await ensureDataLoaded(tenantId, false);
+      } else {
+        await ensureTenantSettingsLoaded(tenantId);
+      }
+      if (includeFilters && !filters) {
+        await ensureDataLoaded(tenantId, false);
+        filters = buildFilters(tenantId);
+      }
       timings.loadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();
       const profile = getTenantProfile(tenantId);
@@ -2046,7 +2059,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
-        ...(includeFilters ? { filters: buildFilters(tenantId) } : {}),
+        ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
       const elapsedMs = Math.round(performance.now() - startedAt);
