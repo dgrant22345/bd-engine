@@ -104,6 +104,7 @@ await mutationCheck('authenticated session can load bootstrap', async () => {
 await mutationCheck('authenticated status includes operator detail', async () => {
   const body = await getJson('/api/status', cookie);
   assert(typeof body.checks?.emailConfigured === 'boolean', '/api/status did not include emailConfigured');
+  assert(typeof body.checks?.supportNotificationsConfigured === 'boolean', '/api/status did not include support notification readiness');
   assert(typeof body.checks?.errorAlertsConfigured === 'boolean', '/api/status did not include error alert readiness');
   assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalMirrorHealthy'), '/api/status omitted relational mirror readiness');
   assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalContentHealthy'), '/api/status omitted relational content readiness');

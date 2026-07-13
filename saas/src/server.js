@@ -9,7 +9,7 @@ import { extractSession, createSession, destroySession, setSessionCookie, clearS
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail } from './email.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
@@ -594,6 +594,40 @@ function getRequestOrigin(req) {
   return `${protoValue || 'https'}://${hostValue}`;
 }
 
+async function notifySupportOperators(req, { ticket, requester, tenant, message }) {
+  if (!isEmailConfigured() || supportAdminEmails.size === 0) return;
+  try {
+    await sendSupportOperatorEmail({
+      to: [...supportAdminEmails],
+      requesterName: requester?.name,
+      requesterEmail: requester?.email,
+      workspaceName: tenant?.name,
+      ticket,
+      message,
+      supportUrl: getRequestOrigin(req),
+    });
+  } catch (error) {
+    console.warn(`Support operator notification failed for ${ticket?.id || 'unknown ticket'}:`, error.message);
+  }
+}
+
+async function notifySupportCustomer(req, { ticket, message }) {
+  if (!isEmailConfigured() || !ticket?.createdByUserId) return;
+  const requester = findUserById(ticket.createdByUserId);
+  if (!requester?.email) return;
+  try {
+    await sendSupportCustomerReplyEmail({
+      to: requester.email,
+      name: requester.name,
+      ticket,
+      message,
+      supportUrl: getRequestOrigin(req),
+    });
+  } catch (error) {
+    console.warn(`Support customer notification failed for ${ticket.id}:`, error.message);
+  }
+}
+
 function shouldExposeDevResetToken() {
   return process.env.BD_EXPOSE_RESET_TOKEN === 'true'
     || process.env.NODE_ENV === 'test'
@@ -947,6 +981,12 @@ self.addEventListener('activate', (event) => {
         internal: false,
         createdAt,
       });
+      await notifySupportOperators(req, {
+        ticket,
+        requester: user,
+        tenant,
+        message: validation.value.body,
+      });
       return sendJson(res, 201, {
         ticket: publicSupportTicket(ticket),
         message: 'Your request was sent. You can follow its progress here.',
@@ -972,6 +1012,12 @@ self.addEventListener('activate', (event) => {
       authorUserId: user.id,
       authorType: 'customer',
       body: validation.value.body,
+    });
+    await notifySupportOperators(req, {
+      ticket,
+      requester: user,
+      tenant,
+      message: validation.value.body,
     });
     return sendJson(res, 201, { ticket: publicSupportTicket(ticket), message: 'Reply sent.' });
   }
@@ -1015,6 +1061,9 @@ self.addEventListener('activate', (event) => {
       allTenants: true,
     });
     if (!ticket) return sendJson(res, 404, { error: 'Support request not found.' });
+    if (!validation.value.internal) {
+      await notifySupportCustomer(req, { ticket, message: validation.value.body });
+    }
     return sendJson(res, 201, {
       ticket: publicSupportTicket(ticket, { operator: true }),
       message: validation.value.internal ? 'Internal note added.' : 'Reply sent.',
@@ -2297,6 +2346,7 @@ function getHealthPayload(includeDetails = false) {
     stripeMode: stripeStatus.mode,
     stripeMissing: stripeStatus.missing,
     emailConfigured: isEmailConfigured(),
+    supportNotificationsConfigured: isEmailConfigured() && supportAdminEmails.size > 0,
     errorAlertsConfigured: Boolean(ERROR_WEBHOOK),
     relationalMirrorConfigured: isDbEnabled(),
     relationalMirrorHealthy: relationalMirrorHealth.healthy,
