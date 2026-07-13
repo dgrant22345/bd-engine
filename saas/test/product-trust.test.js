@@ -18,11 +18,12 @@ test('public product claims match implemented job-board coverage and team sync',
   assert.doesNotMatch(landing, /until team sync ships/i);
   assert.match(landing, /Greenhouse, Lever, Ashby, SmartRecruiters, Workday/);
   assert.match(landing, /BambooHR, Workable, Jobvite/);
+  assert.match(landing, /Recruitee, Personio/);
   assert.doesNotMatch(landing, /3 team members/i);
   assert.doesNotMatch(landing, /Team Analytics/);
   assert.match(landing, /Workspace sync across your devices/);
   assert.match(landing, /Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account/);
-  assert.match(app, /Live import supported/);
+  assert.match(app, /Automatic import supported/);
   assert.match(app, /Tracking only/);
   assert.match(landing, /Find my next role/);
   assert.match(landing, /Start job search/);

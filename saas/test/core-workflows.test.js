@@ -263,6 +263,99 @@ test('Workable boards import jobs from the documented public careers endpoint', 
   }
 });
 
+test('Recruitee boards import published offers from the public careers API', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-recruitee-import';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Recruitee' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Recruitee',
+    careersUrl: 'https://example-team.recruitee.com/',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(JSON.stringify({
+      offers: [{
+        id: 724,
+        slug: 'sales-engineer',
+        title: 'Sales Engineer',
+        department: 'Sales',
+        employment_type: 'full_time',
+        locations: [{ city: 'Toronto', state: 'Ontario', country: 'Canada' }],
+        careers_url: 'https://example-team.recruitee.com/o/sales-engineer',
+        published_at: new Date().toISOString(),
+      }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.newJobs, 1);
+    assert.deepEqual(requestedUrls, ['https://example-team.recruitee.com/api/offers/']);
+    const imported = (await store.findJobs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(imported.source, 'Recruitee');
+    assert.equal(imported.location, 'Toronto, Ontario, Canada');
+    assert.equal(imported.jobUrl, 'https://example-team.recruitee.com/o/sales-engineer');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Personio boards import the public XML positions feed', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-personio-import';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Personio' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Personio',
+    careersUrl: 'https://example-team.jobs.personio.de/',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+      <workzag-jobs><position><id>4103</id><office>Toronto, ON</office>
+      <department>Customer Success</department><name>Implementation Manager</name>
+      <employmentType>permanent</employmentType><schedule>full-time</schedule>
+      <createdAt>2026-07-12T12:14:07+0000</createdAt></position></workzag-jobs>`, {
+      status: 200,
+      headers: { 'content-type': 'application/xml' },
+    });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.newJobs, 1);
+    assert.deepEqual(requestedUrls, ['https://example-team.jobs.personio.de/xml?language=en']);
+    const imported = (await store.findJobs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(imported.source, 'Personio');
+    assert.equal(imported.title, 'Implementation Manager');
+    assert.equal(imported.employmentType, 'permanent, full-time');
+    assert.equal(imported.jobUrl, 'https://example-team.jobs.personio.de/job/4103');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('outreach drafts use verified role context and return real alternate angles', async () => {
   const store = createStore();
   const tenantId = 'tenant-outreach-quality';

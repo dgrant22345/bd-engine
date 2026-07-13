@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
+import { XMLParser } from 'fast-xml-parser';
 import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
@@ -18,6 +19,7 @@ const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'board
 const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MIN_JOB_LINKS, 3);
 const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
 const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
+const ATS_DISCOVERY_PROBE_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_PROBE_CONCURRENCY, 4);
 const RELATIONAL_READ_TENANTS = new Set(String(process.env.BD_RELATIONAL_READ_TENANTS || '')
   .split(',')
   .map((value) => value.trim())
@@ -5590,8 +5592,12 @@ const ATS_FETCHERS = new Map([
   ['workday', fetchWorkdayJobs],
   ['bamboohr', fetchBamboohrJobs],
   ['workable', fetchWorkableJobs],
+  ['recruitee', fetchRecruiteeJobs],
+  ['personio', fetchPersonioJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
+
+const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio'];
 
 const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'phenom']);
 const BOARD_COVERAGE_META = {
@@ -5647,6 +5653,8 @@ function normalizeAtsType(value) {
   if (normalized.includes('workday') || normalized.includes('myworkdayjobs')) return 'workday';
   if (normalized.includes('bamboohr')) return 'bamboohr';
   if (normalized.includes('workable')) return 'workable';
+  if (normalized.includes('recruitee')) return 'recruitee';
+  if (normalized.includes('personio')) return 'personio';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -5662,6 +5670,8 @@ function detectAtsTypeFromUrl(value) {
   if (url.includes('myworkdayjobs.com')) return 'workday';
   if (url.includes('bamboohr.com')) return 'bamboohr';
   if (url.includes('workable.com')) return 'workable';
+  if (url.includes('recruitee.com')) return 'recruitee';
+  if (url.includes('jobs.personio.de')) return 'personio';
   return '';
 }
 
@@ -5752,6 +5762,10 @@ function getConfigBoardId(config = {}) {
     if (bamboo) return decodeURIComponent(bamboo[1]);
     const workable = String(sourceUrl).match(/(?:apply\.)?workable\.com\/(?:api\/accounts\/)?([^/?#]+)/i);
     if (workable && !['api', 'j', 'jobs', 'www'].includes(workable[1].toLowerCase())) return decodeURIComponent(workable[1]);
+    const recruitee = String(sourceUrl).match(/https?:\/\/([^./]+)\.recruitee\.com/i);
+    if (recruitee) return decodeURIComponent(recruitee[1]);
+    const personio = String(sourceUrl).match(/https?:\/\/([^./]+)\.jobs\.personio\.de/i);
+    if (personio) return decodeURIComponent(personio[1]);
   }
   return '';
 }
@@ -6153,10 +6167,59 @@ async function fetchWorkableJobs(config, boardId) {
   return { jobs: firstArray(payload?.jobs, payload) };
 }
 
+async function fetchRecruiteeJobs(config, boardId) {
+  const url = getRecruiteeJobsApiUrl(config, boardId);
+  const payload = await fetchJson(url);
+  return { jobs: firstArray(payload?.offers, payload?.jobs, payload) };
+}
+
+async function fetchPersonioJobs(config, boardId) {
+  const url = getPersonioJobsFeedUrl(config, boardId);
+  const content = await fetchText(url, 15000);
+  const parser = new XMLParser({
+    ignoreAttributes: true,
+    parseTagValue: false,
+    processEntities: false,
+    trimValues: true,
+  });
+  const payload = parser.parse(content);
+  const positions = payload?.['workzag-jobs']?.position;
+  return { jobs: Array.isArray(positions) ? positions : (positions ? [positions] : []) };
+}
+
 function getWorkableJobsApiUrl(config = {}, boardId = '') {
   const apiUrl = String(config.apiUrl || '');
   if (/workable\.com\/api\/accounts\//i.test(apiUrl)) return setUrlSearchParams(apiUrl, { details: 'true' });
   return `https://www.workable.com/api/accounts/${encodeURIComponent(boardId)}?details=true`;
+}
+
+function getRecruiteeJobsApiUrl(config = {}, boardId = '') {
+  const apiUrl = String(config.apiUrl || '');
+  if (/\.recruitee\.com\/api\/offers\/?/i.test(apiUrl)) return apiUrl;
+  return `https://${encodeURIComponent(boardId)}.recruitee.com/api/offers/`;
+}
+
+function getPersonioJobsFeedUrl(config = {}, boardId = '') {
+  const personioUrl = getConfigUrlCandidates(config).find((value) => /\.jobs\.personio\.de/i.test(value));
+  if (personioUrl) {
+    try {
+      const parsed = new URL(personioUrl);
+      parsed.pathname = '/xml';
+      if (!parsed.searchParams.has('language')) parsed.searchParams.set('language', 'en');
+      return parsed.toString();
+    } catch {
+      // Fall through to the account subdomain.
+    }
+  }
+  return `https://${encodeURIComponent(boardId)}.jobs.personio.de/xml?language=en`;
+}
+
+function getPersonioCareerOrigin(config = {}, boardId = '') {
+  try {
+    return new URL(getPersonioJobsFeedUrl(config, boardId)).origin;
+  } catch {
+    return `https://${encodeURIComponent(boardId)}.jobs.personio.de`;
+  }
 }
 
 function getBambooCareersApiUrl(config = {}, boardId = '') {
@@ -6204,7 +6267,7 @@ async function fetchText(url, timeoutMs = 15000) {
   try {
     const response = await fetch(url, {
       headers: {
-        accept: 'text/html,application/json',
+        accept: 'text/html,application/xml,text/xml,application/json',
         'user-agent': 'Mozilla/5.0 (compatible; BD-Engine/1.0; +https://bd-engine-production.up.railway.app/)',
       },
       signal: controller.signal,
@@ -6271,27 +6334,29 @@ function parseBamboohrJobs(content) {
 
 async function discoverAtsBoard(config) {
   const knownAtsType = getConfigAtsType(config);
-  const atsTypes = ATS_FETCHERS.has(knownAtsType)
-    ? [knownAtsType, ...[...ATS_FETCHERS.keys()].filter((item) => item !== knownAtsType)]
-    : [...ATS_FETCHERS.keys()];
+  const atsTypes = BLIND_PROBE_ATS_TYPES.includes(knownAtsType)
+    ? [knownAtsType, ...BLIND_PROBE_ATS_TYPES.filter((item) => item !== knownAtsType)]
+    : BLIND_PROBE_ATS_TYPES;
   const candidates = buildBoardCandidates(config);
 
   const linkedBoard = await discoverAtsBoardFromCareersPages(config);
   if (linkedBoard) return linkedBoard;
 
   for (const boardId of candidates) {
-    for (const atsType of atsTypes) {
-      const result = await probeAtsBoard(atsType, boardId);
-      if (result) {
-        return {
-          atsType,
-          boardId,
-          apiUrl: result.apiUrl,
-          resolvedBoardUrl: result.resolvedBoardUrl,
-          jobCount: result.jobCount,
-          method: 'public_ats_probe',
-        };
-      }
+    const probes = await mapSettledWithConcurrency(atsTypes, ATS_DISCOVERY_PROBE_CONCURRENCY, async (atsType) => ({
+      atsType,
+      result: await probeAtsBoard(atsType, boardId),
+    }));
+    const match = probes.find((probe) => probe.status === 'fulfilled' && probe.value.result)?.value;
+    if (match) {
+      return {
+        atsType: match.atsType,
+        boardId,
+        apiUrl: match.result.apiUrl,
+        resolvedBoardUrl: match.result.resolvedBoardUrl,
+        jobCount: match.result.jobCount,
+        method: 'public_ats_probe',
+      };
     }
   }
   return null;
@@ -6680,7 +6745,7 @@ async function probeAtsUrl(config, atsUrl) {
   };
   const boardId = getConfigBoardId(tempConfig);
   if (!boardId) return null;
-  if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite'].includes(atsType)) {
+  if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio'].includes(atsType)) {
     const probed = await probeAtsBoard(atsType, boardId);
     if (probed) {
       return {
@@ -6760,6 +6825,20 @@ async function probeAtsUrl(config, atsUrl) {
 
 async function probeAtsBoard(atsType, boardId) {
   const encoded = encodeURIComponent(boardId);
+  if (atsType === 'personio') {
+    const apiUrl = `https://${encoded}.jobs.personio.de/xml?language=en`;
+    try {
+      const result = await fetchPersonioJobs({ apiUrl }, boardId);
+      if (!result.jobs.length) return null;
+      return {
+        apiUrl,
+        resolvedBoardUrl: `https://${encoded}.jobs.personio.de/`,
+        jobCount: result.jobs.length,
+      };
+    } catch {
+      return null;
+    }
+  }
   const endpoints = {
     greenhouse: {
       apiUrl: `https://boards-api.greenhouse.io/v1/boards/${encoded}/jobs`,
@@ -6785,6 +6864,11 @@ async function probeAtsBoard(atsType, boardId) {
       apiUrl: `https://jobs.jobvite.com/api/job-list?company=${encoded}`,
       resolvedBoardUrl: `https://jobs.jobvite.com/${encoded}`,
       readJobs: (payload) => payload?.jobs || payload?.requisitions,
+    },
+    recruitee: {
+      apiUrl: `https://${encoded}.recruitee.com/api/offers/`,
+      resolvedBoardUrl: `https://${encoded}.recruitee.com/`,
+      readJobs: (payload) => payload?.offers || payload?.jobs || payload,
     },
   };
   const endpoint = endpoints[atsType];
@@ -7053,6 +7137,67 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       isGta: isGtaLocation(location),
     };
   }
+  if (atsType === 'recruitee') {
+    const title = raw.title || raw.name || '';
+    if (!title) return null;
+    const location = readRecruiteeLocation(raw);
+    const postedAt = raw.published_at || raw.created_at || raw.updated_at || retrievedAt;
+    const jobId = raw.id || raw.slug || title;
+    const jobUrl = raw.careers_url || raw.careers_apply_url || raw.url || raw.apply_url || '';
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || raw.department_name || '',
+      employmentType: raw.employment_type || raw.employmentType || '',
+      atsType,
+      source: 'Recruitee',
+      jobId: String(jobId),
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'personio') {
+    const title = raw.name || raw.title || '';
+    if (!title) return null;
+    const location = raw.office || raw.location || '';
+    const postedAt = raw.createdAt || raw.created_at || retrievedAt;
+    const jobId = raw.id || title;
+    const jobUrl = `${getPersonioCareerOrigin(config, getConfigBoardId(config))}/job/${encodeURIComponent(jobId)}`;
+    const employmentType = [raw.employmentType, raw.schedule].filter(Boolean).join(', ');
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department || raw.recruitingCategory || '',
+      employmentType,
+      atsType,
+      source: 'Personio',
+      jobId: String(jobId),
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
   if (atsType === 'custom_static') {
     const title = raw.title || raw.name || '';
     if (!title) return null;
@@ -7114,6 +7259,17 @@ function getJobNaturalKey(item) {
     normalizeAtsType(item.atsType || item.source),
     providerJobId || stableSource || normalizeKey(`${item.title}|${item.location}`),
   ].map((part) => normalizeKey(part)).join('|');
+}
+
+function readRecruiteeLocation(raw = {}) {
+  const locations = Array.isArray(raw.locations) ? raw.locations : [];
+  const values = locations.map((location) => {
+    if (typeof location === 'string') return location;
+    return location?.name || [location?.city, location?.state || location?.region, location?.country].filter(Boolean).join(', ');
+  }).filter(Boolean);
+  if (values.length) return values.join('; ');
+  if (typeof raw.location === 'string') return raw.location;
+  return raw.location?.name || [raw.location?.city, raw.location?.state || raw.location?.region, raw.location?.country].filter(Boolean).join(', ');
 }
 
 function getProviderJobIdentity(item = {}) {

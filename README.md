@@ -93,7 +93,7 @@ powershell -NoProfile -File scripts\check-stats.ps1
 3. Click **Run job import**
 4. Jobs appear in the **Jobs** view
 
-Supported import sources: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Jobvite.
+Supported import sources: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and compatible static careers pages.
 
 ## Data
 
