@@ -419,7 +419,7 @@ function startPeriodicPipelineRunner(startupPromise) {
             retryDelayMs,
           });
           if (!claim.claimed) continue;
-          store.startRevenuePipeline(tenant.id, { plan: getPlan(tenant.plan), scheduled: true });
+          await store.startLiveJobImport(tenant.id, { plan: getPlan(tenant.plan), scheduled: true });
           started += 1;
           console.log(`[Scheduler] Started overdue pipeline for ${tenant.id}.`);
         } catch (err) {

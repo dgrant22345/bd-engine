@@ -1508,6 +1508,7 @@ async function finishResumableBackgroundJob(job) {
 }
 
 async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
+  const scheduled = Boolean(job.recovery?.options?.scheduled);
   try {
     await beginResumableBackgroundJob(job, 'Fetching active ATS boards...');
     job.progress = 25;
@@ -1534,6 +1535,16 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
     job.errorMessage = err.message || 'Live ATS job import failed.';
   } finally {
     await finishResumableBackgroundJob(job);
+    if (scheduled) {
+      const profile = getTenantProfile(tenantId);
+      if (profile) {
+        profile.settings.lastPipelineAttemptAt = job.startedAt || job.queuedAt;
+        profile.settings.lastPipelineStatus = job.status;
+        profile.settings.lastPipelineError = job.status === 'failed' ? job.errorMessage || '' : '';
+        if (job.status === 'completed') profile.settings.lastPipelineRun = job.finishedAt;
+        persistTenant(tenantId);
+      }
+    }
   }
 }
 

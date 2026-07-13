@@ -71,7 +71,7 @@ saas/
   app even though `/health` and error-reporting hooks are available.
 - LinkedIn and live ATS imports persist resumable queue descriptors and recover
   after deploys. Other interrupted administrative jobs fail visibly; scheduled
-  revenue pipelines retry after a bounded backoff instead of overlapping.
+  ATS refreshes retry after a bounded backoff instead of overlapping.
 
 ## Validation
 
