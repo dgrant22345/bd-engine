@@ -676,7 +676,7 @@ const settings = {
 };
 
 const tenantProfiles = new Map([
-  [seedTenant.id, { workspace, settings }],
+  [seedTenant.id, { workspace, settings, tenant: { ...seedTenant } }],
 ]);
 
 // Efficient tenant-keyed storage
@@ -1062,6 +1062,26 @@ export function getBackgroundJobRecoveryDecision(job = {}) {
     return { recoverable: false, reason: 'missing_csv_payload', attempts };
   }
   return { recoverable: true, reason: 'resumable', attempts };
+}
+
+export function getScheduledPipelineDecision({
+  settings = {},
+  hasActiveJob = false,
+  nowMs = Date.now(),
+  intervalMs = 24 * 60 * 60 * 1000,
+  retryDelayMs = 60 * 60 * 1000,
+} = {}) {
+  if (!settings.setupComplete) return { due: false, reason: 'setup_incomplete' };
+  if (hasActiveJob) return { due: false, reason: 'already_running' };
+  const successAt = new Date(settings.lastPipelineRun || 0).getTime();
+  if (Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
+    return { due: false, reason: 'fresh' };
+  }
+  const attemptAt = new Date(settings.lastPipelineAttemptAt || 0).getTime();
+  if (Number.isFinite(attemptAt) && attemptAt > nowMs - retryDelayMs) {
+    return { due: false, reason: 'recent_attempt' };
+  }
+  return { due: true, reason: 'overdue' };
 }
 
 function cloneRecoveryOptions(options = {}) {
@@ -3899,6 +3919,12 @@ export function createStore() {
     
     startRevenuePipeline(tenantId, options = {}) {
       assertTenant(tenantId);
+      const activeJob = [...backgroundJobs.values()].find((jobItem) => (
+        jobItem.tenantId === tenantId
+        && jobItem.type === 'revenue-pipeline'
+        && ['queued', 'running'].includes(jobItem.status)
+      ));
+      if (activeJob) return { ...publicBackgroundJob(activeJob), alreadyRunning: true };
       const jobId = `pipe-${Date.now()}`;
       const job = {
         id: jobId,
@@ -3908,7 +3934,9 @@ export function createStore() {
         stage: 'starting',
         message: 'Initializing pipeline...',
         progressMessage: 'Initializing pipeline...',
-        startedAt: now(),
+        queuedAt: now(),
+        startedAt: null,
+        finishedAt: null,
         updatedAt: now(),
         recordsAffected: 0,
         result: null,
@@ -3919,6 +3947,8 @@ export function createStore() {
         const pipelineStartedAt = performance.now();
         const timings = {};
         try {
+          job.status = 'running';
+          job.startedAt = now();
           const update = (stage, progress, message) => {
             job.stage = stage;
             job.progress = progress;
@@ -3968,12 +3998,23 @@ export function createStore() {
           job.message = `Pipeline failed: ${err.message}`;
           job.progressMessage = job.message;
           job.error = err.message;
+          job.errorMessage = err.message || 'Revenue pipeline failed.';
         } finally {
           job.finishedAt = job.finishedAt || now();
+          job.updatedAt = job.finishedAt;
+          const profile = getTenantProfile(tenantId);
+          if (profile) {
+            profile.settings.lastPipelineAttemptAt = job.startedAt || job.queuedAt;
+            profile.settings.lastPipelineStatus = job.status;
+            profile.settings.lastPipelineError = job.status === 'failed' ? job.errorMessage || job.error || '' : '';
+            if (job.status === 'completed') profile.settings.lastPipelineRun = job.finishedAt;
+            persistTenant(tenantId);
+          }
+          await persistBackgroundJob(job);
         }
       })();
 
-      return job;
+      return publicBackgroundJob(job);
     },
 
     purgeStaleJobs(tenantId) {
@@ -4037,7 +4078,37 @@ export function createStore() {
     },
 
     getAllTenants() {
-      return Array.from(tenantsById.values());
+      return [...tenantProfiles.entries()].map(([tenantId, profile]) => ({
+        id: tenantId,
+        plan: profile.tenant?.plan || 'trial',
+        status: profile.tenant?.status || 'active',
+        slug: profile.tenant?.slug || '',
+      }));
+    },
+
+    async claimScheduledPipeline(tenantId, options = {}) {
+      assertTenant(tenantId);
+      await ensureTenantSettingsLoaded(tenantId);
+      const profile = getTenantProfile(tenantId);
+      const hasActiveJob = [...backgroundJobs.values()].some((jobItem) => (
+        jobItem.tenantId === tenantId
+        && ['revenue-pipeline', 'launch-workflow', 'live-job-import', 'ats-discovery'].includes(jobItem.type)
+        && ['queued', 'running'].includes(jobItem.status)
+      ));
+      const nowMs = Number(options.nowMs) || Date.now();
+      const decision = getScheduledPipelineDecision({
+        settings: profile.settings,
+        hasActiveJob,
+        nowMs,
+        intervalMs: Number(options.intervalMs) || 24 * 60 * 60 * 1000,
+        retryDelayMs: Number(options.retryDelayMs) || 60 * 60 * 1000,
+      });
+      if (!decision.due) return { claimed: false, ...decision };
+      profile.settings.lastPipelineAttemptAt = new Date(nowMs).toISOString();
+      profile.settings.lastPipelineStatus = 'queued';
+      profile.settings.lastPipelineError = '';
+      persistTenant(tenantId);
+      return { claimed: true, ...decision, attemptedAt: profile.settings.lastPipelineAttemptAt };
     },
 
     // ── Account creation ──────────────────────────────────────────────────
@@ -4935,6 +5006,11 @@ function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
   const tenantPersona = readPersona(tenant?.persona || tenant?.settings?.persona);
   if (tenantProfiles.has(tenantId)) {
     const existing = tenantProfiles.get(tenantId);
+    existing.tenant = {
+      ...(existing.tenant || {}),
+      ...(typeof tenant === 'object' ? tenant : {}),
+      id: tenantId,
+    };
     if (tenantPersona && tenantPersona !== normalizePersona(existing.persona || existing.settings?.persona)) {
       existing.persona = tenantPersona;
       existing.settings.persona = tenantPersona;
@@ -4946,6 +5022,10 @@ function ensureTenantProfile(tenantId, tenant = {}, user = {}) {
   const ownerEmail = user.email || '';
   const initialPersona = tenantPersona || 'bd';
   const profile = {
+    tenant: {
+      ...(typeof tenant === 'object' ? tenant : {}),
+      id: tenantId,
+    },
     workspace: {
       id: `workspace-${tenantId}`,
       tenantId,

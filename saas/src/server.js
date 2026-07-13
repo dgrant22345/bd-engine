@@ -361,7 +361,7 @@ async function startServer() {
 
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
-    startPeriodicPipelineRunner();
+    startPeriodicPipelineRunner(startupPromise);
   });
 
   // Graceful shutdown. Order matters: wait for in-flight requests to finish
@@ -395,22 +395,48 @@ async function startServer() {
   }
 }
 
-function startPeriodicPipelineRunner() {
-  const interval = 24 * 60 * 60 * 1000; // 24 hours
-  console.log('[Scheduler] Starting 24-hour periodic pipeline runner...');
-  
-  setInterval(() => {
-    console.log('[Scheduler] Running scheduled pipelines for all tenants...');
-    const tenants = store.getAllTenants?.() || [];
-    tenants.forEach(tenant => {
-      try {
-        console.log(`[Scheduler] Auto-starting pipeline for ${tenant.id}`);
-        store.startRevenuePipeline(tenant.id, { plan: getPlan(tenant.plan) });
-      } catch (err) {
-        console.error(`[Scheduler] Failed to auto-start pipeline for ${tenant.id}:`, err.message);
+function startPeriodicPipelineRunner(startupPromise) {
+  const pipelineIntervalMs = 24 * 60 * 60 * 1000;
+  const retryDelayMs = 60 * 60 * 1000;
+  const scanIntervalMs = Math.max(60_000, Number(process.env.BD_SCHEDULER_SCAN_MS) || 15 * 60 * 1000);
+  const maxTenantsPerScan = Math.max(1, Math.min(25, Number(process.env.BD_SCHEDULER_MAX_TENANTS) || 3));
+  let scanRunning = false;
+
+  const scan = async () => {
+    if (scanRunning) return;
+    scanRunning = true;
+    try {
+      await startupPromise;
+      if (!startupComplete || startupError) return;
+      const tenants = store.getAllTenants?.() || [];
+      let started = 0;
+      for (const tenant of tenants) {
+        if (started >= maxTenantsPerScan) break;
+        if (tenant.status !== 'active' || tenant.slug === PUBLIC_DEMO_SLUG) continue;
+        try {
+          const claim = await store.claimScheduledPipeline(tenant.id, {
+            intervalMs: pipelineIntervalMs,
+            retryDelayMs,
+          });
+          if (!claim.claimed) continue;
+          store.startRevenuePipeline(tenant.id, { plan: getPlan(tenant.plan), scheduled: true });
+          started += 1;
+          console.log(`[Scheduler] Started overdue pipeline for ${tenant.id}.`);
+        } catch (err) {
+          console.error(`[Scheduler] Failed to schedule pipeline for ${tenant.id}:`, err.message);
+        }
       }
-    });
-  }, interval);
+      if (started) console.log(`[Scheduler] Started ${started} overdue pipeline${started === 1 ? '' : 's'}.`);
+    } finally {
+      scanRunning = false;
+    }
+  };
+
+  console.log(`[Scheduler] Scanning every ${Math.round(scanIntervalMs / 60000)} minute(s), up to ${maxTenantsPerScan} workspace(s) per scan.`);
+  const startupTimer = setTimeout(() => void scan(), 10_000);
+  const intervalTimer = setInterval(() => void scan(), scanIntervalMs);
+  startupTimer.unref?.();
+  intervalTimer.unref?.();
 }
 
 let startupComplete = false;

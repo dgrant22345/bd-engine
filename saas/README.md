@@ -69,8 +69,9 @@ saas/
   `BD_EMAIL_FROM`; email verification is not yet enforced.
 - External uptime monitoring and alert routing must be configured outside the
   app even though `/health` and error-reporting hooks are available.
-- Background operations are process-local. Finished entries are bounded, but
-  durable job resumption across deploys is still future work.
+- LinkedIn and live ATS imports persist resumable queue descriptors and recover
+  after deploys. Other interrupted administrative jobs fail visibly; scheduled
+  revenue pipelines retry after a bounded backoff instead of overlapping.
 
 ## Validation
 
