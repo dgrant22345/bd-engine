@@ -198,6 +198,26 @@ test('message journey: outreach modal generates grounded content in the demo', a
   await expect(generate).toBeVisible({ timeout: 10000 });
   await generate.click();
   await expect(app.locator('#outreach-modal-backdrop')).toContainText(/subject|copy/i, { timeout: 15000 });
+  await expect(app.locator('#outreach-modal-backdrop')).toContainText(/grounding check/i);
+  await expect(app.locator('#outreach-email-body')).toBeEditable();
+  await expect(app.locator('#outreach-channel-email')).toBeChecked();
+  await expect(app.locator('#outreach-channel-linkedin')).not.toBeChecked();
+  await app.locator('#outreach-subject-input').fill('A focused hiring question');
+  await expect(app.locator('#outreach-mailto-link')).toHaveAttribute('href', /A%20focused%20hiring%20question/);
+});
+
+test('mobile message journey: account detail and composer stay actionable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await startDemo(page);
+  await gotoAppRoute(page, '#/accounts');
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await app.locator('[data-action="open-account"]').first().click();
+  const compose = app.locator('#open-outreach-modal');
+  await expect(compose).toBeVisible({ timeout: 10000 });
+  await compose.click();
+  await expect(app.locator('#outreach-modal-backdrop')).toBeVisible();
+  const overflow = await app.locator('#outreach-modal-backdrop').evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });
 
 test('import journey: setup preview selects tracked targets and preserves network companies', async ({ page }) => {

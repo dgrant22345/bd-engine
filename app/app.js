@@ -1992,7 +1992,7 @@ function bindEvents() {
 
   document.addEventListener('click', async (event) => {
     // Open outreach modal
-    if (event.target.id === 'open-outreach-modal') {
+    if (event.target.closest('#open-outreach-modal')) {
       setOutreachModalOpen(true);
       syncOutreachComposerState();
       return;
@@ -2346,8 +2346,8 @@ function bindEvents() {
       return;
     }
 
-    if (actionName === 'copy-outreach-subject') {
-      await copyGeneratedSubject(action.dataset.index, action);
+    if (actionName === 'select-outreach-subject') {
+      selectGeneratedSubject(action.dataset.index, action);
       return;
     }
 
@@ -5024,12 +5024,13 @@ async function renderAccountDetail(accountId) {
           <button class="modal-close" type="button" aria-label="Close modal">&times;</button>
         </div>
         <div class="outreach-controls outreach-controls--stacked">
-          <select id="outreach-contact-select" class="inline-select">
+          <div class="outreach-control-grid">
+          <label class="outreach-control-field"><span>Contact</span><select id="outreach-contact-select" class="inline-select">
             ${detail.contacts.length
               ? detail.contacts.map((c, i) => `<option value="${escapeAttr(c.id || c.fullName || '')}" data-name="${escapeAttr(c.fullName || '')}" data-title="${escapeAttr(c.title || '')}" data-contact-id="${escapeAttr(c.id || '')}" data-email="${escapeAttr(c.email || '')}" data-linkedin-url="${escapeAttr(c.linkedinUrl || '')}" data-company="${escapeAttr(c.companyName || detail.account.displayName || '')}" data-notes="${escapeAttr(c.notes || '')}"${i === 0 ? ' selected' : ''}>${escapeHtml(c.fullName)}${c.title ? ' \u2014 ' + escapeHtml(c.title) : ''}</option>`).join('')
               : '<option value="">No contacts</option>'}
-          </select>
-          <select id="outreach-template-select" class="inline-select">
+          </select></label>
+          <label class="outreach-control-field"><span>Message goal</span><select id="outreach-template-select" class="inline-select">
             <optgroup label="Sales & Business Development">
               <option value="cold" ${selected(suggestedOutreachTemplate, 'cold')}>Balanced hiring note</option>
               <option value="talent_partner" ${selected(suggestedOutreachTemplate, 'talent_partner')}>Talent / recruiter note</option>
@@ -5044,15 +5045,16 @@ async function renderAccountDetail(accountId) {
               <option value="job_networking" ${selected(suggestedOutreachTemplate, 'job_networking')}>Networking conversation</option>
               <option value="job_referral" ${selected(suggestedOutreachTemplate, 'job_referral')}>Request an introduction</option>
             </optgroup>
-          </select>
-          <select id="outreach-job-select" class="inline-select">
-            <option value="">General inquiry (No specific job)</option>
+          </select></label>
+          <label class="outreach-control-field outreach-control-field--wide"><span>Hiring signal</span><select id="outreach-job-select" class="inline-select">
+            <option value="">Use all verified openings</option>
             ${detail.jobs.length
-              ? detail.jobs.map((j) => `<option value="${escapeAttr(j.id)}">${escapeHtml(j.title)}</option>`).join('')
+              ? detail.jobs.map((j) => `<option value="${escapeAttr(j.id)}">${escapeHtml(j.title)}${j.location ? ` - ${escapeHtml(j.location)}` : ''}</option>`).join('')
               : ''}
-          </select>
+          </select></label>
+          </div>
           <div class="button-row">
-            <button id="generate-outreach-button" class="secondary-button" data-action="generate-outreach" data-id="${detail.account.id}">Generate tailored note</button>
+            <button id="generate-outreach-button" class="primary-button" data-action="generate-outreach" data-id="${detail.account.id}" type="button">Generate tailored note</button>
             <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
           </div>
         </div>
@@ -7005,7 +7007,7 @@ document.addEventListener('change', (event) => {
     updateBulkBar();
     return;
   }
-  if (event.target.id === 'outreach-template-select' || event.target.id === 'outreach-contact-select') {
+  if (event.target.id === 'outreach-template-select' || event.target.id === 'outreach-contact-select' || event.target.id === 'outreach-job-select') {
     clearGeneratedOutreachDraft('Generate a fresh note for the selected contact and angle.');
     syncOutreachComposerState();
     return;
@@ -7014,6 +7016,13 @@ document.addEventListener('change', (event) => {
     updateBulkBar();
     return;
   }
+});
+
+document.addEventListener('input', (event) => {
+  const fieldName = event.target?.dataset?.outreachField;
+  if (!fieldName || !appState.generatedOutreach || !Object.prototype.hasOwnProperty.call(appState.generatedOutreach, fieldName)) return;
+  appState.generatedOutreach[fieldName] = event.target.value;
+  if (fieldName === 'subjectLine' || fieldName === 'messageBody') syncOutreachActionLinks();
 });
 
 document.addEventListener('click', (event) => {
@@ -7300,14 +7309,16 @@ function getFutureDateInput(days = 7) {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function buildOutreachLogNotes(outreach, contact, followUpAt) {
+function buildOutreachLogNotes(outreach, contact, followUpAt, channels) {
+  const sentEmail = channels.includes('email');
+  const sentLinkedIn = channels.includes('linkedin');
   const lines = [
-    `Channels: email + LinkedIn`,
-    contact.email ? `Email: ${contact.email}` : '',
-    contact.linkedinUrl ? `LinkedIn: ${contact.linkedinUrl}` : '',
-    outreach.subjectLine ? `Subject: ${outreach.subjectLine}` : '',
-    outreach.messageBody ? `Email draft:\n${outreach.messageBody}` : '',
-    outreach.linkedinMessage ? `LinkedIn draft:\n${outreach.linkedinMessage}` : '',
+    `Channels sent: ${channels.join(' + ')}`,
+    sentEmail && contact.email ? `Email: ${contact.email}` : '',
+    sentLinkedIn && contact.linkedinUrl ? `LinkedIn: ${contact.linkedinUrl}` : '',
+    sentEmail && outreach.subjectLine ? `Subject: ${outreach.subjectLine}` : '',
+    sentEmail && outreach.messageBody ? `Email sent:\n${outreach.messageBody}` : '',
+    sentLinkedIn && outreach.linkedinMessage ? `LinkedIn message sent:\n${outreach.linkedinMessage}` : '',
     `Follow-up reminder: ${followUpAt}`,
   ];
   return lines.filter(Boolean).join('\n\n');
@@ -7325,10 +7336,19 @@ async function logGeneratedOutreach(buttonEl) {
   const contact = getSelectedOutreachContact();
   const contactLabel = contact.name || 'selected contact';
   const followUpDays = parseInt(document.getElementById('outreach-followup-days')?.value || '7', 10);
+  const channels = [
+    document.getElementById('outreach-channel-email')?.checked ? 'email' : '',
+    document.getElementById('outreach-channel-linkedin')?.checked ? 'linkedin' : '',
+  ].filter(Boolean);
+  if (!channels.length) {
+    showToast('Select at least one channel that you sent.', 'warning');
+    return;
+  }
   const followUpAt = getFutureDateInput(followUpDays);
   const today = getFutureDateInput(0);
-  const summary = `Sent email + LinkedIn outreach to ${contactLabel}`;
-  const notes = buildOutreachLogNotes(outreach, contact, followUpAt);
+  const channelLabel = channels.length === 2 ? 'email and LinkedIn' : channels[0];
+  const summary = `Sent ${channelLabel} outreach to ${contactLabel}`;
+  const notes = buildOutreachLogNotes(outreach, contact, followUpAt, channels);
   const originalText = buttonEl?.textContent || '';
   if (buttonEl) {
     buttonEl.disabled = true;
@@ -7347,13 +7367,15 @@ async function logGeneratedOutreach(buttonEl) {
         notes,
         pipelineStage: 'contacted',
         metadata: {
-          channels: ['email', 'linkedin'],
+          channels,
           subjectLine: outreach.subjectLine || '',
           contactName: contact.name || '',
           contactEmail: contact.email || '',
           linkedinUrl: contact.linkedinUrl || '',
           followUpAt,
         },
+        followUpDays,
+        contactName: contact.name || '',
       }),
     });
 
@@ -7371,7 +7393,7 @@ async function logGeneratedOutreach(buttonEl) {
     });
 
     if (contact.id) {
-      const contactNote = `Outreach sent ${today}: email + LinkedIn. Follow up ${followUpAt}.`;
+      const contactNote = `Outreach sent ${today}: ${channelLabel}. Follow up ${followUpAt}.`;
       const mergedNotes = [contact.notes, contactNote].filter(Boolean).join('\n');
       await api(`/api/contacts/${contact.id}`, {
         method: 'PATCH',
@@ -7382,8 +7404,8 @@ async function logGeneratedOutreach(buttonEl) {
     appState.outreachSequences.push({
       id: Date.now(),
       accountId: account.id,
-      channel: 'follow_up',
-      note: `Follow up with ${contactLabel} after email + LinkedIn outreach`,
+      channel: channels.join('+'),
+      note: `Follow up with ${contactLabel} after ${channelLabel} outreach`,
       dueAt: new Date(`${followUpAt}T09:00:00`).toISOString(),
       done: false,
     });
@@ -7418,6 +7440,7 @@ function syncOutreachComposerState() {
 
 function normalizeGeneratedOutreachItem(result, fallbackTemplateKey = '') {
   result = result || {};
+  const grounding = result.grounding || {};
   const subjectOptionsRaw = result.subject_options || result.subjectOptions || [];
   const subjectOptions = Array.isArray(subjectOptionsRaw) ? subjectOptionsRaw.filter(Boolean) : [];
   const templateKey = result.template_key || result.templateKey || fallbackTemplateKey || document.getElementById('outreach-template-select')?.value || 'cold';
@@ -7444,6 +7467,13 @@ function normalizeGeneratedOutreachItem(result, fallbackTemplateKey = '') {
     signalFocus: result.signal_focus || result.signalFocus || '',
     suggestedNextStep: result.suggested_next_step || result.suggestedNextStep || '',
     companySnippet: result.companySnippet || result.company_snippet || '',
+    grounding: {
+      score: Number(grounding.score || 0),
+      label: grounding.label || '',
+      evidence: Array.isArray(grounding.evidence) ? grounding.evidence : [],
+      warnings: Array.isArray(grounding.warnings) ? grounding.warnings : [],
+      roleFamily: grounding.role_family || grounding.roleFamily || '',
+    },
     timings: result.timings || {},
     variants: [],
   };
@@ -7461,12 +7491,15 @@ function normalizeGeneratedOutreach(result) {
   };
 }
 
-function renderOutreachPiece(title, body, actionsHtml, className = '') {
+function renderOutreachPiece(title, body, actionsHtml, className = '', fieldName = '') {
   if (!body) return '';
+  const content = fieldName
+    ? `<textarea class="outreach-editable outreach-editable--compact" data-outreach-field="${escapeAttr(fieldName)}" aria-label="Edit ${escapeAttr(title)}">${escapeHtml(body)}</textarea>`
+    : `<div class="outreach-piece-body">${escapeHtml(body)}</div>`;
   return `
     <article class="outreach-piece ${className}">
       <div class="outreach-piece-header"><strong>${escapeHtml(title)}</strong></div>
-      <div class="outreach-piece-body">${escapeHtml(body)}</div>
+      ${content}
       ${actionsHtml ? `<div class="button-row outreach-piece-actions">${actionsHtml}</div>` : ''}
     </article>
   `;
@@ -7506,6 +7539,23 @@ function renderGeneratedOutreachVariants(outreach) {
   `;
 }
 
+function renderOutreachGrounding(grounding = {}) {
+  const score = Number(grounding.score || 0);
+  const tone = score >= 75 ? 'success' : score >= 50 ? 'warm' : 'danger';
+  const evidence = Array.isArray(grounding.evidence) ? grounding.evidence : [];
+  const warnings = Array.isArray(grounding.warnings) ? grounding.warnings : [];
+  return `
+    <section class="outreach-grounding" aria-label="Message grounding">
+      <div class="outreach-grounding-header">
+        <div><span class="outreach-brief-label">Grounding check</span><strong>${escapeHtml(grounding.label || 'Review before sending')}</strong></div>
+        ${renderStatusPill(`${score}/100`, tone)}
+      </div>
+      ${evidence.length ? `<div class="outreach-evidence-list">${evidence.map((item) => `<span class="outreach-evidence"><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</span>`).join('')}</div>` : ''}
+      ${warnings.map((warning) => `<div class="outreach-warning" role="status">${escapeHtml(warning)}</div>`).join('')}
+    </section>
+  `;
+}
+
 function renderGeneratedOutreach(outreach) {
   const gmailSubject = encodeURIComponent(outreach.subjectLine || '');
   const gmailBody = encodeURIComponent(outreach.messageBody || '');
@@ -7524,42 +7574,62 @@ function renderGeneratedOutreach(outreach) {
     <div class="outreach-composer">
       <div class="outreach-brief">
         <div class="kpi-ribbon">${pills}</div>
+        ${renderOutreachGrounding(outreach.grounding)}
         ${outreach.whyNow ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Why now</span><p>${escapeHtml(outreach.whyNow)}</p></div>` : ''}
         ${outreach.contactHook ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Best angle</span><p>${escapeHtml(outreach.contactHook)}</p></div>` : ''}
         ${outreach.angleSummary ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Approach</span><p>${escapeHtml(outreach.angleSummary)}</p></div>` : ''}
         ${outreach.sequenceGuidance ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Sequence context</span><p>${escapeHtml(outreach.sequenceGuidance)}</p></div>` : ''}
         ${outreach.companySnippet ? `<div class="outreach-brief-block"><span class="outreach-brief-label">Company context</span><p>${escapeHtml(outreach.companySnippet)}</p></div>` : ''}
-        <div class="button-row outreach-piece-actions">
-          <select id="outreach-followup-days" class="inline-select inline-select--sm" style="width: auto; margin-right: 8px;">
+        <div class="outreach-log-controls">
+          <fieldset class="outreach-channel-picker">
+            <legend>Log only what you sent</legend>
+            <label><input id="outreach-channel-email" type="checkbox" value="email" checked> Email</label>
+            <label><input id="outreach-channel-linkedin" type="checkbox" value="linkedin"> LinkedIn</label>
+          </fieldset>
+          <label class="outreach-control-field outreach-control-field--compact"><span>Follow up in</span><select id="outreach-followup-days" class="inline-select inline-select--sm">
             <option value="3">3 days</option>
             <option value="7" selected>1 week</option>
             <option value="14">2 weeks</option>
-          </select>
-          <button class="primary-button" data-action="log-generated-outreach" type="button">Log sent + follow-up</button>
-          <span class="small muted">Use after sending the email draft and LinkedIn message.</span>
+          </select></label>
+          <button class="primary-button" data-action="log-generated-outreach" type="button">Log sent and schedule follow-up</button>
         </div>
       </div>
       <div class="outreach-piece-grid">
         <article class="outreach-piece outreach-piece--primary">
           <div class="outreach-piece-header">
             <strong>Primary email</strong>
-            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="ghost-button micro-button" data-action="copy-outreach-subject" data-index="${index}" type="button">${escapeHtml(option)}</button>`).join('')}</div>` : ''}
+            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="ghost-button micro-button" data-action="select-outreach-subject" data-index="${index}" type="button">Use: ${escapeHtml(option)}</button>`).join('')}</div>` : ''}
           </div>
-          <div class="outreach-piece-subject">Subject: ${escapeHtml(outreach.subjectLine)}</div>
-          <div class="outreach-piece-body">${escapeHtml(outreach.messageBody)}</div>
+          <label class="outreach-edit-label" for="outreach-subject-input">Subject</label>
+          <input id="outreach-subject-input" class="outreach-editable outreach-editable--subject" data-outreach-field="subjectLine" value="${escapeAttr(outreach.subjectLine)}">
+          <label class="outreach-edit-label" for="outreach-email-body">Message</label>
+          <textarea id="outreach-email-body" class="outreach-editable outreach-editable--email" data-outreach-field="messageBody">${escapeHtml(outreach.messageBody)}</textarea>
           <div class="button-row outreach-piece-actions">
             <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy email</button>
-            <a class="primary-button" href="${mailtoHref}" target="_blank" rel="noreferrer">Open in mail</a>
-            <a class="secondary-button" href="https://mail.google.com/mail/?view=cm${gmailTo}&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
+            <a id="outreach-mailto-link" class="primary-button" href="${mailtoHref}" target="_blank" rel="noreferrer">Open in mail</a>
+            <a id="outreach-gmail-link" class="secondary-button" href="https://mail.google.com/mail/?view=cm${gmailTo}&su=${gmailSubject}&body=${gmailBody}" target="_blank" rel="noreferrer">Draft in Gmail</a>
           </div>
         </article>
-        ${renderOutreachPiece('LinkedIn DM', outreach.linkedinMessage, '<button class="primary-button" data-action="open-generated-linkedin" type="button">Copy & open LinkedIn</button><button class="secondary-button" data-action="copy-generated-outreach" data-kind="linkedin" type="button">Copy DM</button>')}
-        ${renderOutreachPiece('Follow-up note', outreach.followUpMessage, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="followup" type="button">Copy follow-up</button>')}
-        ${renderOutreachPiece('Call opener', outreach.callOpener, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="call" type="button">Copy opener</button>')}
+        ${renderOutreachPiece('LinkedIn DM', outreach.linkedinMessage, '<button class="primary-button" data-action="open-generated-linkedin" type="button">Copy and open LinkedIn</button><button class="secondary-button" data-action="copy-generated-outreach" data-kind="linkedin" type="button">Copy DM</button>', '', 'linkedinMessage')}
+        ${renderOutreachPiece('Follow-up note', outreach.followUpMessage, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="followup" type="button">Copy follow-up</button>', '', 'followUpMessage')}
+        ${renderOutreachPiece('Call opener', outreach.callOpener, '<button class="secondary-button" data-action="copy-generated-outreach" data-kind="call" type="button">Copy opener</button>', '', 'callOpener')}
       </div>
       ${renderGeneratedOutreachVariants(outreach)}
     </div>
   `;
+}
+
+function syncOutreachActionLinks() {
+  const outreach = appState.generatedOutreach;
+  if (!outreach) return;
+  const selectedContact = getSelectedOutreachContact();
+  const subject = encodeURIComponent(outreach.subjectLine || '');
+  const body = encodeURIComponent(outreach.messageBody || '');
+  const email = selectedContact.email ? encodeURIComponent(selectedContact.email) : '';
+  const mailLink = document.getElementById('outreach-mailto-link');
+  const gmailLink = document.getElementById('outreach-gmail-link');
+  if (mailLink) mailLink.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  if (gmailLink) gmailLink.href = `https://mail.google.com/mail/?view=cm${email ? `&to=${email}` : ''}&su=${subject}&body=${body}`;
 }
 
 function getGeneratedOutreachModel(variantIndex = null) {
@@ -7595,14 +7665,17 @@ async function copyGeneratedOutreach(kind, buttonEl, variantIndex = null) {
   setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
 }
 
-async function copyGeneratedSubject(index, buttonEl) {
+function selectGeneratedSubject(index, buttonEl) {
   const outreach = appState.generatedOutreach;
   if (!outreach?.subjectOptions?.length) return;
   const text = outreach.subjectOptions[Number(index)] || '';
   if (!text) return;
+  outreach.subjectLine = text;
+  const subjectInput = document.getElementById('outreach-subject-input');
+  if (subjectInput) subjectInput.value = text;
+  syncOutreachActionLinks();
   const originalText = buttonEl.textContent;
-  await navigator.clipboard.writeText(text);
-  buttonEl.textContent = 'Copied!';
+  buttonEl.textContent = 'Selected';
   setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
 }
 

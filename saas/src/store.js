@@ -4841,6 +4841,62 @@ function normalizeConfigPatch(input) {
   return output;
 }
 
+function classifyOutreachRoleFamily(jobTitle = '', department = '') {
+  const value = `${jobTitle} ${department}`.toLowerCase();
+  if (/data|machine learning|artificial intelligence|analytics|scientist/.test(value)) return 'data';
+  if (/engineer|developer|software|platform|devops|security|technical|technology/.test(value)) return 'engineering';
+  if (/sales|account executive|business development|revenue|growth/.test(value)) return 'sales';
+  if (/marketing|brand|content|communications|demand generation/.test(value)) return 'marketing';
+  if (/product|design|research|user experience|ux|ui/.test(value)) return 'product';
+  if (/clinical|medical|nurse|physician|health|pharma|biotech/.test(value)) return 'clinical';
+  if (/manufactur|operations|supply chain|logistics|quality|field service/.test(value)) return 'operations';
+  if (/finance|accounting|controller|legal|compliance|risk/.test(value)) return 'finance';
+  if (/people|human resources|talent|recruit/.test(value)) return 'people';
+  return 'general';
+}
+
+function buildOutreachGrounding({ itemContact, accountJobs, specificJob, roleSignal }) {
+  const newestJob = specificJob || accountJobs
+    .slice()
+    .sort((a, b) => String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')))[0];
+  const ageDays = newestJob ? daysSince(newestJob.postedAt || newestJob.importedAt) : 999;
+  const roleFamily = classifyOutreachRoleFamily(newestJob?.title, newestJob?.department);
+  const evidence = [];
+  if (roleSignal) evidence.push({ label: specificJob ? 'Selected role' : 'Visible openings', value: roleSignal, confidence: 'verified' });
+  if (newestJob?.department) evidence.push({ label: 'Team', value: newestJob.department, confidence: 'verified' });
+  if (newestJob?.postedAt && ageDays >= 0 && ageDays < 999) {
+    evidence.push({
+      label: 'Signal age',
+      value: ageDays === 0 ? 'Posted today' : ageDays === 1 ? 'Posted yesterday' : `Posted ${ageDays} days ago`,
+      confidence: ageDays <= 30 ? 'verified' : 'stale',
+    });
+  }
+  if (itemContact?.title) evidence.push({ label: 'Contact role', value: itemContact.title, confidence: 'verified' });
+
+  let qualityScore = 20;
+  if (roleSignal) qualityScore += 30;
+  if (specificJob) qualityScore += 15;
+  if (itemContact?.fullName) qualityScore += 10;
+  if (itemContact?.title) qualityScore += 15;
+  if (newestJob?.department) qualityScore += 5;
+  if (ageDays <= 30) qualityScore += 5;
+  qualityScore = Math.min(100, qualityScore);
+
+  const warnings = [];
+  if (!roleSignal) warnings.push('No verified opening is available. Add or select a role before sending this message.');
+  if (!itemContact?.title) warnings.push('The contact title is missing, so the draft cannot tailor the reason for reaching out.');
+  if (ageDays > 90 && ageDays < 999) warnings.push('The newest role signal is more than 90 days old. Confirm it is still active.');
+
+  return {
+    roleFamily,
+    ageDays,
+    evidence,
+    qualityScore,
+    qualityLabel: qualityScore >= 75 ? 'Strong grounding' : qualityScore >= 50 ? 'Review before sending' : 'Limited context',
+    warnings,
+  };
+}
+
 function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJobs = [], template, jobId, includeVariants = false }) {
   const templateKey = template || 'cold';
   const specificJob = jobId ? accountJobs.find((item) => item.id === jobId) : null;
@@ -4859,10 +4915,21 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
   const signalSentence = roleSignal
     ? `${companyName} is currently hiring for ${roleSignal}.`
     : `${companyName} is on my target list, although I do not have a verified open role to reference yet.`;
+  const grounding = buildOutreachGrounding({ itemContact, accountJobs, specificJob, roleSignal });
 
   const draft = isJobSeekerTemplate(templateKey)
     ? buildJobSeekerDraft({ companyName, firstName, contactTitle, templateKey, jobLabel, roleSignal, specificJob })
-    : buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount });
+    : buildSalesDraft({
+      companyName,
+      firstName,
+      contactTitle,
+      templateKey,
+      roleSignal,
+      signalSentence,
+      activeRoleCount,
+      specificJob,
+      grounding,
+    });
 
   const result = {
     account_id: itemAccount.id,
@@ -4872,6 +4939,13 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
     persona_label: contactTitle || (isJobSeekerTemplate(templateKey) ? 'Company contact' : 'Hiring stakeholder'),
     signal_focus: roleSignal,
     company_snippet: signalSentence,
+    grounding: {
+      score: grounding.qualityScore,
+      label: grounding.qualityLabel,
+      evidence: grounding.evidence,
+      warnings: grounding.warnings,
+      role_family: grounding.roleFamily,
+    },
     timings: { generatedMs: 1 },
     ...draft,
     variants: [],
@@ -4967,31 +5041,49 @@ function buildJobSeekerDraft({ companyName, firstName, contactTitle, templateKey
   };
 }
 
-function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount }) {
+function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount, specificJob, grounding }) {
   const hasVerifiedSignal = Boolean(roleSignal);
   const roleReference = hasVerifiedSignal ? roleSignal : 'your current hiring priorities';
   const roleCountText = activeRoleCount > 1 ? `${activeRoleCount} visible openings` : roleReference;
+  const focusRole = specificJob?.title || roleSignal || 'a priority search';
+  const familyValue = {
+    data: 'For data searches, I help teams map the relevant talent pool and qualify a focused shortlist before the process absorbs more manager time.',
+    engineering: 'For technical searches, I help teams reach qualified people outside the active applicant pool and narrow the market to a credible shortlist.',
+    sales: 'For revenue searches, I help teams identify candidates with the right segment, buyer, and deal-cycle experience instead of relying on title matches.',
+    marketing: 'For marketing searches, I help teams find candidates whose channel and growth experience matches the actual mandate, not just the job title.',
+    product: 'For product and design searches, I help teams find candidates whose scope and operating environment match what the role needs.',
+    clinical: 'For clinical and life-sciences searches, I help teams reach specialized candidates while keeping qualification criteria precise.',
+    operations: 'For operations searches, I help teams map candidates with the right environment, scale, and hands-on operating experience.',
+    finance: 'For finance and risk searches, I help teams identify candidates with the right technical depth and business context.',
+    people: 'For people and talent searches, I help teams add focused sourcing capacity without creating another process to manage.',
+    general: 'I help teams map the relevant market and build a focused shortlist for priority searches.',
+  }[grounding.roleFamily];
+  const roleQuestion = hasVerifiedSignal
+    ? `Is ${focusRole} already well covered, or would an outside market map be useful?`
+    : 'Who owns the searches where outside market coverage would be most useful?';
   const approaches = {
     executive: {
       label: 'Executive capacity note',
       subject: `${companyName}: hiring capacity`,
-      value: `When several roles are open at once, leadership usually feels the cost in delivery time before it appears in recruiting metrics.`,
-      question: `Is hiring capacity affecting any near-term delivery commitments?`,
-      angle: 'Connect visible hiring demand to delivery risk, without assuming there is a problem.',
+      value: activeRoleCount > 1
+        ? `${roleCountText} suggests there may be a few searches competing for attention. I help teams add focused market coverage around the one role tied most closely to delivery.`
+        : familyValue,
+      question: hasVerifiedSignal ? `Is ${focusRole} important enough to warrant additional search coverage?` : 'Is there one role where additional search coverage would materially help the team?',
+      angle: 'Tie visible hiring demand to a specific search decision without claiming delivery is at risk.',
     },
     hiring_manager: {
       label: 'Hiring manager note',
       subject: `${roleReference} at ${companyName}`,
-      value: `I help hiring managers reduce screening time and reach a credible shortlist without adding more coordination to the team.`,
-      question: `Is shortlist quality or interview bandwidth the tighter constraint right now?`,
-      angle: 'Focus on the manager workload created by active roles.',
+      value: familyValue,
+      question: hasVerifiedSignal ? `For ${focusRole}, is the harder part reaching the right people or narrowing the shortlist?` : 'Is the harder part reaching the right people or narrowing the shortlist?',
+      angle: 'Ask where the search is constrained and keep the offer tied to the visible role.',
     },
     talent_partner: {
       label: 'Talent partner note',
       subject: `${companyName}: ${roleCountText}`,
-      value: `I help recruiting teams prioritize hard-to-fill searches and add qualified conversations where the existing pipeline is thin.`,
-      question: `Are any of these searches proving harder to cover than the others?`,
-      angle: 'Offer focused capacity around the hardest role, not a generic recruiting pitch.',
+      value: familyValue,
+      question: roleQuestion,
+      angle: 'Offer a small, concrete market-mapping step around the least-covered search.',
     },
     warm_intro: {
       label: 'Warm relationship note',
@@ -5017,27 +5109,30 @@ function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, ro
     cold: {
       label: 'Hiring signal note',
       subject: `${companyName}: ${roleCountText}`,
-      value: `I help teams add targeted search capacity when a priority role is not producing enough qualified conversations.`,
-      question: `Which of these roles, if any, is consuming the most recruiting time?`,
+      value: familyValue,
+      question: roleQuestion,
       angle: 'Lead with the verified role signal and ask a diagnostic question.',
     },
   };
   const approach = approaches[templateKey] || approaches.cold;
-  const contactLine = contactTitle ? `Given your role as ${contactTitle}, I thought this might sit close to your team.` : 'I thought this might sit close to your team.';
+  const contactLine = contactTitle ? `Your role as ${contactTitle} made you the most relevant person to ask.` : 'I may not have the right owner, so a redirect would be helpful.';
   const messageBody = [
     `Hi ${firstName},`, '',
-    hasVerifiedSignal ? signalSentence : `I am reaching out about hiring at ${companyName}.`, '',
-    approach.value, contactLine, '',
+    hasVerifiedSignal ? `I noticed that ${signalSentence}` : `I am reaching out about hiring at ${companyName}, but I do not have a verified open role to reference.`, '',
+    approach.value, '',
+    contactLine, '',
     approach.question,
   ].join('\n');
   return {
     template_label: approach.label,
     subject_line: approach.subject,
-    subject_options: [approach.subject, `${roleReference} at ${companyName}`, `A question about hiring at ${companyName}`],
+    subject_options: unique([approach.subject, `${roleReference} at ${companyName}`, `A question about hiring at ${companyName}`]),
     message_body: messageBody,
-    linkedin_message: `Hi ${firstName}, ${hasVerifiedSignal ? `noticed ${companyName} is hiring for ${roleReference}` : `I am reaching out about hiring at ${companyName}`}. ${approach.question}`,
-    follow_up_message: `Hi ${firstName}, one quick follow-up on ${roleReference}. ${templateKey === 'follow_up' ? 'Happy to send a short sample market map, or close the loop if this is not a priority.' : 'If it is not a priority right now, a quick no is completely fine.'}`,
-    call_opener: `${signalSentence} I wanted to understand whether sourcing coverage or interview bandwidth is the tighter constraint.`,
+    linkedin_message: `Hi ${firstName}, ${hasVerifiedSignal ? `I noticed ${companyName} is hiring for ${roleReference}` : `I am trying to find the right hiring contact at ${companyName}`}. ${approach.question}`,
+    follow_up_message: `Hi ${firstName}, one quick follow-up on ${roleReference}. I can send a one-page sample market map if that would be useful; otherwise I am happy to close the loop.`,
+    call_opener: hasVerifiedSignal
+      ? `I noticed ${companyName} is hiring for ${focusRole}. I am calling to ask whether that search is already well covered or could use additional market reach.`
+      : `I am trying to find the person who owns priority hiring at ${companyName}. I do not want to assume there is an active need.`,
     why_now: hasVerifiedSignal ? signalSentence : 'No verified role signal is available; the draft does not claim one.',
     contact_hook: contactTitle ? `${contactTitle} is the known reason this contact may be relevant.` : 'No contact title is available, so the note keeps the assumption light.',
     angle_summary: approach.angle,

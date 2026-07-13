@@ -305,9 +305,51 @@ test('outreach drafts use verified role context and return real alternate angles
     assert.equal(draft.variants.length, 2);
     assert.deepEqual(draft.variants.map((item) => item.template_key), ['hiring_manager', 'executive']);
     assert.ok(draft.linkedin_message.length < 400);
+    assert.equal(draft.grounding.label, 'Strong grounding');
+    assert.ok(draft.grounding.score >= 75);
+    assert.ok(draft.grounding.evidence.some((item) => item.label === 'Visible openings' && /Senior Data Engineer/.test(item.value)));
+    assert.ok(draft.grounding.evidence.some((item) => item.label === 'Contact role' && item.value === 'VP Talent'));
+    assert.deepEqual(draft.grounding.warnings, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('outreach drafts expose limited context instead of inventing a hiring problem', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-outreach-limited';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Quiet Company' });
+
+  const draft = await store.createOutreachDraft(tenantId, account.id, { template: 'cold' });
+  assert.equal(draft.grounding.label, 'Limited context');
+  assert.ok(draft.grounding.score < 50);
+  assert.ok(draft.grounding.warnings.some((item) => /No verified opening/.test(item)));
+  assert.ok(draft.grounding.warnings.some((item) => /contact title is missing/i.test(item)));
+  assert.match(draft.message_body, /do not have a verified open role/i);
+  assert.doesNotMatch(draft.message_body, /pipeline is thin|delivery risk|recent growth/i);
+});
+
+test('logging outreach creates a durable follow-up task', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-outreach-followup';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Followup Systems' });
+
+  await store.addActivity(tenantId, `${tenantId}-owner`, {
+    accountId: account.id,
+    type: 'outreach',
+    summary: 'Sent email outreach to Dana',
+    contactName: 'Dana',
+    followUpDays: 7,
+    metadata: { channels: ['email'] },
+  });
+
+  const tasks = await store.findTasks(tenantId, { page: 1, pageSize: 20 });
+  assert.equal(tasks.total, 1);
+  assert.equal(tasks.items[0].accountId, account.id);
+  assert.equal(tasks.items[0].type, 'follow_up');
+  assert.match(tasks.items[0].summary, /Dana/);
 });
 
 test('generic company identities do not probe unrelated public ATS slugs', async () => {
