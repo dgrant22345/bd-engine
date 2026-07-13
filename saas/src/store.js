@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
-import { dbLoadAllTenantData, dbLoadBackgroundJob, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
@@ -1043,6 +1043,57 @@ function missingBackgroundJob(jobId) {
   };
 }
 
+function publicBackgroundJob(job) {
+  if (!job) return job;
+  const { recovery: _recovery, ...publicJob } = job;
+  return publicJob;
+}
+
+const RESUMABLE_BACKGROUND_JOB_TYPES = new Set(['live-job-import', 'linkedin-csv-import']);
+
+export function getBackgroundJobRecoveryDecision(job = {}) {
+  const recovery = job.recovery && typeof job.recovery === 'object' ? job.recovery : null;
+  if (!recovery || !RESUMABLE_BACKGROUND_JOB_TYPES.has(job.type) || recovery.kind !== job.type) {
+    return { recoverable: false, reason: 'missing_recovery_descriptor' };
+  }
+  const attempts = Math.max(0, Number(recovery.attempts) || 0);
+  if (attempts >= 3) return { recoverable: false, reason: 'attempt_limit', attempts };
+  if (job.type === 'linkedin-csv-import' && !String(recovery.csvText || '').trim()) {
+    return { recoverable: false, reason: 'missing_csv_payload', attempts };
+  }
+  return { recoverable: true, reason: 'resumable', attempts };
+}
+
+function cloneRecoveryOptions(options = {}) {
+  return JSON.parse(JSON.stringify(options, (_key, value) => (
+    typeof value === 'function' || value === undefined ? undefined : value
+  )));
+}
+
+async function persistQueuedBackgroundJob(job) {
+  const recorded = await persistBackgroundJob(job);
+  if (recorded || !isDbEnabled()) return;
+  backgroundJobs.delete(job.id);
+  persistedBackgroundJobSnapshots.delete(job.id);
+  const error = new Error('The import queue is temporarily unavailable. Please try again.');
+  error.status = 503;
+  error.code = 'background_queue_unavailable';
+  throw error;
+}
+
+function failInterruptedBackgroundJob(job, decision) {
+  job.status = 'failed';
+  job.finishedAt = now();
+  job.updatedAt = job.finishedAt;
+  job.progressMessage = decision.reason === 'attempt_limit'
+    ? 'Stopped after repeated restart interruptions'
+    : 'Interrupted by a service restart';
+  job.errorMessage = decision.reason === 'attempt_limit'
+    ? 'This operation was interrupted three times and was stopped. Please run it again.'
+    : 'This operation was interrupted by a deployment or restart. Your saved workspace data is safe; please run the operation again.';
+  delete job.recovery;
+}
+
 const backgroundJobSnapshotTimer = setInterval(() => {
   for (const job of backgroundJobs.values()) {
     persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', error.message));
@@ -1408,6 +1459,98 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
   }
 }
 
+function queueResumableBackgroundJob(storeApi, tenantId, job) {
+  setImmediate(() => {
+    const runner = job.type === 'live-job-import'
+      ? runLiveJobImportBackgroundJob
+      : runLinkedInCsvBackgroundJob;
+    runner(storeApi, tenantId, job).catch((error) => {
+      console.error(`Background job runner failed for ${job.id}:`, error.message);
+    });
+  });
+}
+
+async function beginResumableBackgroundJob(job, message) {
+  job.recovery.attempts = Math.max(0, Number(job.recovery.attempts) || 0) + 1;
+  job.status = 'running';
+  job.startedAt = now();
+  job.finishedAt = null;
+  job.updatedAt = job.startedAt;
+  job.progressMessage = message;
+  await persistBackgroundJob(job);
+}
+
+async function finishResumableBackgroundJob(job) {
+  job.finishedAt = now();
+  job.updatedAt = job.finishedAt;
+  delete job.recovery;
+  await persistBackgroundJob(job);
+}
+
+async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
+  try {
+    await beginResumableBackgroundJob(job, 'Fetching active ATS boards...');
+    job.progress = 25;
+    job.stage = 'import';
+    const result = await storeApi.importLiveJobs(tenantId, job.recovery.options || {});
+    if (result.error) {
+      job.status = 'failed';
+      job.errorMessage = result.error;
+      job.result = result;
+    } else {
+      job.status = 'completed';
+      job.progress = 100;
+      job.stage = 'completed';
+      job.progressMessage = 'Completed';
+      job.recordsAffected = getTrackedJobCountFromResult(result) || getTouchedJobCountFromResult(result);
+      job.result = {
+        stats: result.stats,
+        importRun: result.importRun,
+        warnings: result.warnings || [],
+      };
+    }
+  } catch (err) {
+    job.status = 'failed';
+    job.errorMessage = err.message || 'Live ATS job import failed.';
+  } finally {
+    await finishResumableBackgroundJob(job);
+  }
+}
+
+async function runLinkedInCsvBackgroundJob(storeApi, tenantId, job) {
+  try {
+    await beginResumableBackgroundJob(job, 'Parsing LinkedIn connections CSV...');
+    const result = await storeApi.importLinkedInCSV(
+      tenantId,
+      job.recovery.csvText,
+      job.recovery.options || {}
+    );
+    if (result.error) {
+      job.status = 'failed';
+      job.errorMessage = result.error;
+      job.result = result;
+    } else {
+      job.status = 'completed';
+      job.progressMessage = 'Completed';
+      job.recordsAffected = result.stats?.imported || result.stats?.contactsCreated || 0;
+      job.result = {
+        stats: result.stats,
+        importRun: {
+          status: result.warnings?.length ? 'completed_with_warnings' : 'completed',
+          stats: result.stats,
+          warnings: result.warnings || [],
+        },
+        warnings: result.warnings || [],
+      };
+    }
+  } catch (err) {
+    job.status = 'failed';
+    job.errorMessage = err.message || 'LinkedIn connections import failed.';
+  } finally {
+    await finishResumableBackgroundJob(job);
+  }
+}
+
 export function createStore() {
   return {
     // Load basic tenant profiles only on startup
@@ -1415,6 +1558,32 @@ export function createStore() {
       // Basic users/profiles are loaded separately by the server.
       // We no longer pre-load all tenant_data (lazy load now).
       console.log('  Store: Lazy loading enabled for tenant data');
+      const interruptedJobs = await dbLoadRecoverableBackgroundJobs(50, { throwOnError: true });
+      let resumed = 0;
+      let failed = 0;
+      for (const persisted of interruptedJobs) {
+        if (!persisted?.id || !persisted.tenantId || backgroundJobs.has(persisted.id)) continue;
+        const tenantId = persisted.tenantId;
+        const decision = getBackgroundJobRecoveryDecision(persisted);
+        trackBackgroundJob(tenantId, persisted);
+        if (decision.recoverable) {
+          persisted.status = 'queued';
+          persisted.startedAt = null;
+          persisted.finishedAt = null;
+          persisted.updatedAt = now();
+          persisted.progressMessage = 'Resuming after a service restart...';
+          await persistBackgroundJob(persisted);
+          queueResumableBackgroundJob(this, tenantId, persisted);
+          resumed += 1;
+        } else {
+          failInterruptedBackgroundJob(persisted, decision);
+          await persistBackgroundJob(persisted);
+          failed += 1;
+        }
+      }
+      if (resumed || failed) {
+        console.log(`  Store: Recovered ${resumed} interrupted job${resumed === 1 ? '' : 's'}; marked ${failed} non-resumable job${failed === 1 ? '' : 's'} failed`);
+      }
     },
     flushPendingSaves,
     ensureTenant(tenant, user = {}) {
@@ -2928,7 +3097,7 @@ export function createStore() {
       };
     },
 
-    startLiveJobImport(tenantId, options = {}) {
+    async startLiveJobImport(tenantId, options = {}) {
       assertTenant(tenantId);
       const jobId = `live-job-import-${Date.now()}`;
       const job = {
@@ -2944,42 +3113,17 @@ export function createStore() {
         stage: 'queued',
         recordsAffected: 0,
         result: null,
+        recovery: {
+          kind: 'live-job-import',
+          attempts: 0,
+          options: cloneRecoveryOptions(options),
+        },
       };
       trackBackgroundJob(tenantId, job);
+      await persistQueuedBackgroundJob(job);
+      queueResumableBackgroundJob(this, tenantId, job);
 
-      setImmediate(async () => {
-        try {
-          job.status = 'running';
-          job.startedAt = now();
-          job.progress = 25;
-          job.stage = 'import';
-          job.progressMessage = 'Fetching active ATS boards...';
-          const result = await this.importLiveJobs(tenantId, options);
-          if (result.error) {
-            job.status = 'failed';
-            job.errorMessage = result.error;
-            job.result = result;
-          } else {
-            job.status = 'completed';
-            job.progress = 100;
-            job.stage = 'completed';
-            job.progressMessage = 'Completed';
-            job.recordsAffected = getTrackedJobCountFromResult(result) || getTouchedJobCountFromResult(result);
-            job.result = {
-              stats: result.stats,
-              importRun: result.importRun,
-              warnings: result.warnings || [],
-            };
-          }
-        } catch (err) {
-          job.status = 'failed';
-          job.errorMessage = err.message || 'Live ATS job import failed.';
-        } finally {
-          job.finishedAt = now();
-        }
-      });
-
-      return { ok: true, jobId, job };
+      return { ok: true, jobId, job: publicBackgroundJob(job) };
     },
 
     async importLiveJobs(tenantId, options = {}) {
@@ -3053,7 +3197,11 @@ export function createStore() {
         timings.postDiscoveryIdentityRepairMs = Math.round(performance.now() - postDiscoveryRepairStartedAt);
         directResolvedConfigs += postDiscoveryDirectResolved;
 
-        activeTenantConfigs = tenantConfigs.filter((item) => item.active !== false);
+        activeTenantConfigs = tenantConfigs.filter((item) => {
+          if (item.active === false) return false;
+          const owner = accountForConfig(item, importAccountsById, importAccountsByName);
+          return !owner || isTrackedTarget(owner);
+        });
         importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
       }
       let limitedImportConfigs = importReadyConfigs;
@@ -3093,9 +3241,14 @@ export function createStore() {
       const accountsByNormalizedName = new Map(tenantAccounts.map((item) => [normalizeKey(item.displayName || item.normalizedName), item]));
       const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
       const existingByNaturalKey = new Map();
+      const existingByProviderIdentity = new Map();
       for (const existingJob of tenantJobs) {
         const key = getJobNaturalKey(existingJob);
         if (key && !existingByNaturalKey.has(key)) existingByNaturalKey.set(key, existingJob);
+        const providerIdentity = getProviderJobIdentity(existingJob);
+        if (providerIdentity && !existingByProviderIdentity.has(providerIdentity)) {
+          existingByProviderIdentity.set(providerIdentity, existingJob);
+        }
       }
 
       let fetched = 0;
@@ -3103,6 +3256,8 @@ export function createStore() {
       let filteredOutNonCanada = 0;
       let newJobs = 0;
       let updatedJobs = 0;
+      let closedJobs = 0;
+      let reactivatedJobs = 0;
       const touchedAccountIds = new Set();
 
       const fetchStartedAt = performance.now();
@@ -3151,7 +3306,12 @@ export function createStore() {
         const fetchedJobs = settled.value.jobs;
         fetched += fetchedJobs.length;
         const accountItem = findAccountForConfig(config, accountsByNormalizedName, accountsById);
+        if (accountItem?.id && config.accountId !== accountItem.id) {
+          config.accountId = accountItem.id;
+        }
+        if (accountItem?.id) touchedAccountIds.add(accountItem.id);
         let configKept = 0;
+        const seenJobIds = new Set();
 
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
@@ -3164,12 +3324,17 @@ export function createStore() {
           kept++;
           configKept++;
           const naturalKey = getJobNaturalKey(normalizedJob);
-          const existingJob = existingByNaturalKey.get(naturalKey);
+          const providerIdentity = getProviderJobIdentity(normalizedJob);
+          const existingJob = existingByNaturalKey.get(naturalKey)
+            || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null);
           if (existingJob) {
+            const wasClosed = existingJob.active === false || Boolean(existingJob.closedAt);
             Object.assign(existingJob, {
               ...normalizedJob,
               id: existingJob.id,
               tenantId,
+              active: true,
+              closedAt: '',
               createdAt: existingJob.createdAt || normalizedJob.createdAt,
               naturalKey,
               firstSeenAt: existingJob.firstSeenAt || existingJob.createdAt || normalizedJob.createdAt,
@@ -3177,6 +3342,10 @@ export function createStore() {
               importRunId,
               updatedAt: now(),
             });
+            existingByNaturalKey.set(naturalKey, existingJob);
+            if (providerIdentity) existingByProviderIdentity.set(providerIdentity, existingJob);
+            seenJobIds.add(existingJob.id);
+            if (wasClosed) reactivatedJobs++;
             importItems.push({
               entityType: 'job',
               entityId: existingJob.id,
@@ -3201,6 +3370,8 @@ export function createStore() {
             tenantJobs.unshift(newJob);
             jobs.push(newJob);
             existingByNaturalKey.set(naturalKey, newJob);
+            if (providerIdentity) existingByProviderIdentity.set(providerIdentity, newJob);
+            seenJobIds.add(newJob.id);
             importItems.push({
               entityType: 'job',
               entityId: newJob.id,
@@ -3212,6 +3383,19 @@ export function createStore() {
             newJobs++;
           }
           if (accountItem?.id) touchedAccountIds.add(accountItem.id);
+        }
+
+        const closedForConfig = deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, now());
+        closedJobs += closedForConfig.length;
+        for (const closedJob of closedForConfig) {
+          importItems.push({
+            entityType: 'job',
+            entityId: closedJob.id,
+            naturalKey: getJobNaturalKey(closedJob),
+            status: 'closed',
+            message: 'No longer present on the successfully refreshed ATS board',
+            sourceRow: { title: closedJob.title, companyName: closedJob.companyName, jobId: closedJob.jobId },
+          });
         }
 
         config.lastImportStatus = configKept > 0 ? 'success' : 'empty';
@@ -3260,8 +3444,11 @@ export function createStore() {
         filteredOutNonCanada,
         imported: activeTrackedJobs,
         runImported: newJobs + updatedJobs,
+        jobsTouched: newJobs + updatedJobs + closedJobs,
         newJobs,
         updatedJobs,
+        closedJobs,
+        reactivatedJobs,
         errors: errors.length,
       };
       const importRun = {
@@ -3283,7 +3470,7 @@ export function createStore() {
         completedAt: now(),
         rowsTotal: fetched,
         rowsCreated: newJobs,
-        rowsUpdated: updatedJobs,
+        rowsUpdated: updatedJobs + closedJobs,
         rowsSkipped: filteredOutNonCanada,
         rowsFailed: errors.length,
         warnings,
@@ -3649,7 +3836,7 @@ export function createStore() {
       return { ok: true, jobId: job.id, job };
     },
 
-    startLinkedInCsvImport(tenantId, csvText, options = {}) {
+    async startLinkedInCsvImport(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
       const jobId = `linkedin-csv-${Date.now()}`;
       const job = {
@@ -3663,42 +3850,18 @@ export function createStore() {
         finishedAt: null,
         recordsAffected: 0,
         result: null,
+        recovery: {
+          kind: 'linkedin-csv-import',
+          attempts: 0,
+          csvText: String(csvText || ''),
+          options: cloneRecoveryOptions(options),
+        },
       };
       trackBackgroundJob(tenantId, job);
+      await persistQueuedBackgroundJob(job);
+      queueResumableBackgroundJob(this, tenantId, job);
 
-      setImmediate(async () => {
-        try {
-          job.status = 'running';
-          job.startedAt = now();
-          job.progressMessage = 'Parsing LinkedIn connections CSV...';
-          const result = await this.importLinkedInCSV(tenantId, csvText, options);
-          if (result.error) {
-            job.status = 'failed';
-            job.errorMessage = result.error;
-            job.result = result;
-          } else {
-            job.status = 'completed';
-            job.progressMessage = 'Completed';
-            job.recordsAffected = result.stats?.imported || result.stats?.contactsCreated || 0;
-            job.result = {
-              stats: result.stats,
-              importRun: {
-                status: result.warnings?.length ? 'completed_with_warnings' : 'completed',
-                stats: result.stats,
-                warnings: result.warnings || [],
-              },
-              warnings: result.warnings || [],
-            };
-          }
-        } catch (err) {
-          job.status = 'failed';
-          job.errorMessage = err.message || 'LinkedIn connections import failed.';
-        } finally {
-          job.finishedAt = now();
-        }
-      });
-
-      return { ok: true, jobId, job };
+      return { ok: true, jobId, job: publicBackgroundJob(job) };
     },
 
     async getBackgroundJob(tenantId, jobId) {
@@ -3708,20 +3871,28 @@ export function createStore() {
       // truth so the UI shows a failure instead of a phantom success.
       if (job?.tenantId === tenantId) {
         await persistBackgroundJob(job);
-        return job;
+        return publicBackgroundJob(job);
       }
       const persisted = await dbLoadBackgroundJob(tenantId, jobId);
       if (!persisted) return missingBackgroundJob(jobId);
       if (persisted.status === 'queued' || persisted.status === 'running') {
-        persisted.status = 'failed';
-        persisted.finishedAt = now();
-        persisted.updatedAt = persisted.finishedAt;
-        persisted.progressMessage = 'Interrupted by a service restart';
-        persisted.errorMessage = 'This operation was interrupted by a deployment or restart. Your saved workspace data is safe; please run the operation again.';
+        const decision = getBackgroundJobRecoveryDecision(persisted);
+        trackBackgroundJob(tenantId, persisted);
+        if (decision.recoverable) {
+          persisted.status = 'queued';
+          persisted.startedAt = null;
+          persisted.finishedAt = null;
+          persisted.updatedAt = now();
+          persisted.progressMessage = 'Resuming after a service restart...';
+          await persistBackgroundJob(persisted);
+          queueResumableBackgroundJob(this, tenantId, persisted);
+          return publicBackgroundJob(persisted);
+        }
+        failInterruptedBackgroundJob(persisted, decision);
       }
-      trackBackgroundJob(tenantId, persisted);
+      if (!backgroundJobs.has(jobId)) trackBackgroundJob(tenantId, persisted);
       await persistBackgroundJob(persisted);
-      return persisted;
+      return publicBackgroundJob(persisted);
     },
 
     // ── Revenue Pipeline ──────────────────────────────────────────────────
@@ -6555,6 +6726,25 @@ function getJobNaturalKey(item) {
   ].map((part) => normalizeKey(part)).join('|');
 }
 
+function getProviderJobIdentity(item = {}) {
+  const tenant = normalizeKey(item.tenantId);
+  const atsType = normalizeAtsType(item.atsType || item.source);
+  const jobUrl = String(item.jobUrl || item.url || '').trim();
+  if (jobUrl) {
+    try {
+      const parsed = new URL(jobUrl.startsWith('http') ? jobUrl : `https://${jobUrl}`);
+      parsed.hash = '';
+      const canonicalUrl = `${parsed.hostname.replace(/^www\./, '').toLowerCase()}${parsed.pathname.replace(/\/+$/, '').toLowerCase()}${parsed.search}`;
+      return `${tenant}|${atsType}|url:${canonicalUrl}`;
+    } catch {
+      return `${tenant}|${atsType}|url:${jobUrl.toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+    }
+  }
+  const providerJobId = String(item.jobId || item.providerJobId || '').trim();
+  if (!providerJobId) return '';
+  return `${tenant}|${atsType}|${normalizeKey(item.companyName)}|id:${normalizeKey(providerJobId)}`;
+}
+
 const CANADA_LOCATION_RE = /\b(canada|remote canada|canadian|ontario|on\b|toronto|gta|mississauga|ottawa|waterloo|kitchener|hamilton|london,?\s*on|british columbia|bc\b|vancouver|victoria|alberta|ab\b|calgary|edmonton|quebec|qc\b|montreal|montr[eé]al|nova scotia|ns\b|halifax|manitoba|mb\b|winnipeg|saskatchewan|sk\b|regina|saskatoon|new brunswick|nb\b|newfoundland|nl\b|prince edward island|pei\b|yukon|northwest territories|nunavut)\b/i;
 const US_LOCATION_RE = /\b(us|usa|u\.s\.a?|united states|america|california|ca\b|new york|ny\b|texas|tx\b|washington|wa\b|massachusetts|ma\b|florida|fl\b|illinois|il\b|georgia|colorado|arizona|virginia|seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles)\b/i;
 
@@ -6633,7 +6823,7 @@ function refreshAccountHiringStats(item, tenantJobs) {
 function deactivateJobsForConfig(config, tenantJobs, timestamp = now()) {
   let deactivated = 0;
   for (const jobItem of tenantJobs) {
-    if (jobItem.configId !== config.id || jobItem.active === false) continue;
+    if (!jobBelongsToConfig(jobItem, config) || jobItem.active === false) continue;
     jobItem.active = false;
     jobItem.isNew = false;
     jobItem.closedAt = jobItem.closedAt || timestamp;
@@ -6641,6 +6831,27 @@ function deactivateJobsForConfig(config, tenantJobs, timestamp = now()) {
     deactivated++;
   }
   return deactivated;
+}
+
+function jobBelongsToConfig(jobItem, config) {
+  if (jobItem.configId) return jobItem.configId === config.id;
+  const atsMatches = normalizeAtsType(jobItem.atsType || jobItem.source) === getConfigAtsType(config);
+  if (!atsMatches) return false;
+  if (config.accountId && jobItem.accountId) return config.accountId === jobItem.accountId;
+  return normalizeKey(jobItem.companyName) === normalizeKey(config.companyName);
+}
+
+function deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, timestamp = now()) {
+  const closed = [];
+  for (const jobItem of tenantJobs) {
+    if (jobItem.active === false || seenJobIds.has(jobItem.id) || !jobBelongsToConfig(jobItem, config)) continue;
+    jobItem.active = false;
+    jobItem.isNew = false;
+    jobItem.closedAt = jobItem.closedAt || timestamp;
+    jobItem.updatedAt = timestamp;
+    closed.push(jobItem);
+  }
+  return closed;
 }
 
 

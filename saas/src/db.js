@@ -997,6 +997,28 @@ export async function dbLoadBackgroundJob(tenantId, jobId) {
   }
 }
 
+export async function dbLoadRecoverableBackgroundJobs(limit = 50, { throwOnError = false } = {}) {
+  if (!dbReady) return [];
+  try {
+    const result = await pool.query(
+      `SELECT tenant_id, snapshot
+       FROM background_jobs
+       WHERE status IN ('queued', 'running')
+       ORDER BY updated_at ASC, id ASC
+       LIMIT $1`,
+      [Math.max(1, Math.min(500, Number(limit) || 50))]
+    );
+    return result.rows.map((row) => ({
+      ...(row.snapshot || {}),
+      tenantId: row.tenant_id,
+    }));
+  } catch (err) {
+    console.error('DB: Failed to load recoverable background jobs:', err.message);
+    if (throwOnError) throw err;
+    return [];
+  }
+}
+
 export async function dbGetTenantDataStats(tenantId) {
   if (!dbReady) return null;
   const startedAt = Date.now();

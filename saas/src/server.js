@@ -1145,7 +1145,7 @@ self.addEventListener('activate', (event) => {
 
     if (csvText) {
       if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
-      const accepted = store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies });
+      const accepted = await store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies });
       return sendJson(res, 202, {
         ok: true,
         setupComplete: false,
@@ -1280,7 +1280,7 @@ self.addEventListener('activate', (event) => {
     ];
     if (!dryRun) {
       if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
-      return sendJson(res, 202, store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies }));
+      return sendJson(res, 202, await store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies }));
     }
 
     const result = await store.importLinkedInCSV(tenantId, csvText, {
@@ -1306,7 +1306,7 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/import/jobs' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const body = await readJson(req);
-    return sendJson(res, 202, store.startLiveJobImport(tenantId, { ...body, plan }));
+    return sendJson(res, 202, await store.startLiveJobImport(tenantId, { ...body, plan }));
   }
 
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
