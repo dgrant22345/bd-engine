@@ -56,6 +56,22 @@ test('runtime status exposes automatic refresh timing after setup', async () => 
   assert.ok(Number.isFinite(Date.parse(afterSetup.refreshSchedule.nextEligibleAt)));
 });
 
+test('runtime status does not promise automatic refreshes in the read-only demo', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-runtime-demo';
+  store.ensureTenant({ id: tenantId, name: 'Runtime demo', slug: 'bd-engine-demo' }, { id: `${tenantId}-owner` });
+  store.completeSetup(tenantId, {
+    workspaceName: 'Runtime demo',
+    userName: 'Demo User',
+    userEmail: 'demo@example.com',
+  }, { runPipeline: false });
+
+  const runtime = await store.getRuntimeStatus(tenantId);
+  assert.equal(runtime.refreshSchedule.enabled, false);
+  assert.equal(runtime.refreshSchedule.disabledReason, 'read_only_demo');
+  assert.equal(runtime.refreshSchedule.nextEligibleAt, '');
+});
+
 test('only idempotent imports with complete descriptors resume after a restart', () => {
   assert.deepEqual(getBackgroundJobRecoveryDecision({
     type: 'live-job-import',

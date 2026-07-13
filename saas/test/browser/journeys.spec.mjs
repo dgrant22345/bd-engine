@@ -98,6 +98,9 @@ async function gotoAppRoute(page, route) {
 test('demo journey: read-only demo opens and dashboard renders', async ({ page }) => {
   const app = await startDemo(page);
   await expect(app.locator('body')).toContainText(/dashboard|pipeline|account/i, { timeout: 15000 });
+  await gotoAppRoute(page, '#/admin');
+  await expect(app.locator('.ingestion-health')).toContainText('Demo data', { timeout: 15000 });
+  await expect(app.locator('.ingestion-health')).toContainText('Automatic refresh is off in the read-only demo');
 });
 
 test('signup journey: new account reaches the app workspace', async ({ page }) => {

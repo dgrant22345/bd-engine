@@ -1887,7 +1887,10 @@ export function createStore() {
       const recentJobs = tenantJobs.filter((job) => !['queued', 'running'].includes(job.status)).slice(0, 10);
       const runningJobs = activeJobs.filter((job) => job.status === 'running').length;
       const queuedJobs = activeJobs.filter((job) => job.status === 'queued').length;
-      const settings = getTenantProfile(tenantId)?.settings || {};
+      const profile = getTenantProfile(tenantId);
+      const settings = profile?.settings || {};
+      const isReadOnlyDemo = profile?.tenant?.slug === 'bd-engine-demo';
+      const automaticRefreshEnabled = Boolean(settings.setupComplete && !isReadOnlyDemo);
       return {
         ok: true,
         serverStartedAt: processStartedAt,
@@ -1899,12 +1902,13 @@ export function createStore() {
         activeJobs: activeJobs.map(publicBackgroundJob),
         recentJobs: recentJobs.map(publicBackgroundJob),
         refreshSchedule: {
-          enabled: Boolean(settings.setupComplete),
+          enabled: automaticRefreshEnabled,
+          disabledReason: isReadOnlyDemo ? 'read_only_demo' : (settings.setupComplete ? '' : 'setup_incomplete'),
           lastAttemptAt: settings.lastPipelineAttemptAt || '',
           lastSuccessAt: settings.lastPipelineRun || '',
           lastStatus: settings.lastPipelineStatus || '',
           lastError: settings.lastPipelineError || '',
-          nextEligibleAt: settings.setupComplete ? getNextScheduledRefreshAt(settings) : '',
+          nextEligibleAt: automaticRefreshEnabled ? getNextScheduledRefreshAt(settings) : '',
         },
       };
     },

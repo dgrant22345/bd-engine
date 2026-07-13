@@ -6287,9 +6287,16 @@ function renderIngestionHealthPanel(runtime) {
   const schedule = runtime?.refreshSchedule || {};
   const nextRefreshTime = Date.parse(schedule.nextEligibleAt || '');
   const refreshDue = Number.isFinite(nextRefreshTime) && nextRefreshTime <= Date.now();
-  const scheduleLabel = !schedule.enabled
-    ? 'Finish setup'
-    : (refreshDue ? 'Due now' : formatDateTime(schedule.nextEligibleAt));
+  const scheduleLabel = schedule.disabledReason === 'read_only_demo'
+    ? 'Demo data'
+    : (!schedule.enabled
+      ? 'Finish setup'
+      : (refreshDue ? 'Due now' : formatDateTime(schedule.nextEligibleAt)));
+  const scheduleMeta = schedule.disabledReason === 'read_only_demo'
+    ? 'Automatic refresh is off in the read-only demo'
+    : (schedule.enabled
+      ? 'Runs daily when no refresh is already running'
+      : 'Automatic refresh starts after setup');
   const activeLabel = activeImport
     ? (progress?.current ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : (progress ? `${progress.pct}%` : humanize(activeImport.status)))
     : 'Idle';
@@ -6333,7 +6340,7 @@ function renderIngestionHealthPanel(runtime) {
         <div class="ingestion-health__metric">
           <span class="small muted">Next automatic refresh</span>
           <strong>${escapeHtml(scheduleLabel)}</strong>
-          <span class="small muted">${schedule.enabled ? 'Runs daily when no refresh is already running' : 'Automatic refresh starts after setup'}</span>
+          <span class="small muted">${escapeHtml(scheduleMeta)}</span>
         </div>
       </div>
       ${progress ? `<div class="spark-bar job-progress-bar ingestion-health__bar"><span style="width:${progress.pct}%"></span></div>` : ''}
