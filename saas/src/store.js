@@ -4139,9 +4139,11 @@ export function createStore() {
       let accountsCreated = 0;
       let accountsUpdated = 0;
       let contactsCreated = 0;
+      let contactsUpdated = 0;
       let duplicatesSkipped = 0;
       let planLimitedSkipped = 0;
       const warnings = [];
+      const contactRollupAccountIds = new Set();
       
       const tenantAcctArray = getTenantArray(accountsByTenant, tenantId);
       const tenantContArray = getTenantArray(contactsByTenant, tenantId);
@@ -4161,7 +4163,10 @@ export function createStore() {
       // Create fast lookups
       const existingContactsMap = new Map();
       for (const c of tenantContArray) {
-        indexContactDedupeKeys(existingContactsMap, c);
+        const indexedContact = dryRun
+          ? { ...c, sourceMetadata: { ...(c.sourceMetadata || {}) }, employmentHistory: [...(c.employmentHistory || [])] }
+          : c;
+        indexContactDedupeKeys(existingContactsMap, indexedContact);
       }
 
       const existingAccountsMap = new Map();
@@ -4218,6 +4223,7 @@ export function createStore() {
           }
           accountsUpdated++;
         }
+        contactRollupAccountIds.add(existingAccount.id);
 
         // Create contacts
         let newSeniorCount = 0;
@@ -4231,15 +4237,27 @@ export function createStore() {
             linkedinUrl: c.linkedinUrl,
             companyName: c.company,
           }, normName);
-          const existing = contactKeys.map((key) => existingContactsMap.get(key)).find(Boolean);
+          const matchedKey = contactKeys.find((key) => existingContactsMap.has(key));
+          const existing = matchedKey ? existingContactsMap.get(matchedKey) : null;
           if (existing) {
-            duplicatesSkipped++;
+            const patch = buildLinkedInContactPatch(existing, c, existingAccount, timestamp, {
+              allowCompanyMove: matchedKey.startsWith('linkedin:') || matchedKey.startsWith('email:'),
+            });
+            c.previewAction = patch ? 'Update' : 'Existing';
+            if (patch) {
+              if (existing.accountId) contactRollupAccountIds.add(existing.accountId);
+              Object.assign(existing, patch);
+              indexContactDedupeKeys(existingContactsMap, existing, normName);
+              contactsUpdated++;
+            } else {
+              duplicatesSkipped++;
+            }
             importItems.push({
               entityType: 'contact',
               entityId: existing.id || '',
               naturalKey: contactKeys[0] || '',
-              status: 'duplicate',
-              message: 'Matched an existing contact',
+              status: patch ? 'updated' : 'duplicate',
+              message: patch ? 'Refreshed from LinkedIn CSV' : 'Matched an unchanged contact',
               sourceRow: { fullName: c.fullName, company: c.company, email: c.email, linkedinUrl: c.linkedinUrl },
             });
             continue;
@@ -4259,6 +4277,7 @@ export function createStore() {
           const seniority = classifySeniority(c.position);
           const isTalent = isTalentTitle(c.position);
           const priorityScore = computeContactPriority(seniority, isTalent, c.email);
+          c.previewAction = 'Import';
           
           if (['executive', 'director', 'vp'].includes(seniority)) newSeniorCount++;
           if (isTalent) newTalentCount++;
@@ -4279,6 +4298,8 @@ export function createStore() {
               seniority,
               isTalentLeader: isTalent,
               source: 'linkedin_csv',
+              sourceMetadata: { currentEmploymentObservedAt: timestamp },
+              employmentHistory: [],
               createdAt: timestamp,
               updatedAt: timestamp,
             });
@@ -4324,6 +4345,10 @@ export function createStore() {
         warnings.push(`${skippedMissingName + skippedMissingCompany} rows were skipped because they were missing a name or company.`);
       }
 
+      if (!dryRun) {
+        refreshAccountContactRollups(tenantAcctArray, tenantContArray, contactRollupAccountIds, timestamp);
+      }
+
       // Mark setup as complete after import
       const profile = getTenantProfile(tenantId);
       if (profile && !dryRun) profile.settings.setupComplete = true;
@@ -4340,12 +4365,13 @@ export function createStore() {
       const stats = {
         rowsParsed: rows.length,
         imported: contactsCreated,
-        updated: accountsUpdated,
+        updated: contactsUpdated,
         skipped: skippedMissingName + skippedMissingCompany + duplicatesSkipped + planLimitedSkipped,
         failed: 0,
         accountsCreated,
         accountsUpdated,
         contactsCreated,
+        contactsUpdated,
         contacts: dryRun ? contactsForTenant(tenantId).length + contactsCreated : contactsForTenant(tenantId).length,
         companies: dryRun ? accountsForTenant(tenantId).length + accountsCreated : accountsForTenant(tenantId).length,
         duplicatesSkipped,
@@ -4372,7 +4398,7 @@ export function createStore() {
           completedAt: now(),
           rowsTotal: rows.length,
           rowsCreated: contactsCreated + accountsCreated,
-          rowsUpdated: accountsUpdated,
+          rowsUpdated: accountsUpdated + contactsUpdated,
           rowsSkipped: stats.skipped,
           rowsFailed: stats.failed,
           warnings,
@@ -4392,7 +4418,7 @@ export function createStore() {
             companyName: contactItem.company,
           }, candidate.key).some((key) => existingContactsMap.has(key));
           return {
-            action: candidate.overLimit ? 'Plan limit' : duplicate ? 'Existing' : 'Import',
+            action: candidate.overLimit ? 'Plan limit' : contactItem.previewAction || (duplicate ? 'Existing' : 'Import'),
             fullName: contactItem.fullName,
             companyName: contactItem.company,
             title: contactItem.position,
@@ -4893,6 +4919,117 @@ function contactDedupeKeys(item = {}, companyKey = '') {
 function indexContactDedupeKeys(map, contactItem, companyKey = '') {
   for (const key of contactDedupeKeys(contactItem, companyKey)) {
     if (!map.has(key)) map.set(key, contactItem);
+  }
+}
+
+function buildLinkedInContactPatch(existing, incoming, targetAccount, timestamp, options = {}) {
+  const patch = {};
+  const setIfChanged = (field, value) => {
+    const cleanValue = String(value || '').trim();
+    if (cleanValue && cleanValue !== String(existing[field] || '').trim()) patch[field] = cleanValue;
+  };
+
+  setIfChanged('firstName', incoming.firstName);
+  setIfChanged('lastName', incoming.lastName);
+  setIfChanged('fullName', incoming.fullName);
+  setIfChanged('email', incoming.email);
+  setIfChanged('linkedinUrl', incoming.linkedinUrl);
+  setIfChanged('connectedOn', incoming.connectedOn);
+
+  const currentCompany = String(existing.companyName || '').trim();
+  const incomingCompany = String(incoming.company || '').trim();
+  const companyChanged = Boolean(
+    options.allowCompanyMove
+    && incomingCompany
+    && normalizeKey(incomingCompany) !== normalizeKey(currentCompany)
+  );
+  const incomingTitle = String(incoming.position || '').trim();
+  const currentTitle = String(existing.title || '').trim();
+  const titleChanged = Boolean(incomingTitle && normalizeKey(incomingTitle) !== normalizeKey(currentTitle));
+
+  if (companyChanged || titleChanged) {
+    const employmentHistory = Array.isArray(existing.employmentHistory)
+      ? existing.employmentHistory.map((item) => ({ ...item }))
+      : [];
+    if (currentCompany || currentTitle) {
+      const previousRole = {
+        companyName: currentCompany,
+        title: currentTitle,
+        accountId: existing.accountId || '',
+        firstObservedAt: existing.sourceMetadata?.currentEmploymentObservedAt || existing.createdAt || '',
+        lastObservedAt: timestamp,
+        source: 'linkedin_csv',
+      };
+      const previousKey = `${normalizeKey(previousRole.companyName)}|${normalizeKey(previousRole.title)}`;
+      const latest = employmentHistory[employmentHistory.length - 1];
+      const latestKey = latest ? `${normalizeKey(latest.companyName)}|${normalizeKey(latest.title)}` : '';
+      if (previousKey !== latestKey) employmentHistory.push(previousRole);
+    }
+    patch.employmentHistory = employmentHistory;
+  }
+
+  if (companyChanged) {
+    patch.companyName = incomingCompany;
+    patch.accountId = targetAccount.id;
+  } else if (incomingCompany && incomingCompany !== currentCompany && normalizeKey(incomingCompany) === normalizeKey(currentCompany)) {
+    patch.companyName = incomingCompany;
+  }
+  if (incomingTitle && incomingTitle !== currentTitle) patch.title = incomingTitle;
+
+  const nextTitle = patch.title || currentTitle;
+  const nextEmail = patch.email || existing.email || '';
+  const nextSeniority = classifySeniority(nextTitle);
+  const nextIsTalent = isTalentTitle(nextTitle);
+  const nextPriority = computeContactPriority(nextSeniority, nextIsTalent, nextEmail);
+  if (nextSeniority !== existing.seniority) patch.seniority = nextSeniority;
+  if (nextIsTalent !== Boolean(existing.isTalentLeader)) patch.isTalentLeader = nextIsTalent;
+  if (nextPriority !== Number(existing.priorityScore || 0)) patch.priorityScore = nextPriority;
+
+  if (!Object.keys(patch).length) return null;
+  patch.sourceMetadata = {
+    ...(existing.sourceMetadata || {}),
+    lastLinkedInImportAt: timestamp,
+    currentEmploymentObservedAt: companyChanged || titleChanged
+      ? timestamp
+      : existing.sourceMetadata?.currentEmploymentObservedAt || existing.createdAt || timestamp,
+  };
+  patch.updatedAt = timestamp;
+  return patch;
+}
+
+function refreshAccountContactRollups(accountList, contactList, affectedAccountIds, timestamp) {
+  const rollups = new Map();
+  for (const contactItem of contactList) {
+    if (!contactItem.accountId) continue;
+    const rollup = rollups.get(contactItem.accountId) || { connections: 0, senior: 0, talent: 0 };
+    rollup.connections += 1;
+    if (['executive', 'director', 'vp'].includes(String(contactItem.seniority || '').toLowerCase())) rollup.senior += 1;
+    if (contactItem.isTalentLeader) rollup.talent += 1;
+    rollups.set(contactItem.accountId, rollup);
+  }
+
+  for (const accountItem of accountList) {
+    if (!affectedAccountIds.has(accountItem.id)) continue;
+    const rollup = rollups.get(accountItem.id) || { connections: 0, senior: 0, talent: 0 };
+    const targetScore = Math.min(100, Math.round(
+      rollup.connections * 8
+      + rollup.senior * 15
+      + rollup.talent * 20
+    ));
+    const changed = accountItem.connectionCount !== rollup.connections
+      || accountItem.contactCount !== rollup.connections
+      || accountItem.seniorContactCount !== rollup.senior
+      || accountItem.talentContactCount !== rollup.talent
+      || accountItem.targetScore !== targetScore
+      || accountItem.dailyScore !== targetScore;
+    if (!changed) continue;
+    accountItem.connectionCount = rollup.connections;
+    accountItem.contactCount = rollup.connections;
+    accountItem.seniorContactCount = rollup.senior;
+    accountItem.talentContactCount = rollup.talent;
+    accountItem.targetScore = targetScore;
+    accountItem.dailyScore = targetScore;
+    accountItem.updatedAt = timestamp;
   }
 }
 
