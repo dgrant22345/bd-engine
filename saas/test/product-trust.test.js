@@ -49,8 +49,10 @@ test('authenticated shell exposes actionable support and verification states', a
 test('customer trust copy matches the sanitized production status surface', async () => {
   const landing = await readFile(landingPath, 'utf8');
   assert.doesNotMatch(landing, /moving from prototype/i);
+  assert.doesNotMatch(landing, /Cloud beta/i);
   assert.doesNotMatch(landing, /public status page reports server, database, and Stripe/i);
   assert.match(landing, /public status page reports service availability/i);
+  assert.match(landing, /Sample workspace/i);
 });
 
 // Handler extraction: the delegated click handler declares `actionName`; the

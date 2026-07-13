@@ -731,6 +731,8 @@ function applyDerivedSampleCounts(accountList, contactList, jobList) {
     item.jobsLast90Days = accountJobs.filter((jobItem) => ageDays(jobItem) <= 90).length;
     const accountContacts = contactList.filter((contactItem) => contactItem.accountId === item.id);
     item.connectionCount = accountContacts.length;
+    item.contactCount = accountContacts.length;
+    item.activeJobCount = activeJobs.length;
     item.talentContactCount = accountContacts.filter((contactItem) => contactItem.isTalentLeader).length;
     item.seniorContactCount = accountContacts.filter(
       (contactItem) => seniorLevels.has(String(contactItem.seniority || '').toLowerCase())
@@ -788,7 +790,7 @@ function buildSampleWorkspaceData(tenantId, persona = 'bd') {
       careersUrl: 'https://vertexhealth.example/jobs',
       industry: 'Health technology',
       location: 'Boston, MA',
-      status: 'ready',
+      status: 'researching',
       outreachStatus: 'ready_to_contact',
       targetScore: 84,
       dailyScore: 84,
@@ -922,7 +924,7 @@ let accounts = [
     domain: 'vertexhealth.example',
     industry: 'Health technology',
     location: 'Boston, MA',
-    status: 'ready',
+    status: 'researching',
     outreachStatus: 'ready_to_contact',
     targetScore: 84,
     dailyScore: 84,
@@ -2124,9 +2126,14 @@ export function createStore() {
         })),
         recentlyDiscoveredBoards: resolvedConfigs.slice(0, 5).map((item) => ({
           companyName: item.companyName,
-          ats: item.ats,
+          ats: getConfigAtsType(item),
+          atsType: getConfigAtsType(item),
           confidenceBand: item.confidenceBand,
-          discoveredAt: pastDate(2),
+          discoveryStatus: item.discoveryStatus || 'resolved',
+          discoveryMethod: item.discoveryMethod || item.source || 'configured',
+          careersUrl: item.careersUrl || item.resolvedBoardUrl || '',
+          domain: item.domain || '',
+          discoveredAt: item.discoveredAt || item.updatedAt || '',
         })),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);

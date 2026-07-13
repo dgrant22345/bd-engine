@@ -532,14 +532,15 @@ function renderHealthRing(score) {
 function renderPipelineHeatmap(accounts) {
   if (!accounts || !accounts.length) return '';
 
-  const statuses = ['prospect', 'qualifying', 'active', 'nurture', 'closed_won', 'closed_lost'];
+  const statuses = ['new', 'researching', 'contacted', 'in_conversation', 'client', 'paused'];
   const priorities = ['high', 'medium', 'low'];
   const grid = {};
   statuses.forEach(s => { grid[s] = {}; priorities.forEach(p => { grid[s][p] = 0; }); });
 
   accounts.forEach(a => {
-    const s = (a.status || 'prospect').toLowerCase();
-    const p = (a.priority || 'medium').toLowerCase();
+    const s = (a.status || 'new').toLowerCase();
+    const tierPriority = { a: 'high', b: 'medium', c: 'low' }[String(a.priorityTier || '').toLowerCase()];
+    const p = (a.priority || tierPriority || 'medium').toLowerCase();
     if (grid[s] && grid[s][p] !== undefined) grid[s][p]++;
   });
 
@@ -809,7 +810,7 @@ function detectSmartAlerts(accounts) {
       alerts.push({ type: 'hiring_spike', accountId: a.id, name: a.displayName, message: `Hiring spike: ${a.jobsLast30Days} jobs in 30d (${a.hiringSpikeRatio}x normal)`, severity: 'success' });
     }
     // No contact on high-score account
-    if (current >= 80 && (a.contactCount || 0) === 0) {
+    if (current >= 80 && Number(a.contactCount || a.connectionCount || 0) === 0) {
       alerts.push({ type: 'no_contacts', accountId: a.id, name: a.displayName, message: `${current}-point account has no mapped contacts`, severity: 'warning' });
     }
   });
@@ -1158,7 +1159,7 @@ function computeDataQuality(account) {
   const checks = [
     { label: 'Domain', ok: Boolean(account.domain) },
     { label: 'Careers URL', ok: Boolean(account.careersUrl || account.careers_url) },
-    { label: 'Contacts', ok: (account.contactCount || 0) > 0 },
+    { label: 'Contacts', ok: Number(account.contactCount || account.connectionCount || 0) > 0 },
     { label: 'Active jobs', ok: (account.activeJobCount || account.jobCount || 0) > 0 },
     { label: 'Owner', ok: Boolean(account.owner) },
     { label: 'Industry', ok: Boolean(account.industry) },
@@ -1454,7 +1455,7 @@ detectSmartAlerts = function(accounts) {
     if ((a.hiringSpikeRatio || 0) > t.hiringSpikeFactor && (a.jobsLast30Days || 0) >= t.hiringSpikeMinJobs) {
       alerts.push({ type: 'hiring_spike', accountId: a.id, name: a.displayName, message: `Hiring spike: ${a.jobsLast30Days} jobs in 30d (${a.hiringSpikeRatio}x normal)`, severity: 'success' });
     }
-    if (current >= t.highScoreNoContacts && (a.contactCount || 0) === 0) {
+    if (current >= t.highScoreNoContacts && Number(a.contactCount || a.connectionCount || 0) === 0) {
       alerts.push({ type: 'no_contacts', accountId: a.id, name: a.displayName, message: `${current}-point account has no mapped contacts`, severity: 'warning' });
     }
   });
@@ -4535,7 +4536,7 @@ async function renderDashboardView(options = {}) {
               <span class="small muted">${formatNumber(getTargetScore(item))} / 100</span>
             </div>
             <p class="small">${escapeHtml(getTargetScoreExplanation(item) || item.recommendedAction || 'Review account')}</p>
-            <div class="small muted">${item.topContactName ? 'Contact: ' + escapeHtml(item.topContactName) : ''}${item.openRoleCount ? ' \u00b7 ' + formatNumber(item.openRoleCount) + ' roles' : ''}</div>
+            <div class="small muted">${item.topContactName ? 'Contact: ' + escapeHtml(item.topContactName) : ''}${item.openRoleCount ? ' \u00b7 ' + pluralize(item.openRoleCount, 'role') : ''}</div>
             ${item.isOverdue ? '<span class="status-pill danger">Overdue</span>' : ''}
             ${item.staleFlag === 'STALE' ? '<span class="status-pill warning">Stale</span>' : ''}
             <div class="button-row" style="margin-top:8px;">
@@ -5734,7 +5735,7 @@ function renderTodayQueueTable(items) {
         <tr>
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
           <td>${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d</div></td>
+          <td>${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d</div></td>
           <td>${formatNumber(item.engagementScore || 0)}<div class="small muted">${formatNumber(item.jobsLast90Days || 0)} jobs / 90d</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.companyGrowthSignalScore || 0)} growth</div></td>
           <td>${escapeHtml(item.nextAction || item.recommendedAction || '')}</td>
@@ -5763,7 +5764,7 @@ function renderAccountsTable(items) {
           <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
           <td>${renderHealthRing(computeHealthScore(item))}</td>
           <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${formatNumber(item.jobsLast30Days || 0)} jobs / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
+          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
           <td data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
           <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
@@ -7885,7 +7886,7 @@ function renderTargetScoreSignalSummary(item) {
     parts.push(`${formatNumber(item.engagementScore)} engagement`);
   }
   if (item?.jobsLast30Days !== undefined && item?.jobsLast30Days !== null) {
-    parts.push(`${formatNumber(item.jobsLast30Days)} jobs / 30d`);
+    parts.push(`${pluralize(item.jobsLast30Days, 'job')} / 30d`);
   }
   if (item?.jobsLast90Days !== undefined && item?.jobsLast90Days !== null) {
     parts.push(`${formatNumber(item.jobsLast90Days)} jobs / 90d`);

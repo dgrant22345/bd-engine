@@ -45,6 +45,20 @@ test('sample role counts equal their visible active jobs (no 14-vs-2 claims)', a
   }
 });
 
+test('sample dashboard adapters agree on contacts, stages, and discovered boards', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-sample-dashboard';
+  store.ensureTenant({ id: tenantId, name: 'Sample dashboard' }, { id: 'u1', name: 'Owner' });
+  await store.loadSampleWorkspace(tenantId);
+
+  const dashboard = await store.getDashboard(tenantId);
+  assert.ok(dashboard.todayQueue.every((item) => Number(item.contactCount || item.connectionCount || 0) > 0));
+  assert.ok(dashboard.todayQueue.every((item) => ['new', 'researching', 'contacted', 'in_conversation', 'client', 'paused'].includes(item.status)));
+  assert.ok(dashboard.recentlyDiscoveredBoards.every((item) => item.atsType && item.atsType !== 'unknown'));
+  assert.ok(dashboard.recentlyDiscoveredBoards.every((item) => item.discoveryStatus === 'resolved'));
+  assert.ok(dashboard.recentlyDiscoveredBoards.every((item) => item.discoveryMethod));
+});
+
 test('the dev seed workspace is coherent too', async () => {
   const store = createStore();
   const tenantId = 'tenant-demo';
