@@ -997,6 +997,24 @@ export async function dbLoadBackgroundJob(tenantId, jobId) {
   }
 }
 
+export async function dbLoadRecentBackgroundJobs(tenantId, limit = 20) {
+  if (!dbReady || !tenantId) return [];
+  try {
+    const result = await pool.query(
+      `SELECT snapshot
+       FROM background_jobs
+       WHERE tenant_id = $1
+       ORDER BY updated_at DESC, id DESC
+       LIMIT $2`,
+      [tenantId, Math.max(1, Math.min(100, Number(limit) || 20))]
+    );
+    return result.rows.map((row) => row.snapshot || {}).filter((job) => job.id);
+  } catch (err) {
+    console.error('DB: Failed to load recent background jobs:', err.message);
+    return [];
+  }
+}
+
 export async function dbLoadRecoverableBackgroundJobs(limit = 50, { throwOnError = false } = {}) {
   if (!dbReady) return [];
   try {

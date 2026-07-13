@@ -123,6 +123,18 @@ test('setup journey: wizard completes through to the dashboard', async ({ page }
   await expect(app.locator('body')).toContainText(/dashboard|account|signal|readiness/i, { timeout: 15000 });
 });
 
+test('admin journey: import health and automatic refresh timing are visible', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/admin');
+
+  const health = app.locator('.ingestion-health');
+  await expect(health).toBeVisible({ timeout: 15000 });
+  await expect(health).toContainText('Last successful refresh');
+  await expect(health).toContainText('Next automatic refresh');
+  await expect(health).toContainText(/Due now|[A-Z][a-z]{2} \d{1,2}/);
+});
+
 test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {
   const { app } = await signup(page);
   await completeSetup(page, app);

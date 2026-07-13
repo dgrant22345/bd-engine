@@ -6272,23 +6272,38 @@ function renderIngestionHealthPanel(runtime) {
   const jobs = getRuntimeJobs(runtime);
   const liveImports = jobs.filter((job) => job.type === 'live-job-import');
   const activeImport = liveImports.find((job) => ['queued', 'running'].includes(job.status));
-  const lastImport = liveImports.find((job) => job.status === 'completed') || liveImports[0];
-  const lastFailed = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
+  const lastImport = liveImports.find((job) => job.status === 'completed');
+  const latestFailure = liveImports.find((job) => ['failed', 'cancelled'].includes(job.status));
+  const lastSuccessTime = Date.parse(lastImport?.finishedAt || lastImport?.updatedAt || '') || 0;
+  const lastFailureTime = Date.parse(latestFailure?.finishedAt || latestFailure?.updatedAt || '') || 0;
+  const lastFailed = latestFailure && lastFailureTime > lastSuccessTime ? latestFailure : null;
   const progress = activeImport ? getJobProgress(activeImport) : null;
+  const lastResult = lastImport?.result || {};
+  const lastStats = lastResult.stats || lastResult.importRun?.stats || {};
+  const trackedJobs = getLiveImportTrackedJobCount(lastImport, lastResult);
+  const jobsChanged = getLiveImportChangedJobCount(lastResult) ?? Number(lastStats.jobsTouched || lastStats.runImported || 0);
+  const newJobs = Number(lastStats.newJobs || 0);
+  const closedJobs = Number(lastStats.closedJobs || 0);
+  const schedule = runtime?.refreshSchedule || {};
+  const nextRefreshTime = Date.parse(schedule.nextEligibleAt || '');
+  const refreshDue = Number.isFinite(nextRefreshTime) && nextRefreshTime <= Date.now();
+  const scheduleLabel = !schedule.enabled
+    ? 'Finish setup'
+    : (refreshDue ? 'Due now' : formatDateTime(schedule.nextEligibleAt));
   const activeLabel = activeImport
     ? (progress?.current ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : (progress ? `${progress.pct}%` : humanize(activeImport.status)))
     : 'Idle';
   const activeMeta = activeImport
-    ? `${getJobPhaseLabel(activeImport)} · ${getRuntimeJobDuration(activeImport)} elapsed`
+    ? `${getJobPhaseLabel(activeImport)} / ${getRuntimeJobDuration(activeImport)} elapsed`
     : 'No live import is currently active';
   const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
-  const lastRecords = lastImport?.recordsAffected ? `${formatNumber(lastImport.recordsAffected)} active jobs tracked` : 'No jobs tracked yet';
   const lastMeta = lastImport
-    ? `${lastDuration || humanize(lastImport.status)} · ${lastRecords}`
+    ? `${lastDuration || 'Completed'} / ${formatNumber(newJobs)} new / ${formatNumber(closedJobs)} closed`
     : 'No completed imports found';
   const failureMeta = lastFailed
-    ? `${humanize(lastFailed.status)} · ${formatDate(lastFailed.finishedAt || lastFailed.updatedAt || lastFailed.queuedAt)}`
+    ? `${humanize(lastFailed.status)} / ${formatDateTime(lastFailed.finishedAt || lastFailed.updatedAt || lastFailed.queuedAt)}`
     : 'No recent live import failures';
+  const failureMessage = lastFailed?.errorMessage || lastFailed?.progressMessage || schedule.lastError || '';
 
   return `
     <div class="ingestion-health">
@@ -6306,22 +6321,23 @@ function renderIngestionHealthPanel(runtime) {
           <span class="small muted">${escapeHtml(activeMeta)}</span>
         </div>
         <div class="ingestion-health__metric">
-          <span class="small muted">Last import</span>
-          <strong>${escapeHtml(lastDuration || humanize(lastImport?.status || 'none'))}</strong>
+          <span class="small muted">Last successful refresh</span>
+          <strong>${escapeHtml(lastImport ? formatDateTime(lastImport.finishedAt || lastImport.updatedAt) : 'Not run yet')}</strong>
           <span class="small muted">${escapeHtml(lastMeta)}</span>
         </div>
         <div class="ingestion-health__metric">
-          <span class="small muted">Queue load</span>
-          <strong>${formatNumber((runtime?.runningJobs || 0) + (runtime?.queuedJobs || 0))}</strong>
-          <span class="small muted">${formatNumber(runtime?.runningJobs || 0)} running · ${formatNumber(runtime?.queuedJobs || 0)} queued</span>
+          <span class="small muted">Latest job result</span>
+          <strong>${formatNumber(trackedJobs)} tracked</strong>
+          <span class="small muted">${formatNumber(jobsChanged)} changed in the last refresh</span>
         </div>
         <div class="ingestion-health__metric">
-          <span class="small muted">Recent failures</span>
-          <strong>${lastFailed ? 'Review' : 'Clear'}</strong>
-          <span class="small muted">${escapeHtml(failureMeta)}</span>
+          <span class="small muted">Next automatic refresh</span>
+          <strong>${escapeHtml(scheduleLabel)}</strong>
+          <span class="small muted">${schedule.enabled ? 'Runs daily when no refresh is already running' : 'Automatic refresh starts after setup'}</span>
         </div>
       </div>
       ${progress ? `<div class="spark-bar job-progress-bar ingestion-health__bar"><span style="width:${progress.pct}%"></span></div>` : ''}
+      ${lastFailed ? `<div class="ingestion-health__notice" role="alert"><strong>Recent refresh needs attention.</strong><span>${escapeHtml(failureMessage || failureMeta)}</span><button class="ghost-button ghost-button--xs" type="button" data-action="run-live-import">Retry now</button></div>` : ''}
     </div>
   `;
 }
@@ -7797,6 +7813,18 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function formatDateInput(value) {

@@ -962,7 +962,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/runtime/status') {
-    return sendJson(res, 200, store.getRuntimeStatus());
+    return sendJson(res, 200, await store.getRuntimeStatus(tenantId));
   }
 
   if (pathname === '/api/bootstrap') {
@@ -989,7 +989,7 @@ self.addEventListener('activate', (event) => {
     const billingAccess = getBillingAccessStatus(tenant);
     return sendJson(res, 200, {
       bootstrap: bootstrapData,
-      runtime: store.getRuntimeStatus(),
+      runtime: await store.getRuntimeStatus(tenantId),
       targetScoreRollout: store.getTargetScoreRollout(tenantId),
       resolverReport: store.getResolverReport(tenantId),
       enrichmentReport: store.getEnrichmentReport(tenantId),

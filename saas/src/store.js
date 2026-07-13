@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
-import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
@@ -1049,6 +1049,24 @@ function publicBackgroundJob(job) {
   return publicJob;
 }
 
+function backgroundJobTimestamp(job = {}) {
+  return Date.parse(job.updatedAt || job.finishedAt || job.startedAt || job.queuedAt || '') || 0;
+}
+
+function getNextScheduledRefreshAt(settings = {}, nowMs = Date.now()) {
+  const intervalMs = 24 * 60 * 60 * 1000;
+  const retryDelayMs = 60 * 60 * 1000;
+  const successAt = Date.parse(settings.lastPipelineRun || '');
+  if (Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
+    return new Date(successAt + intervalMs).toISOString();
+  }
+  const attemptAt = Date.parse(settings.lastPipelineAttemptAt || '');
+  if (Number.isFinite(attemptAt) && attemptAt > nowMs - retryDelayMs) {
+    return new Date(attemptAt + retryDelayMs).toISOString();
+  }
+  return new Date(nowMs).toISOString();
+}
+
 const RESUMABLE_BACKGROUND_JOB_TYPES = new Set(['live-job-import', 'linkedin-csv-import']);
 
 export function getBackgroundJobRecoveryDecision(job = {}) {
@@ -1855,18 +1873,39 @@ export function createStore() {
       return payload;
     },
 
-    getRuntimeStatus() {
+    async getRuntimeStatus(tenantId) {
+      assertTenant(tenantId);
+      const persistedJobs = await dbLoadRecentBackgroundJobs(tenantId, 20);
+      const jobsById = new Map();
+      for (const job of persistedJobs) jobsById.set(job.id, job);
+      for (const job of backgroundJobs.values()) {
+        if (job.tenantId === tenantId) jobsById.set(job.id, publicBackgroundJob(job));
+      }
+      const tenantJobs = [...jobsById.values()]
+        .sort((a, b) => backgroundJobTimestamp(b) - backgroundJobTimestamp(a));
+      const activeJobs = tenantJobs.filter((job) => ['queued', 'running'].includes(job.status));
+      const recentJobs = tenantJobs.filter((job) => !['queued', 'running'].includes(job.status)).slice(0, 10);
+      const runningJobs = activeJobs.filter((job) => job.status === 'running').length;
+      const queuedJobs = activeJobs.filter((job) => job.status === 'queued').length;
+      const settings = getTenantProfile(tenantId)?.settings || {};
       return {
         ok: true,
         serverStartedAt: processStartedAt,
         serverWarmedAt: processStartedAt,
         warmed: true,
-        workerRunning: false,
-        workerPid: null,
-        runningJobs: 0,
-        queuedJobs: 0,
-        activeJobs: [],
-        recentJobs: [],
+        workerRunning: runningJobs > 0,
+        runningJobs,
+        queuedJobs,
+        activeJobs: activeJobs.map(publicBackgroundJob),
+        recentJobs: recentJobs.map(publicBackgroundJob),
+        refreshSchedule: {
+          enabled: Boolean(settings.setupComplete),
+          lastAttemptAt: settings.lastPipelineAttemptAt || '',
+          lastSuccessAt: settings.lastPipelineRun || '',
+          lastStatus: settings.lastPipelineStatus || '',
+          lastError: settings.lastPipelineError || '',
+          nextEligibleAt: settings.setupComplete ? getNextScheduledRefreshAt(settings) : '',
+        },
       };
     },
 

@@ -886,6 +886,22 @@ a {
   height: 7px;
 }
 
+.ingestion-health__notice {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(185, 52, 52, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 241, 241, 0.92);
+  color: var(--danger);
+}
+
+.ingestion-health__notice span {
+  flex: 1;
+  color: var(--ink-muted);
+}
+
 .inline-split {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1850,6 +1866,11 @@ a {
 
   .ingestion-health__grid {
     grid-template-columns: 1fr;
+  }
+
+  .ingestion-health__notice {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .hero-card,

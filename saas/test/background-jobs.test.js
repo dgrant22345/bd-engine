@@ -24,6 +24,36 @@ test('background job status is scoped to its workspace', async () => {
   const hidden = await store.getBackgroundJob(otherTenantId, created.jobId);
   assert.equal(hidden.status, 'failed');
   assert.equal(hidden.type, 'unknown');
+
+  const ownerRuntime = await store.getRuntimeStatus(ownerTenantId);
+  assert.equal(ownerRuntime.recentJobs.length, 1);
+  assert.equal(ownerRuntime.recentJobs[0].id, created.jobId);
+  assert.equal(ownerRuntime.runningJobs, 0);
+  assert.equal(ownerRuntime.queuedJobs, 0);
+
+  const otherRuntime = await store.getRuntimeStatus(otherTenantId);
+  assert.equal(otherRuntime.recentJobs.length, 0);
+  assert.equal(otherRuntime.activeJobs.length, 0);
+});
+
+test('runtime status exposes automatic refresh timing after setup', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-runtime-schedule';
+  store.ensureTenant({ id: tenantId, name: 'Scheduled runtime' }, { id: `${tenantId}-owner` });
+
+  const beforeSetup = await store.getRuntimeStatus(tenantId);
+  assert.equal(beforeSetup.refreshSchedule.enabled, false);
+  assert.equal(beforeSetup.refreshSchedule.nextEligibleAt, '');
+
+  store.completeSetup(tenantId, {
+    workspaceName: 'Scheduled runtime',
+    userName: 'Owner',
+    userEmail: 'owner@example.com',
+  }, { runPipeline: false });
+
+  const afterSetup = await store.getRuntimeStatus(tenantId);
+  assert.equal(afterSetup.refreshSchedule.enabled, true);
+  assert.ok(Number.isFinite(Date.parse(afterSetup.refreshSchedule.nextEligibleAt)));
 });
 
 test('only idempotent imports with complete descriptors resume after a restart', () => {
