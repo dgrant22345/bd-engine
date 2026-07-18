@@ -14,6 +14,8 @@ npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
 npm.cmd --prefix saas run benchmark:ats
 npm.cmd --prefix saas run test:browser
+npm.cmd --prefix renderer run check
+npm.cmd --prefix renderer test
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -SkipInstaller
 ```
 
@@ -23,6 +25,8 @@ With Inno Setup 6 installed, also build the installer and test it on a clean Win
 
 Push the approved commit to the Railway-connected branch. Confirm Railway deployed that exact Git hash. Then run read-only smoke checks against the deployed URL and review `/health`, relational parity, recent 5xx errors, and support/email/billing configuration.
 
+When `renderer/` changes, deploy that directory to the private `ats-renderer` Railway service and verify `/health` from the web service before enabling `BD_ATS_RENDER_SERVICE_URL`. Keep the renderer without a public domain. Its `RENDERER_TOKEN` and the web service's `BD_ATS_RENDER_SERVICE_TOKEN` must match and should be rotated together.
+
 Do not enable mutation smoke tests against customer production data.
 
 ## 4. Publish Windows App
@@ -31,4 +35,4 @@ Build `dist\BD-Engine-Setup.exe`, verify its version metadata, scan the artifact
 
 ## 5. Roll Back
 
-For application regressions, redeploy the previous known-good commit. For data migrations, follow `saas/OPERATIONS.md`: preserve a current backup, verify relational/legacy parity, create a rollback snapshot where needed, and restore into a disposable database before applying recovery to production.
+For application regressions, redeploy the previous known-good commit. For renderer regressions, clear `BD_ATS_RENDER_SERVICE_URL` first so discovery returns to static-only behavior, then redeploy the previous renderer revision. For data migrations, follow `saas/OPERATIONS.md`: preserve a current backup, verify relational/legacy parity, create a rollback snapshot where needed, and restore into a disposable database before applying recovery to production.

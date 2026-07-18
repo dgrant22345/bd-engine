@@ -2,10 +2,11 @@
 
 BD Engine turns a recruiter's professional network and live hiring signals into a prioritized daily business-development list. It supports sales and job-seeker workspaces, LinkedIn Connections CSV import, company and contact ranking, public ATS discovery, normalized job ingestion, grounded outreach drafts, activity tracking, and follow-up tasks.
 
-The repository contains two supported runtimes:
+The repository contains three deployable components:
 
 - `saas/`: the hosted multi-tenant Node.js application used for Railway deployments. PostgreSQL is authoritative in production.
 - `server/`: the Windows-local PowerShell application packaged by the Inno Setup installer. It binds to localhost and stores customer data under `%LOCALAPPDATA%\BD Engine`.
+- `renderer/`: the isolated, authenticated Playwright service used only when a public careers page requires browser rendering for ATS discovery.
 
 The shared browser application lives in `app/`.
 
@@ -28,6 +29,8 @@ Open `http://127.0.0.1:8787`. In-memory mode is for local development and tests 
 npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
 npm.cmd --prefix saas run test:browser
+npm.cmd --prefix renderer run check
+npm.cmd --prefix renderer test
 ```
 
 Run a local smoke test against a running server:

@@ -8,6 +8,35 @@ on:
       - deploy/perf-restore
 
 jobs:
+  renderer-checks:
+    name: ATS renderer checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        working-directory: renderer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: renderer/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static checks
+        run: npm run check
+
+      - name: Contract and security tests
+        run: npm test
+
   saas-checks:
     name: SaaS checks and smoke
     runs-on: ubuntu-latest
