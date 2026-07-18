@@ -20,6 +20,7 @@ const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_C
 const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
 const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
 const ATS_DISCOVERY_PROBE_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_PROBE_CONCURRENCY, 4);
+const ATS_JSON_REQUEST_ATTEMPTS = readPositiveInteger(process.env.BD_ATS_JSON_REQUEST_ATTEMPTS, 3);
 const RELATIONAL_READ_TENANTS = new Set(String(process.env.BD_RELATIONAL_READ_TENANTS || '')
   .split(',')
   .map((value) => value.trim())
@@ -3163,7 +3164,21 @@ export function createStore() {
       }
       const prioritizeStartedAt = performance.now();
       const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
-      candidates = prioritizeDiscoveryCandidates(candidates, accountsById).slice(0, limit);
+      const accountsByName = new Map(
+        tenantAccounts
+          .map((item) => [normalizeKey(item.normalizedName || item.displayName), item])
+          .filter(([key]) => key)
+      );
+      candidates = prioritizeDiscoveryCandidates(candidates, accountsById, accountsByName).slice(0, limit);
+      let linkedAccountConfigs = 0;
+      for (const config of candidates) {
+        if (config.accountId) continue;
+        const owner = accountForConfig(config, accountsById, accountsByName);
+        if (!owner?.id) continue;
+        config.accountId = owner.id;
+        config.updatedAt = now();
+        linkedAccountConfigs++;
+      }
       timings.candidatePrioritizationMs = Math.round(performance.now() - prioritizeStartedAt);
 
       let checked = 0;
@@ -3196,7 +3211,7 @@ export function createStore() {
         const match = settled.value?.match;
         try {
           if (match) {
-            const requiresReview = match.method === 'public_ats_probe';
+            const requiresReview = match.method === 'public_ats_probe' || match.requiresReview === true;
             Object.assign(config, {
               atsType: match.atsType,
               ats: match.atsType,
@@ -3242,7 +3257,7 @@ export function createStore() {
       timings.discoveryConcurrency = discoveryConcurrency;
 
       const persistStartedAt = performance.now();
-      if (createdConfigs || directResolved || checked) persistTenant(tenantId);
+      if (createdConfigs || directResolved || linkedAccountConfigs || checked) persistTenant(tenantId);
       timings.persistQueuedMs = Math.round(performance.now() - persistStartedAt);
       timings.totalMs = Math.round(performance.now() - totalStartedAt);
 
@@ -3252,7 +3267,7 @@ export function createStore() {
       if (!mapped && suggested) {
         warnings.push(`Found ${suggested} possible ATS board${suggested === 1 ? '' : 's'} by company-name matching. Review them before importing jobs.`);
       } else if (!mapped && checked) {
-        warnings.push('No public supported ATS boards were matched. Add a board ID manually for any company you know uses Greenhouse, Lever, Ashby, SmartRecruiters, Jobvite, Workday, or BambooHR.');
+        warnings.push('No supported public job boards were matched. Add the company careers URL or a known board URL, then try discovery again.');
       }
 
       const stats = {
@@ -3263,6 +3278,7 @@ export function createStore() {
         suggested,
         unresolved,
         directResolved,
+        linkedAccountConfigs,
         configsCreated: createdConfigs,
         candidateCount: candidates.length,
         discoveryConcurrency,
@@ -3353,10 +3369,17 @@ export function createStore() {
       const autoDiscoverEnabled = options.autoDiscover !== false && options.autoDiscover !== 'false';
       const autoDiscoveryLimit = readPositiveInteger(options.autoDiscoveryLimit, DEFAULT_IMPORT_DISCOVERY_LIMIT);
       const autoDiscoveryMinReady = readPositiveInteger(options.autoDiscoveryMinReady, DEFAULT_IMPORT_DISCOVERY_MIN_READY);
+      const hasAutoDiscoveryCandidates = tenantConfigs.some((item) => {
+        if (normalizeKey(item.reviewStatus) === 'rejected') return false;
+        const owner = accountForConfig(item, importAccountsById, importAccountsByName);
+        if (owner && !isTrackedTarget(owner)) return false;
+        return !isResolvedBoardConfig(item)
+          || ['needs_review', 'unresolved', 'error'].includes(normalizeKey(item.discoveryStatus));
+      });
       const autoDiscoveryNeeded = autoDiscoverEnabled
         && autoDiscoveryLimit > 0
-        && activeTenantConfigs.length > importReadyConfigs.length
-        && importReadyConfigs.length < autoDiscoveryMinReady;
+        && hasAutoDiscoveryCandidates
+        && (options.scheduled === true || options.scheduled === 'true' || importReadyConfigs.length < autoDiscoveryMinReady);
       if (autoDiscoveryNeeded) {
         const autoDiscoveryStartedAt = performance.now();
         const discovery = await this.runAtsDiscovery(tenantId, {
@@ -3413,7 +3436,7 @@ export function createStore() {
       if (!tenantConfigs.length) {
         warnings.push('No active ATS configs were found yet. Run setup/workflow first so the app can discover job boards for your accounts.');
       } else if (!supportedConfigs.length) {
-        warnings.push(`No supported ATS boards were ready to import. Add or approve configs with Greenhouse, Lever, or Ashby board IDs. ${needsResolutionConfigs} config${needsResolutionConfigs === 1 ? '' : 's'} still need ATS resolution.`);
+        warnings.push(`No supported job boards were ready to import. Add a board URL or approve a suggested match. ${needsResolutionConfigs} config${needsResolutionConfigs === 1 ? '' : 's'} still need ATS resolution.`);
       } else if (unsupportedCount > 0) {
         warnings.push(`${unsupportedCount} active config${unsupportedCount === 1 ? '' : 's'} could not be fetched because the ATS type or board ID is missing/unsupported. ${needsResolutionConfigs} total config${needsResolutionConfigs === 1 ? '' : 's'} still need ATS resolution.`);
       }
@@ -5594,10 +5617,11 @@ const ATS_FETCHERS = new Map([
   ['workable', fetchWorkableJobs],
   ['recruitee', fetchRecruiteeJobs],
   ['personio', fetchPersonioJobs],
+  ['rippling', fetchRipplingJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
-const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio'];
+const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'];
 
 const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'phenom']);
 const BOARD_COVERAGE_META = {
@@ -5655,6 +5679,7 @@ function normalizeAtsType(value) {
   if (normalized.includes('workable')) return 'workable';
   if (normalized.includes('recruitee')) return 'recruitee';
   if (normalized.includes('personio')) return 'personio';
+  if (normalized.includes('rippling')) return 'rippling';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -5672,6 +5697,7 @@ function detectAtsTypeFromUrl(value) {
   if (url.includes('workable.com')) return 'workable';
   if (url.includes('recruitee.com')) return 'recruitee';
   if (url.includes('jobs.personio.de')) return 'personio';
+  if (url.includes('ats.rippling.com')) return 'rippling';
   return '';
 }
 
@@ -5694,10 +5720,10 @@ function getConfigAtsType(config = {}) {
   return detectAtsTypeFromUrl(getConfigAtsUrl(config));
 }
 
-function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map()) {
+function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map(), accountsByName = new Map()) {
   return [...configs].sort((a, b) => {
-    const scoreDelta = getDiscoveryCandidateScore(b, accountsById.get(b.accountId))
-      - getDiscoveryCandidateScore(a, accountsById.get(a.accountId));
+    const scoreDelta = getDiscoveryCandidateScore(b, accountForConfig(b, accountsById, accountsByName))
+      - getDiscoveryCandidateScore(a, accountForConfig(a, accountsById, accountsByName));
     if (scoreDelta) return scoreDelta;
     const checkedDelta = String(a.lastDiscoveryCheckedAt || '').localeCompare(String(b.lastDiscoveryCheckedAt || ''));
     if (checkedDelta) return checkedDelta;
@@ -5766,6 +5792,16 @@ function getConfigBoardId(config = {}) {
     if (recruitee) return decodeURIComponent(recruitee[1]);
     const personio = String(sourceUrl).match(/https?:\/\/([^./]+)\.jobs\.personio\.de/i);
     if (personio) return decodeURIComponent(personio[1]);
+    try {
+      const parsed = new URL(sourceUrl);
+      if (parsed.hostname.toLowerCase() === 'ats.rippling.com') {
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        const jobsIndex = segments.findIndex((segment) => segment.toLowerCase() === 'jobs');
+        if (jobsIndex > 0) return decodeURIComponent(segments[jobsIndex - 1]);
+      }
+    } catch {
+      // Continue to the next URL candidate.
+    }
   }
   return '';
 }
@@ -6187,6 +6223,36 @@ async function fetchPersonioJobs(config, boardId) {
   return { jobs: Array.isArray(positions) ? positions : (positions ? [positions] : []) };
 }
 
+async function fetchRipplingJobs(config, boardId) {
+  const boardUrl = getRipplingBoardUrl(config, boardId);
+  const content = await fetchText(boardUrl, 15000);
+  const scriptMatch = content.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!scriptMatch?.[1]) return { jobs: [] };
+
+  const payload = JSON.parse(scriptMatch[1]);
+  const queries = payload?.props?.pageProps?.dehydratedState?.queries;
+  const jobs = [];
+  const seen = new Set();
+  for (const query of Array.isArray(queries) ? queries : []) {
+    const data = query?.state?.data;
+    const items = firstArray(data?.items, data?.jobs, data?.results);
+    for (const item of items) {
+      const id = String(item?.id || item?.url || '');
+      const title = item?.name || item?.title || '';
+      if (!id || !title || seen.has(id)) continue;
+      seen.add(id);
+      jobs.push({
+        ...item,
+        title,
+        location: firstString((Array.isArray(item.locations) ? item.locations : []).map((location) => location?.name)) || '',
+        department: item.department?.name || item.department || '',
+        jobUrl: item.url || '',
+      });
+    }
+  }
+  return { jobs };
+}
+
 function getWorkableJobsApiUrl(config = {}, boardId = '') {
   const apiUrl = String(config.apiUrl || '');
   if (/workable\.com\/api\/accounts\//i.test(apiUrl)) return setUrlSearchParams(apiUrl, { details: 'true' });
@@ -6222,6 +6288,26 @@ function getPersonioCareerOrigin(config = {}, boardId = '') {
   }
 }
 
+function getRipplingBoardUrl(config = {}, boardId = '') {
+  const ripplingUrl = getConfigUrlCandidates(config).find((value) => /ats\.rippling\.com/i.test(value));
+  if (ripplingUrl) {
+    try {
+      const parsed = new URL(ripplingUrl);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const jobsIndex = segments.findIndex((segment) => segment.toLowerCase() === 'jobs');
+      if (jobsIndex > 0) {
+        parsed.pathname = `/${segments.slice(0, jobsIndex + 1).join('/')}`;
+        parsed.search = '';
+        parsed.hash = '';
+        return parsed.toString();
+      }
+    } catch {
+      // Fall through to the standard board URL.
+    }
+  }
+  return `https://ats.rippling.com/${encodeURIComponent(boardId)}/jobs`;
+}
+
 function getBambooCareersApiUrl(config = {}, boardId = '') {
   const bambooUrl = getConfigUrlCandidates(config).find((value) => /\.bamboohr\.com/i.test(value));
   if (bambooUrl) {
@@ -6243,22 +6329,49 @@ async function fetchStaticCareersJobs(config) {
 }
 
 async function fetchJson(url, timeoutMs = 15000, init = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...init,
-      headers: { accept: 'application/json' },
-      ...(init.headers ? { headers: { accept: 'application/json', ...init.headers } } : {}),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`ATS request failed with HTTP ${response.status}`);
+  let lastError = null;
+  for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers: {
+          accept: 'application/json',
+          'accept-language': 'en-US,en;q=0.9',
+          'user-agent': 'Mozilla/5.0 (compatible; BD-Engine/1.0; +https://bd-engine-production.up.railway.app/)',
+          ...(init.headers || {}),
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`ATS request failed with HTTP ${response.status}`);
+        error.retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+        throw error;
+      }
+
+      const body = await response.text();
+      try {
+        return JSON.parse(body);
+      } catch {
+        const contentType = response.headers.get('content-type') || 'unknown content type';
+        const returnedHtml = /^\s*</.test(body);
+        const error = new Error(returnedHtml
+          ? `ATS returned HTML instead of JSON (${contentType})`
+          : `ATS returned invalid JSON (${contentType})`);
+        error.retryable = returnedHtml && /\.myworkdayjobs\.com\b/i.test(String(url));
+        throw error;
+      }
+    } catch (error) {
+      lastError = error;
+      const retryable = error?.retryable === true || error?.name === 'AbortError' || error?.cause?.code === 'ECONNRESET';
+      if (!retryable || attempt === ATS_JSON_REQUEST_ATTEMPTS) throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
+    await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
   }
+  throw lastError || new Error('ATS request failed');
 }
 
 async function fetchText(url, timeoutMs = 15000) {
@@ -6338,9 +6451,18 @@ async function discoverAtsBoard(config) {
     ? [knownAtsType, ...BLIND_PROBE_ATS_TYPES.filter((item) => item !== knownAtsType)]
     : BLIND_PROBE_ATS_TYPES;
   const candidates = buildBoardCandidates(config);
+  const isUnreviewedNameProbe = config.discoveryMethod === 'public_ats_probe'
+    && normalizeKey(config.reviewStatus) !== 'approved';
+  const trustedUrlCandidates = isUnreviewedNameProbe
+    ? [config.careersUrl, config.sourceUrl, config.boardUrl, config.url].filter(Boolean)
+    : getConfigUrlCandidates(config);
+  const hasTrustedCareerIdentity = Boolean(getUsableCompanyDomain(config.domain || config.canonicalDomain))
+    || trustedUrlCandidates.some((value) => Boolean(getUsableCareerUrl(value)));
 
-  const linkedBoard = await discoverAtsBoardFromCareersPages(config);
-  if (linkedBoard) return linkedBoard;
+  if (hasTrustedCareerIdentity) {
+    const linkedBoard = await discoverAtsBoardFromCareersPages(config);
+    if (linkedBoard) return linkedBoard;
+  }
 
   for (const boardId of candidates) {
     const probes = await mapSettledWithConcurrency(atsTypes, ATS_DISCOVERY_PROBE_CONCURRENCY, async (atsType) => ({
@@ -6358,6 +6480,10 @@ async function discoverAtsBoard(config) {
         method: 'public_ats_probe',
       };
     }
+  }
+  if (!hasTrustedCareerIdentity) {
+    const guessedCareerMatch = await discoverAtsBoardFromCareersPages(config);
+    return guessedCareerMatch ? { ...guessedCareerMatch, requiresReview: true } : null;
   }
   return null;
 }
@@ -6390,8 +6516,10 @@ function buildBoardCandidates(config) {
 
 async function discoverAtsBoardFromCareersPages(config) {
   const urls = buildCareerPageUrls(config);
-  for (const url of urls) {
-    try {
+  const batchSize = 3;
+  for (let offset = 0; offset < urls.length; offset += batchSize) {
+    const batch = urls.slice(offset, offset + batchSize);
+    const results = await mapSettledWithConcurrency(batch, batchSize, async (url) => {
       const html = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
       const atsLinks = extractAtsLinks(html, url);
       for (const atsUrl of atsLinks) {
@@ -6410,9 +6538,10 @@ async function discoverAtsBoardFromCareersPages(config) {
           method: 'static_careers_page',
         };
       }
-    } catch {
-      // Many company careers pages block bots or time out; continue with the next candidate URL.
-    }
+      return null;
+    });
+    const match = results.find((result) => result.status === 'fulfilled' && result.value)?.value;
+    if (match) return match;
   }
   return null;
 }
@@ -6433,6 +6562,7 @@ function guessDomainsFromName(companyName) {
 
 function isGenericCompanyIdentity(value) {
   const normalized = normalizeKey(value).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (normalized.replace(/[^a-z0-9]/g, '').length < 2) return true;
   return /^(confidential( company)?|independent contractor|n a|nda( .*)?|not disclosed|private company|self employed|stealth( company| startup)?|undisclosed( company)?|freelance|freelancer)$/.test(normalized);
 }
 
@@ -6745,7 +6875,7 @@ async function probeAtsUrl(config, atsUrl) {
   };
   const boardId = getConfigBoardId(tempConfig);
   if (!boardId) return null;
-  if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio'].includes(atsType)) {
+  if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'].includes(atsType)) {
     const probed = await probeAtsBoard(atsType, boardId);
     if (probed) {
       return {
@@ -6833,6 +6963,20 @@ async function probeAtsBoard(atsType, boardId) {
       return {
         apiUrl,
         resolvedBoardUrl: `https://${encoded}.jobs.personio.de/`,
+        jobCount: result.jobs.length,
+      };
+    } catch {
+      return null;
+    }
+  }
+  if (atsType === 'rippling') {
+    const resolvedBoardUrl = `https://ats.rippling.com/${encoded}/jobs`;
+    try {
+      const result = await fetchRipplingJobs({ resolvedBoardUrl }, boardId);
+      if (!result.jobs.length) return null;
+      return {
+        apiUrl: resolvedBoardUrl,
+        resolvedBoardUrl,
         jobCount: result.jobs.length,
       };
     } catch {
@@ -7186,6 +7330,36 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       employmentType,
       atsType,
       source: 'Personio',
+      jobId: String(jobId),
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'rippling') {
+    const title = raw.title || raw.name || '';
+    if (!title) return null;
+    const location = raw.location || firstString((Array.isArray(raw.locations) ? raw.locations : []).map((item) => item?.name)) || '';
+    const postedAt = raw.createdAt || raw.updatedAt || retrievedAt;
+    const jobId = raw.id || raw.jobUrl || raw.url || title;
+    const jobUrl = raw.jobUrl || raw.url || '';
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.department?.name || raw.department || '',
+      employmentType: raw.employmentType || '',
+      atsType,
+      source: 'Rippling',
       jobId: String(jobId),
       naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
       jobUrl,

@@ -263,6 +263,258 @@ test('Workable boards import jobs from the documented public careers endpoint', 
   }
 });
 
+test('live imports discover inactive unresolved board configs', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-import-auto-discovery';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Rocket Labs' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Rocket Labs',
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('api.ashbyhq.com/posting-api/job-board/examplerocketlabs')) {
+      return new Response(JSON.stringify({ jobs: [{ id: 'job-1', title: 'Engineer' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('', { status: 404 });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscoveryLimit: 1,
+      discoveryConcurrency: 1,
+    });
+    assert.equal(result.stats.autoDiscoveryChecked, 1);
+    const suggestion = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(suggestion.atsType, 'ashby');
+    assert.equal(suggestion.reviewStatus, 'pending');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('scheduled imports keep discovering after the ready-board minimum is met', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-scheduled-discovery';
+  addTenant(store, tenantId);
+  const readyAccount = await store.addAccount(tenantId, { displayName: 'Ready Systems' });
+  store.addConfig(tenantId, {
+    accountId: readyAccount.id,
+    companyName: 'Ready Systems',
+    atsType: 'greenhouse',
+    boardId: 'ready-systems',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+  const unresolvedAccount = await store.addAccount(tenantId, { displayName: 'Future Rocket Labs' });
+  store.addConfig(tenantId, {
+    accountId: unresolvedAccount.id,
+    companyName: 'Future Rocket Labs',
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('boards-api.greenhouse.io/v1/boards/ready-systems/jobs')) {
+      return new Response(JSON.stringify({ jobs: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (value.includes('api.ashbyhq.com/posting-api/job-board/futurerocketlabs')) {
+      return new Response(JSON.stringify({ jobs: [{ id: 'job-1', title: 'Engineer' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('', { status: 404 });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      scheduled: true,
+      autoDiscoveryLimit: 1,
+      autoDiscoveryMinReady: 1,
+      discoveryConcurrency: 1,
+    });
+    assert.equal(result.stats.activeConfigs, 1);
+    assert.equal(result.stats.autoDiscoveryChecked, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ATS discovery prioritizes and links high-value legacy configs by company name', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-discovery-priority';
+  addTenant(store, tenantId);
+  const lowValue = await store.addAccount(tenantId, { displayName: 'Low Value Works', targetScore: 5 });
+  const highValue = await store.addAccount(tenantId, { displayName: 'Priority Systems', targetScore: 95 });
+  store.addConfig(tenantId, {
+    companyName: lowValue.displayName,
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+  store.addConfig(tenantId, {
+    companyName: highValue.displayName,
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response('', { status: 404 });
+  };
+
+  try {
+    const result = await store.runAtsDiscovery(tenantId, {
+      limit: 1,
+      discoveryConcurrency: 1,
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+    });
+    assert.equal(result.stats.checked, 1);
+    assert.equal(result.stats.linkedAccountConfigs, 1);
+    assert.ok(requestedUrls.some((url) => url.includes('prioritysystems')));
+    assert.equal(requestedUrls.some((url) => url.includes('lowvalueworks')), false);
+    const priorityConfig = (await store.findConfigs(tenantId, { q: 'Priority Systems', page: 1, pageSize: 20 })).items[0];
+    assert.equal(priorityConfig.accountId, highValue.id);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Workday imports retry transient HTML challenge responses', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-workday-retry';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Workday Example' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Workday Example',
+    atsType: 'workday',
+    boardId: 'Example_Careers',
+    apiUrl: 'https://example.wd10.myworkdayjobs.com/wday/cxs/example/Example_Careers/jobs',
+    resolvedBoardUrl: 'https://example.wd10.myworkdayjobs.com/Example_Careers',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  let fetchCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetchCount++;
+    if (fetchCount === 1) {
+      return new Response('<!doctype html><title>Please wait</title>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    return new Response(JSON.stringify({
+      total: 1,
+      jobPostings: [{
+        title: 'Account Executive',
+        externalPath: '/job/Toronto/Account-Executive_R1001',
+        locationsText: 'Toronto, ON',
+        postedOn: 'Posted Today',
+      }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(fetchCount, 2);
+    assert.equal(result.stats.fetched, 1);
+    assert.equal(result.stats.newJobs, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Rippling boards import structured jobs from the public careers page', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-rippling-import';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Pace' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Pace',
+    atsType: 'rippling',
+    boardId: 'pace',
+    resolvedBoardUrl: 'https://ats.rippling.com/pace/jobs',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const nextData = {
+    props: {
+      pageProps: {
+        dehydratedState: {
+          queries: [{
+            state: {
+              data: {
+                items: [{
+                  id: 'rippling-job-1',
+                  name: 'Enterprise Account Executive',
+                  url: 'https://ats.rippling.com/pace/jobs/rippling-job-1',
+                  department: { name: 'Sales' },
+                  locations: [{ name: 'Toronto, ON' }],
+                }],
+              },
+            },
+          }],
+        },
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script></html>`,
+    { status: 200, headers: { 'content-type': 'text/html' } }
+  );
+
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    assert.equal(result.stats.fetched, 1);
+    assert.equal(result.stats.newJobs, 1);
+    const job = (await store.findJobs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(job.source, 'Rippling');
+    assert.equal(job.location, 'Toronto, ON');
+    assert.equal(job.department, 'Sales');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Recruitee boards import published offers from the public careers API', async () => {
   const store = createStore();
   const tenantId = 'tenant-recruitee-import';
