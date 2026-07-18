@@ -347,7 +347,7 @@ export function handleWebhookEvent(payload, signature) {
   try {
     event = stripe.webhooks.constructEvent(payload, signature, endpointSecret);
   } catch (err) {
-    throw new Error(`Webhook Error: ${err.message}`);
+    throw new Error(`Webhook Error: ${err.message}`, { cause: err });
   }
   
   return event;

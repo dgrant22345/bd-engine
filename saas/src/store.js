@@ -7166,7 +7166,7 @@ async function probeAtsUrl(config, atsUrl) {
     if (!descriptor) return null;
     // Validate the descriptor actually returns jobs — a malformed tenant/site
     // parse otherwise resolves a board that fetches nothing.
-    let jobCount = 0;
+    let jobCount;
     try {
       const payload = await fetchJson(descriptor.apiUrl, 8000, {
         method: 'POST',

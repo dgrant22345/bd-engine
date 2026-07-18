@@ -243,7 +243,7 @@ test('discovery decodes ATS links embedded as escaped JavaScript strings', async
   globalThis.fetch = async (url) => {
     const value = String(url);
     if (value === 'https://escaped-link-labs.example/careers') {
-      return new Response('<script>window.jobs=[{jobUrl:\\"https:\\\/\\\/jobs.ashbyhq.com\\\/escaped-link-labs\\\/job-1\\"}]</script>', {
+      return new Response('<script>window.jobs=[{jobUrl:\\"https:\\/\\/jobs.ashbyhq.com\\/escaped-link-labs\\/job-1\\"}]</script>', {
         status: 200,
         headers: { 'content-type': 'text/html' },
       });

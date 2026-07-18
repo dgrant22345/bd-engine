@@ -95,9 +95,9 @@ PowerShell/SQLite edition remains supported separately.
 - PostgreSQL relational entities still store timestamps as text and legacy
   identity indexes are non-unique to tolerate old duplicates. Complete the
   canary migration, deduplicate, then add safe partial unique constraints.
-- CI has syntax checks rather than ESLint/type checking or formatting enforcement.
-  Add focused linting incrementally; do not block releases on thousands of
-  unrelated legacy style findings at once.
+- CI now enforces ESLint correctness rules across SaaS source, scripts, and tests.
+  Formatting and static typing remain incremental engineering improvements; do
+  not force a broad legacy rewrite solely to add them.
 - Configure centralized structured log retention and external dashboards/paging.
   The authenticated status API now reports 5xx rate, queue age/failures, and a
   24-hour ingestion success rate against explicit SLO targets.
@@ -144,6 +144,9 @@ PowerShell/SQLite edition remains supported separately.
 - Added a generated schema contract and CI drift gate for the executable migrations.
 - Added authenticated queue/error/ingestion operational metrics and explicit SLOs.
 - Pinned every third-party GitHub Action to an immutable upstream commit.
+- Added a scheduled, read-only production probe for availability, readiness,
+  anonymous authorization boundaries, plan visibility, and customer entry.
+- Added a focused ESLint correctness gate and fixed the defects it exposed.
 
 ## Required production configuration
 

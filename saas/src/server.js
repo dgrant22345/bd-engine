@@ -2360,7 +2360,6 @@ async function handleLogin(req, res) {
       return sendJson(res, 500, { error: 'No workspace found for this account.' });
     }
     primaryTenant = repair.tenant;
-    userTenants = repair.tenants || [primaryTenant];
     workspaceRecovered = true;
   }
 
@@ -2418,7 +2417,6 @@ async function handleMe(req, res) {
     const repair = ensureTenantForUser(user);
     if (repair.tenant) {
       tenant = repair.tenant;
-      userTenants = repair.tenants || [tenant];
       membership = getMembership(tenant.id, user.id);
       tenant = ensureInternalOwnerEntitlement(tenant, user);
       userTenants = findTenantsForUser(user.id);

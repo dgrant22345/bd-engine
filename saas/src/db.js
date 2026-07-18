@@ -44,7 +44,7 @@ export async function dbTransaction(work) {
     await client.query('COMMIT');
     return result;
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { /* Preserve the original transaction error. */ }
     throw error;
   } finally {
     client.release();
@@ -104,7 +104,7 @@ async function runSchemaMigration(id, description, migrate) {
     }
     await client.query('COMMIT');
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { /* Preserve the original migration error. */ }
     throw err;
   } finally {
     client.release();
@@ -1322,7 +1322,7 @@ export async function dbCreateSupportTicket(ticket = {}, initialMessage = {}) {
     await client.query('COMMIT');
     return { ...normalizedTicket, messages: [mapSupportMessage(inserted.rows[0])] };
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { /* Preserve the original support error. */ }
     throw err;
   } finally {
     client.release();
@@ -1467,7 +1467,7 @@ export async function dbAddSupportTicketMessage({ ticketId, tenantId = '', autho
       messages: messagesResult.rows.map(mapSupportMessage),
     };
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { /* Preserve the original support error. */ }
     throw err;
   } finally {
     client.release();

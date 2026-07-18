@@ -6,6 +6,7 @@ Run these before pushing a production change:
 
 ```powershell
 npm.cmd --prefix saas run check
+npm.cmd --prefix saas run lint
 npm.cmd --prefix saas run check:schema
 npm.cmd --prefix saas test
 npm.cmd --prefix saas run test:browser
@@ -33,6 +34,12 @@ when the 5xx rate remains above 1%, the oldest active job exceeds
 below 95% after at least one completed or failed run. Treat a missing active-job
 timestamp as unhealthy. Keep the external dashboard and paging destination
 outside the application so an application outage cannot hide its own alert.
+
+`.github/workflows/production-probe.yml` runs the read-only smoke suite against
+production every 15 minutes. Set the `BD_PRODUCTION_URL` repository variable
+when moving to a custom domain. GitHub workflow failure notifications are a
+secondary signal, not a paging service; route `/health`, `/readyz`, and the
+application error webhook to an accountable on-call destination before launch.
 
 ## Schema migrations
 
