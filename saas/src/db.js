@@ -719,6 +719,17 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260718_relational_identity_constraints', 'Enforce verified contact and job natural identities', async (client) => {
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS contacts_tenant_identity_uidx
+          ON contacts (tenant_id, identity_key) WHERE identity_key <> '';
+        CREATE UNIQUE INDEX IF NOT EXISTS contacts_tenant_linkedin_uidx
+          ON contacts (tenant_id, canonical_linkedin_url) WHERE canonical_linkedin_url <> '';
+        CREATE UNIQUE INDEX IF NOT EXISTS jobs_tenant_natural_key_uidx
+          ON jobs (tenant_id, natural_key) WHERE natural_key <> '';
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;

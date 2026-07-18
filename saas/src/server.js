@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
-import { extractSession, createSession, destroySession, forgetUserSessions, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
+import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
@@ -61,6 +61,11 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const SUPPORT_CREATE_MAX = Number(process.env.BD_SUPPORT_CREATE_MAX) > 0 ? Number(process.env.BD_SUPPORT_CREATE_MAX) : 10;
 const SUPPORT_REPLY_MAX = Number(process.env.BD_SUPPORT_REPLY_MAX) > 0 ? Number(process.env.BD_SUPPORT_REPLY_MAX) : 30;
 const SUPPORT_WINDOW_MS = 60 * 60 * 1000;
+const PRIVILEGED_STEP_UP_MAX = 10;
+const PRIVILEGED_STEP_UP_WINDOW_MS = 15 * 60 * 1000;
+const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_MAX_AGE_MS) > 0
+  ? Number(process.env.BD_PRIVILEGED_SESSION_MAX_AGE_MS)
+  : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
@@ -531,6 +536,15 @@ function canManageSupport(user) {
   return supportAdminEmails.has(String(user?.email || '').trim().toLowerCase());
 }
 
+function requirePrivilegedStepUp(res, sessionData) {
+  if (isRecentAuthentication(sessionData, PRIVILEGED_SESSION_MAX_AGE_MS)) return true;
+  sendJson(res, 428, {
+    error: 'Confirm your password to continue with privileged access.',
+    code: 'step_up_required',
+  });
+  return false;
+}
+
 function isInternalOwner(user) {
   return internalOwnerEmails.has(String(user?.email || '').trim().toLowerCase());
 }
@@ -900,6 +914,23 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 401, { error: 'Session expired. Please log in again.' });
   }
 
+  if (pathname === '/api/auth/step-up' && req.method === 'POST') {
+    if (await rateLimitExceeded(`privileged-step-up:${user.id}`, PRIVILEGED_STEP_UP_MAX, PRIVILEGED_STEP_UP_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many confirmation attempts. Wait before trying again.' });
+    }
+    const body = await readJson(req);
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 401, { error: 'The password you entered is incorrect.', code: 'password_incorrect' });
+    }
+    const authenticatedAt = new Date().toISOString();
+    await markSessionStepUp(sessionData.id, authenticatedAt);
+    return sendJson(res, 200, {
+      ok: true,
+      authenticatedAt,
+      expiresAt: new Date(Date.parse(authenticatedAt) + PRIVILEGED_SESSION_MAX_AGE_MS).toISOString(),
+    });
+  }
+
   let tenantId = sessionData.tenantId;
   let tenant = findTenantById(tenantId);
   let membership = tenant ? getMembership(tenantId, user.id) : null;
@@ -1054,6 +1085,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/support/admin/tickets' && req.method === 'GET') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const requestedStatus = String(url.searchParams.get('status') || '');
     const status = SUPPORT_STATUSES.has(requestedStatus) ? requestedStatus : '';
     const tickets = await dbListSupportTickets({ allTenants: true, status, limit: 100 });
@@ -1069,6 +1101,7 @@ self.addEventListener('activate', (event) => {
   const supportAdminTicketMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)$/);
   if (supportAdminTicketMatch && req.method === 'PATCH') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const current = await dbGetSupportTicket(supportAdminTicketMatch[1], { allTenants: true });
     if (!current) return sendJson(res, 404, { error: 'Support request not found.' });
     const validation = validateSupportAdminUpdate(await readJson(req), current);
@@ -1080,6 +1113,7 @@ self.addEventListener('activate', (event) => {
   const supportAdminReplyMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)\/messages$/);
   if (supportAdminReplyMatch && req.method === 'POST') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const validation = validateSupportReplyInput(await readJson(req));
     if (validation.error) return sendJson(res, 400, { error: validation.error });
     const ticket = await dbAddSupportTicketMessage({
@@ -1308,6 +1342,12 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 400, {
         error: `Type "${expected}" to delete this workspace's imported data.`,
         code: 'confirmation_required',
+      });
+    }
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 400, {
+        error: 'The password you entered is incorrect.',
+        code: 'password_incorrect',
       });
     }
     const result = await store.clearTenantWorkspaceData(tenantId);

@@ -35,13 +35,13 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 140/140 pass.
-- Chromium customer journeys and accessibility checks: 20/20 pass.
+- SaaS unit/contract tests: 143/143 pass.
+- Chromium customer journeys and accessibility checks: 21/21 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
 - Deterministic ATS contract: 12/12 providers pass.
 - Live ATS canary: 12/12 providers, 2,406 jobs, 0 provider errors.
-- Schema migration contract: 24 tables, 51 indexes, 8 migrations; no drift.
+- Schema migration contract: 24 tables, 54 indexes, 9 migrations; no drift.
 - Production relational parity: 3/3 workspaces pass deep parity.
 - Production health: `{"ok":true,"status":"operational"}`.
 - Production dependency audits: 0 known vulnerabilities in SaaS and renderer.
@@ -92,9 +92,11 @@ PowerShell/SQLite edition remains supported separately.
 
 ## P2 - important improvements
 
-- PostgreSQL relational entities still store timestamps as text and legacy
-  identity indexes are non-unique to tolerate old duplicates. Complete the
-  canary migration, deduplicate, then add safe partial unique constraints.
+- PostgreSQL relational entities still store timestamps as text. Verified
+  contact identity, LinkedIn URL, and job natural-key constraints are staged;
+  re-run the duplicate gate before deployment. Account and board uniqueness is
+  blocked by 120 production duplicate groups and 638 excess rows, which require
+  an owner-approved, backed-up deduplication rather than an automatic migration.
 - CI now enforces ESLint correctness rules across SaaS source, scripts, and tests.
   Formatting and static typing remain incremental engineering improvements; do
   not force a broad legacy rewrite solely to add them.
@@ -103,8 +105,9 @@ PowerShell/SQLite edition remains supported separately.
   24-hour ingestion success rate against explicit SLO targets.
 - Review the new privacy-safe activation and revenue funnel monthly and define
   cohort targets after enough real customer volume exists for a useful baseline.
-- Consider MFA/passkeys for owner/support accounts that can access large contact
-  datasets.
+- Cross-workspace support access now requires a recent login or rate-limited
+  current-password step-up. Add passkeys or MFA when enrollment, recovery, and
+  operator support can be implemented and exercised end to end.
 - Review dependency and pinned GitHub Action updates monthly through an explicit
   pull request; CI actions are now immutable commit references.
 
@@ -147,6 +150,11 @@ PowerShell/SQLite edition remains supported separately.
 - Added a scheduled, read-only production probe for availability, readiness,
   anonymous authorization boundaries, plan visibility, and customer entry.
 - Added a focused ESLint correctness gate and fixed the defects it exposed.
+- Added expiring, persisted password step-up for cross-workspace support access.
+- Required the current password as well as the exact confirmation phrase for
+  workspace-wide data deletion.
+- Added a read-only production duplicate gate and staged only the contact/job
+  constraints proven clean by aggregate production evidence.
 
 ## Required production configuration
 

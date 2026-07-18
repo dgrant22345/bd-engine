@@ -316,6 +316,23 @@ test('privacy journey: workspace data export responds from the account menu', as
   }
 });
 
+test('privacy journey: workspace deletion requires the current password', async ({ page }) => {
+  await signup(page);
+  await page.click('#cloud-avatar-btn');
+  await page.click('#cloud-export-btn');
+  const dialog = page.getByRole('dialog', { name: 'Privacy and data' });
+  const form = dialog.locator('[data-privacy-delete]');
+  await expect(form).toBeVisible();
+  await form.locator('[name="password"]').fill('wrong-password');
+  await form.locator('[name="confirm"]').fill('DELETE Journey Workspace');
+  await form.getByRole('button', { name: 'Delete workspace data' }).click();
+  await expect(form.locator('[data-privacy-result]')).toContainText('password you entered is incorrect');
+  await form.locator('[name="password"]').fill('journey-password-1');
+  await form.getByRole('button', { name: 'Delete workspace data' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible();
+});
+
 test('privacy journey: eligible customer can close their account and is signed out', async ({ page }) => {
   const { email } = await signup(page);
   await page.click('#cloud-avatar-btn');

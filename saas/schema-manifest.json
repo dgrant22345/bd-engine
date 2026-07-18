@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "bb1add08a83af1e5ec75f55c2150a4b9269ecdf41d3afa507224730598159d3a",
+  "sourceSha256": "d34952bc6db2cc676228fd97d6c1baf410c6670995588383864dcd02eba18ee3",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -33,6 +33,10 @@
     {
       "id": "20260718_product_analytics",
       "description": "Add idempotent privacy-safe product funnel events"
+    },
+    {
+      "id": "20260718_relational_identity_constraints",
+      "description": "Enforce verified contact and job natural identities"
     }
   ],
   "tables": [
@@ -88,7 +92,9 @@
     "contacts_tenant_account_priority_idx",
     "contacts_tenant_email_idx",
     "contacts_tenant_identity_idx",
+    "contacts_tenant_identity_uidx",
     "contacts_tenant_linkedin_idx",
+    "contacts_tenant_linkedin_uidx",
     "contacts_tenant_updated_idx",
     "email_verification_tokens_expires_idx",
     "email_verification_tokens_user_idx",
@@ -99,6 +105,7 @@
     "jobs_tenant_account_posted_idx",
     "jobs_tenant_import_run_idx",
     "jobs_tenant_natural_key_idx",
+    "jobs_tenant_natural_key_uidx",
     "jobs_tenant_posted_idx",
     "jobs_tenant_updated_idx",
     "password_reset_tokens_expires_idx",

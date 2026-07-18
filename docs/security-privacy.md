@@ -14,7 +14,8 @@ Hosted workspaces store data in PostgreSQL. Data leaves the browser for the BD E
 - UI rendering escapes untrusted text and URLs are validated before use.
 - CSV parsing uses a structured parser and limits import size and resource creation.
 - Successful authenticated mutations create privacy-safe audit records.
-- Customer exports, owner-confirmed workspace-data deletion, and self-service account closure are available from the authenticated account surface. Closure verifies the password and exact confirmation, prevents orphaned shared workspaces, cancels affected subscriptions, deletes sessions and customer records transactionally, and retains only a pseudonymous operational closure ledger.
+- Cross-workspace support access requires a recent login or rate-limited current-password step-up. The elevation is session-scoped, persisted, and expires after 15 minutes by default.
+- Customer exports, password-and-phrase-confirmed workspace-data deletion, and self-service account closure are available from the authenticated account surface. Closure verifies the password and exact confirmation, prevents orphaned shared workspaces, cancels affected subscriptions, deletes sessions and customer records transactionally, and retains only a pseudonymous operational closure ledger.
 - Backups include sensitive data and must be encrypted, access controlled, and retention limited.
 
 ## Release Security Checks

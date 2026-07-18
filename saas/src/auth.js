@@ -88,6 +88,28 @@ export async function destroySession(sessionId) {
   await dbDeleteSession(sessionId);
 }
 
+export function isRecentAuthentication(session, maxAgeMs = 15 * 60 * 1000, nowMs = Date.now()) {
+  const authenticatedAt = Date.parse(session?.stepUpAt || session?.createdAt || '');
+  return Number.isFinite(authenticatedAt)
+    && authenticatedAt <= nowMs
+    && nowMs - authenticatedAt <= maxAgeMs;
+}
+
+export async function markSessionStepUp(sessionId, authenticatedAt = new Date().toISOString()) {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error('Session expired. Please log in again.');
+  const previous = session.stepUpAt;
+  session.stepUpAt = authenticatedAt;
+  try {
+    await dbSaveSession(session);
+  } catch (error) {
+    if (previous) session.stepUpAt = previous;
+    else delete session.stepUpAt;
+    throw error;
+  }
+  return session;
+}
+
 export function forgetUserSessions(userId) {
   let removed = 0;
   for (const [sessionId, session] of sessions) {

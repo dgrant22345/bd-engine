@@ -76,7 +76,13 @@
         ...options,
       });
       const data = res.status === 204 ? null : await res.json();
-      if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
+      if (!res.ok) {
+        const error = new Error(data?.error || `Request failed: ${res.status}`);
+        error.code = data?.code || '';
+        error.status = res.status;
+        error.details = data;
+        throw error;
+      }
       return data;
     }
 
@@ -1181,6 +1187,8 @@
       const deletionPanel = state.canManageWorkspace ? `
         <form class="support-compose" data-privacy-delete>
           <div><h3>Delete workspace data</h3><p>Permanently removes accounts, contacts, jobs, boards, tasks, and activity. Your login and empty workspace remain available.</p></div>
+          <label for="privacy-delete-password">Current password</label>
+          <input id="privacy-delete-password" name="password" type="password" autocomplete="current-password" required>
           <label for="privacy-confirm">Type <strong>${escapeHtml(expected)}</strong> to confirm</label>
           <input id="privacy-confirm" name="confirm" autocomplete="off" required>
           <div class="support-form-actions"><button class="btn btn-danger" type="submit" disabled>Delete workspace data</button></div>
@@ -1234,8 +1242,13 @@
 
       const form = backdrop.querySelector('[data-privacy-delete]');
       const input = form?.elements.confirm;
+      const passwordInput = form?.elements.password;
       const submit = form?.querySelector('button[type="submit"]');
-      input?.addEventListener('input', () => { submit.disabled = input.value.trim() !== expected; });
+      const syncDeleteSubmit = () => {
+        submit.disabled = input.value.trim() !== expected || !passwordInput.value;
+      };
+      input?.addEventListener('input', syncDeleteSubmit);
+      passwordInput?.addEventListener('input', syncDeleteSubmit);
       form?.addEventListener('submit', async (event) => {
         event.preventDefault();
         submit.disabled = true;
@@ -1243,14 +1256,14 @@
         try {
           const data = await api('/api/privacy/delete-workspace', {
             method: 'POST',
-            body: JSON.stringify({ confirm: input.value.trim() }),
+            body: JSON.stringify({ confirm: input.value.trim(), password: passwordInput.value }),
           });
           close();
           state.verificationMessage = data.message || 'Workspace data deleted.';
           render();
         } catch (error) {
           submit.textContent = 'Delete workspace data';
-          submit.disabled = input.value.trim() !== expected;
+          syncDeleteSubmit();
           form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
         }
       });
@@ -1421,8 +1434,44 @@
           </section>`;
         wireOperatorSupportForms(backdrop, requestedStatus);
       } catch (error) {
+        if (error.code === 'step_up_required') {
+          renderOperatorStepUp(backdrop, requestedStatus);
+          return;
+        }
         body.innerHTML = `<div class="support-error" role="alert"><strong>Support inbox could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
       }
+    }
+
+    function renderOperatorStepUp(backdrop, requestedStatus = '') {
+      setSupportTab(backdrop, 'operator');
+      const body = backdrop.querySelector('[data-support-body]');
+      body.innerHTML = `
+        <form class="support-compose" data-operator-step-up>
+          <div><h3>Confirm your identity</h3><p>The support inbox contains customer information. Enter your current password to continue.</p></div>
+          <label for="operator-step-up-password">Current password</label>
+          <input id="operator-step-up-password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <div class="support-form-actions"><button class="btn btn-primary" type="submit">Continue to support inbox</button></div>
+          <div data-operator-step-up-result aria-live="polite"></div>
+        </form>`;
+      const form = body.querySelector('[data-operator-step-up]');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Confirming...';
+        try {
+          await api('/api/auth/step-up', {
+            method: 'POST',
+            body: JSON.stringify({ password: form.elements.password.value }),
+          });
+          await loadOperatorSupport(backdrop, requestedStatus, 'Identity confirmed.');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Continue to support inbox';
+          form.querySelector('[data-operator-step-up-result]').innerHTML = `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`;
+        }
+      });
+      form.elements.password.focus();
     }
 
     function wireOperatorSupportForms(backdrop, requestedStatus) {

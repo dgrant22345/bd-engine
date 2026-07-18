@@ -129,6 +129,26 @@ and a current production backup exists.
   relational-primary and persists that choice in `tenants.storage_mode`.
 - Existing legacy workspaces are not migrated by the new-workspace flag.
 
+Audit candidate natural-key constraints without printing customer values:
+
+```powershell
+npm.cmd --prefix saas run report:duplicates
+npm.cmd --prefix saas run report:duplicates -- --fail-on-duplicates
+```
+
+Do not add a unique index until this reports zero duplicate groups, deep parity
+passes, and an owner-approved deduplication has been backed up and rehearsed.
+Email alone is intentionally not a uniqueness key because shared team addresses
+can be valid; tenant-scoped identity, LinkedIn, job, and provider-board keys are
+the constraint candidates.
+
+The contact identity, contact LinkedIn URL, and job natural-key constraints are
+included in migration `20260718_relational_identity_constraints` after the
+2026-07-18 production audit reported zero duplicates for all three. Re-run the
+auditor immediately before deployment; the migration fails closed if data has
+drifted. Account and board constraints remain blocked because the same audit
+found 120 duplicate groups and 638 excess rows across those keys.
+
 Verify legacy mirrors:
 
 ```powershell
@@ -184,6 +204,9 @@ The app reports these in the authenticated status screen:
 - `BD_ERROR_WEBHOOK` enables immediate server-error alerts.
 - `BD_BACKGROUND_JOB_STALE_MS` controls the queue-age alert threshold and
   defaults to 900000 milliseconds.
+- `BD_PRIVILEGED_SESSION_MAX_AGE_MS` controls how long a login or password
+  confirmation unlocks cross-workspace support access and defaults to 900000
+  milliseconds. Keep it short; increasing it expands stolen-session exposure.
 - An external uptime monitor should poll `/health` and alert on non-200 results.
 - Privacy and Terms copy requires legal review before broad commercial launch.
 
