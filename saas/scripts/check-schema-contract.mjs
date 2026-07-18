@@ -10,14 +10,15 @@ function uniqueMatches(source, pattern) {
 }
 
 export function buildSchemaManifest(source) {
-  const migrations = [...source.matchAll(/runSchemaMigration\('([^']+)',\s*'([^']+)'/g)]
+  const normalizedSource = source.replace(/\r\n?/g, '\n');
+  const migrations = [...normalizedSource.matchAll(/runSchemaMigration\('([^']+)',\s*'([^']+)'/g)]
     .map((match) => ({ id: match[1], description: match[2] }));
   return {
     generatedFrom: 'src/db.js',
-    sourceSha256: createHash('sha256').update(source).digest('hex'),
+    sourceSha256: createHash('sha256').update(normalizedSource).digest('hex'),
     migrations,
-    tables: uniqueMatches(source, /CREATE TABLE IF NOT EXISTS\s+([a-zA-Z0-9_]+)/g),
-    indexes: uniqueMatches(source, /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS\s+([a-zA-Z0-9_]+)/g),
+    tables: uniqueMatches(normalizedSource, /CREATE TABLE IF NOT EXISTS\s+([a-zA-Z0-9_]+)/g),
+    indexes: uniqueMatches(normalizedSource, /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS\s+([a-zA-Z0-9_]+)/g),
   };
 }
 
