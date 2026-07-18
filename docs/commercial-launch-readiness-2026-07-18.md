@@ -101,9 +101,8 @@ PowerShell/SQLite edition remains supported separately.
 - Configure centralized structured log retention and external dashboards/paging.
   The authenticated status API now reports 5xx rate, queue age/failures, and a
   24-hour ingestion success rate against explicit SLO targets.
-- Extend the new privacy-safe activation and revenue funnel with first resolved
-  board and first useful job milestones once those product definitions are
-  agreed and stable.
+- Review the new privacy-safe activation and revenue funnel monthly and define
+  cohort targets after enough real customer volume exists for a useful baseline.
 - Consider MFA/passkeys for owner/support accounts that can access large contact
   datasets.
 - Review dependency and pinned GitHub Action updates monthly through an explicit

@@ -3364,6 +3364,14 @@ export function createStore() {
         discoveryConcurrency,
         errors: errors.length,
       };
+      if (mapped > 0) {
+        dbRecordProductEvent(buildProductEvent({
+          eventType: 'board_resolved',
+          tenantId,
+          eventKey: tenantId,
+          dimensions: { source: 'ats_discovery' },
+        })).catch((error) => console.error('Board resolution milestone recording failed:', error.message));
+      }
       return {
         ok: true,
         stats,
@@ -3761,6 +3769,14 @@ export function createStore() {
         metadata: { stats, timings },
         items: importItems,
       });
+      if (activeTrackedJobs > 0) {
+        dbRecordProductEvent(buildProductEvent({
+          eventType: 'useful_jobs_found',
+          tenantId,
+          eventKey: tenantId,
+          dimensions: { source: 'live_job_import' },
+        })).catch((error) => console.error('Useful jobs milestone recording failed:', error.message));
+      }
 
       activities.unshift({
         id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,

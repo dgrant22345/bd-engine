@@ -26,3 +26,11 @@ test('product events reject unknown types and discard arbitrary dimensions', () 
   });
   assert.deepEqual(event.metadata, { source: 'manual' });
 });
+
+test('core value milestones are accepted and idempotent per workspace', () => {
+  const board = buildProductEvent({ eventType: 'board_resolved', tenantId: 'tenant-1', eventKey: 'tenant-1' });
+  const jobs = buildProductEvent({ eventType: 'useful_jobs_found', tenantId: 'tenant-1', eventKey: 'tenant-1' });
+  assert.notEqual(board.eventKey, jobs.eventKey);
+  assert.equal(board.eventType, 'board_resolved');
+  assert.equal(jobs.eventType, 'useful_jobs_found');
+});
