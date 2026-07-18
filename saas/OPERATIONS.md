@@ -102,3 +102,11 @@ The app reports these in the authenticated status screen:
 
 Do not mark these ready based only on code presence; verify the live provider
 configuration and an end-to-end test.
+
+### Optional careers-page renderer
+
+- `BD_ATS_RENDER_SERVICE_URL` enables the last-resort public careers-page render adapter.
+- `BD_ATS_RENDER_SERVICE_TOKEN` is sent as a bearer token when configured.
+- `BD_ATS_RENDER_TIMEOUT_MS` bounds each render request and defaults to 20 seconds.
+- Keep renderer concurrency and egress restricted. The application sends only a public careers URL and never customer records.
+- Run `npm run benchmark:ats:live` after provider or renderer changes. The deterministic `npm run benchmark:ats` remains the CI-safe adapter contract check.

@@ -21,6 +21,9 @@ const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREER
 const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
 const ATS_DISCOVERY_PROBE_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_PROBE_CONCURRENCY, 4);
 const ATS_JSON_REQUEST_ATTEMPTS = readPositiveInteger(process.env.BD_ATS_JSON_REQUEST_ATTEMPTS, 3);
+const ATS_RENDER_SERVICE_URL = String(process.env.BD_ATS_RENDER_SERVICE_URL || '').trim();
+const ATS_RENDER_SERVICE_TOKEN = String(process.env.BD_ATS_RENDER_SERVICE_TOKEN || '').trim();
+const ATS_RENDER_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_RENDER_TIMEOUT_MS, 20000);
 const RELATIONAL_READ_TENANTS = new Set(String(process.env.BD_RELATIONAL_READ_TENANTS || '')
   .split(',')
   .map((value) => value.trim())
@@ -5772,10 +5775,14 @@ function getConfigBoardId(config = {}) {
     if (lever) return decodeURIComponent(lever[1]);
     const leverBoard = String(sourceUrl).match(/jobs\.lever\.co\/(?:embed\/)?([^/?#]+)/i);
     if (leverBoard && leverBoard[1].toLowerCase() !== 'embed') return decodeURIComponent(leverBoard[1]);
-    const ashby = String(sourceUrl).match(/ashbyhq\.com\/(?:posting-api\/job-board|jobs)\/([^/?#]+)/i);
-    if (ashby) return decodeURIComponent(ashby[1]);
+    const ashbyApi = String(sourceUrl).match(/api\.ashbyhq\.com\/posting-api\/job-board\/([^/?#]+)/i);
+    if (ashbyApi) return decodeURIComponent(ashbyApi[1]);
+    const ashbyBoard = String(sourceUrl).match(/jobs\.ashbyhq\.com\/([^/?#]+)/i);
+    if (ashbyBoard) return decodeURIComponent(ashbyBoard[1]);
     const smartRecruiters = String(sourceUrl).match(/smartrecruiters\.com\/(?:v1\/companies\/)?([^/?#]+)(?:\/postings)?/i);
     if (smartRecruiters && !['jobs', 'careers', 'www', 'api'].includes(smartRecruiters[1].toLowerCase())) return decodeURIComponent(smartRecruiters[1]);
+    const jobviteCareers = String(sourceUrl).match(/jobs\.jobvite\.com\/careers\/([^/?#&]+)/i);
+    if (jobviteCareers) return decodeURIComponent(jobviteCareers[1]);
     const jobviteApi = String(sourceUrl).match(/jobs\.jobvite\.com\/api\/job-list\?company=([^/?#&]+)/i);
     if (jobviteApi) return decodeURIComponent(jobviteApi[1]);
     const jobvite = String(sourceUrl).match(/jobs\.jobvite\.com\/([^/?#&]+)/i);
@@ -6157,9 +6164,9 @@ async function fetchSmartRecruitersJobs(config, boardId) {
 }
 
 async function fetchJobviteJobs(config, boardId) {
-  const url = config.apiUrl || `https://jobs.jobvite.com/api/job-list?company=${encodeURIComponent(boardId)}`;
-  const payload = await fetchJson(url);
-  return { jobs: firstArray(payload?.jobs, payload?.requisitions, payload) };
+  const url = getJobviteBoardUrl(config, boardId);
+  const content = await fetchText(url, 15000);
+  return { jobs: parseJobviteJobs(content, url) };
 }
 
 async function fetchWorkdayJobs(config) {
@@ -6259,6 +6266,24 @@ function getWorkableJobsApiUrl(config = {}, boardId = '') {
   const apiUrl = String(config.apiUrl || '');
   if (/workable\.com\/api\/accounts\//i.test(apiUrl)) return setUrlSearchParams(apiUrl, { details: 'true' });
   return `https://www.workable.com/api/accounts/${encodeURIComponent(boardId)}?details=true`;
+}
+
+function getJobviteBoardUrl(config = {}, boardId = '') {
+  const jobviteUrl = getConfigUrlCandidates(config).find((value) => /jobs\.jobvite\.com/i.test(value) && !/\/api\/job-list/i.test(value));
+  if (jobviteUrl) {
+    try {
+      const parsed = new URL(jobviteUrl);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const careersIndex = segments.findIndex((segment) => segment.toLowerCase() === 'careers');
+      const slug = careersIndex >= 0 ? segments[careersIndex + 1] : segments[0];
+      if (slug && !['api', 'careers'].includes(slug.toLowerCase())) {
+        return `https://jobs.jobvite.com/${encodeURIComponent(slug)}/jobs`;
+      }
+    } catch {
+      // Fall through to the board identifier.
+    }
+  }
+  return `https://jobs.jobvite.com/${encodeURIComponent(boardId)}/jobs`;
 }
 
 function getRecruiteeJobsApiUrl(config = {}, boardId = '') {
@@ -6378,6 +6403,10 @@ async function fetchJson(url, timeoutMs = 15000, init = {}) {
 }
 
 async function fetchText(url, timeoutMs = 15000) {
+  return (await fetchTextPage(url, timeoutMs)).content;
+}
+
+async function fetchTextPage(url, timeoutMs = 15000) {
   let lastError = null;
   for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
     const controller = new AbortController();
@@ -6397,7 +6426,10 @@ async function fetchText(url, timeoutMs = 15000) {
         error.retryAfterMs = readRetryAfterMs(response);
         throw error;
       }
-      return await response.text();
+      return {
+        content: await response.text(),
+        finalUrl: response.url || String(url),
+      };
     } catch (error) {
       lastError = error;
       const retryable = error?.retryable === true || error?.name === 'AbortError' || error?.cause?.code === 'ECONNRESET';
@@ -6559,24 +6591,19 @@ async function discoverAtsBoardFromCareersPages(config) {
   const batchSize = 3;
   for (let offset = 0; offset < urls.length; offset += batchSize) {
     const batch = urls.slice(offset, offset + batchSize);
-    const results = await mapSettledWithConcurrency(batch, batchSize, async (url) => {
-      const html = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
-      const atsLinks = extractAtsLinks(html, url);
-      for (const atsUrl of atsLinks) {
-        const result = await probeAtsUrl(config, atsUrl);
-        if (result) return result;
-      }
-      const staticJobs = parseStaticCareersJobs(html, url);
-      if (staticJobs.length >= STATIC_CAREERS_MIN_JOB_LINKS) {
-        const boardId = getConfigBoardId(config) || getStaticCareersBoardId(config, url);
-        return {
-          atsType: 'custom_static',
-          boardId,
-          apiUrl: url,
-          resolvedBoardUrl: url,
-          jobCount: staticJobs.length,
-          method: 'static_careers_page',
-        };
+    const results = await mapSettledWithConcurrency(batch, batchSize, async (url, batchIndex) => {
+      const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
+      const directResult = await inspectCareerPage(config, page, url, 'careers_page_link');
+      if (directResult) return directResult;
+
+      // Rendering is intentionally bounded to the highest-confidence URL for
+      // each company. A renderer is optional and receives public careers URLs
+      // only; ordinary provider imports never depend on it.
+      if (offset === 0 && batchIndex === 0 && ATS_RENDER_SERVICE_URL) {
+        const renderedPage = await fetchRenderedCareerPage(url);
+        if (renderedPage) {
+          return inspectCareerPage(config, renderedPage, url, 'rendered_careers_page');
+        }
       }
       return null;
     });
@@ -6584,6 +6611,68 @@ async function discoverAtsBoardFromCareersPages(config) {
     if (match) return match;
   }
   return null;
+}
+
+async function inspectCareerPage(config, page, requestedUrl, method) {
+  const finalUrl = page?.finalUrl || requestedUrl;
+  const atsLinks = [];
+  if (detectAtsTypeFromUrl(finalUrl)) atsLinks.push(finalUrl);
+  for (const atsUrl of extractAtsLinks(page?.content || '', finalUrl)) {
+    if (!atsLinks.includes(atsUrl)) atsLinks.push(atsUrl);
+  }
+  for (const atsUrl of atsLinks) {
+    const result = await probeAtsUrl(config, atsUrl);
+    if (result) return { ...result, method };
+  }
+
+  const staticJobs = parseStaticCareersJobs(page?.content || '', finalUrl);
+  if (staticJobs.length < STATIC_CAREERS_MIN_JOB_LINKS) return null;
+  const boardId = getConfigBoardId(config) || getStaticCareersBoardId(config, finalUrl);
+  return {
+    atsType: 'custom_static',
+    boardId,
+    apiUrl: finalUrl,
+    resolvedBoardUrl: finalUrl,
+    jobCount: staticJobs.length,
+    method: method === 'rendered_careers_page' ? method : 'static_careers_page',
+  };
+}
+
+async function fetchRenderedCareerPage(url) {
+  const target = getUsableCareerUrl(url);
+  if (!target || !ATS_RENDER_SERVICE_URL) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ATS_RENDER_TIMEOUT_MS);
+  try {
+    const response = await fetch(ATS_RENDER_SERVICE_URL, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json,text/html',
+        'content-type': 'application/json',
+        ...(ATS_RENDER_SERVICE_TOKEN ? { authorization: `Bearer ${ATS_RENDER_SERVICE_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({
+        url: target,
+        waitUntil: 'networkidle',
+        timeoutMs: ATS_RENDER_TIMEOUT_MS,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const contentType = response.headers.get('content-type') || '';
+    if (/json/i.test(contentType)) {
+      const payload = await response.json();
+      const content = String(payload?.html || payload?.content || payload?.body || '');
+      if (!content) return null;
+      return { content, finalUrl: payload?.finalUrl || payload?.url || target };
+    }
+    const content = await response.text();
+    return content ? { content, finalUrl: target } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Turn a company name into plausible domains to try when no domain is known.
@@ -6646,10 +6735,14 @@ function buildCareerPageUrls(config = {}) {
 }
 
 function extractAtsLinks(content, baseUrl = '') {
-  const text = String(content || '').replace(/&amp;/g, '&');
+  const text = decodeHtmlEntities(String(content || ''))
+    .replace(/\\u002f/gi, '/')
+    .replace(/\\u003a/gi, ':')
+    .replace(/\\\//g, '/')
+    .replace(/\\"/g, '"');
   const candidates = [];
   const add = (value) => {
-    const raw = String(value || '').trim();
+    const raw = String(value || '').trim().replace(/\\+$/g, '');
     if (!raw) return;
     try {
       const parsed = new URL(raw, baseUrl || undefined);
@@ -6661,8 +6754,38 @@ function extractAtsLinks(content, baseUrl = '') {
     }
   };
   for (const match of text.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)) add(match[0]);
+  for (const match of text.matchAll(/(?:^|[\s"'(])\/\/(?:[^\s"'<>]*\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|jobvite\.com|myworkdayjobs\.com|bamboohr\.com|workable\.com|recruitee\.com|personio\.de|rippling\.com)[^\s"'<>]*/gi)) {
+    add(`https:${match[0].trim().replace(/^["'(]/, '')}`);
+  }
   for (const match of text.matchAll(/\b(?:href|src|data-url)=["']([^"']+)["']/gi)) add(match[1]);
   return candidates.slice(0, 12);
+}
+
+function parseJobviteJobs(content, sourceUrl = '') {
+  const jobs = [];
+  const seen = new Set();
+  const rowPattern = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+  for (const rowMatch of String(content || '').matchAll(rowPattern)) {
+    const row = rowMatch[1] || '';
+    const nameCell = row.match(/<td\b[^>]*class=["'][^"']*jv-job-list-name[^"']*["'][^>]*>([\s\S]*?)<\/td>/i)?.[1] || '';
+    const locationCell = row.match(/<td\b[^>]*class=["'][^"']*jv-job-list-location[^"']*["'][^>]*>([\s\S]*?)<\/td>/i)?.[1] || '';
+    const anchor = nameCell.match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!anchor) continue;
+    const url = normalizeAbsoluteUrl(anchor[1], sourceUrl);
+    const title = cleanHtmlText(anchor[2]);
+    if (!url || !title) continue;
+    const id = extractJobIdFromUrl(url);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    jobs.push({
+      id,
+      title,
+      location: cleanHtmlText(locationCell),
+      jobUrl: url,
+      url,
+    });
+  }
+  return jobs;
 }
 
 function parseStaticCareersJobs(content, sourceUrl = '') {
@@ -6995,6 +7118,20 @@ async function probeAtsUrl(config, atsUrl) {
 
 async function probeAtsBoard(atsType, boardId) {
   const encoded = encodeURIComponent(boardId);
+  if (atsType === 'jobvite') {
+    const resolvedBoardUrl = `https://jobs.jobvite.com/${encoded}/jobs`;
+    try {
+      const result = await fetchJobviteJobs({ resolvedBoardUrl }, boardId);
+      if (!result.jobs.length) return null;
+      return {
+        apiUrl: resolvedBoardUrl,
+        resolvedBoardUrl,
+        jobCount: result.jobs.length,
+      };
+    } catch {
+      return null;
+    }
+  }
   if (atsType === 'personio') {
     const apiUrl = `https://${encoded}.jobs.personio.de/xml?language=en`;
     try {
@@ -7043,11 +7180,6 @@ async function probeAtsBoard(atsType, boardId) {
       apiUrl: `https://api.smartrecruiters.com/v1/companies/${encoded}/postings?limit=1`,
       resolvedBoardUrl: `https://careers.smartrecruiters.com/${encoded}`,
       readJobs: (payload) => payload?.content || payload?.postings,
-    },
-    jobvite: {
-      apiUrl: `https://jobs.jobvite.com/api/job-list?company=${encoded}`,
-      resolvedBoardUrl: `https://jobs.jobvite.com/${encoded}`,
-      readJobs: (payload) => payload?.jobs || payload?.requisitions,
     },
     recruitee: {
       apiUrl: `https://${encoded}.recruitee.com/api/offers/`,

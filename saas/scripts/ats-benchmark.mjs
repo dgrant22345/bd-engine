@@ -43,7 +43,12 @@ function fixtureFetch(url) {
   if (value.includes('api.lever.co')) return json([{ id: 'lever-1', text: 'Lever Sales Lead', categories: { location: 'Toronto, ON', team: 'Sales' }, hostedUrl: 'https://job.example/lever-1', createdAt: Date.parse(postedAt) }]);
   if (value.includes('api.ashbyhq.com')) return json({ jobs: [{ id: 'ashby-1', title: 'Ashby Sales Lead', location: 'Toronto, ON', department: 'Sales', jobUrl: 'https://job.example/ashby-1', publishedAt: postedAt }] });
   if (value.includes('api.smartrecruiters.com')) return json({ totalFound: 1, content: [{ id: 'smart-1', name: 'SmartRecruiters Sales Lead', location: { city: 'Toronto', region: 'ON', country: 'Canada' }, ref: 'https://job.example/smart-1', releasedDate: postedAt }] });
-  if (value.includes('jobs.jobvite.com')) return json({ jobs: [{ id: 'jobvite-1', title: 'Jobvite Sales Lead', location: 'Toronto, ON', jobUrl: 'https://job.example/jobvite-1', postedDate: postedAt }] });
+  if (value.includes('jobs.jobvite.com')) {
+    return new Response(`<table class="jv-job-list"><tbody><tr>
+      <td class="jv-job-list-name"><a href="/jobvite-fixture/job/jobvite-1">Jobvite Sales Lead</a></td>
+      <td class="jv-job-list-location">Toronto, ON</td>
+    </tr></tbody></table>`, { status: 200, headers: { 'content-type': 'text/html' } });
+  }
   if (value.includes('myworkdayjobs.com')) return json({ total: 1, jobPostings: [{ id: 'workday-1', title: 'Workday Sales Lead', locationsText: 'Toronto, ON', externalPath: '/job/Toronto/workday-1', postedOnDate: postedAt }] });
   if (value.includes('bamboohr.com')) return json({ result: [{ id: 'bamboo-1', jobOpeningName: 'BambooHR Sales Lead', location: { city: 'Toronto', state: 'Ontario', country: 'Canada' }, postedDate: postedAt }] });
   if (value.includes('workable.com')) return json({ jobs: [{ shortcode: 'workable-1', title: 'Workable Sales Lead', city: 'Toronto', state: 'Ontario', country: 'Canada', url: 'https://job.example/workable-1', published_on: postedAt }] });

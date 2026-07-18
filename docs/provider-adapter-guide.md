@@ -26,6 +26,20 @@ npm.cmd --prefix saas run benchmark:ats
 
 It sends synthetic fixtures through every supported hosted adapter and fails if any provider does not produce exactly one job with the required normalized identity, URL, source, timestamps, and active state. It does not call live provider services or use customer data. Live endpoint checks remain a separate operational smoke test because provider availability and anti-bot behavior are not deterministic.
 
+Run the current public-board compatibility canary separately:
+
+```powershell
+npm.cmd --prefix saas run benchmark:ats:live
+```
+
+The canary imports public listings from one representative board per provider. It runs automatically every Monday and Thursday in GitHub Actions. A failure may indicate an adapter regression, provider migration, renamed public board, rate limit, or temporary outage and must be triaged before changing product coverage claims.
+
+## Rendered Pages
+
+Discovery first checks redirects, regular HTML, embedded JSON, escaped JavaScript URLs, and static job markup. If those checks find nothing, one high-confidence careers URL per company can be sent to an optional rendering service configured with `BD_ATS_RENDER_SERVICE_URL` and `BD_ATS_RENDER_SERVICE_TOKEN`. The service must accept a JSON `POST` containing `url`, `waitUntil`, and `timeoutMs`, then return either HTML or JSON with an `html`/`content` field and optional `finalUrl`.
+
+Only public careers URLs are eligible. Rendering is bounded to one attempt per company and is not used for normal imports from an already resolved provider. Keep the renderer isolated from the web service, enforce its own egress and concurrency limits, and never send contact, account-note, outreach, or applicant data to it.
+
 ## Adding A Provider
 
 1. Add provider identification and URL parsing near the existing adapters in `saas/src/store.js` and the local equivalent in `server/Modules/BdEngine.JobImport.psm1` when local support is intended.

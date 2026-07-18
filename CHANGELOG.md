@@ -11,6 +11,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Expanded and tested public ATS coverage, discovery isolation, lifecycle handling, and ingestion diagnostics.
 - Prevented incomplete paginated ATS refreshes from closing valid jobs, added rate-limit-aware retries for XML and HTML providers, and corrected ambiguous Canada/US location filtering.
 - Added a deterministic release benchmark that certifies all 12 supported hosted job adapters against the normalized job contract.
+- Restored live Jobvite imports after its legacy JSON endpoint was retired, fixed Ashby board identity parsing, and improved ATS discovery across redirects and JavaScript-escaped links.
+- Added a bounded authenticated careers-page renderer fallback plus a scheduled live canary covering all 12 public provider adapters.
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Updated product, privacy, provider, troubleshooting, packaging, and release documentation.
 

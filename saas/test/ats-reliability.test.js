@@ -185,3 +185,88 @@ test('XML and HTML providers retry transient rate limits', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Jobvite imports its current server-rendered careers board', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-jobvite-html';
+  addTenant(store, tenantId);
+  await addReadyBoard(store, tenantId, {
+    companyName: 'Jobvite HTML Labs',
+    atsType: 'jobvite',
+    boardId: 'jobvite-html-labs',
+    resolvedBoardUrl: 'https://jobs.jobvite.com/jobvite-html-labs/jobs',
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(`<table class="jv-job-list"><tbody>
+      <tr><td class="jv-job-list-name"><a href="/jobvite-html-labs/job/jv-1">Account Executive</a></td><td class="jv-job-list-location">Toronto, Ontario</td></tr>
+      <tr><td class="jv-job-list-name"><a href="/jobvite-html-labs/job/jv-2">Sales Engineer</a></td><td class="jv-job-list-location">Chicago, Illinois</td></tr>
+    </tbody></table>`, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    assert.equal(result.stats.newJobs, 2);
+    assert.deepEqual(requestedUrls, ['https://jobs.jobvite.com/jobvite-html-labs/jobs']);
+    const jobs = await store.findJobs(tenantId, { page: 1, pageSize: 20 });
+    assert.deepEqual(jobs.items.map((job) => job.title).sort(), ['Account Executive', 'Sales Engineer']);
+    assert.ok(jobs.items.every((job) => job.source === 'Jobvite' && /jobs\.jobvite\.com/.test(job.jobUrl)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('discovery decodes ATS links embedded as escaped JavaScript strings', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-escaped-ats-discovery';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, {
+    displayName: 'Escaped Link Labs',
+    domain: 'escaped-link-labs.example',
+    careersUrl: 'https://escaped-link-labs.example/careers',
+  });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Escaped Link Labs',
+    domain: 'escaped-link-labs.example',
+    careersUrl: 'https://escaped-link-labs.example/careers',
+    atsType: 'unknown',
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value === 'https://escaped-link-labs.example/careers') {
+      return new Response('<script>window.jobs=[{jobUrl:\\"https:\\\/\\\/jobs.ashbyhq.com\\\/escaped-link-labs\\\/job-1\\"}]</script>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    if (value.includes('api.ashbyhq.com/posting-api/job-board/escaped-link-labs')) {
+      return Response.json({ jobs: [{ id: 'job-1', title: 'Sales Lead', location: 'Toronto, ON', jobUrl: 'https://jobs.ashbyhq.com/escaped-link-labs/job-1' }] });
+    }
+    return new Response('not found', { status: 404 });
+  };
+
+  try {
+    const result = await store.runAtsDiscovery(tenantId, {
+      limit: 1,
+      discoveryConcurrency: 1,
+      plan,
+    });
+    assert.equal(result.stats.mapped, 1);
+    const config = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(config.atsType, 'ashby');
+    assert.equal(config.boardId, 'escaped-link-labs');
+    assert.equal(config.discoveryStatus, 'resolved');
+    assert.equal(config.discoveryMethod, 'careers_page_link');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
