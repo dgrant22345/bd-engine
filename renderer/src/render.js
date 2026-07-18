@@ -3,6 +3,7 @@ import { publicError, validatePublicUrl } from './security.js';
 
 const MAX_HTML_BYTES = readPositiveInteger(process.env.RENDER_MAX_HTML_BYTES, 5 * 1024 * 1024);
 const MAX_TIMEOUT_MS = readPositiveInteger(process.env.RENDER_MAX_TIMEOUT_MS, 25000);
+const CHROMIUM_SANDBOX = String(process.env.RENDER_CHROMIUM_SANDBOX || '').toLowerCase() === 'true';
 const BLOCKED_RESOURCE_TYPES = new Set(['image', 'media', 'font']);
 let browserPromise = null;
 
@@ -50,7 +51,7 @@ async function getBrowser() {
   if (!browserPromise) {
     browserPromise = chromium.launch({
       headless: true,
-      chromiumSandbox: true,
+      chromiumSandbox: CHROMIUM_SANDBOX,
       args: ['--disable-dev-shm-usage', '--disable-background-networking'],
     }).then((browser) => {
       browser.on('disconnected', () => { browserPromise = null; });
