@@ -9,6 +9,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Focused the default dashboard on daily actions while keeping advanced sections optional.
 - Replaced browser-native account dialogs with accessible in-app dialogs.
 - Expanded and tested public ATS coverage, discovery isolation, lifecycle handling, and ingestion diagnostics.
+- Prevented incomplete paginated ATS refreshes from closing valid jobs, added rate-limit-aware retries for XML and HTML providers, and corrected ambiguous Canada/US location filtering.
+- Added a deterministic release benchmark that certifies all 12 supported hosted job adapters against the normalized job contract.
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Updated product, privacy, provider, troubleshooting, packaging, and release documentation.
 

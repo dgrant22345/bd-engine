@@ -6149,8 +6149,9 @@ async function fetchSmartRecruitersJobs(config, boardId) {
     const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }));
     return firstArray(payload?.content, payload?.postings, payload);
   });
+  assertCompleteAtsPages('SmartRecruiters', pages);
   for (const page of pages) {
-    if (page.status === 'fulfilled') jobs.push(...page.value);
+    jobs.push(...page.value);
   }
   return { jobs };
 }
@@ -6185,8 +6186,9 @@ async function fetchWorkdayJobs(config) {
   const offsets = [];
   for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
   const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, readPage);
+  assertCompleteAtsPages('Workday', pages);
   for (const page of pages) {
-    if (page.status === 'fulfilled') jobs.push(...page.value.jobs);
+    jobs.push(...page.value.jobs);
   }
   return { jobs };
 }
@@ -6347,6 +6349,7 @@ async function fetchJson(url, timeoutMs = 15000, init = {}) {
       if (!response.ok) {
         const error = new Error(`ATS request failed with HTTP ${response.status}`);
         error.retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+        error.retryAfterMs = readRetryAfterMs(response);
         throw error;
       }
 
@@ -6369,29 +6372,66 @@ async function fetchJson(url, timeoutMs = 15000, init = {}) {
     } finally {
       clearTimeout(timeout);
     }
-    await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    await waitForAtsRetry(lastError, attempt);
   }
   throw lastError || new Error('ATS request failed');
 }
 
 async function fetchText(url, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      headers: {
-        accept: 'text/html,application/xml,text/xml,application/json',
-        'user-agent': 'Mozilla/5.0 (compatible; BD-Engine/1.0; +https://bd-engine-production.up.railway.app/)',
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`ATS request failed with HTTP ${response.status}`);
+  let lastError = null;
+  for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: 'text/html,application/xml,text/xml,application/json',
+          'accept-language': 'en-US,en;q=0.9',
+          'user-agent': 'Mozilla/5.0 (compatible; BD-Engine/1.0; +https://bd-engine-production.up.railway.app/)',
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`ATS request failed with HTTP ${response.status}`);
+        error.retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+        error.retryAfterMs = readRetryAfterMs(response);
+        throw error;
+      }
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+      const retryable = error?.retryable === true || error?.name === 'AbortError' || error?.cause?.code === 'ECONNRESET';
+      if (!retryable || attempt === ATS_JSON_REQUEST_ATTEMPTS) throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    return await response.text();
-  } finally {
-    clearTimeout(timeout);
+    await waitForAtsRetry(lastError, attempt);
   }
+  throw lastError || new Error('ATS request failed');
+}
+
+function assertCompleteAtsPages(providerName, pages) {
+  const failedPages = pages.filter((page) => page.status === 'rejected');
+  if (!failedPages.length) return;
+  const error = new Error(`${providerName} could not load every results page. Retry the refresh; existing jobs were preserved.`);
+  error.cause = failedPages[0].reason;
+  throw error;
+}
+
+function readRetryAfterMs(response) {
+  const value = response?.headers?.get?.('retry-after');
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(10000, seconds * 1000);
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return null;
+  return Math.min(10000, Math.max(0, retryAt - Date.now()));
+}
+
+async function waitForAtsRetry(error, attempt) {
+  const retryAfterMs = error?.retryAfterMs == null ? Number.NaN : Number(error.retryAfterMs);
+  const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : 200 * attempt;
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function firstArray(...values) {
@@ -7465,8 +7505,18 @@ function getProviderJobIdentity(item = {}) {
   return `${tenant}|${atsType}|${normalizeKey(item.companyName)}|id:${normalizeKey(providerJobId)}`;
 }
 
-const CANADA_LOCATION_RE = /\b(canada|remote canada|canadian|ontario|on\b|toronto|gta|mississauga|ottawa|waterloo|kitchener|hamilton|london,?\s*on|british columbia|bc\b|vancouver|victoria|alberta|ab\b|calgary|edmonton|quebec|qc\b|montreal|montr[eé]al|nova scotia|ns\b|halifax|manitoba|mb\b|winnipeg|saskatchewan|sk\b|regina|saskatoon|new brunswick|nb\b|newfoundland|nl\b|prince edward island|pei\b|yukon|northwest territories|nunavut)\b/i;
-const US_LOCATION_RE = /\b(us|usa|u\.s\.a?|united states|america|california|ca\b|new york|ny\b|texas|tx\b|washington|wa\b|massachusetts|ma\b|florida|fl\b|illinois|il\b|georgia|colorado|arizona|virginia|seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles)\b/i;
+const CANADA_COUNTRY_RE = /\b(canada|canadian)\b/i;
+const US_COUNTRY_RE = /\b(us|usa|u\.s\.a?|united states(?: of america)?)\b/i;
+const NORTH_AMERICA_REGION_RE = /\bnorth america\b/i;
+const OTHER_REGION_RE = /\b(emea|europe|european union|uk|united kingdom|england|scotland|wales|ireland|netherlands|germany|france|spain|italy|poland|sweden|norway|denmark|finland|switzerland|austria|portugal|belgium|australia|new zealand|india|singapore|japan|china|hong kong|latin america|latam|apac|asia|africa|middle east)\b/i;
+const CANADA_PROVINCE_RE = /\b(ontario|british columbia|alberta|quebec|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland(?: and labrador)?|prince edward island|yukon|northwest territories|nunavut)\b/i;
+const US_STATE_RE = /\b(california|new york|texas|washington|massachusetts|florida|illinois|georgia|colorado|arizona|virginia|pennsylvania|north carolina|ohio|michigan|new jersey|maryland|oregon|minnesota|tennessee|utah|district of columbia)\b/i;
+const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montr\u00e9al|quebec city|halifax|winnipeg|regina|saskatoon|st\.? john'?s)\b/i;
+const US_CITY_RE = /\b(seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles|new york city|miami|dallas|houston|phoenix|portland|philadelphia|detroit|minneapolis|nashville|salt lake city)\b/i;
+const CANADA_CODE_RE = /,\s*(on|bc|ab|qc|ns|mb|sk|nb|pe|pei|yt|nt|nu)(?=\s*(?:,|\/|\||\)|$))/i;
+const US_CODE_RE = /,\s*(ca|ny|tx|wa|ma|fl|il|ga|co|az|va|pa|nc|oh|mi|nj|md|or|mn|tn|ut|dc)(?=\s*(?:,|\/|\||\)|$))/i;
+const OTHER_COUNTRY_CODE_RE = /,\s*(nl|gb|uk|ie|de|fr|es|it|pl|se|no|dk|fi|ch|at|pt|be|au|nz|in|sg|jp|cn|hk)(?=\s*(?:,|\/|\||\)|$))/i;
+const NEWFOUNDLAND_CODE_RE = /\b(st\.? john'?s|corner brook|gander|newfoundland),\s*nl\b/i;
 
 // The tenant's geographyFocus setting (e.g. "Canada + US", "Canada", "US",
 // "Global") controls which job locations survive import. Defaults to Canada+US
@@ -7491,10 +7541,26 @@ function classifyJobRegion(item, accountItem = null) {
     item.region,
     item.office,
     !item.location && accountItem?.location,
-  ].filter(Boolean).join(' ').toLowerCase();
+  ].filter(Boolean).join(' ').trim();
   if (!text.trim()) return 'unknown';
-  if (CANADA_LOCATION_RE.test(text)) return 'canada';
-  if (US_LOCATION_RE.test(text)) return 'us';
+
+  const canadaCountry = CANADA_COUNTRY_RE.test(text);
+  const usCountry = US_COUNTRY_RE.test(text);
+  if (NORTH_AMERICA_REGION_RE.test(text)) return 'north_america';
+  if (canadaCountry && usCountry) return 'north_america';
+  if (canadaCountry) return 'canada';
+  if (usCountry) return 'us';
+
+  // Explicit regions take precedence over ambiguous city names and over
+  // generic remote wording, such as "Victoria, Australia" or "Remote EMEA".
+  if (NEWFOUNDLAND_CODE_RE.test(text)) return 'canada';
+  if (OTHER_REGION_RE.test(text) || OTHER_COUNTRY_CODE_RE.test(text)) return 'other';
+  if (CANADA_CODE_RE.test(text)) return 'canada';
+  if (US_CODE_RE.test(text)) return 'us';
+  if (CANADA_PROVINCE_RE.test(text)) return 'canada';
+  if (US_STATE_RE.test(text)) return 'us';
+  if (CANADA_CITY_RE.test(text)) return 'canada';
+  if (US_CITY_RE.test(text)) return 'us';
   if (/remote/i.test(text)) return 'remote';
   return 'other';
 }
@@ -7505,6 +7571,7 @@ function jobMatchesGeography(item, accountItem, allow) {
   switch (classifyJobRegion(item, accountItem)) {
     case 'canada': return allowed.canada;
     case 'us': return allowed.us;
+    case 'north_america': return allowed.canada || allowed.us;
     case 'remote': return allowed.canada || allowed.us || allowed.other;
     case 'other': return allowed.other;
     case 'unknown': return true; // location unknown — keep rather than silently drop

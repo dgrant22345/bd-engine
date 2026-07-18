@@ -12,6 +12,7 @@
 ```powershell
 npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
+npm.cmd --prefix saas run benchmark:ats
 npm.cmd --prefix saas run test:browser
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -SkipInstaller
 ```
