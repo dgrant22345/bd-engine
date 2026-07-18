@@ -883,7 +883,7 @@ function buildSampleWorkspaceData(tenantId, persona = 'bd') {
     { id: id('activity-sample'), tenantId, type: 'sample_workspace', summary: 'Loaded synthetic sample workspace', notes: 'Synthetic data for product exploration; no real personal data.', occurredAt: now(), createdAt: now(), createdByUserId: 'system' },
   ];
   const sampleTasks = [
-    { id: id('task-sample'), tenantId, accountId: id('northstar'), title: isJobSeeker ? 'Draft Priya referral ask' : 'Send Priya hiring-signal follow-up', dueDate: futureDate(2), status: 'pending', priority: 'high', createdAt: now(), updatedAt: now() },
+    { id: id('task-sample'), tenantId, accountId: id('northstar'), summary: isJobSeeker ? 'Draft Priya referral ask' : 'Send Priya hiring-signal follow-up', dueDate: futureDate(2), status: 'pending', priority: 'high', createdAt: now(), updatedAt: now() },
   ];
   applyDerivedSampleCounts(sampleAccounts, sampleContacts, sampleJobs);
   return { accounts: sampleAccounts, contacts: sampleContacts, jobs: sampleJobs, configs: sampleConfigs, activities: sampleActivities, tasks: sampleTasks };

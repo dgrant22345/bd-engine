@@ -150,10 +150,12 @@
         } else if (state.resetToken) {
           state.view = 'reset';
         } else {
-          state.view = 'landing';
+          state.view = new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing';
         }
       } catch {
-        state.view = state.resetToken ? 'reset' : 'landing';
+        state.view = state.resetToken
+          ? 'reset'
+          : (new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing');
       }
       render();
     }
@@ -1283,12 +1285,14 @@
       const daysCopy = state.trialDaysRemaining !== null
         ? `${state.trialDaysRemaining} day${state.trialDaysRemaining === 1 ? '' : 's'} left`
         : '14-day trial';
+      const accountLabel = state.persona === 'jobseeker' ? 'companies' : 'accounts';
+      const contactLabel = state.persona === 'jobseeker' ? 'network contacts' : 'contacts';
 
       return `
         <div class="cloud-trial-cta" role="region" aria-label="Free trial limits and upgrade options">
           <div class="cloud-trial-cta-copy">
             <span class="cloud-trial-cta-kicker">Free trial · ${escapeHtml(daysCopy)}</span>
-            <strong>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} accounts, ${formatLimit(trialLimits.contacts)} contacts.</strong>
+            <strong>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} ${accountLabel}, ${formatLimit(trialLimits.contacts)} ${contactLabel}.</strong>
             <span>${state.persona === 'jobseeker' ? 'Job Seeker adds a larger search workspace and 50 CSV imports.' : 'Sales Pro adds unlimited ATS boards, enrichment, and CSV export.'}</span>
           </div>
           <div class="cloud-trial-cta-actions">

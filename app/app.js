@@ -2002,6 +2002,15 @@ async function init() {
   } catch (error) {
     initializationActive = false;
     hideWorkspaceLoadProgress();
+    if (error?.status === 401 && location.pathname.startsWith('/app')) {
+      const loginUrl = '/?login=1';
+      try {
+        window.top.location.replace(loginUrl);
+      } catch {
+        location.replace(loginUrl);
+      }
+      return;
+    }
     if (isBillingRequiredError(error)) {
       clearTimeout(longLoadTimer);
       await renderBillingRequiredView(error);
@@ -2014,6 +2023,8 @@ async function init() {
 
 function bindEvents() {
   window.addEventListener('hashchange', () => {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
     renderRoute().catch((error) => {
       if (isBillingRequiredError(error)) {
         renderBillingRequiredView(error);
@@ -3685,8 +3696,8 @@ async function renderBillingRequiredView(error = {}) {
   const canManageBilling = Boolean(billing?.canManageBilling);
   const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
   const stripeBillingMessage = stripeReady
-    ? (canManageBilling ? 'Open Stripe to update your payment method or plan.' : 'Checkout is ready.')
-    : 'Live checkout is not enabled yet. Ask the BD Engine owner to finish Stripe live-mode setup.';
+    ? (canManageBilling ? 'Open the secure billing portal to update your payment method or plan.' : 'Secure checkout is ready.')
+    : 'Online plan changes are not available in this workspace. Your current access is unchanged.';
 
   appRoot.innerHTML = `
     <section class="hero-card">
@@ -3701,7 +3712,7 @@ async function renderBillingRequiredView(error = {}) {
             <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
           </select>
           <div class="button-row">
-            <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${stripeReady || canManageBilling ? '' : ' disabled'}>${canManageBilling ? 'Open Stripe billing' : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled')}</button>
+            <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${stripeReady || canManageBilling ? '' : ' disabled'}>${canManageBilling ? 'Manage billing' : (stripeReady ? 'Choose this plan' : 'Plan changes unavailable')}</button>
           </div>
         </div>
       </div>
@@ -3756,7 +3767,7 @@ async function renderRoute() {
     renderBreadcrumbs([
       { label: 'Dashboard', href: '#/dashboard' },
       { label: 'Accounts', href: '#/accounts' },
-      { label: decodeURIComponent(parts[1]) },
+      { label: 'Account' },
     ]);
     await renderAccountDetail(parts[1]);
     return;
@@ -4525,14 +4536,11 @@ async function renderDashboardView(options = {}) {
   }
   setViewTitle('Dashboard');
   const shouldHydrateExtended = !options.extendedPayload;
-  const [dashboardPayload, tasksPayload] = await Promise.all([
-    options.dashboardPayload ? Promise.resolve(options.dashboardPayload) : api('/api/dashboard', { skipCache: true }),
-    options.tasksPayload ? Promise.resolve(options.tasksPayload) : api('/api/tasks', { skipCache: true }).catch(() => ({ items: [] })),
-  ]);
+  const dashboardPayload = options.dashboardPayload
+    ? await Promise.resolve(options.dashboardPayload)
+    : await api('/api/dashboard', { skipCache: true });
   const extendedPayload = options.extendedPayload || null;
   const dashboard = dashboardPayload || {};
-  const tasks = tasksPayload || {};
-  const taskList = (Array.isArray(tasks.items) ? tasks.items : []).slice(0, DASHBOARD_RENDER_LIMITS.tasks);
   dashboard.todayQueue = (Array.isArray(dashboard.todayQueue) ? dashboard.todayQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.todayQueue);
   dashboard.followUpAccounts = (Array.isArray(dashboard.followUpAccounts) ? dashboard.followUpAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
   dashboard.newJobsToday = (Array.isArray(dashboard.newJobsToday) ? dashboard.newJobsToday : []).slice(0, DASHBOARD_RENDER_LIMITS.recentJobs);
@@ -4565,7 +4573,6 @@ async function renderDashboardView(options = {}) {
   const networkLeadersList = Array.isArray(dashboard.networkLeaders) ? dashboard.networkLeaders : [];
   const maxNetwork = Math.max(1, ...networkLeadersList.map((item) => item.connectionCount || 0));
   const coverageEvents = (extended.activityFeed || []).length + (dashboard.recentlyDiscoveredBoards || []).length;
-  const queuePressure = (extended.overdueFollowUps || []).length + (extended.staleAccounts || []).length;
   const resolutionQueue = (dashboard.needsResolution && dashboard.needsResolution.length)
     ? dashboard.needsResolution
     : (Array.isArray(extended.resolutionQueue) ? extended.resolutionQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.resolution);
@@ -4574,33 +4581,6 @@ async function renderDashboardView(options = {}) {
   const jobsImportedLast24h = getDashboardImported24h(dashboard.summary);
   const jobsPostedLast24h = getDashboardPosted24h(dashboard.summary);
   const analyticsQueue = dashboard.todayQueue.slice(0, DASHBOARD_RENDER_LIMITS.analytics);
-  const dashboardStory = [
-    {
-      label: 'Priority lane',
-      value: topCompany ? `${formatNumber(getTargetScore(topCompany))}/100` : 'No company yet',
-      description: topCompany ? (getTargetScoreExplanation(topCompany) || topCompany.displayName) : 'Relax filters or run discovery to populate the lead lane.',
-      tone: 'accent',
-    },
-    {
-      label: 'Market motion',
-      value: `${formatNumber(activeJobCount)} tracked jobs`,
-      description: `${formatNumber(jobsImportedLast24h)} imported in 24h; ${formatNumber(jobsPostedLast24h)} posted in 24h.`,
-      tone: 'success',
-    },
-    {
-      label: 'Attention needed',
-      value: `${formatNumber(queuePressure)} accounts`,
-      description: queuePressure ? 'These accounts are overdue, stale, or ready for the next touch.' : 'No follow-up pressure is active right now.',
-      tone: 'warning',
-    },
-    {
-      label: 'Resolution backlog',
-      value: `${formatNumber(resolutionPressure)} accounts`,
-      description: resolutionPressure ? 'These accounts still need cleaner domain, careers, or ATS identity before they become reliable hiring signals.' : 'Resolver backlog is under control right now.',
-      tone: 'neutral',
-    },
-  ];
-
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
@@ -4623,9 +4603,6 @@ async function renderDashboardView(options = {}) {
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
             ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
           </div>
-          <div class="story-strip">
-            ${dashboardStory.map((item) => renderStoryCard(item.label, item.value, item.description, item.tone)).join('')}
-          </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Target score', topCompany ? formatNumber(getTargetScore(topCompany)) : '0')}
@@ -4635,50 +4612,6 @@ async function renderDashboardView(options = {}) {
         </div>
       </div>
 
-      ${taskList.length ? `
-      <div class="tasks-panel dashboard-panel">
-        <div class="panel-header">
-          <div>
-            <h3>Pending Tasks & Reminders</h3>
-            <p class="muted small">Your automated follow-up queue.</p>
-          </div>
-          <span class="badge badge--warning">${pluralize(taskList.length, 'task')}</span>
-        </div>
-        <div class="task-list">
-          ${taskList.map(task => `
-            <div class="task-item" id="task-${task.id}">
-              <div class="task-info">
-                <div class="task-summary">${escapeHtml(task.summary)}</div>
-                <div class="task-meta">Due ${formatDate(task.dueDate)}</div>
-              </div>
-              <button class="ghost-button ghost-button--xs" data-action="complete-task" data-id="${task.id}">Mark Done</button>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-      ` : ''}
-
-      ${topCompany ? `
-        <div class="spotlight-card">
-          <div class="panel-header">
-            <div>
-              <h3>${escapeHtml(personaCopy.spotlightTitle)}</h3>
-              <p class="muted small">${escapeHtml(personaCopy.spotlightSubtitle)}</p>
-            </div>
-            ${renderStatusPill(topCompany.hiringStatus || 'No active jobs', topCompany.jobCount > 0 ? 'success' : 'neutral')}
-          </div>
-          <div class="spotlight-copy">
-            <div class="spotlight-quote">${escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.outreachDraft || 'Open the account for a deeper view.')}</div>
-            <div class="spotlight-metrics">
-              ${renderSignalChip('Target score', `${formatNumber(getTargetScore(topCompany))}/100`, 'accent')}
-              ${renderSignalChip('Hiring velocity', formatNumber(topCompany.hiringVelocity || 0), 'success')}
-              ${renderSignalChip('Engagement', formatNumber(topCompany.engagementScore || 0), 'neutral')}
-              ${renderSignalChip('Next action', topCompany.nextAction || 'Review account', 'accent')}
-              ${renderSignalChip('Open roles', formatNumber(topCompany.openRoleCount || topCompany.jobCount), 'success')}
-            </div>
-          </div>
-        </div>
-      ` : ''}
     </section>`)}
 
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
@@ -5113,6 +5046,11 @@ async function renderAccountDetail(accountId) {
   appState.accountDetail = detail;
   appState.generatedOutreach = null;
   setViewTitle(detail.account.displayName);
+  renderBreadcrumbs([
+    { label: 'Dashboard', href: '#/dashboard' },
+    { label: 'Accounts', href: '#/accounts' },
+    { label: detail.account.displayName },
+  ]);
   const targetScore = getTargetScore(detail.account);
   const targetScoreExplanation = getTargetScoreExplanation(detail.account) || detail.account.recommendedAction || 'No target-score explanation available yet.';
   const connectionGraph = detail.account.connectionGraph || { shortestPathToDecisionMaker: { summary: 'No warm intro path mapped yet.', pathLength: 0 }, warmIntroCandidates: [], relationshipStrengthScore: 0 };
@@ -5239,8 +5177,8 @@ async function renderAccountDetail(accountId) {
       <div class="action-zone-col">
         <div class="table-card">
           <div class="panel-header"><div><h3>Top contacts</h3><p class="muted small">Click a name to open LinkedIn, or click anywhere else on the row to select for outreach.</p></div></div>
-          ${detail.contacts.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th><th>Action</th></tr></thead><tbody>' +
-            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td>' + escapeHtml(c.title || '') + '</td><td>' + formatNumber(c.priorityScore) + '</td><td>' + formatDate(c.connectedOn) + '</td><td><button class="ghost-button ghost-button--xs" type="button" data-action="select-contact-outreach" data-account-id="' + escapeAttr(detail.account.id) + '" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName || '') + '">Outreach</button></td></tr>').join('') +
+          ${detail.contacts.length ? '<div class="table-scroll top-contacts-table"><table class="table"><thead><tr><th>Contact</th><th>Role & relationship</th><th>Action</th></tr></thead><tbody>' +
+            detail.contacts.map((c) => '<tr class="contact-row-selectable" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName) + '" data-contact-title="' + escapeAttr(c.title || '') + '"><td>' + (() => { const linkedinHref = getContactLinkedInHref(c, detail.account.displayName); return linkedinHref ? '<a class="row-link" href="' + escapeAttr(linkedinHref) + '" target="_blank" rel="noreferrer"><strong>' + escapeHtml(c.fullName || '') + '</strong></a>' : '<strong>' + escapeHtml(c.fullName || '') + '</strong>'; })() + '</td><td><strong class="contact-role">' + escapeHtml(c.title || 'Role not listed') + '</strong><span class="contact-relationship-meta">' + formatNumber(c.priorityScore) + ' score · connected ' + formatDate(c.connectedOn) + '</span></td><td><button class="ghost-button ghost-button--xs" type="button" data-action="select-contact-outreach" data-account-id="' + escapeAttr(detail.account.id) + '" data-contact-id="' + escapeAttr(c.id || '') + '" data-contact-name="' + escapeAttr(c.fullName || '') + '" aria-label="Draft outreach for ' + escapeAttr(c.fullName || 'contact') + '">Draft</button></td></tr>').join('') +
             '</tbody></table></div>' : renderEmptyState({ icon: 'People', title: 'No contacts imported for this account', copy: 'Import LinkedIn connections or add contacts so outreach has a warm path.', action: '<a class="secondary-button" href="#/admin">Import contacts</a>' })}
         </div>
       </div>
@@ -5586,23 +5524,18 @@ async function renderAdminView() {
   const stripeStatus = billing.stripe || {};
   const stripeReady = Boolean(stripeStatus.checkoutReady ?? stripeStatus.ready);
   const stripeCommercialReady = Boolean(stripeStatus.commercialReady);
-  const stripeMissing = Array.isArray(stripeStatus.missing) && stripeStatus.missing.length
-    ? stripeStatus.missing.join(', ')
-    : '';
   const stripeBillingMessage = stripeCommercialReady
-    ? 'Stripe live checkout is ready.'
+    ? 'Secure online plan changes are available.'
     : (stripeReady
-      ? `Stripe checkout is configured in ${stripeStatus.mode || 'unknown'} mode. Use live Stripe keys before launch.`
-      : (stripeStatus.ready && stripeStatus.mode === 'test'
-        ? 'Stripe is in test mode, so public paid checkout is disabled until live keys are set.'
-        : `Stripe checkout needs setup${stripeMissing ? `: ${stripeMissing}` : '.'}`));
+      ? 'Secure checkout is available for configured plans.'
+      : 'Online plan changes are not available in this workspace. Your current access is unchanged.');
   const billingAccess = billing.billingAccess || {};
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
   const billingPrimaryAction = billing.canManageBilling ? 'billing-portal' : 'billing-checkout';
   const billingPrimaryLabel = billing.canManageBilling
-    ? (paymentAttentionRequired ? 'Update payment method' : 'Manage plan in Stripe')
-    : (stripeReady ? 'Subscribe via Stripe' : 'Live checkout disabled');
+    ? (paymentAttentionRequired ? 'Update payment method' : 'Manage plan')
+    : (stripeReady ? 'Choose a plan' : 'Plan changes unavailable');
   const siteAnalyticsSection = canViewSiteAnalytics ? `
         ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
           <div class="metrics-grid metrics-grid--compact">
@@ -5707,7 +5640,7 @@ async function renderAdminView() {
             <div class="action-card">
               <p class="eyebrow">Current Plan: ${escapeHtml(billing.plan?.name || 'Trial')}</p>
               <h4>${paymentAttentionRequired ? 'Payment needs attention' : 'Manage your workspace plan'}</h4>
-              <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}${stripeReady && stripeMissing ? ` Missing optional plans: ${escapeHtml(stripeMissing)}` : ''}</p>
+              <p class="small muted">You are currently on the ${escapeHtml(billing.plan?.displayName || 'Trial')} plan. ${escapeHtml(stripeBillingMessage)}</p>
               ${paymentAttentionRequired ? `<div class="billing-notice billing-notice--warning" role="status"><strong>Workspace access remains available during recovery.</strong><span>Update the payment method by ${escapeHtml(billingGraceDate || 'the grace deadline')}${billingAccess.graceDaysRemaining !== null && billingAccess.graceDaysRemaining !== undefined ? ` (${formatNumber(billingAccess.graceDaysRemaining)} day${billingAccess.graceDaysRemaining === 1 ? '' : 's'} remaining)` : ''}.</span></div>` : ''}
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
@@ -5981,7 +5914,10 @@ function renderContactsTable(items) {
             <div class="button-row button-row--wrap">
               <button class="ghost-button ghost-button--xs" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId || '')}" data-contact-id="${escapeAttr(item.id || '')}" data-contact-name="${escapeAttr(item.fullName || '')}" ${item.accountId ? '' : 'disabled'}>Outreach</button>
             </div>
-            <form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
+            <details class="contact-edit-details">
+              <summary>Edit details</summary>
+              <form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form contact-inline-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
+            </details>
           </td>
         </tr>`).join('')}
     </tbody></table></div>`;
@@ -8331,11 +8267,12 @@ function renderTaskSection(title, tasks, tone) {
 }
 
 function renderTaskItem(task) {
+  const summary = task.summary || task.title || 'Follow-up task';
   return `
     <article class="task-item">
       <div class="task-item-main">
         <div class="task-item-info">
-          <strong>${escapeHtml(task.summary)}</strong>
+          <strong>${escapeHtml(summary)}</strong>
           <div class="small muted">Due ${formatDate(task.dueDate)}</div>
         </div>
         <div class="task-item-actions">

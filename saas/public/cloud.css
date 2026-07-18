@@ -1833,3 +1833,69 @@ a:hover { text-decoration: underline; }
   .trust-actions { flex-direction: column; }
   .trust-actions .btn { width: 100%; }
 }
+
+/* Render-reviewed shell density for 720-900px laptop viewports. */
+.cloud-demo-banner,
+.cloud-trial-cta {
+  min-height: 48px;
+  padding: 8px 20px;
+}
+
+@media (max-height: 800px) {
+  .cloud-demo-banner,
+  .cloud-trial-cta {
+    gap: 10px;
+    min-height: 44px;
+    padding-block: 6px;
+  }
+
+  .cloud-trial-cta-copy span:last-child,
+  .cloud-demo-banner span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .auth-page {
+    align-items: flex-start;
+    padding: 12px 24px;
+  }
+
+  .auth-card {
+    max-width: 480px;
+    padding: 18px 28px;
+  }
+
+  .auth-header {
+    margin-bottom: 12px;
+  }
+
+  .brand-icon-sm {
+    margin-bottom: 10px;
+  }
+
+  .auth-form {
+    gap: 8px;
+  }
+
+  .auth-footer {
+    margin-top: 12px;
+  }
+}
+
+@media (min-width: 800px) and (max-width: 1024px) {
+  .cloud-demo-banner,
+  .cloud-trial-cta {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .cloud-referral-note {
+    display: none;
+  }
+
+  .cloud-trial-cta-actions {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+  }
+}
