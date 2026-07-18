@@ -8,6 +8,9 @@ Run these before pushing a production change:
 npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
 npm.cmd --prefix saas run test:browser
+npm.cmd --prefix saas audit --omit=dev --audit-level=high
+npm.cmd --prefix saas run check:production-config
+npm.cmd --prefix saas run verify:db-contracts
 $env:BD_CLOUD_SMOKE_URL='http://127.0.0.1:8787'
 npm.cmd --prefix saas run smoke
 ```
@@ -20,6 +23,22 @@ After deployment, verify `/health`, relational parity, recent application
 errors, and HTTP 5xx logs. A healthy release has a connected database, zero
 mirror mismatches, zero deep-content mismatches, and the expected relational
 primary count.
+
+For an aggregate-only ATS diagnosis that does not print customer records:
+
+```powershell
+npm.cmd --prefix saas run report:job-coverage -- --tenant <tenant-id>
+```
+
+Legacy board records can be linked to an unambiguous normalized-name match with
+a guarded repair. It is dry-run by default. Before applying, create and verify
+a current backup; the exact backup reference is recorded in the audit log.
+
+```powershell
+npm.cmd --prefix saas run repair:board-links -- --tenant <tenant-id>
+npm.cmd --prefix saas run repair:board-links -- --tenant <tenant-id> --apply --confirm LINK_BOARD_CONFIGS --backup-reference <backup-id-or-sha>
+npm.cmd --prefix saas run check:integrity -- --tenant <tenant-id>
+```
 
 ## Backup and restore
 
@@ -96,6 +115,14 @@ The app reports these in the authenticated status screen:
   and support notifications. New customer messages go to support admins;
   customer-facing replies go to the requester. Internal notes are never emailed.
   Confirm these flows against real inboxes after changing either setting.
+- `BD_REQUIRE_EMAIL_VERIFICATION=true` blocks unverified users from CSV/job
+  imports, ATS discovery, and external resolution work. Enable it only after
+  verification delivery has been tested; the commercial configuration check
+  requires it.
+- Authentication, demo, verification, client-error, and support abuse limits are
+  coordinated through hashed PostgreSQL buckets. Raw IP addresses and emails are
+  not stored in the limiter table; expired buckets are removed by operational
+  cleanup.
 - `BD_ERROR_WEBHOOK` enables immediate server-error alerts.
 - An external uptime monitor should poll `/health` and alert on non-200 results.
 - Privacy and Terms copy requires legal review before broad commercial launch.

@@ -2369,6 +2369,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'curate-legacy-targets') {
+      await curateLegacyTargets();
+      return;
+    }
+
     if (actionName === 'run-target-score-rollout') {
       await runTargetScoreRollout(action);
       return;
@@ -3694,8 +3699,11 @@ async function renderBillingRequiredView(error = {}) {
   const stripeReady = Boolean(stripeStatus.checkoutReady);
   const selectedPlanId = isJobSeekerPersona() ? 'jobseeker' : 'sales';
   const canManageBilling = Boolean(billing?.canManageBilling);
+  const canChangeBilling = billing?.canChangeBilling !== false;
   const message = error.message || error.error || 'Your trial has ended. Choose a plan to continue using BD Engine.';
-  const stripeBillingMessage = stripeReady
+  const stripeBillingMessage = !canChangeBilling
+    ? 'A workspace owner or admin must manage the subscription.'
+    : stripeReady
     ? (canManageBilling ? 'Open the secure billing portal to update your payment method or plan.' : 'Secure checkout is ready.')
     : 'Online plan changes are not available in this workspace. Your current access is unchanged.';
 
@@ -3712,7 +3720,7 @@ async function renderBillingRequiredView(error = {}) {
             <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
           </select>
           <div class="button-row">
-            <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${stripeReady || canManageBilling ? '' : ' disabled'}>${canManageBilling ? 'Manage billing' : (stripeReady ? 'Choose this plan' : 'Plan changes unavailable')}</button>
+            <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${canChangeBilling && (stripeReady || canManageBilling) ? '' : ' disabled'}>${!canChangeBilling ? 'Owner access required' : (canManageBilling ? 'Manage billing' : (stripeReady ? 'Choose this plan' : 'Plan changes unavailable'))}</button>
           </div>
         </div>
       </div>
@@ -5532,8 +5540,11 @@ async function renderAdminView() {
   const billingAccess = billing.billingAccess || {};
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
+  const canChangeBilling = billing.canChangeBilling !== false;
   const billingPrimaryAction = billing.canManageBilling ? 'billing-portal' : 'billing-checkout';
-  const billingPrimaryLabel = billing.canManageBilling
+  const billingPrimaryLabel = !canChangeBilling
+    ? 'Owner access required'
+    : billing.canManageBilling
     ? (paymentAttentionRequired ? 'Update payment method' : 'Manage plan')
     : (stripeReady ? 'Choose a plan' : 'Plan changes unavailable');
   const siteAnalyticsSection = canViewSiteAnalytics ? `
@@ -5648,7 +5659,7 @@ async function renderAdminView() {
                   <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
                 </select>
                 <div class="button-row">
-                  <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${stripeReady || billing.canManageBilling ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>
+                  <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${canChangeBilling && (stripeReady || billing.canManageBilling) ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>
                 </div>
               </div>
             </div>
@@ -6488,6 +6499,7 @@ function renderJobCoverageHealth(diagnostics = {}) {
   const tracked = Number(summary.trackedCompanies || 0);
   const ready = Number(summary.importReady || 0);
   const issueCount = Number(summary.totalIssues || 0);
+  const legacyUnclassified = Number(summary.legacyUnclassifiedCompanies || 0);
   const coverageCopy = tracked
     ? `${formatNumber(ready)} of ${formatNumber(tracked)} tracked companies have a refresh-ready job source.`
     : 'Track companies to begin finding job sources.';
@@ -6501,6 +6513,7 @@ function renderJobCoverageHealth(diagnostics = {}) {
         </div>
         ${renderStatusPill(issueCount ? `${formatNumber(issueCount)} to improve` : 'Coverage healthy', issueCount ? 'warning' : 'success')}
       </div>
+      ${legacyUnclassified ? `<div class="ingestion-health__notice" role="status"><strong>Focus automatic refresh on a target portfolio.</strong><span>${formatNumber(legacyUnclassified)} legacy companies are currently treated as targets because they predate target selection. Classify the strongest companies so discovery is not spread across your entire network history.</span><button class="ghost-button ghost-button--xs" type="button" data-action="curate-legacy-targets">Choose target count</button></div>` : ''}
       <div class="metrics-grid metrics-grid--compact">
         ${renderMetricCard('Ready sources', ready, `${formatNumber(summary.readyNotRun || 0)} have not run yet`)}
         ${renderMetricCard('Refreshed successfully', summary.successful || 0, 'Sources returning usable live jobs')}
@@ -7624,6 +7637,56 @@ function renderOutreachPiece(title, body, actionsHtml, className = '', fieldName
   `;
 }
 
+async function curateLegacyTargets() {
+  const rawLimit = await showAppDialog({
+    title: 'Choose the target portfolio size',
+    message: 'BD Engine will rank legacy companies by target score, live roles, and relationship strength. Other companies remain searchable but stop consuming automatic ATS discovery.',
+    confirmLabel: 'Preview selection',
+    inputLabel: 'Number of target companies (1-1,000)',
+    inputPlaceholder: '100',
+    inputValue: '100',
+  });
+  if (rawLimit === null) return;
+  const targetLimit = Number(rawLimit);
+  if (!Number.isInteger(targetLimit) || targetLimit < 1 || targetLimit > 1000) {
+    showToast('Enter a whole number from 1 to 1,000.', 'warning');
+    return;
+  }
+
+  try {
+    const preview = await api(`/api/accounts/legacy-target-curation?targetLimit=${targetLimit}`, { skipCache: true });
+    if (!preview.legacyCompanies) {
+      showToast('All companies are already classified.', 'info');
+      await renderAdminView();
+      return;
+    }
+    const workspaceName = appState.bootstrap?.workspace?.name || 'Workspace';
+    const expected = `CURATE ${workspaceName}`;
+    const examples = (preview.preview || []).slice(0, 4).map((item) => item.displayName).filter(Boolean).join(', ');
+    const confirmation = await showAppDialog({
+      title: 'Confirm target classification',
+      message: `${formatNumber(preview.selectedTargets)} companies will receive automatic ATS discovery and ${formatNumber(preview.networkCompanies)} will remain network context. Top-ranked examples: ${examples || 'none available'}. This changes classification, not customer records or historical jobs.`,
+      confirmLabel: 'Classify companies',
+      cancelLabel: 'Keep current setup',
+      danger: true,
+      inputLabel: `Type ${expected} to confirm`,
+    });
+    if (confirmation === null) return;
+    if (confirmation !== expected) {
+      showToast(`Type ${expected} exactly to continue.`, 'warning');
+      return;
+    }
+    const result = await api('/api/accounts/legacy-target-curation', {
+      method: 'POST',
+      body: JSON.stringify({ targetLimit, confirm: confirmation }),
+    });
+    showToast(result.message || 'Legacy companies classified.', 'success', 7000);
+    await renderAdminView();
+  } catch (error) {
+    showToast(`Target classification failed: ${error.message}`, 'error', 7000);
+  }
+}
+
 function renderGeneratedOutreachVariants(outreach) {
   if (!outreach?.variants?.length) return '';
   return `
@@ -7912,7 +7975,6 @@ async function archiveAccount(accountId) {
 async function runSearch(value) {
   searchResults.classList.remove('hidden');
   searchResults.setAttribute('aria-busy', 'true');
-  searchInput?.setAttribute('aria-expanded', 'true');
   try {
     const results = await api(`/api/search${buildQuery({ q: value })}`);
     if (searchInput?.value.trim() !== value) {
@@ -7937,7 +7999,6 @@ async function runSearch(value) {
 function hideSearchResults({ keepContent = false } = {}) {
   searchResults.classList.add('hidden');
   searchResults.setAttribute('aria-busy', 'false');
-  searchInput?.setAttribute('aria-expanded', 'false');
   if (!keepContent) searchResults.innerHTML = '';
 }
 

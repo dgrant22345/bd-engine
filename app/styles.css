@@ -6,9 +6,9 @@
   --surface-muted: #f6f8fb;
   --surface-ink: #0f1728;
   --ink: #162033;
-  --muted: #617089;
+  --muted: #52617a;
   --text: #162033;
-  --text-muted: #617089;
+  --text-muted: #52617a;
   --line: rgba(22, 32, 51, 0.1);
   --border: rgba(22, 32, 51, 0.1);
   --line-strong: rgba(22, 32, 51, 0.16);
@@ -5550,15 +5550,15 @@ body.print-mode .main { margin: 0 !important; padding: 10px !important; max-widt
   --surface-muted: #f3f6fa;
   --surface-ink: #111827;
   --ink: #172033;
-  --muted: #66758b;
+  --muted: #52617a;
   --text: #172033;
-  --text-muted: #66758b;
+  --text-muted: #52617a;
   --line: rgba(23, 32, 51, 0.1);
   --border: rgba(23, 32, 51, 0.1);
   --line-strong: rgba(23, 32, 51, 0.16);
   --accent: #2563eb;
   --accent-soft: rgba(37, 99, 235, 0.1);
-  --success: #0f8a67;
+  --success: #087354;
   --success-soft: rgba(15, 138, 103, 0.11);
   --warning: #b7791f;
   --warning-soft: rgba(183, 121, 31, 0.13);
@@ -5683,6 +5683,7 @@ body {
   color: var(--sidebar-muted);
   font-size: 0.66rem;
   font-weight: 700;
+  opacity: 1;
 }
 
 .sidebar-footnote {

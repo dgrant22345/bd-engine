@@ -35,6 +35,60 @@ export async function dbQuery(text, params = []) {
   return pool.query(text, params);
 }
 
+export async function dbTransaction(work) {
+  if (!dbReady || !pool) throw new Error('Database is not ready.');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work((text, params = []) => client.query(text, params));
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function dbClassifyLegacyAccounts(tenantId, selectedIds, timestamp) {
+  if (!dbReady || !pool) return { saved: false, reason: 'database_not_ready' };
+  const ids = Array.isArray(selectedIds) ? selectedIds : [];
+  return dbTransaction(async (query) => {
+    const relational = await query(`
+      UPDATE accounts
+      SET raw = jsonb_set(
+            jsonb_set(coalesce(raw, '{}'::jsonb), '{tracked}', to_jsonb(id = ANY($2::text[])), true),
+            '{updatedAt}', to_jsonb($3::text), true
+          ),
+          updated_at = $3
+      WHERE tenant_id = $1 AND NOT (coalesce(raw, '{}'::jsonb) ? 'tracked')
+    `, [tenantId, ids, timestamp]);
+    const legacy = await query(`
+      UPDATE tenant_data data
+      SET accounts = classified.accounts, updated_at = $3
+      FROM (
+        SELECT coalesce(jsonb_agg(
+          CASE
+            WHEN NOT (account.item ? 'tracked')
+              THEN jsonb_set(
+                jsonb_set(account.item, '{tracked}', to_jsonb((account.item->>'id') = ANY($2::text[])), true),
+                '{updatedAt}', to_jsonb($3::text), true
+              )
+            ELSE account.item
+          END
+          ORDER BY account.ordinality
+        ), '[]'::jsonb) AS accounts
+        FROM tenant_data source
+        CROSS JOIN LATERAL jsonb_array_elements(source.accounts) WITH ORDINALITY AS account(item, ordinality)
+        WHERE source.tenant_id = $1
+      ) classified
+      WHERE data.tenant_id = $1
+    `, [tenantId, ids, timestamp]);
+    return { saved: true, relationalUpdated: relational.rowCount || 0, legacyUpdated: legacy.rowCount || 0 };
+  });
+}
+
 async function runSchemaMigration(id, description, migrate) {
   const client = await pool.connect();
   try {
@@ -70,6 +124,11 @@ export async function initDb() {
       max: Math.max(1, Math.min(20, Number(process.env.BD_DB_POOL_MAX) || 5)),
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
+    });
+    pool.on('error', (error) => {
+      // pg removes a failed idle client from the pool. Handle the event so a
+      // transient database disconnect does not become an uncaught process exit.
+      console.error('DB: Unexpected idle client error:', error.message);
     });
 
     // Test connection
@@ -610,6 +669,20 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260718_shared_rate_limits', 'Add durable cross-instance abuse limits', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+          bucket_key TEXT PRIMARY KEY,
+          window_start TEXT NOT NULL,
+          request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+          expires_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS rate_limit_buckets_expires_idx
+          ON rate_limit_buckets (expires_at);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -655,6 +728,40 @@ export async function dbClaimStripeWebhook(eventId, eventType = '') {
   return result.rowCount
     ? { acquired: true, attempts: Number(result.rows[0].attempts || 1), storage: 'postgres' }
     : { acquired: false, duplicate: true };
+}
+
+export async function dbConsumeRateLimit(bucketKey, max, windowMs, nowMs = Date.now()) {
+  if (!dbReady || !pool) return null;
+  const limit = Math.max(1, Number(max) || 1);
+  const duration = Math.max(1, Number(windowMs) || 1);
+  const now = new Date(nowMs).toISOString();
+  const expiresAt = new Date(nowMs + duration).toISOString();
+  const result = await pool.query(`
+    INSERT INTO rate_limit_buckets (
+      bucket_key, window_start, request_count, expires_at, updated_at
+    ) VALUES ($1, $2, 1, $3, $2)
+    ON CONFLICT (bucket_key) DO UPDATE SET
+      window_start = CASE
+        WHEN rate_limit_buckets.expires_at <= EXCLUDED.updated_at THEN EXCLUDED.window_start
+        ELSE rate_limit_buckets.window_start
+      END,
+      request_count = CASE
+        WHEN rate_limit_buckets.expires_at <= EXCLUDED.updated_at THEN 1
+        ELSE rate_limit_buckets.request_count + 1
+      END,
+      expires_at = CASE
+        WHEN rate_limit_buckets.expires_at <= EXCLUDED.updated_at THEN EXCLUDED.expires_at
+        ELSE rate_limit_buckets.expires_at
+      END,
+      updated_at = EXCLUDED.updated_at
+    RETURNING request_count, expires_at
+  `, [String(bucketKey || ''), now, expiresAt]);
+  const row = result.rows[0];
+  return {
+    exceeded: Number(row?.request_count || 0) > limit,
+    count: Number(row?.request_count || 0),
+    resetAt: row?.expires_at || expiresAt,
+  };
 }
 
 export async function dbCompleteStripeWebhook(eventId) {
@@ -705,6 +812,7 @@ export async function dbSaveUser(user) {
     );
   } catch (err) {
     console.error('DB: Failed to save user:', err.message);
+    throw err;
   }
 }
 
@@ -820,6 +928,7 @@ export async function dbSaveMembership(m) {
     );
   } catch (err) {
     console.error('DB: Failed to save membership:', err.message);
+    throw err;
   }
 }
 
@@ -1639,6 +1748,7 @@ export async function dbSaveSession(session) {
     );
   } catch (err) {
     console.error('DB: Failed to save session:', err.message);
+    throw err;
   }
 }
 
@@ -1648,6 +1758,7 @@ export async function dbDeleteSession(sessionId) {
     await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
   } catch (err) {
     console.error('DB: Failed to delete session:', err.message);
+    throw err;
   }
 }
 
@@ -1736,17 +1847,19 @@ export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays
   if (!dbReady) return null;
   const nowIso = new Date().toISOString();
   const jobCutoff = new Date(Date.now() - Math.max(1, Number(backgroundJobRetentionDays) || 14) * 86400000).toISOString();
-  const [sessions, resetTokens, verificationTokens, backgroundJobs] = await Promise.all([
+  const [sessions, resetTokens, verificationTokens, backgroundJobs, rateLimitBuckets] = await Promise.all([
     pool.query('DELETE FROM sessions WHERE expires_at < $1', [nowIso]),
     pool.query("DELETE FROM password_reset_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
     pool.query("DELETE FROM email_verification_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
     pool.query("DELETE FROM background_jobs WHERE status IN ('completed', 'failed', 'cancelled') AND finished_at <> '' AND finished_at < $1", [jobCutoff]),
+    pool.query('DELETE FROM rate_limit_buckets WHERE expires_at < $1', [nowIso]),
   ]);
   return {
     sessions: sessions.rowCount || 0,
     resetTokens: resetTokens.rowCount || 0,
     verificationTokens: verificationTokens.rowCount || 0,
     backgroundJobs: backgroundJobs.rowCount || 0,
+    rateLimitBuckets: rateLimitBuckets.rowCount || 0,
     cleanedAt: nowIso,
   };
 }

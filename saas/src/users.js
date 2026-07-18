@@ -101,12 +101,12 @@ export function authenticateUser(email, password) {
 
 // ── Tenant CRUD ─────────────────────────────────────────────────────────────
 
-export function setUserPassword(userId, password) {
+export async function setUserPassword(userId, password) {
   const user = findUserById(userId);
   if (!user) return { error: 'User not found.' };
   user.passwordHash = hashPassword(password);
   user.updatedAt = now();
-  dbSaveUser(user).catch(() => {});
+  await dbSaveUser(user);
   return { user };
 }
 

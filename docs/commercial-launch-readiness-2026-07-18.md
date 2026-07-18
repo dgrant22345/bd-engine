@@ -1,0 +1,212 @@
+# Commercial Launch Readiness - 2026-07-18
+
+## Executive verdict
+
+**LIMITED BETA READY. Not ready for a broad paid launch.** The core product is
+real and functional: production is healthy, tenant-scoped workflows work, live
+ATS adapters imported 2,409 public jobs from 12/12 providers in 8.8 seconds,
+and the main workspace currently holds 6,184 active jobs from 82 resolved
+boards. The remaining launch gates are operational configuration, legacy data
+curation, retention cleanup, and professional legal review rather than a demo
+backend or a missing scraper.
+
+Assumption: this is an early-stage hosted SaaS for staffing/recruiting business
+development users and individual job seekers, initially at low-to-moderate
+traffic and tens of thousands of records per large workspace. Railway hosts the
+Node/PostgreSQL app and a private Playwright renderer. A legacy Windows-local
+PowerShell/SQLite edition remains supported separately.
+
+## Architecture and trust boundaries
+
+- `saas/src/server.js`: HTTP API, authentication boundary, tenant authorization,
+  billing routes, support, privacy, health, and static cloud shell.
+- `saas/src/store.js`: tenant-scoped product workflows, import/discovery jobs,
+  deduplication, scoring, and legacy/relational persistence coordination.
+- `saas/src/db.js`: PostgreSQL connection, advisory-locked migrations, sessions,
+  billing webhooks, support, analytics, audit records, and application data.
+- `app/`: shared browser application loaded in a same-origin iframe.
+- `renderer/`: private bearer-authenticated Playwright service. It receives only
+  validated public careers URLs; SSRF checks block private/local destinations.
+- External processors/services: Railway/PostgreSQL, public ATS and careers sites,
+  Stripe, Resend when configured, and an operator-selected error webhook.
+- Sensitive data: account credentials, LinkedIn-derived contacts, notes,
+  outreach history, jobs, support messages, billing identifiers, and backups.
+
+## Verified baseline
+
+- SaaS syntax checks: pass.
+- SaaS unit/contract tests: 131/131 pass.
+- Chromium customer journeys and accessibility checks: 19/19 pass.
+- Compact compatibility journey: Chromium, Firefox, and WebKit pass.
+- Renderer checks/tests: 4/4 pass.
+- Deterministic ATS contract: 12/12 providers pass.
+- Live ATS canary: 12/12 providers, 2,409 jobs, 0 provider errors.
+- Production relational parity: 3/3 workspaces pass deep parity.
+- Production health: `{"ok":true,"status":"operational"}`.
+- Production dependency audits: 0 known vulnerabilities in SaaS and renderer.
+- Windows package staging: pass; public code signing was not verified.
+- No repository secret was found by the targeted scan. Test-only fake keys and
+  certificate marker parsing remain intentionally present.
+
+## P0 - launch blockers
+
+1. **Production session secret is below the new 32-character minimum.** Evidence:
+   the value-safe production checker reports only the variable name and length
+   failure. Impact: reduced signing-key strength; deploying the hardened build
+   will fail closed until this is rotated. Fix: generate a strong random secret,
+   schedule the expected one-time session logout, set it in Railway, and verify
+   login/logout/restart persistence. Never print or commit the value.
+2. **Production account recovery email is unavailable.** `RESEND_API_KEY` and
+   `BD_EMAIL_FROM` are unset. Impact: paying users cannot self-recover accounts
+   and verification/support email cannot be trusted. Fix: verify a sending
+   domain, configure both values, and test reset, verification, support receipt,
+   and reply delivery against real inboxes.
+3. **Verified-email enforcement is not enabled in production.** Configure and
+   test transactional email first, then set `BD_REQUIRE_EMAIL_VERIFICATION=true`.
+   Impact: until rollout, unverified accounts can consume import, discovery, and
+   renderer capacity. The production checker now fails until this gate is on.
+4. **Known duplicate personal-data workspace awaits an owner decision.**
+   `docs/workspace-provenance.md` documents 20,509 duplicated real contacts in
+   an abandoned trial identity. Impact: unnecessary privacy and breach exposure.
+   Fix: obtain explicit approval, take a fresh verified backup, delete through a
+   controlled audited operation, and document the retention decision.
+
+## P1 - serious commercial risks
+
+1. Production has no `BD_SUPPORT_ADMIN_EMAILS` and no `BD_ERROR_WEBHOOK`.
+   Customer requests and server failures lack accountable real-time routing.
+2. The main legacy workspace has 12,235 mechanically linkable board records and
+   12,317 unclassified legacy companies. Discovery is diluted across an entire
+   network history. A dry-run board-link repair and owner-confirmed target
+   curation workflow are now included; neither has changed production data.
+3. Full account closure is a support workflow, not automated. Workspace export
+   and owner-confirmed workspace-data deletion are implemented. Define and test
+   multi-workspace ownership transfer, Stripe cancellation, statutory retention,
+   and account erasure before automating full closure.
+4. Daily encrypted offsite backups, retention, alerting, and a recent restore
+   drill are documented but not proven by repository state. Record evidence in
+   the launch checklist; a backup that has never restored is not a recovery plan.
+5. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
+   agreements. Refunds, taxes, renewal/cancellation language, processor terms,
+   lawful-basis/consent, and Canadian/international privacy obligations need
+   qualified legal/accounting review.
+6. Windows distribution is not proven code-signed. Do not broadly distribute an
+   unsigned installer to paying customers.
+
+## P2 - important improvements
+
+- PostgreSQL relational entities still store timestamps as text and legacy
+  identity indexes are non-unique to tolerate old duplicates. Complete the
+  canary migration, deduplicate, then add safe partial unique constraints.
+- `saas/src/db.js` is the authoritative migration source while `schema.sql` is a
+  bootstrap snapshot. Add an automated schema-drift check or generated snapshot.
+- CI has syntax checks rather than ESLint/type checking or formatting enforcement.
+  Add focused linting incrementally; do not block releases on thousands of
+  unrelated legacy style findings at once.
+- Add centralized structured log retention, latency/error
+  dashboards, queue-depth alerts, and explicit ATS success-rate SLOs.
+- Activation analytics are page-view oriented. Add privacy-safe events for
+  signup, setup complete, first target, first resolved board, first useful job,
+  first outreach, upgrade start/success, cancellation, and recovery.
+- Consider MFA/passkeys for owner/support accounts that can access large contact
+  datasets.
+- Review dependency updates monthly and pin GitHub Actions by commit SHA for a
+  stricter CI supply-chain posture.
+
+## P3 - optional enhancements
+
+- Server-rendered metadata, sitemap, and richer SEO only matter if organic
+  acquisition becomes a channel; the authenticated product itself is the focus.
+- Add customer-visible incident history and an SLA only when support capacity
+  and monitoring can sustain the promise.
+- Add organization invites/seat billing after role semantics and seat limits are
+  fully productized; do not advertise seats before then.
+
+## Changes in this hardening pass
+
+- Enforced read-only viewer behavior and owner/admin billing permissions.
+- Restricted workspace-wide data deletion and legacy mass classification to the
+  owner role.
+- Made session creation, logout revocation, password reset, user/membership
+  persistence, legacy tenant saves, and privacy deletion fail truthfully on DB
+  errors. Added a PostgreSQL pool error listener to prevent idle-client crashes.
+- Added 10-character new-password minimum and 32-character production session
+  secret minimum; existing password hashes remain compatible.
+- Added a customer-facing Privacy and data dialog with export and typed deletion.
+- Added aggregate job-coverage diagnostics, dry-run board-link repair, and
+  owner-confirmed legacy target curation.
+- Added production configuration checks, deterministic Docker installs, CI
+  production dependency audits, stronger headers, tests, and runbook updates.
+- Added hashed PostgreSQL-backed rate limits shared across app instances, with a
+  bounded in-memory fallback when PostgreSQL is unavailable.
+- Added rollout-gated verified-email enforcement for imports and ATS discovery.
+- Added axe WCAG/contrast checks and Chromium, Firefox, and WebKit browser gates;
+  corrected search semantics and low-contrast UI tokens found by the rendered tests.
+
+## Required production configuration
+
+Core: `DATABASE_URL`, `SESSION_SECRET`, `BD_CLOUD_ENV=production`.
+
+Billing: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_JOBSEEKER`, `STRIPE_PRICE_SALES`.
+
+Customer operations: `RESEND_API_KEY`, `BD_EMAIL_FROM`,
+`BD_SUPPORT_ADMIN_EMAILS`, `BD_ERROR_WEBHOOK`,
+`BD_REQUIRE_EMAIL_VERIFICATION=true`.
+
+ATS renderer pair: `BD_ATS_RENDER_SERVICE_URL`,
+`BD_ATS_RENDER_SERVICE_TOKEN`; renderer service uses `RENDERER_TOKEN`.
+
+Privileged access: narrowly scoped `BD_INTERNAL_OWNER_EMAILS`,
+`BD_ANALYTICS_ADMIN_EMAILS`, and `BD_SUPPORT_ADMIN_EMAILS`.
+
+Never enable in production: `BD_EXPOSE_RESET_TOKEN`,
+`BD_ALLOW_TEST_CHECKOUT`, `BD_ENABLE_SYNTHETIC_ERROR`.
+
+## Deployment and rollback
+
+1. Resolve all P0 environment gates and run `check:production-config` without
+   exposing values.
+2. Create and verify a fresh encrypted backup; test its dry-run restore against
+   a disposable database.
+3. Run check, unit tests, browser tests, both dependency audits, ATS contract,
+   and renderer tests. Review `git diff` and deploy the exact approved commit.
+4. Verify `/readyz`, `/health`, login/logout, password email, setup, one ATS
+   discovery, one live refresh, billing test-mode flow, support delivery, and
+   relational parity. Do not run mutation smoke against customer data.
+5. Roll back by redeploying the last known-good commit. If a data repair was
+   applied, use its verified pre-change backup and documented restore procedure;
+   never reverse a migration with ad hoc SQL under incident pressure.
+
+## Monitoring and alert minimum
+
+- External `/health` and `/readyz` probes with paging on sustained failures.
+- 5xx rate, p95 latency, memory, restart count, DB connections, background queue
+  age/failures, ATS board success/empty/failure rates, webhook failures, email
+  failures, payment recovery state, and relational parity drift.
+- Alerts must include release and request ID, never customer rows or secrets.
+- Daily backup success and monthly restore-drill evidence.
+
+## Manual QA gate
+
+- Recruiter and job-seeker signup, verification, setup, CSV preview/import, target
+  selection, board discovery, job refresh, outreach, task completion, and logout.
+- Trial limit, upgrade, successful webhook, duplicate webhook, failed payment,
+  grace period, portal, cancellation, invoice access, and plan entitlement.
+- Owner/member/viewer permissions; cross-tenant requests; support customer/admin
+  views; privacy export; wrong and correct destructive confirmations.
+- Password reset, expired token, unavailable email, session restart, and logout
+  revocation.
+- Empty/loading/error/offline/retry states at desktop, laptop, and mobile widths;
+  keyboard-only operation and screen-reader labels on critical dialogs/forms.
+- ATS outage, renderer outage, rate limit, malformed/large CSV, duplicate import,
+  DB interruption, deploy restart, rollback, and restore rehearsal.
+
+## Professional review required
+
+Qualified counsel should review Privacy, Terms, consent/lawful processing of
+contact data, retention/erasure, cookies/analytics, subprocessors, cross-border
+transfers, anti-spam/outreach obligations, PIPEDA/GDPR applicability, and breach
+response. A qualified accountant should review taxes, invoices, refunds, and
+revenue recognition. Security controls here are engineering evidence, not SOC 2,
+PCI, GDPR, or PIPEDA certification.

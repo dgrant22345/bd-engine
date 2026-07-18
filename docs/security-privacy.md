@@ -14,7 +14,7 @@ Hosted workspaces store data in PostgreSQL. Data leaves the browser for the BD E
 - UI rendering escapes untrusted text and URLs are validated before use.
 - CSV parsing uses a structured parser and limits import size and resource creation.
 - Successful authenticated mutations create privacy-safe audit records.
-- Customer exports and account deletion are available from the authenticated account surface.
+- Customer exports and owner-confirmed workspace-data deletion are available from the authenticated account surface. Full account closure is handled through support until automated multi-workspace and billing cleanup is implemented.
 - Backups include sensitive data and must be encrypted, access controlled, and retention limited.
 
 ## Release Security Checks

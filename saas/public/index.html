@@ -39,6 +39,7 @@
       verificationMessage: '',
       emailVerificationAvailable: false,
       canManageSupport: false,
+      canManageWorkspace: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
     };
@@ -146,6 +147,7 @@
           state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
           state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
           state.canManageSupport = Boolean(data.canManageSupport);
+          state.canManageWorkspace = Boolean(data.canManageWorkspace);
           state.view = 'app';
         } else if (state.resetToken) {
           state.view = 'reset';
@@ -191,6 +193,7 @@
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
+        state.canManageWorkspace = Boolean(data.canManageWorkspace);
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -221,6 +224,7 @@
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
+        state.canManageWorkspace = Boolean(data.canManageWorkspace);
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
@@ -296,6 +300,7 @@
         state.demo = true;
         state.readOnly = true;
         state.canManageSupport = false;
+        state.canManageWorkspace = false;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -317,6 +322,7 @@
       state.readOnly = false;
       state.emailVerificationAvailable = false;
       state.canManageSupport = false;
+      state.canManageWorkspace = false;
       state.view = 'landing';
       state.error = '';
       render();
@@ -922,7 +928,7 @@
             <form id="reset-form" class="auth-form">
               <div class="form-group">
                 <label for="reset-password">New password</label>
-                <input type="password" id="reset-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" autofocus>
+                <input type="password" id="reset-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10" autofocus>
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Resetting...' : 'Reset password'}
@@ -973,7 +979,7 @@
               </div>
               <div class="form-group">
                 <label for="signup-password">Password</label>
-                <input type="password" id="signup-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6">
+                <input type="password" id="signup-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10">
               </div>
               <div class="form-group">
                 <label for="signup-workspace" id="workspace-label">Workspace name</label>
@@ -1166,6 +1172,85 @@
       }
     }
 
+    function openPrivacyCenter() {
+      root.querySelector('.support-backdrop')?.remove();
+      const expected = `DELETE ${state.tenant?.name || 'Workspace'}`;
+      const deletionPanel = state.canManageWorkspace ? `
+        <form class="support-compose" data-privacy-delete>
+          <div><h3>Delete workspace data</h3><p>Permanently removes accounts, contacts, jobs, boards, tasks, and activity. Your login and empty workspace remain available.</p></div>
+          <label for="privacy-confirm">Type <strong>${escapeHtml(expected)}</strong> to confirm</label>
+          <input id="privacy-confirm" name="confirm" autocomplete="off" required>
+          <div class="support-form-actions"><button class="btn btn-danger" type="submit" disabled>Delete workspace data</button></div>
+          <div data-privacy-result aria-live="polite"></div>
+        </form>` : `
+        <section class="support-compose">
+          <div><h3>Delete workspace data</h3><p>Only the workspace owner can permanently delete shared workspace data.</p></div>
+          <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-privacy-support>Contact support</button></div>
+        </section>`;
+
+      root.insertAdjacentHTML('beforeend', `
+        <div class="support-backdrop" data-privacy-backdrop>
+          <section class="support-modal" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+            <header class="support-modal-header">
+              <div><span class="support-eyebrow">Account controls</span><h2 id="privacy-title">Privacy and data</h2></div>
+              <button class="support-close" type="button" data-privacy-close aria-label="Close privacy and data">Close</button>
+            </header>
+            <div class="support-modal-body">
+              <div class="support-customer-layout">
+                <section class="support-compose">
+                  <div><h3>Export workspace data</h3><p>Download a JSON copy of your profile, accounts, contacts, jobs, boards, tasks, and activity.</p></div>
+                  <div class="support-form-actions"><button class="btn btn-primary" type="button" data-privacy-export>Download export</button></div>
+                  <p class="support-email-fallback">Need the account closed as well? Send an account request through the support center.</p>
+                </section>
+                ${deletionPanel}
+              </div>
+            </div>
+          </section>
+        </div>`);
+
+      const backdrop = root.querySelector('[data-privacy-backdrop]');
+      const onKeydown = (event) => { if (event.key === 'Escape') close(); };
+      const close = () => {
+        document.removeEventListener('keydown', onKeydown);
+        backdrop?.remove();
+      };
+      backdrop.querySelector('[data-privacy-close]')?.addEventListener('click', close);
+      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+      document.addEventListener('keydown', onKeydown);
+      backdrop.querySelector('[data-privacy-close]')?.focus();
+      backdrop.querySelector('[data-privacy-export]')?.addEventListener('click', () => {
+        close();
+        doExportData();
+      });
+      backdrop.querySelector('[data-privacy-support]')?.addEventListener('click', () => {
+        close();
+        openSupportCenter();
+      });
+
+      const form = backdrop.querySelector('[data-privacy-delete]');
+      const input = form?.elements.confirm;
+      const submit = form?.querySelector('button[type="submit"]');
+      input?.addEventListener('input', () => { submit.disabled = input.value.trim() !== expected; });
+      form?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        submit.textContent = 'Deleting...';
+        try {
+          const data = await api('/api/privacy/delete-workspace', {
+            method: 'POST',
+            body: JSON.stringify({ confirm: input.value.trim() }),
+          });
+          close();
+          state.verificationMessage = data.message || 'Workspace data deleted.';
+          render();
+        } catch (error) {
+          submit.textContent = 'Delete workspace data';
+          submit.disabled = input.value.trim() !== expected;
+          form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
+        }
+      });
+    }
+
     function wireCustomerSupportForms(backdrop) {
       backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -1342,7 +1427,7 @@
                   <hr>
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
                   ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
-                  <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Export my data</button>
+                  <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Privacy and data</button>
                   <button class="cloud-menu-item" id="cloud-support-btn" type="button" role="menuitem">Support center</button>
                   ${state.canManageSupport ? '<button class="cloud-menu-item" id="cloud-support-inbox-btn" type="button" role="menuitem">Support inbox</button>' : ''}
                   ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
@@ -1371,8 +1456,8 @@
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
-        doExportData();
         setUserMenuOpen(false);
+        openPrivacyCenter();
       });
       root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
         setUserMenuOpen(false);

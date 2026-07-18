@@ -304,9 +304,11 @@ test('billing journey: billing page opens from the account menu', async ({ page 
 test('privacy journey: workspace data export responds from the account menu', async ({ page }) => {
   await signup(page);
   await page.click('#cloud-avatar-btn');
+  await page.click('#cloud-export-btn');
+  await expect(page.getByRole('dialog', { name: 'Privacy and data' })).toBeVisible();
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
-    page.click('#cloud-export-btn'),
+    page.click('[data-privacy-export]'),
   ]);
   if (!download) {
     // Export may render inline instead of downloading; either way the page must respond visibly.

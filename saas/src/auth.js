@@ -1,7 +1,7 @@
 /**
  * BD Engine Cloud — Authentication module.
  *
- * Development stub that uses signed cookies for sessions.
+ * Signed-cookie authentication with server-side session persistence.
  * In production this would verify JWTs or use an auth provider (Clerk, Auth0, etc.).
  */
 
@@ -9,8 +9,12 @@ import { randomUUID, randomBytes, scryptSync, createHmac, createHash, timingSafe
 import { dbSaveSession, dbDeleteSession, dbLoadActiveSessions } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET || 'bd-engine-dev-secret-do-not-use-in-production';
-if (!process.env.SESSION_SECRET && (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production')) {
+const PRODUCTION_AUTH = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.BD_CLOUD_ENV === 'production' || process.env.NODE_ENV === 'production');
+if (!process.env.SESSION_SECRET && PRODUCTION_AUTH) {
   throw new Error('SESSION_SECRET is required in production.');
+}
+if (PRODUCTION_AUTH && SECRET.length < 32) {
+  throw new Error('SESSION_SECRET must contain at least 32 characters in production.');
 }
 
 // In-memory session cache, write-through to Postgres so sessions survive
@@ -48,7 +52,7 @@ function verifySignedCookie(cookie) {
 
 // ── Session management ──────────────────────────────────────────────────────
 
-export function createSession(userId, tenantId, extra = {}) {
+export async function createSession(userId, tenantId, extra = {}) {
   const sessionId = randomUUID();
   const session = {
     id: sessionId,
@@ -59,7 +63,12 @@ export function createSession(userId, tenantId, extra = {}) {
     ...extra,
   };
   sessions.set(sessionId, session);
-  dbSaveSession(session).catch(() => {});
+  try {
+    await dbSaveSession(session);
+  } catch (error) {
+    sessions.delete(sessionId);
+    throw error;
+  }
   return { sessionId, cookie: createSignedCookie(sessionId) };
 }
 
@@ -74,9 +83,9 @@ export function getSession(sessionId) {
   return session;
 }
 
-export function destroySession(sessionId) {
+export async function destroySession(sessionId) {
   sessions.delete(sessionId);
-  dbDeleteSession(sessionId).catch(() => {});
+  await dbDeleteSession(sessionId);
 }
 
 // Repopulate the in-memory cache from Postgres at startup so a deploy/restart

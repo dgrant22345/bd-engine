@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 
@@ -1187,7 +1187,7 @@ async function saveTenantNow(tenantId) {
     const settingsResult = await dbSaveTenantData(tenantId, { settings: data.settings }, { throwOnError: true });
     if (!settingsResult?.saved) throw new Error(`Workspace settings save failed: ${settingsResult?.reason || 'unknown error'}`);
   } else {
-    await dbSaveTenantData(tenantId, data);
+    await dbSaveTenantData(tenantId, data, { throwOnError: true });
     try {
       await syncTenantRelationalMirror(tenantId, data);
     } catch (err) {
@@ -1690,13 +1690,6 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, true);
       const before = countTenantWorkspaceItems(tenantId);
-      replaceTenantItems(accountsByTenant, 'accounts', tenantId, []);
-      replaceTenantItems(contactsByTenant, 'contacts', tenantId, []);
-      replaceTenantItems(jobsByTenant, 'jobs', tenantId, []);
-      replaceTenantItems(configsByTenant, 'configs', tenantId, []);
-      replaceTenantItems(activitiesByTenant, 'activities', tenantId, []);
-      replaceTenantItems(tasksByTenant, 'tasks', tenantId, []);
-      loadedTenants.set(tenantId, { core: true, contacts: true });
       await dbSaveTenantData(tenantId, {
         accounts: [],
         contacts: [],
@@ -1705,12 +1698,15 @@ export function createStore() {
         activities: [],
         tasks: [],
         settings: getTenantProfile(tenantId)?.settings || {},
-      });
-      try {
-        await wipeTenantRelationalMirror(tenantId);
-      } catch (err) {
-        console.error('Relational mirror wipe error:', tenantId, err.message);
-      }
+      }, { throwOnError: true });
+      await wipeTenantRelationalMirror(tenantId);
+      replaceTenantItems(accountsByTenant, 'accounts', tenantId, []);
+      replaceTenantItems(contactsByTenant, 'contacts', tenantId, []);
+      replaceTenantItems(jobsByTenant, 'jobs', tenantId, []);
+      replaceTenantItems(configsByTenant, 'configs', tenantId, []);
+      replaceTenantItems(activitiesByTenant, 'activities', tenantId, []);
+      replaceTenantItems(tasksByTenant, 'tasks', tenantId, []);
+      loadedTenants.set(tenantId, { core: true, contacts: true });
       await dbRecordAuditLog({
         tenantId,
         action: 'workspace.clear',
@@ -1721,6 +1717,57 @@ export function createStore() {
         metadata: { privacySafe: true },
       });
       return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
+    },
+
+    async curateLegacyTargets(tenantId, { targetLimit = 100, apply = false } = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
+      const legacyAccounts = accountsForTenant(tenantId).filter((item) => typeof item.tracked !== 'boolean');
+      const ranked = [...legacyAccounts].sort((a, b) => (
+        Number(b.targetScore || 0) - Number(a.targetScore || 0)
+        || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
+        || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
+        || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
+        || Number(b.connectionCount || 0) - Number(a.connectionCount || 0)
+        || String(a.displayName || '').localeCompare(String(b.displayName || ''))
+      ));
+      const selectedIds = new Set(ranked.slice(0, limit).map((item) => item.id));
+      const summary = {
+        legacyCompanies: legacyAccounts.length,
+        selectedTargets: Math.min(limit, legacyAccounts.length),
+        networkCompanies: Math.max(0, legacyAccounts.length - limit),
+        targetLimit: limit,
+        preview: ranked.slice(0, 12).map((item) => ({
+          id: item.id,
+          displayName: item.displayName,
+          targetScore: Number(item.targetScore || 0),
+          openRoleCount: Number(item.openRoleCount || item.jobCount || 0),
+          connectionCount: Number(item.connectionCount || 0),
+        })),
+      };
+      if (!apply || !legacyAccounts.length) return { ok: true, applied: false, ...summary };
+
+      const timestamp = now();
+      const previous = new Map(legacyAccounts.map((item) => [item.id, { updatedAt: item.updatedAt }]));
+      for (const item of legacyAccounts) {
+        item.tracked = selectedIds.has(item.id);
+        item.updatedAt = timestamp;
+      }
+      try {
+        if (isDbEnabled()) {
+          const result = await dbClassifyLegacyAccounts(tenantId, [...selectedIds], timestamp);
+          if (!result?.saved) throw new Error(`Target classification save failed: ${result?.reason || 'unknown error'}`);
+          primeTenantRelationalMirror(tenantId, { accounts: accountsForTenant(tenantId) });
+        }
+      } catch (error) {
+        for (const item of legacyAccounts) {
+          delete item.tracked;
+          item.updatedAt = previous.get(item.id)?.updatedAt;
+        }
+        throw error;
+      }
+      return { ok: true, applied: true, ...summary };
     },
 
     getSession() {
@@ -1781,6 +1828,9 @@ export function createStore() {
       const tenantConfigs = configsForTenant(tenantId);
       const tenantJobs = jobsForTenant(tenantId);
       const trackedAccounts = tenantAccounts.filter(isTrackedTarget);
+      const explicitTrackedAccounts = tenantAccounts.filter((item) => item.tracked === true);
+      const networkAccounts = tenantAccounts.filter((item) => item.tracked === false);
+      const legacyUnclassifiedAccounts = tenantAccounts.filter((item) => typeof item.tracked !== 'boolean');
       const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
       const accountsByName = new Map(tenantAccounts.map((item) => [normalizeKey(item.normalizedName || item.displayName), item]));
       const activeConfigs = tenantConfigs.filter((item) => item.active !== false);
@@ -1843,6 +1893,9 @@ export function createStore() {
         counts: {
           accounts: tenantAccounts.length,
           trackedCompanies: trackedAccounts.length,
+          explicitTrackedCompanies: explicitTrackedAccounts.length,
+          networkCompanies: networkAccounts.length,
+          legacyUnclassifiedCompanies: legacyUnclassifiedAccounts.length,
           jobs: tenantJobs.length,
           activeJobs: tenantJobs.filter((item) => item.active !== false).length,
           configs: tenantConfigs.length,
@@ -1854,6 +1907,9 @@ export function createStore() {
         },
         coverageSummary: {
           trackedCompanies: trackedAccounts.length,
+          explicitTrackedCompanies: explicitTrackedAccounts.length,
+          networkCompanies: networkAccounts.length,
+          legacyUnclassifiedCompanies: legacyUnclassifiedAccounts.length,
           sourceCount: tenantConfigs.length,
           importReady: importReadyConfigs.length,
           readyCoveragePercent,

@@ -51,7 +51,7 @@ await mutationCheck('signup creates a session', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Auth User',
       workspaceName: 'Smoke Auth Workspace',
     }),
@@ -76,21 +76,21 @@ await mutationCheck('password reset changes the account password', async () => {
   const confirm = await fetch(`${baseUrl}/api/auth/password-reset/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: requestBody.resetToken, password: 'smoke5678' }),
+    body: JSON.stringify({ token: requestBody.resetToken, password: 'smoke-password-5678' }),
   });
   assert(confirm.status === 200, `password reset confirm returned ${confirm.status}`);
 
   const oldLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: authEmail, password: 'smoke1234' }),
+    body: JSON.stringify({ email: authEmail, password: 'smoke-password-1234' }),
   });
   assert(oldLogin.status === 401, 'old password still logged in after reset');
 
   const newLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: authEmail, password: 'smoke5678' }),
+    body: JSON.stringify({ email: authEmail, password: 'smoke-password-5678' }),
   });
   assert(newLogin.status === 200, `new password login returned ${newLogin.status}`);
 });
@@ -230,7 +230,7 @@ await mutationCheck('new signup gets an empty first-run workspace', async () => 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Test User',
       workspaceName: 'Smoke Test Workspace',
     }),
@@ -250,7 +250,7 @@ await mutationCheck('sample workspace completes onboarding without overwriting d
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Sample User',
       workspaceName: 'Smoke Sample Workspace',
     }),
@@ -294,7 +294,7 @@ await mutationCheck('job seeker signup preserves its persona across the app', as
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Job Seeker',
       workspaceName: 'Smoke Job Search',
       persona: 'jobseeker',
@@ -320,7 +320,7 @@ await mutationCheck('referral code tracks referred signup', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email: referrerEmail,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Referrer',
       workspaceName: 'Smoke Referrer Workspace',
     }),
@@ -336,7 +336,7 @@ await mutationCheck('referral code tracks referred signup', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email: referredEmail,
-      password: 'smoke1234',
+      password: 'smoke-password-1234',
       name: 'Smoke Referred',
       workspaceName: 'Smoke Referred Workspace',
       referralCode: referrerBilling.referral.code,

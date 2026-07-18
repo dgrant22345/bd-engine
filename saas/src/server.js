@@ -8,11 +8,14 @@ import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTe
 import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
+import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './authorization.js';
+import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js';
+import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -20,6 +23,7 @@ const publicDir = join(rootDir, 'public');
 const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
+const MIN_PASSWORD_LENGTH = 10;
 const serverStartedAt = new Date();
 const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
 const internalOwnerEmails = new Set(parseEmailList([
@@ -92,17 +96,20 @@ function clientIp(req) {
   return forwarded || req.socket?.remoteAddress || 'unknown';
 }
 
-// Fixed-window limiter. Returns true when the caller is OVER the limit.
-function rateLimitExceeded(key, max, windowMs) {
+// Fixed-window limiter shared through PostgreSQL in production. Memory remains
+// a deterministic fallback for local development and transient DB failures.
+async function rateLimitExceeded(key, max, windowMs) {
   const nowMs = Date.now();
   if (rateBuckets.size >= MAX_RATE_BUCKETS) pruneEphemeralMemory(nowMs);
-  const bucket = rateBuckets.get(key);
-  if (!bucket || nowMs >= bucket.resetAt) {
-    rateBuckets.set(key, { count: 1, resetAt: nowMs + windowMs });
-    return false;
+  if (isDbReady()) {
+    try {
+      const decision = await dbConsumeRateLimit(hashRateLimitKey(key), max, windowMs, nowMs);
+      if (decision) return decision.exceeded;
+    } catch (error) {
+      console.error('Shared rate limiter failed; using process fallback:', error.message);
+    }
   }
-  bucket.count += 1;
-  return bucket.count > max;
+  return consumeMemoryRateLimitBucket(rateBuckets, key, max, windowMs, nowMs);
 }
 
 function pruneEphemeralMemory(nowMs = Date.now()) {
@@ -319,6 +326,8 @@ async function startServer() {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     if ((process.env.BD_CLOUD_ENV || process.env.NODE_ENV) === 'production') {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
@@ -732,7 +741,7 @@ async function route(req, res) {
   // operators learn about broken buttons before customers report them. Public
   // (errors can happen pre-login) but tightly rate limited and truncated.
   if (pathname === '/api/client-error' && req.method === 'POST') {
-    if (rateLimitExceeded(`client-error:${clientIp(req)}`, 10, 60 * 1000)) {
+    if (await rateLimitExceeded(`client-error:${clientIp(req)}`, 10, 60 * 1000)) {
       return sendJson(res, 429, { error: 'Too many error reports.' });
     }
     const payload = await readJson(req);
@@ -755,35 +764,35 @@ async function route(req, res) {
   }
 
   if (pathname === '/api/auth/signup' && req.method === 'POST') {
-    if (rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
+    if (await rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many sign-ups from this network. Please wait a few minutes and try again.' });
     }
     return handleSignup(req, res);
   }
 
   if (pathname === '/api/auth/login' && req.method === 'POST') {
-    if (rateLimitExceeded(`login:${clientIp(req)}`, LOGIN_MAX, LOGIN_WINDOW_MS)) {
+    if (await rateLimitExceeded(`login:${clientIp(req)}`, LOGIN_MAX, LOGIN_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many login attempts. Please wait a few minutes and try again.' });
     }
     return handleLogin(req, res);
   }
 
   if (pathname === '/api/auth/password-reset/request' && req.method === 'POST') {
-    if (rateLimitExceeded(`password-reset:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`password-reset:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many reset requests from this network. Please wait a few minutes and try again.' });
     }
     return handlePasswordResetRequest(req, res);
   }
 
   if (pathname === '/api/auth/password-reset/confirm' && req.method === 'POST') {
-    if (rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many reset attempts. Please wait a few minutes and try again.' });
     }
     return handlePasswordResetConfirm(req, res);
   }
 
   if (pathname === '/api/auth/email-verification/confirm' && req.method === 'POST') {
-    if (rateLimitExceeded(`email-verification-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 4, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`email-verification-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 4, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many verification attempts. Please wait a few minutes and try again.' });
     }
     return handleEmailVerificationConfirm(req, res);
@@ -810,7 +819,7 @@ async function route(req, res) {
   }
 
   if (pathname === '/api/demo/start' && req.method === 'POST') {
-    if (rateLimitExceeded(`demo:${clientIp(req)}`, DEMO_MAX, DEMO_WINDOW_MS)) {
+    if (await rateLimitExceeded(`demo:${clientIp(req)}`, DEMO_MAX, DEMO_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many demo starts from this network. Please wait a few minutes and try again.' });
     }
     return handleStartDemo(req, res);
@@ -901,7 +910,7 @@ self.addEventListener('activate', (event) => {
     tenant = ensureInternalOwnerEntitlement(tenant, user);
     store.ensureTenant(tenant, user);
     await persistUserWorkspace(user, tenant);
-    const { cookie } = createSession(user.id, tenantId, {
+    const { cookie } = await createSession(user.id, tenantId, {
       demo: Boolean(sessionData.demo),
       readOnly: Boolean(sessionData.readOnly),
     });
@@ -929,7 +938,7 @@ self.addEventListener('activate', (event) => {
   store.ensureTenant(tenant, session.user);
 
   if (pathname === '/api/auth/email-verification/request' && req.method === 'POST') {
-    if (rateLimitExceeded(`email-verification:${user.id}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`email-verification:${user.id}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many verification emails requested. Please wait before trying again.' });
     }
     if (user.emailVerifiedAt) {
@@ -942,7 +951,23 @@ self.addEventListener('activate', (event) => {
       emailConfigured: result.emailConfigured,
       message: result.sent
         ? `Verification email sent to ${user.email}.`
-        : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+        : isEmailVerificationRequired()
+          ? 'Email verification is temporarily unavailable. You can continue using features that do not import data or run job discovery.'
+          : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+    });
+  }
+
+  if (
+    isEmailVerificationRequired()
+    && !user.emailVerifiedAt
+    && !isReadOnlyDemoSession(sessionData, tenant)
+    && requiresVerifiedEmail(pathname, req.method)
+  ) {
+    return sendJson(res, 403, {
+      error: 'Verify your email before importing data or running job discovery.',
+      code: 'email_verification_required',
+      emailConfigured: isEmailConfigured(),
+      nextAction: 'Open Account, send a verification email, and follow the link before trying again.',
     });
   }
 
@@ -953,7 +978,7 @@ self.addEventListener('activate', (event) => {
     }
     if (req.method === 'POST') {
       if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
-      if (rateLimitExceeded(`support-create:${user.id}`, SUPPORT_CREATE_MAX, SUPPORT_WINDOW_MS)) {
+      if (await rateLimitExceeded(`support-create:${user.id}`, SUPPORT_CREATE_MAX, SUPPORT_WINDOW_MS)) {
         return sendJson(res, 429, { error: 'You have sent several support requests recently. Reply to an existing request or try again later.' });
       }
       const validation = validateSupportTicketInput(await readJson(req));
@@ -997,7 +1022,7 @@ self.addEventListener('activate', (event) => {
   const supportReplyMatch = pathname.match(/^\/api\/support\/tickets\/([^/]+)\/messages$/);
   if (supportReplyMatch && req.method === 'POST') {
     if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
-    if (rateLimitExceeded(`support-reply:${user.id}`, SUPPORT_REPLY_MAX, SUPPORT_WINDOW_MS)) {
+    if (await rateLimitExceeded(`support-reply:${user.id}`, SUPPORT_REPLY_MAX, SUPPORT_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many support replies were sent recently. Please wait and try again.' });
     }
     const accessible = await dbGetSupportTicket(supportReplyMatch[1], { tenantId, createdByUserId: user.id });
@@ -1074,6 +1099,13 @@ self.addEventListener('activate', (event) => {
     return sendDemoReadOnly(res);
   }
 
+  if (!canMutateWorkspace(session.membership.role, req.method)) {
+    return sendJson(res, 403, {
+      error: 'This workspace role is read-only. Ask a workspace owner to make this change.',
+      code: 'workspace_read_only',
+    });
+  }
+
   if (isTenantBillingBlocked(tenant, user) && !isBillingExemptPath(pathname)) {
     return sendBillingRequired(res, tenant);
   }
@@ -1104,6 +1136,7 @@ self.addEventListener('activate', (event) => {
       usage,
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
+      canChangeBilling: canManageBilling(session.membership.role),
       tenant: getBillingTenantPayload(tenant, user),
       billingAccess,
       referral: getReferralSummary(tenant, origin),
@@ -1111,6 +1144,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/billing/checkout' && req.method === 'POST') {
+    if (!canManageBilling(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Workspace owner or admin access is required to change billing.' });
+    }
     const body = await readJson(req);
     const planId = body.planId;
     try {
@@ -1140,6 +1176,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/billing/portal' && req.method === 'POST') {
+    if (!canManageBilling(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Workspace owner or admin access is required to manage billing.' });
+    }
     const customerId = tenant.stripeCustomerId || tenant.stripe_customer_id || '';
     if (!customerId) {
       return sendJson(res, 400, { error: 'No Stripe customer is attached to this workspace yet. Complete checkout first.' });
@@ -1228,6 +1267,7 @@ self.addEventListener('activate', (event) => {
         usage: getUsageSummary(tenantId, effectivePlanId, tenantUsage),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
+        canChangeBilling: canManageBilling(session.membership.role),
         tenant: getBillingTenantPayload(tenant, user),
         billingAccess,
         referral: getReferralSummary(tenant, origin),
@@ -1249,6 +1289,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/privacy/delete-workspace' && req.method === 'POST') {
+    if (!canDeleteWorkspaceData(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Only the workspace owner can delete all workspace data.' });
+    }
     const body = await readJson(req);
     const expected = `DELETE ${tenant.name}`;
     if (String(body.confirm || '').trim() !== expected) {
@@ -1261,6 +1304,32 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, {
       ...result,
       message: 'Workspace data deleted. Your account and workspace shell remain available.',
+    });
+  }
+
+  if (pathname === '/api/accounts/legacy-target-curation' && req.method === 'GET') {
+    return sendJson(res, 200, await store.curateLegacyTargets(tenantId, {
+      targetLimit: url.searchParams.get('targetLimit'),
+      apply: false,
+    }));
+  }
+
+  if (pathname === '/api/accounts/legacy-target-curation' && req.method === 'POST') {
+    if (!canDeleteWorkspaceData(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Only the workspace owner can classify all legacy companies.' });
+    }
+    const body = await readJson(req);
+    const expected = `CURATE ${tenant.name}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, { error: `Type "${expected}" to classify legacy companies.` });
+    }
+    const result = await store.curateLegacyTargets(tenantId, {
+      targetLimit: body.targetLimit,
+      apply: true,
+    });
+    return sendJson(res, 200, {
+      ...result,
+      message: `${result.selectedTargets} target companies selected. ${result.networkCompanies} companies remain searchable network context without automatic ATS refresh.`,
     });
   }
 
@@ -1910,8 +1979,8 @@ async function handlePasswordResetConfirm(req, res) {
   if (!token || !password) {
     return sendJson(res, 400, { error: 'Reset token and new password are required.' });
   }
-  if (String(password).length < 6) {
-    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
   }
 
   const tokenHash = hashPasswordResetToken(token);
@@ -1920,7 +1989,7 @@ async function handlePasswordResetConfirm(req, res) {
     return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
   }
 
-  const result = setUserPassword(record.userId, password);
+  const result = await setUserPassword(record.userId, password);
   if (result.error) {
     return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
   }
@@ -2028,7 +2097,7 @@ async function handleStartDemo(req, res) {
   });
   await persistUserWorkspace(user, tenant);
 
-  const { cookie } = createSession(user.id, tenant.id, { demo: true, readOnly: true });
+  const { cookie } = await createSession(user.id, tenant.id, { demo: true, readOnly: true });
   setSessionCookie(res, cookie);
   return sendJson(res, 201, {
     demo: true,
@@ -2039,6 +2108,8 @@ async function handleStartDemo(req, res) {
     plan: getPublicPlanPayload(getPlan('sales')),
     trialDaysRemaining: null,
     persona: 'bd',
+    membership: { role: 'viewer' },
+    canManageWorkspace: false,
     redirect: '/app/#/dashboard',
   });
 }
@@ -2049,8 +2120,8 @@ async function handleSignup(req, res) {
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
   }
-  if (String(password).length < 6) {
-    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
   }
 
   // Create user
@@ -2081,7 +2152,7 @@ async function handleSignup(req, res) {
   store.setPersona(tenantId, userPersona);
   await persistUserWorkspace(userResult.user, tenantResult.tenant);
   const verification = await issueEmailVerification(req, userResult.user);
-  const { cookie } = createSession(userResult.user.id, tenantId);
+  const { cookie } = await createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
 
   return sendJson(res, 201, {
@@ -2091,6 +2162,8 @@ async function handleSignup(req, res) {
     plan: getPublicPlanPayload(getPlan(getEffectivePlanId(tenantResult.tenant, userResult.user))),
     trialDaysRemaining: getTrialDaysRemaining(tenantResult.tenant),
     persona: userPersona,
+    membership: { role: 'owner' },
+    canManageWorkspace: true,
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
     emailVerificationAvailable: verification.emailConfigured,
     verificationEmailSent: verification.sent,
@@ -2129,7 +2202,8 @@ async function handleLogin(req, res) {
   store.ensureTenant(primaryTenant, result.user);
   await persistUserWorkspace(result.user, primaryTenant);
   const persona = store.getPersona(primaryTenant.id);
-  const { cookie } = createSession(result.user.id, primaryTenant.id);
+  const effectiveRole = getEffectiveMembershipRole(getMembership(primaryTenant.id, result.user.id), result.user);
+  const { cookie } = await createSession(result.user.id, primaryTenant.id);
   setSessionCookie(res, cookie);
 
   return sendJson(res, 200, {
@@ -2140,6 +2214,8 @@ async function handleLogin(req, res) {
     trialDaysRemaining: getEffectivePlanId(primaryTenant, result.user) !== ownerPlanId ? getTrialDaysRemaining(primaryTenant) : null,
     referral: getReferralSummary(primaryTenant, getRequestOrigin(req)),
     persona,
+    membership: { role: effectiveRole },
+    canManageWorkspace: canDeleteWorkspaceData(effectiveRole),
     workspaceRecovered,
     emailVerificationAvailable: isEmailConfigured(),
     canManageSupport: canManageSupport(result.user),
@@ -2148,14 +2224,14 @@ async function handleLogin(req, res) {
 
 async function handleLogout(req, res) {
   const sessionData = extractSession(req);
-  if (sessionData) {
-    destroySession(sessionData.id);
-  }
   clearSessionCookie(res);
+  if (sessionData) {
+    await destroySession(sessionData.id);
+  }
   return sendJson(res, 200, { ok: true });
 }
 
-function handleMe(req, res) {
+async function handleMe(req, res) {
   const sessionData = extractSession(req);
   if (!sessionData) {
     return sendJson(res, 200, { authenticated: false });
@@ -2180,8 +2256,8 @@ function handleMe(req, res) {
       tenant = ensureInternalOwnerEntitlement(tenant, user);
       userTenants = findTenantsForUser(user.id);
       store.ensureTenant(tenant, user);
-      persistUserWorkspace(user, tenant).catch(() => {});
-      const { cookie } = createSession(user.id, tenant.id);
+      await persistUserWorkspace(user, tenant);
+      const { cookie } = await createSession(user.id, tenant.id);
       setSessionCookie(res, cookie);
     }
   } else {
@@ -2195,6 +2271,7 @@ function handleMe(req, res) {
   const trialDaysRemaining = tenant && effectivePlanId !== ownerPlanId ? getTrialDaysRemaining(tenant) : null;
   const persona = tenant ? store.getPersona(tenant.id) : 'bd';
   const billingRequired = tenant ? isTenantBillingBlocked(tenant, user) : false;
+  const effectiveRole = getEffectiveMembershipRole(membership, user);
 
   return sendJson(res, 200, {
     authenticated: true,
@@ -2203,7 +2280,8 @@ function handleMe(req, res) {
     user: safeUser(user),
     tenant: getEffectiveTenant(tenant, user),
     tenants: withEffectiveTenantRoles(userTenants, user),
-    membership: membership ? { role: getEffectiveMembershipRole(membership, user) } : null,
+    membership: membership ? { role: effectiveRole } : null,
+    canManageWorkspace: canDeleteWorkspaceData(effectiveRole),
     plan: getPublicPlanPayload(plan),
     trialDaysRemaining,
     billingRequired,
@@ -2227,6 +2305,8 @@ async function handleCreateTenant(req, res, user) {
     return sendJson(res, 409, { error: result.error });
   }
   const tenant = ensureInternalOwnerEntitlement(result.tenant, user);
+  store.ensureTenant(tenant, user);
+  await persistUserWorkspace(user, tenant);
   return sendJson(res, 201, { tenant: getEffectiveTenant(tenant, user) });
 }
 
