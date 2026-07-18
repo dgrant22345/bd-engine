@@ -1,5 +1,6 @@
--- BD Engine Cloud SaaS schema draft.
--- This is the production direction for the hosted app, not the local Windows data store.
+-- REFERENCE-ONLY HISTORICAL DESIGN DRAFT. DO NOT APPLY TO A DATABASE.
+-- The executable PostgreSQL schema and advisory-locked migrations live in
+-- src/db.js. schema-manifest.json is the CI-verified review snapshot.
 
 create table tenants (
   id text primary key,

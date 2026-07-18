@@ -1330,6 +1330,40 @@ a:hover { text-decoration: underline; }
   align-items: start;
 }
 
+.account-closure-panel {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.account-closure-form {
+  max-width: 720px;
+  padding-right: 0;
+  border-right: 0;
+}
+
+.account-closure-effects {
+  margin: 4px 0 8px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.account-closure-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.account-closure-check input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.landing-account-notice {
+  width: min(1120px, calc(100% - 40px));
+  margin: 18px auto 0;
+}
+
 .support-compose,
 .support-reply-form {
   display: flex;

@@ -683,6 +683,42 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260718_account_closures', 'Add recoverable privacy account-closure ledger', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS account_closures (
+          id TEXT PRIMARY KEY,
+          subject_hash TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'completed', 'failed')),
+          deleted_tenant_count INTEGER NOT NULL DEFAULT 0,
+          left_workspace_count INTEGER NOT NULL DEFAULT 0,
+          subscriptions_canceled_count INTEGER NOT NULL DEFAULT 0,
+          error TEXT NOT NULL DEFAULT '',
+          metadata JSONB NOT NULL DEFAULT '{}',
+          requested_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS account_closures_status_updated_idx
+          ON account_closures (status, updated_at);
+        CREATE INDEX IF NOT EXISTS account_closures_subject_idx
+          ON account_closures (subject_hash, requested_at DESC);
+      `);
+    });
+
+    await runSchemaMigration('20260718_product_analytics', 'Add idempotent privacy-safe product funnel events', async (client) => {
+      await client.query(`
+        ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS event_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+        CREATE UNIQUE INDEX IF NOT EXISTS analytics_events_event_key_uidx
+          ON analytics_events (event_key) WHERE event_key <> '';
+        CREATE INDEX IF NOT EXISTS analytics_events_type_day_idx
+          ON analytics_events (event_type, day DESC);
+        CREATE INDEX IF NOT EXISTS analytics_events_tenant_type_idx
+          ON analytics_events (tenant_id, event_type, created_at DESC) WHERE tenant_id <> '';
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -762,6 +798,92 @@ export async function dbConsumeRateLimit(bucketKey, max, windowMs, nowMs = Date.
     count: Number(row?.request_count || 0),
     resetAt: row?.expires_at || expiresAt,
   };
+}
+
+export async function dbRecordAccountClosure(record = {}) {
+  if (!dbReady || !pool) return { recorded: false, storage: 'memory' };
+  const now = record.updatedAt || new Date().toISOString();
+  await pool.query(`
+    INSERT INTO account_closures (
+      id, subject_hash, status, deleted_tenant_count, left_workspace_count,
+      subscriptions_canceled_count, error, metadata, requested_at, updated_at, completed_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (id) DO UPDATE SET
+      status = EXCLUDED.status,
+      deleted_tenant_count = EXCLUDED.deleted_tenant_count,
+      left_workspace_count = EXCLUDED.left_workspace_count,
+      subscriptions_canceled_count = EXCLUDED.subscriptions_canceled_count,
+      error = EXCLUDED.error,
+      metadata = EXCLUDED.metadata,
+      updated_at = EXCLUDED.updated_at,
+      completed_at = EXCLUDED.completed_at
+  `, [
+    record.id,
+    record.subjectHash,
+    record.status || 'pending',
+    Number(record.deletedTenantCount || 0),
+    Number(record.leftWorkspaceCount || 0),
+    Number(record.subscriptionsCanceledCount || 0),
+    String(record.error || '').slice(0, 1000),
+    JSON.stringify(record.metadata || {}),
+    record.requestedAt || now,
+    now,
+    record.completedAt || '',
+  ]);
+  return { recorded: true, storage: 'postgres' };
+}
+
+export async function dbCloseUserAccount({ userId, deleteTenantIds = [], closureId, completedAt } = {}) {
+  if (!dbReady || !pool) return { closed: true, storage: 'memory' };
+  const deletedIds = [...new Set(deleteTenantIds.filter(Boolean))];
+  const finishedAt = completedAt || new Date().toISOString();
+  return dbTransaction(async (query) => {
+    const lockedUser = await query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+    if (lockedUser.rowCount !== 1) throw new Error('Account closure could not lock the user record.');
+    if (deletedIds.length > 0) {
+      const lockedTenants = await query(
+        'SELECT id FROM tenants WHERE id = ANY($1::text[]) FOR UPDATE',
+        [deletedIds]
+      );
+      if (lockedTenants.rowCount !== deletedIds.length) {
+        throw new Error('Account closure workspace selection changed. Retry the request.');
+      }
+      const lockedMemberships = await query(
+        'SELECT tenant_id, user_id, role FROM memberships WHERE tenant_id = ANY($1::text[]) FOR UPDATE',
+        [deletedIds]
+      );
+      for (const tenantId of deletedIds) {
+        const tenantMemberships = lockedMemberships.rows.filter((row) => row.tenant_id === tenantId);
+        if (tenantMemberships.length !== 1
+          || tenantMemberships[0].user_id !== userId
+          || tenantMemberships[0].role !== 'owner') {
+          throw new Error('Account closure workspace ownership changed. Retry the request.');
+        }
+      }
+    }
+    await query('DELETE FROM analytics_events WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
+    await query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+    await query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+    await query('DELETE FROM email_verification_tokens WHERE user_id = $1', [userId]);
+    await query('DELETE FROM memberships WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
+    await query('DELETE FROM tenant_data WHERE tenant_id = ANY($1::text[])', [deletedIds]);
+    await query("UPDATE tenants SET referred_by_tenant_id = '' WHERE referred_by_tenant_id = ANY($1::text[])", [deletedIds]);
+    const deletedTenants = await query('DELETE FROM tenants WHERE id = ANY($1::text[]) RETURNING id', [deletedIds]);
+    const deletedUser = await query('DELETE FROM users WHERE id = $1 RETURNING id', [userId]);
+    if (deletedUser.rowCount !== 1) throw new Error('Account closure could not remove the user record.');
+    const completedClosure = await query(`
+      UPDATE account_closures
+      SET status = 'completed', error = '', completed_at = $2, updated_at = $2
+      WHERE id = $1
+    `, [closureId, finishedAt]);
+    if (completedClosure.rowCount !== 1) throw new Error('Account closure ledger is unavailable.');
+    return {
+      closed: true,
+      storage: 'postgres',
+      deletedTenants: deletedTenants.rowCount || 0,
+      completedAt: finishedAt,
+    };
+  });
 }
 
 export async function dbCompleteStripeWebhook(eventId) {
@@ -1587,8 +1709,8 @@ export async function dbGetAnalyticsSummary(days = 30) {
   }
 
   try {
-    const [totals, recent, byDay, topPaths, topSources] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors FROM analytics_events`),
+    const [totals, recent, byDay, topPaths, topSources, funnel] = await Promise.all([
+      pool.query("SELECT COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors FROM analytics_events WHERE event_type = 'pageview'"),
       pool.query(
         `SELECT
            COUNT(*)::int AS visits,
@@ -1596,13 +1718,13 @@ export async function dbGetAnalyticsSummary(days = 30) {
            COUNT(*) FILTER (WHERE day = $2)::int AS visits_today,
            COUNT(DISTINCT visitor_id) FILTER (WHERE day = $2)::int AS visitors_today
          FROM analytics_events
-         WHERE day >= $1`,
+         WHERE day >= $1 AND event_type = 'pageview'`,
         [sinceDay, today]
       ),
       pool.query(
         `SELECT day, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
          FROM analytics_events
-         WHERE day >= $1
+         WHERE day >= $1 AND event_type = 'pageview'
          GROUP BY day
          ORDER BY day ASC`,
         [sinceDay]
@@ -1610,7 +1732,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
       pool.query(
         `SELECT path, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
          FROM analytics_events
-         WHERE day >= $1
+         WHERE day >= $1 AND event_type = 'pageview'
          GROUP BY path
          ORDER BY visits DESC
          LIMIT 8`,
@@ -1619,10 +1741,20 @@ export async function dbGetAnalyticsSummary(days = 30) {
       pool.query(
         `SELECT source, COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors
          FROM analytics_events
-         WHERE day >= $1
+         WHERE day >= $1 AND event_type = 'pageview'
          GROUP BY source
          ORDER BY visits DESC
          LIMIT 8`,
+        [sinceDay]
+      ),
+      pool.query(
+        `SELECT event_type, COUNT(*)::int AS events,
+                COUNT(DISTINCT NULLIF(tenant_id, ''))::int AS workspaces,
+                COUNT(DISTINCT NULLIF(user_id, ''))::int AS users
+         FROM analytics_events
+         WHERE day >= $1 AND event_type <> 'pageview'
+         GROUP BY event_type
+         ORDER BY events DESC, event_type ASC`,
         [sinceDay]
       ),
     ]);
@@ -1642,6 +1774,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
       byDay: byDay.rows.map((row) => ({ day: row.day, visits: row.visits, visitors: row.visitors })),
       topPaths: topPaths.rows.map((row) => ({ path: row.path || '/', visits: row.visits, visitors: row.visitors })),
       topSources: topSources.rows.map((row) => ({ source: row.source || 'direct', visits: row.visits, visitors: row.visitors })),
+      funnel: funnel.rows.map((row) => ({ eventType: row.event_type, events: row.events, workspaces: row.workspaces, users: row.users })),
     };
   } catch (err) {
     console.error('DB: Failed to load analytics summary:', err.message);
@@ -1659,6 +1792,8 @@ function normalizeAnalyticsEvent(event = {}) {
     source: sanitizeAnalyticsSource(event.source),
     tenantId: String(event.tenantId || '').trim().slice(0, 96),
     userId: String(event.userId || '').trim().slice(0, 96),
+    eventKey: String(event.eventKey || '').trim().slice(0, 96),
+    metadata: event.metadata && typeof event.metadata === 'object' ? event.metadata : {},
     createdAt,
     day: createdAt.slice(0, 10),
   };
@@ -1692,12 +1827,15 @@ function sanitizeAnalyticsSource(value) {
 
 function summarizeAnalyticsRows(rows, sinceDay, today) {
   const recentRows = rows.filter((row) => row.day >= sinceDay);
+  const pageRows = rows.filter((row) => row.eventType === 'pageview');
+  const recentPageRows = recentRows.filter((row) => row.eventType === 'pageview');
   const unique = (items) => new Set(items.map((row) => row.visitorId)).size;
   const byDayMap = new Map();
   const pathMap = new Map();
   const sourceMap = new Map();
+  const funnelMap = new Map();
 
-  for (const row of recentRows) {
+  for (const row of recentPageRows) {
     if (!byDayMap.has(row.day)) byDayMap.set(row.day, []);
     byDayMap.get(row.day).push(row);
     const pathRows = pathMap.get(row.path) || [];
@@ -1707,19 +1845,30 @@ function summarizeAnalyticsRows(rows, sinceDay, today) {
     sourceRows.push(row);
     sourceMap.set(row.source, sourceRows);
   }
+  for (const row of recentRows.filter((item) => item.eventType !== 'pageview')) {
+    const eventRows = funnelMap.get(row.eventType) || [];
+    eventRows.push(row);
+    funnelMap.set(row.eventType, eventRows);
+  }
 
   return {
     lookbackDays: Math.max(1, Math.round((Date.now() - Date.parse(`${sinceDay}T00:00:00Z`)) / (24 * 60 * 60 * 1000)) + 1),
-    totals: { visits: rows.length, visitors: unique(rows) },
+    totals: { visits: pageRows.length, visitors: unique(pageRows) },
     recent: {
-      visits: recentRows.length,
-      visitors: unique(recentRows),
-      visitsToday: recentRows.filter((row) => row.day === today).length,
-      visitorsToday: unique(recentRows.filter((row) => row.day === today)),
+      visits: recentPageRows.length,
+      visitors: unique(recentPageRows),
+      visitsToday: recentPageRows.filter((row) => row.day === today).length,
+      visitorsToday: unique(recentPageRows.filter((row) => row.day === today)),
     },
     byDay: Array.from(byDayMap.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([day, dayRows]) => ({ day, visits: dayRows.length, visitors: unique(dayRows) })),
     topPaths: summarizeAnalyticsGroup(pathMap, 'path'),
     topSources: summarizeAnalyticsGroup(sourceMap, 'source'),
+    funnel: Array.from(funnelMap.entries()).map(([eventType, eventRows]) => ({
+      eventType,
+      events: eventRows.length,
+      workspaces: new Set(eventRows.map((row) => row.tenantId).filter(Boolean)).size,
+      users: new Set(eventRows.map((row) => row.userId).filter(Boolean)).size,
+    })).sort((a, b) => b.events - a.events || a.eventType.localeCompare(b.eventType)),
   };
 }
 
@@ -1759,6 +1908,34 @@ export async function dbDeleteSession(sessionId) {
   } catch (err) {
     console.error('DB: Failed to delete session:', err.message);
     throw err;
+  }
+}
+
+export async function dbRecordProductEvent(event) {
+  const payload = normalizeAnalyticsEvent(event);
+  if (!payload.visitorId || !payload.eventKey) return { recorded: false, reason: 'missing product event identity' };
+  if (!dbReady) {
+    if (memoryAnalyticsEvents.some((item) => item.eventKey === payload.eventKey)) {
+      return { recorded: false, duplicate: true, storage: 'memory' };
+    }
+    memoryAnalyticsEvents.push(payload);
+    return { recorded: true, storage: 'memory' };
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO analytics_events (
+         visitor_id, event_type, path, referrer, source, tenant_id, user_id,
+         created_at, day, event_key, metadata
+       ) VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (event_key) WHERE event_key <> '' DO NOTHING`,
+      [payload.visitorId, payload.eventType, payload.path, payload.source,
+        payload.tenantId, payload.userId, payload.createdAt, payload.day,
+        payload.eventKey, JSON.stringify(payload.metadata)]
+    );
+    return { recorded: result.rowCount === 1, duplicate: result.rowCount === 0, storage: 'postgres' };
+  } catch (err) {
+    console.error('DB: Failed to record product event:', err.message);
+    return { recorded: false, reason: err.message };
   }
 }
 

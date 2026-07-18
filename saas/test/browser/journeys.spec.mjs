@@ -316,6 +316,26 @@ test('privacy journey: workspace data export responds from the account menu', as
   }
 });
 
+test('privacy journey: eligible customer can close their account and is signed out', async ({ page }) => {
+  const { email } = await signup(page);
+  await page.click('#cloud-avatar-btn');
+  await page.click('#cloud-export-btn');
+  const dialog = page.getByRole('dialog', { name: 'Privacy and data' });
+  await expect(dialog).toBeVisible();
+  const closureForm = dialog.locator('[data-account-closure-form]');
+  await expect(closureForm).toBeVisible({ timeout: 10000 });
+  await closureForm.locator('[name="password"]').fill('journey-password-1');
+  await closureForm.locator('[name="confirm"]').fill(`DELETE ACCOUNT ${email}`);
+  await closureForm.locator('[name="exportAcknowledged"]').check();
+  await closureForm.getByRole('button', { name: 'Close account permanently' }).click();
+  await expect(page.locator('#nav-signup')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('.landing-account-notice')).toContainText('account has been closed');
+  await expect(page.locator('iframe.cloud-app-frame')).toHaveCount(0);
+  const sessionResponse = await page.request.get('/api/auth/me');
+  expect(sessionResponse.status()).toBe(200);
+  expect((await sessionResponse.json()).authenticated).toBe(false);
+});
+
 test('logout journey: logging out returns to the landing page', async ({ page }) => {
   await signup(page);
   await page.click('#cloud-avatar-btn');

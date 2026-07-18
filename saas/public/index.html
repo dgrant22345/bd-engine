@@ -37,6 +37,7 @@
       resetMessage: '',
       verificationToken: getInitialVerificationToken(),
       verificationMessage: '',
+      accountClosedMessage: '',
       emailVerificationAvailable: false,
       canManageSupport: false,
       canManageWorkspace: false,
@@ -497,6 +498,7 @@
               <button class="btn btn-primary btn-glow" id="nav-signup">Start free trial</button>
             </div>
           </nav>
+          ${state.accountClosedMessage ? `<div class="cloud-account-notice landing-account-notice" role="status"><span>${escapeHtml(state.accountClosedMessage)}</span><button class="cloud-notice-close" type="button" data-dismiss-account-closed aria-label="Dismiss message">Close</button></div>` : ''}
 
           <section class="hero">
             <div class="hero-content">
@@ -687,6 +689,7 @@
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+      root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
     }
 
     function getTrustContent(kind) {
@@ -1204,6 +1207,9 @@
                 </section>
                 ${deletionPanel}
               </div>
+              <section class="account-closure-panel" data-account-closure aria-live="polite">
+                <div class="support-loading"><span class="btn-spinner"></span> Checking account closure requirements...</div>
+              </section>
             </div>
           </section>
         </div>`);
@@ -1219,7 +1225,6 @@
       document.addEventListener('keydown', onKeydown);
       backdrop.querySelector('[data-privacy-close]')?.focus();
       backdrop.querySelector('[data-privacy-export]')?.addEventListener('click', () => {
-        close();
         doExportData();
       });
       backdrop.querySelector('[data-privacy-support]')?.addEventListener('click', () => {
@@ -1249,6 +1254,101 @@
           form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
         }
       });
+      loadAccountClosure(backdrop);
+    }
+
+    async function loadAccountClosure(backdrop) {
+      const panel = backdrop.querySelector('[data-account-closure]');
+      if (!panel) return;
+      try {
+        const data = await api('/api/privacy/account-closure');
+        if (!data.eligible) {
+          panel.innerHTML = `
+            <div><h3>Close account</h3><p>Your account cannot be closed automatically because doing so would leave a shared workspace without an owner.</p></div>
+            <div class="support-error" role="status"><strong>Ownership transfer required</strong><ul>${(data.blockers || []).map((item) => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul></div>
+            <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-closure-support>Contact support</button></div>`;
+          panel.querySelector('[data-closure-support]')?.addEventListener('click', () => {
+            backdrop.remove();
+            openSupportCenter();
+          });
+          return;
+        }
+
+        const consequences = [
+          ...(data.deleteWorkspaces || []).map((item) => `Delete workspace: ${item.name}`),
+          ...(data.leaveWorkspaces || []).map((item) => `Leave workspace: ${item.name}`),
+          ...(data.subscriptionsToCancel ? [`Cancel ${data.subscriptionsToCancel} active subscription${data.subscriptionsToCancel === 1 ? '' : 's'}`] : []),
+        ];
+        panel.innerHTML = `
+          <form class="support-compose account-closure-form" data-account-closure-form>
+            <div><h3>Close account</h3><p>Permanently removes your login and personal identifiers. Sole-user workspaces are deleted, shared workspaces with another owner remain available, and attached subscriptions are canceled first.</p></div>
+            ${consequences.length ? `<ul class="account-closure-effects">${consequences.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<p>No workspaces or subscriptions are attached to this login.</p>'}
+            <label for="account-closure-reason">Reason (optional)</label>
+            <select id="account-closure-reason" name="reason">
+              <option value="">Prefer not to say</option>
+              <option value="not_useful">Did not provide enough value</option>
+              <option value="coverage">Not enough jobs or ATS coverage</option>
+              <option value="usability">Too difficult to use</option>
+              <option value="price">Price</option>
+              <option value="privacy">Privacy or data concerns</option>
+              <option value="other">Other</option>
+            </select>
+            <label for="account-closure-password">Current password</label>
+            <input id="account-closure-password" name="password" type="password" autocomplete="current-password" required>
+            <label for="account-closure-confirm">Type <strong>${escapeHtml(data.expectedConfirmation)}</strong></label>
+            <input id="account-closure-confirm" name="confirm" autocomplete="off" required>
+            <label class="account-closure-check"><input name="exportAcknowledged" type="checkbox" required> I downloaded my data or choose to continue without an export.</label>
+            <div class="support-form-actions"><button class="btn btn-danger" type="submit" disabled>Close account permanently</button></div>
+            <div data-account-closure-result aria-live="polite"></div>
+          </form>`;
+
+        const form = panel.querySelector('[data-account-closure-form]');
+        const submit = form.querySelector('button[type="submit"]');
+        const syncSubmit = () => {
+          submit.disabled = !form.elements.password.value
+            || form.elements.confirm.value.trim() !== data.expectedConfirmation
+            || !form.elements.exportAcknowledged.checked;
+        };
+        form.addEventListener('input', syncSubmit);
+        form.addEventListener('change', syncSubmit);
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          submit.disabled = true;
+          submit.textContent = 'Closing account...';
+          try {
+            const result = await api('/api/privacy/account-closure', {
+              method: 'POST',
+              body: JSON.stringify({
+                password: form.elements.password.value,
+                confirm: form.elements.confirm.value.trim(),
+                exportAcknowledged: form.elements.exportAcknowledged.checked,
+                reason: form.elements.reason.value,
+              }),
+            });
+            backdrop.remove();
+            state.user = null;
+            state.tenant = null;
+            state.tenants = [];
+            state.plan = null;
+            state.trialDaysRemaining = null;
+            state.referral = null;
+            state.demo = false;
+            state.readOnly = false;
+            state.emailVerificationAvailable = false;
+            state.canManageSupport = false;
+            state.canManageWorkspace = false;
+            state.accountClosedMessage = result.message || 'Your account has been closed.';
+            state.view = 'landing';
+            render();
+          } catch (error) {
+            submit.textContent = 'Close account permanently';
+            syncSubmit();
+            form.querySelector('[data-account-closure-result]').innerHTML = `<div class="support-error" role="alert"><strong>Account was not closed.</strong><p>${escapeHtml(error.message)}</p></div>`;
+          }
+        });
+      } catch (error) {
+        panel.innerHTML = `<div class="support-error" role="alert"><strong>Closure requirements could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
+      }
     }
 
     function wireCustomerSupportForms(backdrop) {

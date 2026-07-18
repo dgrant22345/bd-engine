@@ -4,7 +4,7 @@
 
 **LIMITED BETA READY. Not ready for a broad paid launch.** The core product is
 real and functional: production is healthy, tenant-scoped workflows work, live
-ATS adapters imported 2,409 public jobs from 12/12 providers in 8.8 seconds,
+ATS adapters imported 2,406 public jobs from 12/12 providers in 9.0 seconds,
 and the main workspace currently holds 6,184 active jobs from 82 resolved
 boards. The remaining launch gates are operational configuration, legacy data
 curation, retention cleanup, and professional legal review rather than a demo
@@ -35,12 +35,13 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 131/131 pass.
-- Chromium customer journeys and accessibility checks: 19/19 pass.
+- SaaS unit/contract tests: 140/140 pass.
+- Chromium customer journeys and accessibility checks: 20/20 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
 - Deterministic ATS contract: 12/12 providers pass.
-- Live ATS canary: 12/12 providers, 2,409 jobs, 0 provider errors.
+- Live ATS canary: 12/12 providers, 2,406 jobs, 0 provider errors.
+- Schema migration contract: 24 tables, 51 indexes, 8 migrations; no drift.
 - Production relational parity: 3/3 workspaces pass deep parity.
 - Production health: `{"ok":true,"status":"operational"}`.
 - Production dependency audits: 0 known vulnerabilities in SaaS and renderer.
@@ -79,18 +80,14 @@ PowerShell/SQLite edition remains supported separately.
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target
    curation workflow are now included; neither has changed production data.
-3. Full account closure is a support workflow, not automated. Workspace export
-   and owner-confirmed workspace-data deletion are implemented. Define and test
-   multi-workspace ownership transfer, Stripe cancellation, statutory retention,
-   and account erasure before automating full closure.
-4. Daily encrypted offsite backups, retention, alerting, and a recent restore
+3. Daily encrypted offsite backups, retention, alerting, and a recent restore
    drill are documented but not proven by repository state. Record evidence in
    the launch checklist; a backup that has never restored is not a recovery plan.
-5. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
+4. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
    agreements. Refunds, taxes, renewal/cancellation language, processor terms,
    lawful-basis/consent, and Canadian/international privacy obligations need
    qualified legal/accounting review.
-6. Windows distribution is not proven code-signed. Do not broadly distribute an
+5. Windows distribution is not proven code-signed. Do not broadly distribute an
    unsigned installer to paying customers.
 
 ## P2 - important improvements
@@ -98,20 +95,19 @@ PowerShell/SQLite edition remains supported separately.
 - PostgreSQL relational entities still store timestamps as text and legacy
   identity indexes are non-unique to tolerate old duplicates. Complete the
   canary migration, deduplicate, then add safe partial unique constraints.
-- `saas/src/db.js` is the authoritative migration source while `schema.sql` is a
-  bootstrap snapshot. Add an automated schema-drift check or generated snapshot.
 - CI has syntax checks rather than ESLint/type checking or formatting enforcement.
   Add focused linting incrementally; do not block releases on thousands of
   unrelated legacy style findings at once.
-- Add centralized structured log retention, latency/error
-  dashboards, queue-depth alerts, and explicit ATS success-rate SLOs.
-- Activation analytics are page-view oriented. Add privacy-safe events for
-  signup, setup complete, first target, first resolved board, first useful job,
-  first outreach, upgrade start/success, cancellation, and recovery.
+- Configure centralized structured log retention and external dashboards/paging.
+  The authenticated status API now reports 5xx rate, queue age/failures, and a
+  24-hour ingestion success rate against explicit SLO targets.
+- Extend the new privacy-safe activation and revenue funnel with first resolved
+  board and first useful job milestones once those product definitions are
+  agreed and stable.
 - Consider MFA/passkeys for owner/support accounts that can access large contact
   datasets.
-- Review dependency updates monthly and pin GitHub Actions by commit SHA for a
-  stricter CI supply-chain posture.
+- Review dependency and pinned GitHub Action updates monthly through an explicit
+  pull request; CI actions are now immutable commit references.
 
 ## P3 - optional enhancements
 
@@ -142,6 +138,13 @@ PowerShell/SQLite edition remains supported separately.
 - Added rollout-gated verified-email enforcement for imports and ATS discovery.
 - Added axe WCAG/contrast checks and Chromium, Firefox, and WebKit browser gates;
   corrected search semantics and low-contrast UI tokens found by the rendered tests.
+- Added transactional self-service account closure with ownership protection,
+  idempotent Stripe cancellation, session erasure, and a pseudonymous recovery ledger.
+- Added allowlisted, idempotent activation and revenue milestones without accepting
+  arbitrary public event names or dimensions.
+- Added a generated schema contract and CI drift gate for the executable migrations.
+- Added authenticated queue/error/ingestion operational metrics and explicit SLOs.
+- Pinned every third-party GitHub Action to an immutable upstream commit.
 
 ## Required production configuration
 

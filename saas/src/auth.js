@@ -88,6 +88,17 @@ export async function destroySession(sessionId) {
   await dbDeleteSession(sessionId);
 }
 
+export function forgetUserSessions(userId) {
+  let removed = 0;
+  for (const [sessionId, session] of sessions) {
+    if (session.userId === userId) {
+      sessions.delete(sessionId);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 // Repopulate the in-memory cache from Postgres at startup so a deploy/restart
 // no longer logs everyone out. Called from server startup before serving.
 export async function loadSessionsFromDb() {

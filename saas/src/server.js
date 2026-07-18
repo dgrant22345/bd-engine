@@ -5,10 +5,10 @@ import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
-import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
-import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
+import { extractSession, createSession, destroySession, forgetUserSessions, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
+import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
@@ -16,6 +16,8 @@ import { validateSupportTicketInput, validateSupportReplyInput, validateSupportA
 import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './authorization.js';
 import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js';
 import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
+import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
+import { buildProductEvent } from './product-analytics.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -879,6 +881,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/analytics/visit' && req.method === 'POST') {
+    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, 120, 60 * 60 * 1000)) {
+      return sendJson(res, 429, { error: 'Too many analytics requests.' });
+    }
     return handleAnalyticsVisit(req, res);
   }
 
@@ -1169,6 +1174,11 @@ self.addEventListener('activate', (event) => {
       }, {
         customerId,
       });
+      await recordProductMilestone({
+        eventType: 'checkout_started', tenantId, userId: user.id,
+        eventKey: `${tenantId}:${planId}:${new Date().toISOString().slice(0, 10)}`,
+        dimensions: { planId, mode: customerId ? 'existing_customer' : 'new_customer' },
+      });
       return sendJson(res, 200, { url: sessionUrl, mode: 'checkout' });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
@@ -1307,6 +1317,106 @@ self.addEventListener('activate', (event) => {
     });
   }
 
+  if (pathname === '/api/privacy/account-closure' && req.method === 'GET') {
+    const plan = buildAccountClosurePlan(user.id, listTenants(), listMemberships());
+    return sendJson(res, 200, {
+      eligible: plan.eligible,
+      blockers: plan.blockers,
+      deleteWorkspaces: plan.deleteTenants.map((item) => ({ id: item.id, name: item.name })),
+      leaveWorkspaces: plan.leaveTenants.map((item) => ({ id: item.id, name: item.name, role: item.role })),
+      subscriptionsToCancel: plan.subscriptionIds.length,
+      expectedConfirmation: `DELETE ACCOUNT ${user.email}`,
+    });
+  }
+
+  if (pathname === '/api/privacy/account-closure' && req.method === 'POST') {
+    if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
+    const body = await readJson(req);
+    const expected = `DELETE ACCOUNT ${user.email}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, { error: `Type "${expected}" to close your account.`, code: 'confirmation_required' });
+    }
+    if (!body.exportAcknowledged) {
+      return sendJson(res, 400, { error: 'Confirm that you downloaded your data or chose to continue without an export.' });
+    }
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 400, { error: 'The password you entered is incorrect.', code: 'password_incorrect' });
+    }
+
+    const plan = buildAccountClosurePlan(user.id, listTenants(), listMemberships());
+    if (!plan.eligible) {
+      return sendJson(res, 409, {
+        error: 'Your account cannot be closed until workspace ownership is transferred.',
+        code: 'ownership_transfer_required',
+        blockers: plan.blockers,
+      });
+    }
+
+    const closureId = `closure-${randomUUID()}`;
+    const requestedAt = new Date().toISOString();
+    const closureReason = new Set(['not_useful', 'coverage', 'usability', 'price', 'privacy', 'other'])
+      .has(String(body.reason || '')) ? String(body.reason) : '';
+    const closureRecord = {
+      id: closureId,
+      subjectHash: accountClosureSubjectHash(user.id),
+      status: 'pending',
+      deletedTenantCount: plan.deleteTenants.length,
+      leftWorkspaceCount: plan.leaveTenants.length,
+      subscriptionsCanceledCount: 0,
+      requestedAt,
+      updatedAt: requestedAt,
+      metadata: { reason: closureReason },
+    };
+    await dbRecordAccountClosure(closureRecord);
+
+    let subscriptionsCanceledCount = 0;
+    try {
+      for (const subscriptionId of plan.subscriptionIds) {
+        const cancellation = await cancelSubscriptionForAccountClosure(subscriptionId);
+        if (cancellation.canceled || cancellation.alreadyEnded) subscriptionsCanceledCount += 1;
+      }
+      await dbRecordAccountClosure({
+        ...closureRecord,
+        subscriptionsCanceledCount,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const deletedTenantIds = plan.deleteTenants.map((item) => item.id);
+      const result = await dbCloseUserAccount({
+        userId: user.id,
+        deleteTenantIds: deletedTenantIds,
+        closureId,
+      });
+      store.forgetClosedTenants(deletedTenantIds);
+      forgetClosedAccount(user.id, deletedTenantIds);
+      forgetUserSessions(user.id);
+      clearSessionCookie(res);
+      return sendJson(res, 200, {
+        ok: true,
+        closed: true,
+        deletedWorkspaces: deletedTenantIds.length,
+        leftWorkspaces: plan.leaveTenants.length,
+        subscriptionsCanceled: subscriptionsCanceledCount,
+        completedAt: result.completedAt || new Date().toISOString(),
+        message: 'Your account has been closed and you have been signed out.',
+      });
+    } catch (error) {
+      await dbRecordAccountClosure({
+        ...closureRecord,
+        status: 'failed',
+        subscriptionsCanceledCount,
+        error: 'account_closure_dependency_failed',
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+      reportServerError(500, req, error);
+      return sendJson(res, 502, {
+        error: 'Account closure could not finish safely. Your account remains available; retry or contact support.',
+        code: 'account_closure_incomplete',
+        requestId: req.requestId,
+      });
+    }
+  }
+
   if (pathname === '/api/accounts/legacy-target-curation' && req.method === 'GET') {
     return sendJson(res, 200, await store.curateLegacyTargets(tenantId, {
       targetLimit: url.searchParams.get('targetLimit'),
@@ -1350,6 +1460,10 @@ self.addEventListener('activate', (event) => {
     if (req.method === 'POST') {
       if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts' })) return;
       const item = await store.addAccount(tenantId, await readJson(req));
+      await recordProductMilestone({
+        eventType: 'target_created', tenantId, userId: user.id,
+        eventKey: tenantId, dimensions: { source: 'manual', persona: tenant.persona, planId: tenant.plan },
+      });
       return sendJson(res, 201, item);
     }
     return sendJson(res, 200, await store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
@@ -1381,6 +1495,10 @@ self.addEventListener('activate', (event) => {
     const payload = await readJson(req);
     const draft = await store.createOutreachDraft(tenantId, accountOutreachMatch[1], payload);
     if (!draft) return sendJson(res, 404, { error: 'Account not found' });
+    await recordProductMilestone({
+      eventType: 'outreach_generated', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
     return sendJson(res, 201, draft);
   }
 
@@ -1479,6 +1597,10 @@ self.addEventListener('activate', (event) => {
     }
 
     store.completeSetup(tenantId, fields);
+    await recordProductMilestone({
+      eventType: 'setup_completed', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan, source: 'no_csv' },
+    });
     return sendJson(res, 200, {
       ok: true,
       setupComplete: true,
@@ -1624,13 +1746,23 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/discovery/run' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const body = await readJson(req);
-    return sendJson(res, 202, store.startAtsDiscovery(tenantId, { ...body, plan }));
+    const accepted = store.startAtsDiscovery(tenantId, { ...body, plan });
+    await recordProductMilestone({
+      eventType: 'discovery_started', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
+    return sendJson(res, 202, accepted);
   }
 
   if (pathname === '/api/import/jobs' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const body = await readJson(req);
-    return sendJson(res, 202, await store.startLiveJobImport(tenantId, { ...body, plan }));
+    const accepted = await store.startLiveJobImport(tenantId, { ...body, plan });
+    await recordProductMilestone({
+      eventType: 'job_import_started', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
+    return sendJson(res, 202, accepted);
   }
 
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
@@ -1705,7 +1837,7 @@ async function handleAnalyticsVisit(req, res) {
   const startedAt = performance.now();
   const result = await dbRecordAnalyticsVisit({
     visitorId: body.visitorId,
-    eventType: body.eventType || 'pageview',
+    eventType: 'pageview',
     path: body.path || '/',
     referrer: body.referrer || '',
     source: body.source || '',
@@ -1717,6 +1849,15 @@ async function handleAnalyticsVisit(req, res) {
     console.warn(`Slow analytics write: saas/src/db.js dbRecordAnalyticsVisit ${elapsedMs}ms`);
   }
   return sendJson(res, result.recorded ? 202 : 400, result);
+}
+
+async function recordProductMilestone(event) {
+  try {
+    return await dbRecordProductEvent(buildProductEvent(event));
+  } catch (error) {
+    console.error('Product milestone recording failed:', error.message);
+    return { recorded: false, reason: error.message };
+  }
 }
 
 async function handleStripeBillingEvent(event) {
@@ -1737,6 +1878,11 @@ async function handleStripeBillingEvent(event) {
     });
     const referral = await maybeGrantReferralCredit(tenant, object);
     const pendingReferralCredits = tenant ? await grantPendingReferralCreditsForReferrer(tenant) : [];
+    await recordProductMilestone({
+      eventType: 'subscription_started', tenantId,
+      eventKey: object.id || getStripeId(object.subscription) || tenantId,
+      dimensions: { planId: resolvedPlanId, source: 'stripe_checkout' },
+    });
     return { updated: Boolean(tenant), tenantId, planId: resolvedPlanId, referral, pendingReferralCredits };
   }
 
@@ -1790,6 +1936,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: object.id || '',
       billingGraceEndsAt: '',
     });
+    await recordProductMilestone({
+      eventType: 'subscription_canceled', tenantId,
+      eventKey: object.id || tenantId,
+      dimensions: { planId: tenant?.plan || existingTenant?.plan || '', source: 'stripe_webhook' },
+    });
     return { updated: Boolean(tenant), tenantId, status: 'canceled' };
   }
 
@@ -1803,6 +1954,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
       billingGraceEndsAt: createBillingGraceDeadline(object),
       billingLastPaymentFailedAt: new Date().toISOString(),
+    });
+    await recordProductMilestone({
+      eventType: 'payment_failed', tenantId: tenant.id,
+      eventKey: object.id || `${tenant.id}:${object.created || Date.now()}`,
+      dimensions: { planId: tenant.plan, source: 'stripe_webhook' },
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status: 'past_due' };
   }
@@ -1818,6 +1974,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
       billingGraceEndsAt: '',
       billingLastPaymentFailedAt: '',
+    });
+    await recordProductMilestone({
+      eventType: 'payment_recovered', tenantId: tenant.id,
+      eventKey: object.id || `${tenant.id}:${object.created || Date.now()}`,
+      dimensions: { planId: tenant.plan, source: 'stripe_webhook' },
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status };
   }
@@ -2155,6 +2316,12 @@ async function handleSignup(req, res) {
   const { cookie } = await createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
 
+  await recordProductMilestone({
+    eventType: 'signup_completed', tenantId, userId: userResult.user.id,
+    eventKey: userResult.user.id,
+    dimensions: { persona: userPersona, planId: getEffectivePlanId(tenantResult.tenant, userResult.user), source: referrerTenant ? 'referral' : 'direct' },
+  });
+
   return sendJson(res, 201, {
     user: safeUser(userResult.user),
     tenant: getEffectiveTenant(tenantResult.tenant, userResult.user) || null,
@@ -2417,6 +2584,10 @@ function getHealthPayload(includeDetails = false) {
     ? Math.round(serverStats.totalDurationMs / serverStats.requestCount)
     : 0;
   const stripeStatus = getStripeConfigStatus();
+  const operational = store.getOperationalMetrics();
+  const errorRatePercent = serverStats.requestCount
+    ? Math.round((serverStats.errorCount / serverStats.requestCount) * 10000) / 100
+    : 0;
   const checks = {
     server: true,
     databaseConfigured: isDbEnabled(),
@@ -2442,6 +2613,7 @@ function getHealthPayload(includeDetails = false) {
     relationalContentCheckedAt: relationalContentHealth.checkedAt,
     relationalPrimaryWorkspaceCount: getRelationalPrimaryTenantIds().length,
     relationalNewWorkspaceDefault: RELATIONAL_WRITE_NEW_TENANTS,
+    backgroundQueueHealthy: operational.healthy,
   };
   const payload = {
     ok: true,
@@ -2462,6 +2634,20 @@ function getHealthPayload(includeDetails = false) {
       memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
       rateLimitBuckets: rateBuckets.size,
       resetTokenCacheEntries: passwordResetTokens.size,
+      errorRatePercent,
+      background: operational,
+    };
+    payload.slo = {
+      targets: {
+        http5xxRatePercentMax: 1,
+        backgroundJobMaxAgeMs: operational.staleAfterMs,
+        ingestionSuccessRatePercentMin: 95,
+      },
+      observed: {
+        http5xxRatePercent: errorRatePercent,
+        backgroundJobMaxAgeMs: operational.oldestActiveAgeMs,
+        ingestionSuccessRatePercent24h: operational.ingestionSuccessRate24h,
+      },
     };
     payload.lastError = serverStats.lastError;
   }

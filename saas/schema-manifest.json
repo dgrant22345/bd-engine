@@ -1,0 +1,117 @@
+{
+  "generatedFrom": "src/db.js",
+  "sourceSha256": "0001bfdd67dadcd8d167f15821851459c6504d7c4fa91282fba244abbf2dd3d9",
+  "migrations": [
+    {
+      "id": "20260707_persistence_foundation",
+      "description": "Add audit/import durability, identity keys, and query indexes"
+    },
+    {
+      "id": "20260711_background_job_snapshots",
+      "description": "Persist tenant-scoped background job status"
+    },
+    {
+      "id": "20260711_stripe_webhook_idempotency",
+      "description": "Track Stripe webhook processing and retries"
+    },
+    {
+      "id": "20260713_email_verification",
+      "description": "Add advisory email verification lifecycle"
+    },
+    {
+      "id": "20260713_support_tickets",
+      "description": "Add customer support ticket lifecycle"
+    },
+    {
+      "id": "20260718_shared_rate_limits",
+      "description": "Add durable cross-instance abuse limits"
+    },
+    {
+      "id": "20260718_account_closures",
+      "description": "Add recoverable privacy account-closure ledger"
+    },
+    {
+      "id": "20260718_product_analytics",
+      "description": "Add idempotent privacy-safe product funnel events"
+    }
+  ],
+  "tables": [
+    "account_closures",
+    "accounts",
+    "activities",
+    "analytics_events",
+    "audit_log",
+    "background_jobs",
+    "board_configs",
+    "contacts",
+    "email_verification_tokens",
+    "import_run_items",
+    "import_runs",
+    "jobs",
+    "memberships",
+    "password_reset_tokens",
+    "rate_limit_buckets",
+    "schema_migrations",
+    "sessions",
+    "stripe_webhook_events",
+    "support_ticket_messages",
+    "support_tickets",
+    "tasks",
+    "tenant_data",
+    "tenants",
+    "users"
+  ],
+  "indexes": [
+    "account_closures_status_updated_idx",
+    "account_closures_subject_idx",
+    "accounts_tenant_domain_idx",
+    "accounts_tenant_identity_idx",
+    "accounts_tenant_normalized_idx",
+    "accounts_tenant_score_idx",
+    "accounts_tenant_updated_idx",
+    "activities_tenant_account_time_idx",
+    "activities_tenant_updated_idx",
+    "analytics_events_created_at_idx",
+    "analytics_events_day_idx",
+    "analytics_events_event_key_uidx",
+    "analytics_events_tenant_type_idx",
+    "analytics_events_type_day_idx",
+    "analytics_events_visitor_idx",
+    "audit_log_tenant_action_idx",
+    "audit_log_tenant_entity_idx",
+    "background_jobs_tenant_updated_idx",
+    "board_configs_tenant_board_idx",
+    "board_configs_tenant_checked_idx",
+    "board_configs_tenant_identity_idx",
+    "board_configs_tenant_status_idx",
+    "board_configs_tenant_updated_idx",
+    "contacts_tenant_account_priority_idx",
+    "contacts_tenant_email_idx",
+    "contacts_tenant_identity_idx",
+    "contacts_tenant_linkedin_idx",
+    "contacts_tenant_updated_idx",
+    "email_verification_tokens_expires_idx",
+    "email_verification_tokens_user_idx",
+    "import_run_items_run_idx",
+    "import_run_items_tenant_key_idx",
+    "import_runs_tenant_hash_idx",
+    "import_runs_tenant_started_idx",
+    "jobs_tenant_account_posted_idx",
+    "jobs_tenant_import_run_idx",
+    "jobs_tenant_natural_key_idx",
+    "jobs_tenant_posted_idx",
+    "jobs_tenant_updated_idx",
+    "password_reset_tokens_expires_idx",
+    "password_reset_tokens_user_idx",
+    "rate_limit_buckets_expires_idx",
+    "sessions_expires_idx",
+    "stripe_webhook_events_status_updated_idx",
+    "support_ticket_messages_ticket_created_idx",
+    "support_tickets_creator_created_idx",
+    "support_tickets_status_updated_idx",
+    "support_tickets_tenant_created_idx",
+    "tasks_tenant_due_idx",
+    "tasks_tenant_updated_idx",
+    "tenants_referral_code_idx"
+  ]
+}

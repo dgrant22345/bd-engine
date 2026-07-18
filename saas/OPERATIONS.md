@@ -6,6 +6,7 @@ Run these before pushing a production change:
 
 ```powershell
 npm.cmd --prefix saas run check
+npm.cmd --prefix saas run check:schema
 npm.cmd --prefix saas test
 npm.cmd --prefix saas run test:browser
 npm.cmd --prefix saas audit --omit=dev --audit-level=high
@@ -23,6 +24,56 @@ After deployment, verify `/health`, relational parity, recent application
 errors, and HTTP 5xx logs. A healthy release has a connected database, zero
 mirror mismatches, zero deep-content mismatches, and the expected relational
 primary count.
+
+The public `/health` response is intentionally availability-only. An
+authenticated `/api/status` response includes the 5xx rate, background queue
+age, failed jobs, 24-hour ingestion success rate, and their SLO targets. Alert
+when the 5xx rate remains above 1%, the oldest active job exceeds
+`BD_BACKGROUND_JOB_STALE_MS` (15 minutes by default), or ingestion success is
+below 95% after at least one completed or failed run. Treat a missing active-job
+timestamp as unhealthy. Keep the external dashboard and paging destination
+outside the application so an application outage cannot hide its own alert.
+
+## Schema migrations
+
+`src/db.js` is the executable PostgreSQL migration source. Never apply
+`schema.sql`; it is a historical reference only. `schema-manifest.json` is the
+reviewable generated contract and CI fails when it drifts from the migration
+source. After an intentional database-source change, inspect the migration,
+then regenerate and verify the contract:
+
+```powershell
+npm.cmd --prefix saas run schema:manifest
+npm.cmd --prefix saas run check:schema
+```
+
+Migration IDs are immutable once deployed. Add a new dated migration, take a
+verified backup first, and roll application code back by commit if deployment
+fails. Do not improvise down migrations against customer data.
+
+## Account closure recovery
+
+Self-service account closure verifies the current password, requires an exact
+confirmation phrase, refuses to orphan a shared workspace, cancels subscriptions
+for workspaces being deleted, and removes the user's sessions and customer data
+in one database transaction. `account_closures` retains only a hashed subject,
+aggregate counts, an allowlisted reason category, status, and a safe error for
+operational recovery.
+
+If a closure is marked `failed`, do not manually delete rows. Confirm whether
+Stripe cancellation completed, inspect the closure status by ID without
+exposing the subject, and ask the customer to retry after the dependency is
+healthy. The database deletion is transactional and the Stripe cancellation is
+idempotent, so a retry is the supported recovery path.
+
+## Product analytics
+
+Activation and revenue milestones are server-recorded and idempotent. Event
+names and dimensions are allowlisted; arbitrary public analytics requests are
+limited to page views and rate limited. Account closure deletes events linked to
+the closing user and deleted workspaces. Use aggregate funnel counts for product
+decisions and do not export raw identifiers to third-party analytics without a
+documented privacy review.
 
 For an aggregate-only ATS diagnosis that does not print customer records:
 
@@ -124,6 +175,8 @@ The app reports these in the authenticated status screen:
   not stored in the limiter table; expired buckets are removed by operational
   cleanup.
 - `BD_ERROR_WEBHOOK` enables immediate server-error alerts.
+- `BD_BACKGROUND_JOB_STALE_MS` controls the queue-age alert threshold and
+  defaults to 900000 milliseconds.
 - An external uptime monitor should poll `/health` and alert on non-200 results.
 - Privacy and Terms copy requires legal review before broad commercial launch.
 

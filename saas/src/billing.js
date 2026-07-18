@@ -315,6 +315,30 @@ export async function createBillingPortalSession(customerId, returnUrl) {
   return session.url;
 }
 
+export async function cancelSubscriptionForAccountClosure(subscriptionId) {
+  if (!stripe) throw new Error('Stripe is not configured. The subscription must be canceled before account closure.');
+  if (!subscriptionId) return { canceled: false, alreadyEnded: true };
+  try {
+    const existing = await stripe.subscriptions.retrieve(subscriptionId);
+    if (existing.status === 'canceled') {
+      return { canceled: true, alreadyEnded: true, subscriptionId };
+    }
+    const canceled = await stripe.subscriptions.cancel(subscriptionId, {
+      prorate: false,
+      invoice_now: false,
+    });
+    if (canceled.status !== 'canceled') {
+      throw new Error('Stripe did not confirm subscription cancellation.');
+    }
+    return { canceled: true, alreadyEnded: false, subscriptionId };
+  } catch (error) {
+    if (error?.code === 'resource_missing') {
+      return { canceled: true, alreadyEnded: true, subscriptionId };
+    }
+    throw error;
+  }
+}
+
 export function handleWebhookEvent(payload, signature) {
   if (!stripe) throw new Error('Stripe is not configured.');
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;

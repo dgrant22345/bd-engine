@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
+import { buildProductEvent } from './product-analytics.js';
+import { summarizeOperationalJobs } from './operational-metrics.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1719,6 +1721,21 @@ export function createStore() {
       return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
     },
 
+    forgetClosedTenants(tenantIds = []) {
+      for (const tenantId of new Set(tenantIds.filter(Boolean))) {
+        const pending = pendingSaves.get(tenantId);
+        if (pending) clearTimeout(pending);
+        pendingSaves.delete(tenantId);
+        saveRetryCounts.delete(tenantId);
+        removeResidentTenant(tenantId);
+        tenantProfiles.delete(tenantId);
+        durableRelationalWriteTenants.delete(tenantId);
+        for (const [jobId, job] of backgroundJobs) {
+          if (job.tenantId === tenantId) backgroundJobs.delete(jobId);
+        }
+      }
+    },
+
     async curateLegacyTargets(tenantId, { targetLimit = 100, apply = false } = {}) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
@@ -2033,6 +2050,9 @@ export function createStore() {
       const settings = profile?.settings || {};
       const isReadOnlyDemo = profile?.tenant?.slug === 'bd-engine-demo';
       const automaticRefreshEnabled = Boolean(settings.setupComplete && !isReadOnlyDemo);
+      const operational = summarizeOperationalJobs(tenantJobs, {
+        staleAfterMs: readPositiveInteger(process.env.BD_BACKGROUND_JOB_STALE_MS, 15 * 60 * 1000),
+      });
       return {
         ok: true,
         serverStartedAt: processStartedAt,
@@ -2043,6 +2063,7 @@ export function createStore() {
         queuedJobs,
         activeJobs: activeJobs.map(publicBackgroundJob),
         recentJobs: recentJobs.map(publicBackgroundJob),
+        operational,
         refreshSchedule: {
           enabled: automaticRefreshEnabled,
           disabledReason: isReadOnlyDemo ? 'read_only_demo' : (settings.setupComplete ? '' : 'setup_incomplete'),
@@ -4310,6 +4331,15 @@ export function createStore() {
       }));
     },
 
+    getOperationalMetrics() {
+      const staleAfterMs = readPositiveInteger(process.env.BD_BACKGROUND_JOB_STALE_MS, 15 * 60 * 1000);
+      return {
+        ...summarizeOperationalJobs([...backgroundJobs.values()], { staleAfterMs }),
+        residentTenants: loadedTenants.size,
+        pendingTenantSaves: pendingSaves.size,
+      };
+    },
+
     async claimScheduledPipeline(tenantId, options = {}) {
       assertTenant(tenantId);
       await ensureTenantSettingsLoaded(tenantId);
@@ -4818,6 +4848,14 @@ export function createStore() {
       // Mark setup as complete after import
       const profile = getTenantProfile(tenantId);
       if (profile && !dryRun) profile.settings.setupComplete = true;
+      if (!dryRun) {
+        dbRecordProductEvent(buildProductEvent({
+          eventType: 'setup_completed',
+          tenantId,
+          eventKey: tenantId,
+          dimensions: { persona: profile?.tenant?.persona || 'bd', planId: profile?.tenant?.plan || 'trial', source: 'csv' },
+        })).catch((error) => console.error('Setup milestone recording failed:', error.message));
+      }
 
       // Persist all imported data
       if (!dryRun) {

@@ -277,6 +277,21 @@ export function getMembership(tenantId, userId) {
   return memberships.find((m) => m.tenantId === tenantId && m.userId === userId) || null;
 }
 
+export function listMemberships() {
+  return memberships.map((membership) => ({ ...membership }));
+}
+
+export function forgetClosedAccount(userId, deletedTenantIds = []) {
+  const deleted = new Set(deletedTenantIds);
+  users.delete(userId);
+  for (const tenantId of deleted) tenants.delete(tenantId);
+  for (let index = memberships.length - 1; index >= 0; index -= 1) {
+    if (memberships[index].userId === userId || deleted.has(memberships[index].tenantId)) {
+      memberships.splice(index, 1);
+    }
+  }
+}
+
 export function addMember(tenantId, userId, role = 'member') {
   const existing = getMembership(tenantId, userId);
   if (existing) return existing;
