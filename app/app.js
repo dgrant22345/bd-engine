@@ -33,6 +33,22 @@ function readJsonSetting(key, fallback) {
 }
 
 const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
+const defaultDashboardCollapsed = {
+  readiness: true,
+  metrics: true,
+  playbook: true,
+  boards: true,
+  enrichment: true,
+  heatmap: true,
+  'smart-alerts': true,
+  velocity: true,
+  leaderboard: true,
+  'data-quality': true,
+  duplicates: true,
+  'sales-cycle': true,
+  charts: true,
+};
+const savedDashboardCollapsed = readJsonSetting('bd_dash_collapsed', null);
 const defaultAlertThresholds = {
   staleDays: 14,
   scoreDropMin: 10,
@@ -62,6 +78,7 @@ const appState = {
   searchTimer: null,
   configEditingId: '',
   runtimeStatus: null,
+  ingestionDiagnostics: null,
   runtimePollTimer: null,
   savedFilters: readJsonSetting('bd_saved_filters', []),
   adminCollapsed: savedAdminCollapsed && typeof savedAdminCollapsed === 'object'
@@ -92,7 +109,9 @@ const appState = {
   postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
   tourActive: false,
   dashboardLayout: readJsonSetting('bd_dash_layout', null),
-  dashboardCollapsed: readJsonSetting('bd_dash_collapsed', {}),
+  dashboardCollapsed: savedDashboardCollapsed && typeof savedDashboardCollapsed === 'object'
+    ? { ...defaultDashboardCollapsed, ...savedDashboardCollapsed }
+    : { ...defaultDashboardCollapsed },
   customFields: readJsonSetting('bd_custom_fields', []),
   customFieldValues: {},
   outreachSequences: readJsonSetting('bd_sequences', []),
@@ -346,6 +365,121 @@ function showUndoToast(message, undoFn, duration = 6000) {
   toastContainer.appendChild(el);
   if (duration > 0) setTimeout(() => { if (!undone) dismissToast(el); }, duration);
   return el;
+}
+
+function showAppDialog({
+  title,
+  message = '',
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  danger = false,
+  inputLabel = '',
+  inputPlaceholder = '',
+  inputValue = '',
+} = {}) {
+  return new Promise((resolve) => {
+    const previouslyFocused = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal-panel app-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <div>
+          <h2 id="app-dialog-title">${escapeHtml(title || 'Confirm action')}</h2>
+          ${message ? `<p class="muted">${escapeHtml(message)}</p>` : ''}
+        </div>
+        ${inputLabel ? `
+          <label>${escapeHtml(inputLabel)}
+            <input id="app-dialog-input" value="${escapeAttr(inputValue)}" placeholder="${escapeAttr(inputPlaceholder)}" autocomplete="off" />
+          </label>` : ''}
+        <div class="app-dialog-actions">
+          <button class="secondary-button" type="button" data-dialog-cancel>${escapeHtml(cancelLabel)}</button>
+          <button class="${danger ? 'danger-button' : 'primary-button'}" type="button" data-dialog-confirm>${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+
+    let settled = false;
+    const input = backdrop.querySelector('#app-dialog-input');
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKeyDown);
+      backdrop.remove();
+      if (previouslyFocused instanceof HTMLElement && document.contains(previouslyFocused)) previouslyFocused.focus();
+      resolve(value);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') finish(input ? null : false);
+      if (event.key === 'Enter' && document.activeElement !== backdrop.querySelector('[data-dialog-cancel]')) {
+        event.preventDefault();
+        finish(input ? input.value.trim() : true);
+      }
+      if (event.key === 'Tab') {
+        const focusable = [...backdrop.querySelectorAll('button:not([disabled]), input:not([disabled])')];
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    backdrop.querySelector('[data-dialog-cancel]').addEventListener('click', () => finish(input ? null : false));
+    backdrop.querySelector('[data-dialog-confirm]').addEventListener('click', () => finish(input ? input.value.trim() : true));
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) finish(input ? null : false);
+    });
+    document.addEventListener('keydown', onKeyDown);
+    document.body.appendChild(backdrop);
+    requestAnimationFrame(() => (input || backdrop.querySelector('[data-dialog-confirm]')).focus());
+  });
+}
+
+function buildSafeDiagnosticSummary() {
+  const runtime = appState.runtimeStatus || {};
+  const ingestion = appState.ingestionDiagnostics || {};
+  const coverage = ingestion.coverageSummary || {};
+  const scheduler = runtime.scheduler || {};
+  const lines = [
+    'BD Engine diagnostic summary',
+    `Generated: ${new Date().toISOString()}`,
+    `Route: ${getRouteRoot() || 'unknown'}`,
+    `Mode: ${appState.bootstrap?.readOnly ? 'read-only demo' : 'authenticated workspace'}`,
+    `Background work: ${Number(runtime.runningJobs || 0)} running, ${Number(runtime.queuedJobs || 0)} waiting`,
+    `Last successful refresh: ${scheduler.lastSuccessAt || appState.bootstrap?.settings?.lastPipelineRun || 'not yet completed'}`,
+    `Tracked companies: ${Number(coverage.trackedCompanies || coverage.totalTrackedCompanies || 0)}`,
+    `Ready job sources: ${Number(coverage.importReady || 0)}`,
+    `Sources needing review: ${Number(coverage.totalIssues || 0)}`,
+    `Browser: ${navigator.userAgent}`,
+  ];
+  return lines.join('\n');
+}
+
+async function writeClipboardText(text) {
+  const value = String(text || '');
+  if (!value) throw new Error('Nothing to copy.');
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Embedded browsers can deny Clipboard API access even after a user click.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard access was blocked.');
 }
 
 /* ── Mobile navigation ── */
@@ -1499,22 +1633,23 @@ function wireBulkKeyboard() {
 /* ── Phase 6: Dashboard layout customization ── */
 function getDashboardSections() {
   return [
-    { id: 'hero', label: 'Hero card', required: true },
-    { id: 'trust', label: 'Trust strip' },
-    { id: 'action-plan', label: 'Persona action plan' },
-    { id: 'metrics', label: 'Metrics grid' },
+    { id: 'hero', label: 'Daily summary', required: true },
+    { id: 'workflow', label: 'Getting started' },
+    { id: 'action-plan', label: 'Recommended next actions' },
+    { id: 'readiness', label: 'Workspace readiness' },
+    { id: 'alerts-bar', label: 'Important alerts' },
+    { id: 'queue', label: "Today's priority queue" },
+    { id: 'jobs-activity', label: 'New jobs and recent activity' },
+    { id: 'metrics', label: 'Performance metrics' },
     { id: 'playbook', label: "Today's playbook" },
-    { id: 'alerts-bar', label: 'Alert bar' },
-    { id: 'boards', label: 'Trigger boards' },
-    { id: 'queue', label: 'Today queue & panels' },
-    { id: 'enrichment', label: 'Enrichment pipeline' },
-    { id: 'jobs-activity', label: 'New jobs & activity' },
+    { id: 'boards', label: 'Hiring signal boards' },
+    { id: 'enrichment', label: 'Data enrichment progress' },
     { id: 'heatmap', label: 'Pipeline heatmap' },
     { id: 'smart-alerts', label: 'Smart alerts' },
     { id: 'velocity', label: 'Deal velocity' },
     { id: 'leaderboard', label: 'Team leaderboard' },
     { id: 'data-quality', label: 'Data quality' },
-    { id: 'duplicates', label: 'Duplicate detection' },
+    { id: 'duplicates', label: 'Possible duplicates' },
     { id: 'sales-cycle', label: 'Sales cycle analytics' },
     { id: 'charts', label: 'Pipeline charts' },
   ];
@@ -1525,7 +1660,7 @@ function renderDashboardCustomizer() {
   const collapsed = appState.dashboardCollapsed;
   return `
     <div class="dash-customizer">
-      <button class="ghost-button ghost-button--xs" id="dash-customize-toggle">Customize dashboard</button>
+      <button class="ghost-button ghost-button--xs" id="dash-customize-toggle">Choose dashboard sections</button>
       <div class="dash-customizer-dropdown hidden" id="dash-customizer-dropdown">
         <p class="small muted" style="margin-bottom:8px">Show/hide dashboard sections:</p>
         ${sections.map(s => `
@@ -2106,7 +2241,13 @@ function bindEvents() {
       return;
     }
     if (actionName === 'save-current-filter') {
-      const name = prompt('Name for this filter set:');
+      const name = await showAppDialog({
+        title: 'Save filter set',
+        message: 'Give this view a short name so you can return to it later.',
+        inputLabel: 'Filter name',
+        inputPlaceholder: 'For example, active hiring accounts',
+        confirmLabel: 'Save filter',
+      });
       if (name) { saveFilter(name.trim()); await renderAccountsView(); }
       return;
     }
@@ -2295,9 +2436,27 @@ function bindEvents() {
       const link = action.dataset.referralLink || document.getElementById('referral-link')?.value || '';
       if (!link) return;
       const originalText = action.textContent;
-      await navigator.clipboard.writeText(link);
+      await writeClipboardText(link);
       action.textContent = 'Copied!';
       setTimeout(() => { action.textContent = originalText; }, 1400);
+      return;
+    }
+
+    if (actionName === 'copy-diagnostics') {
+      const originalText = action.textContent;
+      action.disabled = true;
+      try {
+        await writeClipboardText(buildSafeDiagnosticSummary());
+        action.textContent = 'Diagnostics copied';
+        showToast('Safe diagnostic summary copied. It does not include contacts, messages, or secrets.', 'success');
+      } catch {
+        showToast('Your browser blocked clipboard access. Try again after allowing clipboard permission.', 'warning');
+      } finally {
+        setTimeout(() => {
+          action.textContent = originalText;
+          action.disabled = false;
+        }, 1600);
+      }
       return;
     }
 
@@ -2440,7 +2599,13 @@ function bindEvents() {
     if (actionName === 'merge-duplicate') {
       const keepId = action.dataset.keep;
       const removeId = action.dataset.remove;
-      if (confirm('Merge duplicate into primary account? This will archive the duplicate.')) {
+      const confirmed = await showAppDialog({
+        title: 'Archive duplicate account?',
+        message: 'The primary account will stay active. The duplicate will be marked as paused with a link back to the primary account.',
+        confirmLabel: 'Archive duplicate',
+        danger: true,
+      });
+      if (confirmed) {
         try {
           await api(`/api/accounts/${removeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'paused', notes: `Merged into account ${keepId}` }) });
           showToast('Duplicate archived.', 'success');
@@ -2801,9 +2966,15 @@ async function loadSetupStatus(force = false) {
   appState.setupStatus = await api('/api/setup/status', { skipCache: true });
   if (appState.setupStatus?.persona) appState.persona = normalizeAppPersona(appState.setupStatus.persona);
   applyPersonaChrome();
-  if (!appState.setupDraft.workspaceName && appState.setupStatus?.workspace?.name) {
-    const existingName = appState.setupStatus.workspace.name;
+  const existingName = appState.setupStatus?.workspaceName || appState.setupStatus?.workspace?.name || '';
+  if (!appState.setupDraft.workspaceName && existingName) {
     appState.setupDraft.workspaceName = existingName === 'BD Engine Workspace' ? '' : existingName;
+  }
+  if (!appState.setupDraft.userName && appState.setupStatus?.user?.name) {
+    appState.setupDraft.userName = appState.setupStatus.user.name;
+  }
+  if (!appState.setupDraft.userEmail && appState.setupStatus?.user?.email) {
+    appState.setupDraft.userEmail = appState.setupStatus.user.email;
   }
   return appState.setupStatus;
 }
@@ -3636,9 +3807,10 @@ async function renderRoute() {
 }
 
 function getSetupSteps() {
+  const jobSeeker = isJobSeekerPersona();
   const steps = [
     { key: 'profile', label: 'Profile' },
-    { key: 'team', label: 'Team' },
+    { key: 'team', label: jobSeeker ? 'Support (optional)' : 'Owners (optional)' },
   ];
   if (appState.setupStatus?.licensingEnabled) {
     steps.push({ key: 'license', label: 'License' });
@@ -3706,7 +3878,7 @@ async function renderSetupWizard() {
   const setupCardTitle = current.key === 'launch'
     ? 'You are ready to go'
     : jobSeeker ? 'Set up your search workspace' : 'Set up your workspace';
-  const setupEyebrow = jobSeeker ? 'Job search workspace' : 'Three quick steps';
+  const setupEyebrow = `${steps.length} quick steps`;
   const setupIntro = jobSeeker
     ? 'Create your search workspace, bring in your LinkedIn connections, and start mapping target companies from your own network.'
     : 'Create your workspace, bring in your LinkedIn connections, and start from your own data.';
@@ -3744,10 +3916,10 @@ async function renderSetupWizard() {
 function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
   const checks = Array.isArray(readiness?.checks) ? readiness.checks : [];
   const score = Number(readiness?.score || 0);
-  const title = jobSeeker ? 'What makes this worth paying for?' : 'What makes this sales-ready?';
+  const title = jobSeeker ? 'Build a useful daily shortlist' : 'Build a useful daily prospecting list';
   const copy = jobSeeker
-    ? 'Aim for enough target companies, roles, and warm contacts that BD Engine replaces your manual search tracker.'
-    : 'Aim for enough accounts, contacts, ATS boards, and live jobs that BD Engine can guide daily outreach.';
+    ? 'Add target companies, open roles, and people you know so your next step is clear each day.'
+    : 'Add target accounts, contacts, hiring sources, and live jobs so your next outreach is clear each day.';
   const visibleChecks = checks.length ? checks.slice(0, 4) : [
     { label: jobSeeker ? 'Target companies imported' : 'Target accounts imported', value: 0, target: jobSeeker ? 15 : 25, suffix: '' },
     { label: 'Mapped contacts', value: 0, target: jobSeeker ? 25 : 50, suffix: '' },
@@ -3757,7 +3929,7 @@ function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
   return `
     <div class="setup-value-guide">
       <div>
-        <p class="eyebrow">Value checklist</p>
+        <p class="eyebrow">Workspace readiness</p>
         <strong>${escapeHtml(title)}</strong>
         <p class="muted small">${escapeHtml(copy)}</p>
       </div>
@@ -3769,7 +3941,7 @@ function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
         ${visibleChecks.map((check) => `
           <span>
             <strong>${formatNumber(check.value || 0)}${escapeHtml(check.suffix || '')}</strong>
-            ${escapeHtml(check.label)} target: ${formatNumber(check.target || 0)}${escapeHtml(check.suffix || '')}
+            ${escapeHtml(check.label)} <small class="muted">of ${formatNumber(check.target || 0)}${escapeHtml(check.suffix || '')}</small>
           </span>
         `).join('')}
       </div>
@@ -3877,9 +4049,10 @@ function renderSetupStepContent(stepKey) {
         ${appState.setupBusy ? renderSetupProgress('Starting setup', appState.setupProgressMessage || 'Saving your setup and preparing the import...') : ''}
         <div class="button-row">
           <button class="secondary-button" type="button" data-action="setup-back">Back</button>
-          <button class="secondary-button" type="button" data-action="setup-preview-csv" ${hasCsv && !appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>
-          <button class="ghost-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Skip import</button>
-          <button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy || (hasCsv && !appState.setupPreview) ? 'disabled' : ''}>${appState.setupBusy ? 'Starting...' : hasCsv && !appState.setupPreview ? 'Preview before finishing' : 'Finish setup'}</button>
+          ${hasCsv ? `<button class="secondary-button" type="button" data-action="setup-preview-csv" ${!appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>` : ''}
+          ${hasCsv
+            ? `<button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy || !appState.setupPreview ? 'disabled' : ''}>${appState.setupBusy ? 'Importing...' : appState.setupPreview ? 'Import and finish setup' : 'Preview before importing'}</button>`
+            : `<button class="primary-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Continue without a CSV</button>`}
         </div>
       </div>
     `;
@@ -5381,6 +5554,7 @@ async function renderAdminView() {
   const runtime = batch.runtime;
   const ingestionDiagnostics = batch.ingestionDiagnostics || {};
   appState.runtimeStatus = runtime;
+  appState.ingestionDiagnostics = ingestionDiagnostics;
   const targetScoreRollout = batch.targetScoreRollout || {};
   appState.targetScoreRollout = targetScoreRollout;
   const resolverReport = batch.resolverReport;
@@ -5595,6 +5769,14 @@ async function renderAdminView() {
         ${siteAnalyticsSection}
         ${renderCollapsibleStart('runtime-status', 'App status', 'See whether background work is idle, queued, or running.')}
           <div id="runtime-status-panel"></div>
+          <div class="action-card diagnostics-card">
+            <div>
+              <p class="eyebrow">Support</p>
+              <h4>Share a safe diagnostic summary</h4>
+              <p class="small muted">Copies refresh timing, job-source coverage, background status, and browser details. It excludes contacts, notes, outreach text, and account secrets.</p>
+            </div>
+            <button class="secondary-button" type="button" data-action="copy-diagnostics">Copy diagnostics</button>
+          </div>
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
           <div class="metrics-grid metrics-grid--compact">
@@ -7661,7 +7843,7 @@ async function copyGeneratedOutreach(kind, buttonEl, variantIndex = null) {
   const text = getGeneratedOutreachText(kind, variantIndex);
   if (!text) return;
   const originalText = buttonEl.textContent;
-  await navigator.clipboard.writeText(text);
+  await writeClipboardText(text);
   buttonEl.textContent = 'Copied!';
   setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
 }
@@ -7685,7 +7867,7 @@ async function openGeneratedLinkedIn(buttonEl) {
   if (!outreach?.linkedinMessage) return;
   const selectedContact = getSelectedOutreachContact();
   const originalText = buttonEl.textContent;
-  await navigator.clipboard.writeText(outreach.linkedinMessage);
+  await writeClipboardText(outreach.linkedinMessage);
   window.open(selectedContact.linkedinUrl || 'https://www.linkedin.com/messaging/compose', '_blank', 'noopener');
   buttonEl.textContent = 'Copied & opened';
   setTimeout(() => { buttonEl.textContent = originalText; }, 1800);

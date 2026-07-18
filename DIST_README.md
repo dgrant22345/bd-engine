@@ -29,11 +29,12 @@ That data folder is preserved when you update or uninstall unless you explicitly
 3. Finish the installer.
 4. Launch `BD Engine` from the desktop or Start Menu.
 
-The launcher starts a local server at:
+The launcher normally starts a local server at:
 
 `http://localhost:8173`
 
 It then opens your default browser. If BD Engine is already running, the launcher reuses the existing local server instead of starting a duplicate.
+If port `8173` is occupied, BD Engine chooses an available port through `8183` and remembers it for later launches.
 
 ## First Launch
 
@@ -159,7 +160,7 @@ Useful log files:
 - `server.out.log`
 - `server.err.log`
 
-BD Engine uses port `8173`. If another app is using that port, close the other app and launch BD Engine again.
+BD Engine tries ports `8173` through `8183`. If all are occupied, close an application using that range and launch again.
 
 If a button appears to do nothing:
 

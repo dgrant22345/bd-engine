@@ -1915,14 +1915,14 @@ export function createStore() {
       };
     },
 
-    async getSetupStatus(tenantId) {
+    async getSetupStatus(tenantId, options = {}) {
       assertTenant(tenantId);
       const startedAt = performance.now();
       const timings = {};
       const loadStartedAt = performance.now();
       await ensureTenantSettingsLoaded(tenantId);
       let profile = getTenantProfile(tenantId);
-      const needsWorkspaceData = !profile.settings.setupComplete;
+      const needsWorkspaceData = !profile.settings.setupComplete || options.includeReadiness === true;
       if (needsWorkspaceData) await ensureDataLoaded(tenantId);
       timings.loadMs = Math.round(performance.now() - loadStartedAt);
       const shapeStartedAt = performance.now();

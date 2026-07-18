@@ -59,6 +59,20 @@ test('sample dashboard adapters agree on contacts, stages, and discovered boards
   assert.ok(dashboard.recentlyDiscoveredBoards.every((item) => item.discoveryMethod));
 });
 
+test('sample setup status includes current readiness when explicitly requested', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-sample-readiness';
+  store.ensureTenant({ id: tenantId, name: 'Sample readiness' }, { id: 'u1', name: 'Owner' });
+  await store.loadSampleWorkspace(tenantId);
+
+  const normalStatus = await store.getSetupStatus(tenantId);
+  const launchStatus = await store.getSetupStatus(tenantId, { includeReadiness: true });
+  assert.equal(normalStatus.setupComplete, true);
+  assert.equal(normalStatus.readiness, undefined, 'routine status remains lightweight after setup');
+  assert.ok(launchStatus.readiness.score > 0, 'launch screen receives the loaded workspace readiness');
+  assert.ok(launchStatus.readiness.checks.some((check) => check.value > 0));
+});
+
 test('the dev seed workspace is coherent too', async () => {
   const store = createStore();
   const tenantId = 'tenant-demo';

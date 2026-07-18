@@ -43,8 +43,6 @@ async function signup(page, { persona = 'bd' } = {}) {
 // Walk the first-run wizard to a completed workspace: profile → team →
 // skip import (completes setup) → open dashboard when offered.
 async function fillProfileForm(profile) {
-  // Fields are not reliably prefilled after signup; native `required` would
-  // silently block the submit, so always fill all three.
   await profile.locator('#setup-workspace-name').fill('Journey Workspace');
   await profile.locator('#setup-user-name').fill('Journey Tester');
   await profile.locator('#setup-user-email').fill('journey-setup@example.com');
@@ -98,6 +96,10 @@ async function gotoAppRoute(page, route) {
 test('demo journey: read-only demo opens and dashboard renders', async ({ page }) => {
   const app = await startDemo(page);
   await expect(app.locator('body')).toContainText(/dashboard|pipeline|account/i, { timeout: 15000 });
+  await expect(app.locator('[data-dash-section="workflow"]')).toBeVisible();
+  await expect(app.locator('[data-dash-section="queue"]')).toBeVisible();
+  await expect(app.locator('[data-dash-section="metrics"]')).toBeHidden();
+  await expect(app.locator('#dash-customize-toggle')).toContainText('Choose dashboard sections');
   await expect(app.locator('body')).not.toContainText('has no mapped contacts');
   await expect(app.locator('body')).not.toContainText('unknown via n/a');
   await gotoAppRoute(page, '#/admin');
@@ -107,8 +109,25 @@ test('demo journey: read-only demo opens and dashboard renders', async ({ page }
 });
 
 test('signup journey: new account reaches the app workspace', async ({ page }) => {
-  const { app } = await signup(page);
+  const { app, email } = await signup(page);
   await expect(app.locator('body')).toContainText(/setup|workspace|dashboard/i, { timeout: 15000 });
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile.locator('#setup-workspace-name')).toHaveValue('Journey Workspace');
+  await expect(profile.locator('#setup-user-name')).toHaveValue('Journey Tester');
+  await expect(profile.locator('#setup-user-email')).toHaveValue(email);
+});
+
+test('sample setup journey: loaded data updates readiness before launch', async ({ page }) => {
+  const { app } = await signup(page);
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await profile.locator('button[type="submit"]').click();
+  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  await app.locator('[data-action="setup-load-sample"]').click();
+  await expect(app.locator('[data-action="setup-open-dashboard"]')).toBeVisible({ timeout: 15000 });
+  await expect.poll(async () => Number(await app.locator('.setup-value-score strong').textContent())).toBeGreaterThan(0);
+  await expect(app.locator('.setup-summary-grid')).toContainText('Accounts');
+  await expect(app.locator('.setup-summary-grid')).toContainText('Jobs');
 });
 
 test('setup journey: whitespace-only workspace name is rejected visibly', async ({ page }) => {
@@ -141,6 +160,11 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await expect(health).toContainText(/Due now|[A-Z][a-z]{2} \d{1,2}/);
   await expect(app.locator('.coverage-health')).toContainText('Ready sources');
   await expect(app.locator('.coverage-health')).toContainText('Highest-priority coverage fixes');
+  await app.locator('[data-collapse-id="runtime-status"]').click();
+  const copyDiagnostics = app.locator('[data-action="copy-diagnostics"]');
+  await expect(copyDiagnostics).toBeVisible();
+  await copyDiagnostics.click();
+  await expect(app.locator('.toast', { hasText: /diagnostic summary copied/i })).toBeVisible({ timeout: 5000 });
 });
 
 test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {

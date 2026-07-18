@@ -1163,7 +1163,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/setup/status') {
-    return sendJson(res, 200, await store.getSetupStatus(tenantId));
+    return sendJson(res, 200, await store.getSetupStatus(tenantId, {
+      includeReadiness: url.searchParams.get('includeReadiness') === 'true',
+    }));
   }
 
   if (pathname === '/api/workspace/load-hint') {
@@ -1402,7 +1404,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 202, {
         ok: true,
         setupComplete: false,
-        status: await store.getSetupStatus(tenantId),
+        status: await store.getSetupStatus(tenantId, { includeReadiness: true }),
         ...accepted,
       });
     }
@@ -1411,7 +1413,7 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, {
       ok: true,
       setupComplete: true,
-      status: await store.getSetupStatus(tenantId),
+      status: await store.getSetupStatus(tenantId, { includeReadiness: true }),
     });
   }
 
@@ -1430,7 +1432,7 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 201, {
       ...result,
       setupComplete: true,
-      status: await store.getSetupStatus(tenantId),
+      status: await store.getSetupStatus(tenantId, { includeReadiness: true }),
     });
   }
 

@@ -106,3 +106,32 @@ test('the read-only demo can showcase outreach generation without enabling edits
   assert.match(server, /pathname === '\/api\/auth\/logout'/);
   assert.doesNotMatch(server, /pathname === '\/api\/imports\/jobs'/);
 });
+
+test('core account actions use accessible app dialogs instead of browser prompts', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.doesNotMatch(app, /(?<!\.)\bprompt\s*\(/);
+  assert.doesNotMatch(app, /(?<!\.)\bconfirm\s*\(/);
+  assert.match(app, /function showAppDialog/);
+  assert.match(app, /aria-modal="true"/);
+});
+
+test('dashboard customization matches every rendered core section', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /id: 'workflow', label: 'Getting started'/);
+  assert.match(app, /id: 'readiness', label: 'Workspace readiness'/);
+  assert.doesNotMatch(app, /id: 'trust', label: 'Trust strip'/);
+  assert.match(app, /const defaultDashboardCollapsed/);
+});
+
+test('support diagnostics are copyable and explicitly exclude customer content', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /function buildSafeDiagnosticSummary/);
+  assert.match(app, /data-action="copy-diagnostics"/);
+  assert.match(app, /function writeClipboardText/);
+  assert.match(app, /document\.execCommand\('copy'\)/);
+  assert.match(app, /It excludes contacts, notes, outreach text, and account secrets/);
+  const summaryStart = app.indexOf('function buildSafeDiagnosticSummary');
+  const summaryEnd = app.indexOf('\n}', summaryStart);
+  const summaryFunction = app.slice(summaryStart, summaryEnd);
+  assert.doesNotMatch(summaryFunction, /contacts|outreach|notes|email|tenantId|userId/i);
+});

@@ -93,8 +93,8 @@ The backend preview and final import share the same normalizer/dedupe logic. Cus
 2. Confirm `dist\BD-Engine-Setup.exe` exists.
 3. Install on a clean Windows profile or VM.
 4. Launch from the desktop shortcut.
-5. Confirm the browser opens to `http://localhost:8173`.
-6. Confirm `http://localhost:8173/api/runtime/status` responds.
+5. Confirm the browser opens on localhost, normally `http://localhost:8173`.
+6. Confirm `/api/runtime/status` responds on the selected port.
 7. Add or import a small test record.
 8. On a fresh data directory, confirm the setup wizard appears before the dashboard.
 9. Complete setup with a small LinkedIn-style CSV and confirm the dashboard, accounts, and contacts populate.
@@ -104,9 +104,10 @@ The backend preview and final import share the same normalizer/dedupe logic. Cus
 13. Uninstall and choose `No` when asked to remove user data; confirm `%LOCALAPPDATA%\BD Engine\Data` remains.
 14. Inspect `dist\windows\app` and confirm no personal/demo data or credentials are present.
 
-## Deferred To Phase 3
+## Deferred Release Work
 
 - Optional launch-at-startup support
 - Signed installer and signed launcher executable
 - Rich installer branding/icon assets
-- Port fallback UI if `8173` is occupied by another service
+
+The launcher automatically tries localhost ports `8173` through `8183` and remembers the selected port for later launches.

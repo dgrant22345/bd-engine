@@ -82,6 +82,59 @@ function Test-ProcessIsRunning {
     return [bool](Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
+function Get-SavedServerPort {
+    param(
+        [string]$PortPath,
+        [int]$FallbackPort
+    )
+
+    if (-not (Test-Path -LiteralPath $PortPath)) {
+        return $FallbackPort
+    }
+
+    $raw = (Get-Content -LiteralPath $PortPath -Raw -ErrorAction SilentlyContinue).Trim()
+    $savedPort = 0
+    if ([int]::TryParse($raw, [ref]$savedPort) -and $savedPort -ge 1024 -and $savedPort -le 65535) {
+        return $savedPort
+    }
+
+    return $FallbackPort
+}
+
+function Test-TcpPortAvailable {
+    param([int]$CandidatePort)
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $CandidatePort)
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($listener) {
+            try { $listener.Stop() } catch {}
+        }
+    }
+}
+
+function Get-AvailableServerPort {
+    param(
+        [int]$PreferredPort,
+        [int]$Attempts = 11
+    )
+
+    for ($offset = 0; $offset -lt $Attempts; $offset += 1) {
+        $candidate = $PreferredPort + $offset
+        if ($candidate -gt 65535) { break }
+        if (Test-TcpPortAvailable -CandidatePort $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "No available localhost port was found between $PreferredPort and $($PreferredPort + $Attempts - 1)."
+}
+
 $installRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
 $appDataRoot = Join-Path $localAppData 'BD Engine'
@@ -90,6 +143,7 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
 }
 $logsRoot = Join-Path $appDataRoot 'Logs'
 $serverPidPath = Join-Path $DataRoot 'server.pid'
+$serverPortPath = Join-Path $DataRoot 'server.port'
 $script:LauncherLogPath = Join-Path $logsRoot 'launcher.log'
 
 try {
@@ -100,26 +154,36 @@ try {
     }
 
     $env:BD_ENGINE_DATA_ROOT = $DataRoot
-    $baseUrl = "http://127.0.0.1:$Port"
-    $appUrl = "$baseUrl/"
-    Write-LauncherLog "Launch requested. installRoot=$installRoot dataRoot=$DataRoot port=$Port"
-
-    if (Test-BdEngineRuntime -BaseUrl $baseUrl) {
-        Write-LauncherLog 'Existing BD Engine runtime is healthy; opening browser.'
-        Start-Process $appUrl | Out-Null
-        exit 0
-    }
-
+    $preferredPort = $Port
     $existingPid = Get-ServerPid -PidPath $serverPidPath
+    $savedPort = Get-SavedServerPort -PortPath $serverPortPath -FallbackPort $preferredPort
+    $savedBaseUrl = "http://127.0.0.1:$savedPort"
+    Write-LauncherLog "Launch requested. installRoot=$installRoot dataRoot=$DataRoot preferredPort=$preferredPort savedPort=$savedPort"
+
     if (Test-ProcessIsRunning -ProcessId $existingPid) {
-        Write-LauncherLog "Server process $existingPid is already running; waiting for health."
-        if (Wait-BdEngineRuntime -BaseUrl $baseUrl -TimeoutSeconds 30) {
-            Start-Process $appUrl | Out-Null
+        Write-LauncherLog "Server process $existingPid is already running; checking saved port $savedPort."
+        if (Wait-BdEngineRuntime -BaseUrl $savedBaseUrl -TimeoutSeconds 30) {
+            Start-Process "$savedBaseUrl/" | Out-Null
             exit 0
         }
 
-        throw "BD Engine server process $existingPid is running but did not become healthy at $baseUrl."
+        throw "BD Engine server process $existingPid is running but did not become healthy at $savedBaseUrl."
     }
+
+    $preferredBaseUrl = "http://127.0.0.1:$preferredPort"
+
+    if (Test-BdEngineRuntime -BaseUrl $preferredBaseUrl) {
+        Write-LauncherLog 'Existing BD Engine runtime is healthy; opening browser.'
+        Start-Process "$preferredBaseUrl/" | Out-Null
+        exit 0
+    }
+
+    $Port = Get-AvailableServerPort -PreferredPort $preferredPort
+    if ($Port -ne $preferredPort) {
+        Write-LauncherLog "Preferred port $preferredPort is occupied; using fallback port $Port."
+    }
+    $baseUrl = "http://127.0.0.1:$Port"
+    $appUrl = "$baseUrl/"
 
     $serverScript = Join-Path $installRoot 'server\Server.ps1'
     if (-not (Test-Path -LiteralPath $serverScript)) {
@@ -146,6 +210,7 @@ try {
         -PassThru
 
     Set-Content -LiteralPath $serverPidPath -Value ([string]$process.Id) -Encoding ASCII
+    Set-Content -LiteralPath $serverPortPath -Value ([string]$Port) -Encoding ASCII
     Write-LauncherLog "Started server process $($process.Id). Waiting for health."
 
     if (-not (Wait-BdEngineRuntime -BaseUrl $baseUrl -TimeoutSeconds 60)) {
