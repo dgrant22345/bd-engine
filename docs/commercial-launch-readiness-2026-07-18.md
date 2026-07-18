@@ -178,6 +178,10 @@ Never enable in production: `BD_EXPOSE_RESET_TOKEN`,
 
 ## Deployment and rollback
 
+Record owners, dates, and evidence in `docs/commercial-launch-checklist.md`.
+Repository checks alone cannot prove provider delivery, restore success, legal
+review, support staffing, or alert ownership.
+
 1. Resolve all P0 environment gates and run `check:production-config` without
    exposing values.
 2. Create and verify a fresh encrypted backup; test its dry-run restore against

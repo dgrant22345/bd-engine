@@ -2,6 +2,11 @@
 
 ## Release gate
 
+Use `docs/commercial-launch-checklist.md` as the signed evidence record for a
+broad paid launch. This runbook explains the commands; the checklist records who
+verified each external dependency, customer flow, recovery control, and legal
+review.
+
 Run these before pushing a production change:
 
 ```powershell
