@@ -149,14 +149,17 @@ await mutationCheck('privacy export and confirmed workspace delete work', async 
   const badDelete = await fetch(`${baseUrl}/api/privacy/delete-workspace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ confirm: 'DELETE' }),
+    body: JSON.stringify({ confirm: 'DELETE', password: 'smoke-password-5678' }),
   });
   assert(badDelete.status === 400, `bad privacy delete confirmation returned ${badDelete.status}`);
 
   const deleteResponse = await fetch(`${baseUrl}/api/privacy/delete-workspace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ confirm: 'DELETE Smoke Auth Workspace' }),
+    body: JSON.stringify({
+      confirm: 'DELETE Smoke Auth Workspace',
+      password: 'smoke-password-5678',
+    }),
   });
   assert(deleteResponse.status === 200, `privacy delete returned ${deleteResponse.status}`);
   const deleted = await deleteResponse.json();
