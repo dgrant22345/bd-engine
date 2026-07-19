@@ -13,7 +13,7 @@ async function aggregate(query, tenantId) {
 async function main() {
   const tenantId = String(arg('--tenant') || '').trim();
   if (!tenantId) throw new Error('Provide --tenant <tenant-id>. This report never prints customer records.');
-  if (!await initDb()) throw new Error('DATABASE_URL is required.');
+  if (!await initDb({ migrate: false, readOnly: true })) throw new Error('DATABASE_URL is required.');
 
   const [counts] = await aggregate(`
     SELECT

@@ -4,6 +4,18 @@
 
 LinkedIn exports, contacts, notes, outreach history, jobs, and backups are private customer data. Do not log full records, CSV bodies, generated messages, password material, reset tokens, license keys, or provider secrets.
 
+Operational data is bounded by an hourly cleanup: expired sessions and tokens
+are removed, completed background jobs are retained for 14 days, detailed
+import history for 180 days, analytics for 395 days, audit records for 730 days,
+and completed or failed Stripe webhook receipts for 90 days. Support-message
+and core workspace retention still require a reviewed customer/legal policy;
+do not shorten or extend those periods casually.
+
+Production HTTP logs never include query strings. Error summaries redact common
+emails, credentials, tokens, and URL parameters, and external alerts contain no
+workspace identifier or raw exception text. Request IDs are the supported way
+to correlate a customer report, application log, and alert.
+
 Hosted workspaces store data in PostgreSQL. Data leaves the browser for the BD Engine service and for external services required by enabled features, including public careers providers, Stripe, configured email delivery, and operational monitoring. Windows-local workspaces store application data under `%LOCALAPPDATA%\BD Engine`, while job discovery still makes outbound provider requests.
 
 ## Controls

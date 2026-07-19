@@ -15,6 +15,7 @@ async function main() {
     connectionString,
     ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
     max: 2,
+    options: '-c default_transaction_read_only=on',
   });
   const requestedTenant = arg('--tenant');
   const deep = process.argv.includes('--deep');

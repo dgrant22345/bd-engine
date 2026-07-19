@@ -24,7 +24,7 @@ async function loadRaw(table, tenantId) {
 async function main() {
   const tenantFilter = arg('--tenant');
   const asJson = process.argv.includes('--json');
-  const ready = await initDb();
+  const ready = await initDb({ migrate: false, readOnly: true });
   if (!ready) throw new Error('DATABASE_URL is required for the semantic-integrity report.');
 
   const tenants = tenantFilter

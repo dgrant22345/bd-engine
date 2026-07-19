@@ -18,6 +18,7 @@ import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js'
 import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
 import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
 import { buildProductEvent } from './product-analytics.js';
+import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -147,7 +148,13 @@ async function runOperationalCleanup() {
   pruneEphemeralMemory();
   if (!isDbReady()) return;
   try {
-    await dbPruneExpiredOperationalData();
+    await dbPruneExpiredOperationalData({
+      backgroundJobRetentionDays: retentionDays('BD_BACKGROUND_JOB_RETENTION_DAYS', 14),
+      importHistoryRetentionDays: retentionDays('BD_IMPORT_HISTORY_RETENTION_DAYS', 180),
+      analyticsRetentionDays: retentionDays('BD_ANALYTICS_RETENTION_DAYS', 395),
+      auditRetentionDays: retentionDays('BD_AUDIT_RETENTION_DAYS', 730),
+      stripeWebhookRetentionDays: retentionDays('BD_STRIPE_WEBHOOK_RETENTION_DAYS', 90),
+    });
   } catch (error) {
     console.error('Operational cleanup failed:', error.message);
   }
@@ -226,6 +233,7 @@ const relationalContentHealth = {
 const ERROR_WEBHOOK = String(process.env.BD_ERROR_WEBHOOK || '').trim();
 // Release identifier for correlating an alert with the deployed commit.
 const RELEASE = String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.BD_RELEASE || 'dev').slice(0, 12);
+const STRUCTURED_LOGS = (process.env.BD_CLOUD_ENV || process.env.NODE_ENV) === 'production';
 let lastErrorAlertAt = 0;
 const ERROR_ALERT_MIN_INTERVAL_MS = 60 * 1000;
 
@@ -234,13 +242,12 @@ function reportServerError(status, req, error, { kind = 'SERVER' } = {}) {
   const nowMs = Date.now();
   if (nowMs - lastErrorAlertAt < ERROR_ALERT_MIN_INTERVAL_MS) return;
   lastErrorAlertAt = nowMs;
-  const route = (req.url || '').split('?')[0];
+  const route = safeRequestPath(req.url);
   const context = [
     `release ${RELEASE}`,
     req.requestId ? `request ${req.requestId}` : '',
-    req.tenantId ? `workspace ${req.tenantId}` : '',
   ].filter(Boolean).join(', ');
-  const text = `🚨 BD Engine ${kind} ${status} on ${req.method} ${route} — ${error?.message || 'error'} (${context})`;
+  const text = `[ALERT] BD Engine ${kind} ${status} on ${req.method} ${route} (${context})`;
   fetch(ERROR_WEBHOOK, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -366,14 +373,14 @@ async function startServer() {
       serverStats.lastError = {
         at: new Date().toISOString(),
         method: req.method,
-        url: req.url,
+        url: safeRequestPath(req.url),
         requestId: req.requestId,
-        message: error.message || 'Unexpected server error',
+        message: safeErrorSummary(error),
       };
       // Never leak internal error text to clients on 5xx; 4xx messages are
       // intentional (validation, not-found) so keep those.
       if (status >= 500) {
-        console.error(`  ${status} on ${req.method} ${req.url} [${req.requestId}]:`, error.message);
+        logRequestError(status, req, error);
         reportServerError(status, req, error);
         sendJson(res, status, {
           error: 'Something went wrong on our end. Please try again.',
@@ -390,11 +397,11 @@ async function startServer() {
         statusCode: res.statusCode,
         tenantId: req.tenantId,
         userId: req.actorUserId,
-        url: req.url,
+        url: safeRequestPath(req.url),
         requestId: req.requestId,
       });
       if (auditEntry) await dbRecordAuditLog(auditEntry);
-      console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
+      logRequestCompletion(req, res, elapsedMs);
     }
   });
 
@@ -432,6 +439,38 @@ async function startServer() {
       process.exit(0);
     });
   }
+}
+
+function logRequestCompletion(req, res, elapsedMs) {
+  const entry = {
+    level: 'info',
+    event: 'http_request',
+    method: String(req.method || ''),
+    path: safeRequestPath(req.url),
+    status: Number(res.statusCode || 200),
+    elapsedMs: Number(elapsedMs || 0),
+    requestId: String(req.requestId || ''),
+    release: RELEASE,
+  };
+  console.log(STRUCTURED_LOGS
+    ? JSON.stringify(entry)
+    : `${entry.method} ${entry.path} ${entry.status} ${entry.elapsedMs}ms [${entry.requestId}]`);
+}
+
+function logRequestError(status, req, error) {
+  const entry = {
+    level: 'error',
+    event: 'http_error',
+    method: String(req.method || ''),
+    path: safeRequestPath(req.url),
+    status: Number(status || 500),
+    requestId: String(req.requestId || ''),
+    release: RELEASE,
+    error: safeErrorSummary(error),
+  };
+  console.error(STRUCTURED_LOGS
+    ? JSON.stringify(entry)
+    : `${entry.status} on ${entry.method} ${entry.path} [${entry.requestId}]: ${entry.error}`);
 }
 
 function startPeriodicPipelineRunner(startupPromise) {
@@ -476,6 +515,11 @@ function startPeriodicPipelineRunner(startupPromise) {
   const intervalTimer = setInterval(() => void scan(), scanIntervalMs);
   startupTimer.unref?.();
   intervalTimer.unref?.();
+}
+
+function retentionDays(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.max(1, Math.min(3650, Math.floor(value))) : fallback;
 }
 
 let startupComplete = false;

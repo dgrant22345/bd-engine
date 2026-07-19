@@ -83,16 +83,18 @@ test signups and workspace changes are expected.
 
 ## Backups and Recovery
 
-Create a compressed Postgres backup from the `saas` folder:
+Create an authenticated encrypted Postgres backup from the `saas` folder. Set
+`BD_BACKUP_ENCRYPTION_KEY` to 32 random bytes encoded as `base64:...` or 64
+hexadecimal characters; production backups refuse to run without it.
 
 ```powershell
-npm run backup
+npm run backup -- --require-encryption
 ```
 
 Verify a backup without touching the database:
 
 ```powershell
-npm run restore -- --file .\backups\<backup-file>.json.gz --dry-run
+npm run restore -- --file .\backups\<backup-file>.json.gz.enc --dry-run
 ```
 
 The full runbook lives in `docs/disaster-recovery.md`.

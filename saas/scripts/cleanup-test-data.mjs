@@ -27,6 +27,7 @@ async function main() {
     connectionString,
     ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
     max: 2,
+    options: apply ? undefined : '-c default_transaction_read_only=on',
   });
   const client = await pool.connect();
   try {

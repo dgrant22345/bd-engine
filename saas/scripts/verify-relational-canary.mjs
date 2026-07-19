@@ -10,7 +10,7 @@ function arg(name) {
 async function main() {
   const tenantId = arg('--tenant');
   if (!tenantId) throw new Error('Pass --tenant <tenant-id>.');
-  if (!(await initDb())) throw new Error('DATABASE_URL is required.');
+  if (!(await initDb({ migrate: false, readOnly: true }))) throw new Error('DATABASE_URL is required.');
   await loadUsersFromDb();
   const tenant = findTenantById(tenantId);
   if (!tenant) throw new Error(`Tenant not found: ${tenantId}`);

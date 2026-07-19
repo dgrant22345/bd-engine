@@ -80,7 +80,7 @@ async function main() {
   const mode = arg('--mode') || 'verify';
   if (!tenantId) throw new Error('Pass --tenant <tenant-id>.');
   if (!['create', 'verify', 'cleanup'].includes(mode)) throw new Error('Pass --mode create, verify, or cleanup.');
-  if (!(await initDb())) throw new Error('DATABASE_URL is required.');
+  if (!(await initDb({ migrate: false, readOnly: mode === 'verify' }))) throw new Error('DATABASE_URL is required.');
 
   const result = mode === 'create'
     ? await createCanary(tenantId)

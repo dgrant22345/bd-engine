@@ -28,8 +28,10 @@ smoke checks against customer production data.
 
 After deployment, verify `/health`, relational parity, recent application
 errors, and HTTP 5xx logs. A healthy release has a connected database, zero
-mirror mismatches, zero deep-content mismatches, and the expected relational
-primary count.
+mirror or deep-content mismatches for legacy-primary workspaces, and the
+expected relational-primary count. Relational-primary workspaces may diverge
+from legacy rollback blobs during normal operation; refresh and verify those
+snapshots before relying on a legacy rollback.
 
 The public `/health` response is intentionally availability-only. An
 authenticated `/api/status` response includes the 5xx rate, background queue
@@ -39,6 +41,12 @@ when the 5xx rate remains above 1%, the oldest active job exceeds
 below 95% after at least one completed or failed run. Treat a missing active-job
 timestamp as unhealthy. Keep the external dashboard and paging destination
 outside the application so an application outage cannot hide its own alert.
+
+Production request logs are one-line JSON with release, request ID, method,
+path, status, and elapsed time. Query strings are intentionally omitted. Error
+summaries redact emails, credential-like assignments, long token-like values,
+and URL queries. Webhook alerts omit workspace IDs and exception text entirely;
+use their request ID to correlate with the sanitized application log.
 
 `.github/workflows/production-probe.yml` runs the read-only smoke suite against
 production every 15 minutes. Set the `BD_PRODUCTION_URL` repository variable
@@ -62,6 +70,12 @@ npm.cmd --prefix saas run check:schema
 Migration IDs are immutable once deployed. Add a new dated migration, take a
 verified backup first, and roll application code back by commit if deployment
 fails. Do not improvise down migrations against customer data.
+
+Operational reports, dry runs, parity checks, and canary reads use
+PostgreSQL-enforced read-only sessions and never apply migrations. Controlled
+repair/apply commands also connect with migrations disabled. Run and review
+migrations through an approved application deployment, not as a side effect of
+diagnostics.
 
 ## Account closure recovery
 
@@ -105,27 +119,38 @@ npm.cmd --prefix saas run check:integrity -- --tenant <tenant-id>
 
 ## Backup and restore
 
-Create a compressed, checksummed application backup before migrations or bulk
-data changes:
+Create an encrypted, authenticated, checksummed application backup before
+migrations or bulk data changes. `BD_BACKUP_ENCRYPTION_KEY` must decode to 32
+random bytes and should be stored separately from the backup. Production and
+`--require-encryption` runs fail closed when the key is absent or malformed.
 
 ```powershell
-npm.cmd --prefix saas run backup -- --output backups/<change-name>
+npm.cmd --prefix saas run backup -- --output backups/<change-name>.json.gz.enc --require-encryption
 ```
 
-The command verifies the archive after writing it and prints its SHA-256 hash.
-Keep at least one copy outside the application workspace. Railway database
-snapshots or another encrypted offsite destination should run daily; this is an
-infrastructure setting and is not replaced by repository code.
+All tables are read from one repeatable-read transaction so concurrent customer
+writes cannot produce a mixed-time snapshot. The command decrypts and verifies
+the archive after writing it, then prints its SHA-256 hash without printing the
+key. Keep at least one copy outside the
+application workspace and keep the key in a separate secret manager. Railway
+database snapshots or another encrypted offsite destination should run daily;
+this is an infrastructure setting and is not replaced by repository code.
 
 Test a restore into a disposable database before relying on a backup:
 
 ```powershell
-npm.cmd --prefix saas run restore -- --file <backup.json.gz> --dry-run
-npm.cmd --prefix saas run restore -- --file <backup.json.gz> --apply
+npm.cmd --prefix saas run restore -- --file <backup.json.gz.enc> --dry-run
+$env:BD_RESTORE_CONFIRM='RESTORE'
+npm.cmd --prefix saas run restore -- --file <backup.json.gz.enc> --apply --url <disposable-postgres-url>
+Remove-Item Env:BD_RESTORE_CONFIRM
 ```
 
-Never point an apply restore at production unless recovery has been approved
-and a current production backup exists.
+Both `--apply` and the exact confirmation variable are required. Never place the
+encryption key or database URL directly in shell history, and never point an
+apply restore at production unless recovery has been approved and a current
+production backup exists. Restore refuses a target containing customer or
+workspace rows. `--allow-nonempty` bypasses that protection and is reserved for
+an explicitly approved recovery plan; routine drills must use a fresh database.
 
 ## Relational storage
 
@@ -209,6 +234,13 @@ The app reports these in the authenticated status screen:
 - `BD_ERROR_WEBHOOK` enables immediate server-error alerts.
 - `BD_BACKGROUND_JOB_STALE_MS` controls the queue-age alert threshold and
   defaults to 900000 milliseconds.
+- Operational cleanup runs hourly. Defaults retain completed background jobs
+  for 14 days, detailed import history for 180 days, privacy-safe analytics for
+  395 days, audit records for 730 days, and completed/failed Stripe webhook
+  receipts for 90 days. Configure `BD_BACKGROUND_JOB_RETENTION_DAYS`,
+  `BD_IMPORT_HISTORY_RETENTION_DAYS`, `BD_ANALYTICS_RETENTION_DAYS`,
+  `BD_AUDIT_RETENTION_DAYS`, and `BD_STRIPE_WEBHOOK_RETENTION_DAYS` only after
+  the documented customer/legal retention policy changes.
 - `BD_PRIVILEGED_SESSION_MAX_AGE_MS` controls how long a login or password
   confirmation unlocks cross-workspace support access and defaults to 900000
   milliseconds. Keep it short; increasing it expands stolen-session exposure.

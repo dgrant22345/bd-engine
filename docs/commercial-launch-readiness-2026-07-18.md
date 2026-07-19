@@ -35,14 +35,16 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 154/154 pass.
+- SaaS unit/contract tests: 171/171 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
 - Deterministic ATS contract: 12/12 providers pass.
 - Live ATS canary: 12/12 providers, 2,409 jobs, 0 provider errors.
 - Schema migration contract: 24 tables, 56 indexes, 10 migrations; no drift.
-- Production relational parity: 3/3 workspaces pass deep parity.
+- Production parity audit: all 3 legacy-primary workspaces pass deep parity. The
+  2 relational-primary workspaces correctly serve relational data but have
+  stale legacy rollback mirrors; refresh and verify snapshots before rollback.
 - Production health: `{"ok":true,"status":"operational"}`.
 - Production dependency audits: 0 known vulnerabilities in SaaS and renderer.
 - Windows package staging: pass; public code signing was not verified.
@@ -81,15 +83,22 @@ PowerShell/SQLite edition remains supported separately.
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target
    curation workflow are now included; neither has changed production data.
-3. Daily encrypted offsite backups, retention, alerting, and a recent restore
-   drill are documented but not proven by repository state. Record evidence in
-   the launch checklist; a backup that has never restored is not a recovery plan.
+3. The backup tool now produces authenticated AES-256-GCM archives and refuses
+   unencrypted production runs. `BD_BACKUP_ENCRYPTION_KEY`, daily offsite
+   scheduling, retention, and a recent disposable restore drill are not yet
+   proven. Record evidence in the launch checklist; a backup that has never
+   restored is not a recovery plan.
 4. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
    agreements. Refunds, taxes, renewal/cancellation language, processor terms,
    lawful-basis/consent, and Canadian/international privacy obligations need
    qualified legal/accounting review.
 5. Windows distribution is not proven code-signed. Do not broadly distribute an
    unsigned installer to paying customers.
+6. The two relational-primary workspaces have intentionally diverged from their
+   legacy blobs since cutover. Current reads are not impaired, but an immediate
+   legacy rollback would restore stale data. Create an encrypted backup, run the
+   documented per-workspace snapshot command, and verify deep parity before any
+   rollback or broad launch.
 
 ## P2 - important improvements
 
@@ -169,6 +178,21 @@ PowerShell/SQLite edition remains supported separately.
   added contract coverage for every literal customer action.
 - Restricted customer-visible and imported external links to HTTP/HTTPS and
   discarded unsafe job-link protocols before persistence.
+- Added authenticated AES-256-GCM database backups, fail-closed production key
+  validation, tamper detection, backward-compatible restore reads, and a
+  two-part restore confirmation contract.
+- Made backup coverage derive from the complete schema contract and made restore
+  preserve every archived column, including verification state, relational
+  storage mode, billing recovery fields, and the account-closure ledger.
+- Added hourly bounded retention for detailed import history, analytics, audit
+  records, Stripe webhook receipts, background jobs, rate-limit buckets,
+  sessions, and authentication tokens while preserving active webhook claims.
+- Added structured production request/error logs with path-only request data,
+  sanitized error summaries, and privacy-safe alerts that omit workspace IDs,
+  query strings, and raw exception messages.
+- Made operational reports and dry runs connect without applying migrations and
+  use PostgreSQL-enforced read-only sessions; mutating maintenance tools also no
+  longer migrate the schema as an undocumented side effect.
 
 ## Required production configuration
 
@@ -179,7 +203,7 @@ Billing: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
 
 Customer operations: `RESEND_API_KEY`, `BD_EMAIL_FROM`,
 `BD_SUPPORT_ADMIN_EMAILS`, `BD_ERROR_WEBHOOK`,
-`BD_REQUIRE_EMAIL_VERIFICATION=true`.
+`BD_REQUIRE_EMAIL_VERIFICATION=true`, `BD_BACKUP_ENCRYPTION_KEY`.
 
 ATS renderer pair: `BD_ATS_RENDER_SERVICE_URL`,
 `BD_ATS_RENDER_SERVICE_TOKEN`; renderer service uses `RENDERER_TOKEN`.

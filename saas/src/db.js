@@ -111,10 +111,14 @@ async function runSchemaMigration(id, description, migrate) {
   }
 }
 
-export async function initDb() {
+export async function initDb({ migrate = true, readOnly = false } = {}) {
   if (!isDbEnabled()) {
     console.log('  DB: No DATABASE_URL — running in-memory only');
     return false;
+  }
+
+  if (migrate && readOnly) {
+    throw new Error('A read-only database connection cannot run schema migrations.');
   }
 
   try {
@@ -124,6 +128,7 @@ export async function initDb() {
       max: Math.max(1, Math.min(20, Number(process.env.BD_DB_POOL_MAX) || 5)),
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
+      options: readOnly ? '-c default_transaction_read_only=on' : undefined,
     });
     pool.on('error', (error) => {
       // pg removes a failed idle client from the pool. Handle the event so a
@@ -134,6 +139,12 @@ export async function initDb() {
     // Test connection
     const client = await pool.connect();
     client.release();
+
+    if (!migrate) {
+      dbReady = true;
+      console.log(`  DB: PostgreSQL connected (${readOnly ? 'read-only, ' : ''}migrations disabled)`);
+      return true;
+    }
 
     // Create tables
     await pool.query(`
@@ -746,7 +757,12 @@ export async function initDb() {
     return true;
   } catch (err) {
     console.error('  DB: PostgreSQL connection failed, falling back to in-memory:', err.message);
+    const failedPool = pool;
     pool = null;
+    dbReady = false;
+    if (failedPool) {
+      try { await failedPool.end(); } catch { /* Preserve the original connection error. */ }
+    }
     return false;
   }
 }
@@ -2042,16 +2058,36 @@ export async function dbCheckRelationalCountParity(excludedTenantIds = []) {
   };
 }
 
-export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays = 14 } = {}) {
+export async function dbPruneExpiredOperationalData({
+  backgroundJobRetentionDays = 14,
+  importHistoryRetentionDays = 180,
+  analyticsRetentionDays = 395,
+  auditRetentionDays = 730,
+  stripeWebhookRetentionDays = 90,
+} = {}) {
   if (!dbReady) return null;
   const nowIso = new Date().toISOString();
-  const jobCutoff = new Date(Date.now() - Math.max(1, Number(backgroundJobRetentionDays) || 14) * 86400000).toISOString();
-  const [sessions, resetTokens, verificationTokens, backgroundJobs, rateLimitBuckets] = await Promise.all([
+  const cutoff = (days, fallback) => new Date(
+    Date.now() - Math.max(1, Math.min(3650, Number(days) || fallback)) * 86400000
+  ).toISOString();
+  const jobCutoff = cutoff(backgroundJobRetentionDays, 14);
+  const importCutoff = cutoff(importHistoryRetentionDays, 180);
+  const analyticsCutoff = cutoff(analyticsRetentionDays, 395);
+  const auditCutoff = cutoff(auditRetentionDays, 730);
+  const stripeCutoff = cutoff(stripeWebhookRetentionDays, 90);
+  const [
+    sessions, resetTokens, verificationTokens, backgroundJobs, rateLimitBuckets,
+    importRuns, analyticsEvents, auditLog, stripeWebhookEvents,
+  ] = await Promise.all([
     pool.query('DELETE FROM sessions WHERE expires_at < $1', [nowIso]),
     pool.query("DELETE FROM password_reset_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
     pool.query("DELETE FROM email_verification_tokens WHERE expires_at < $1 OR used_at <> ''", [nowIso]),
     pool.query("DELETE FROM background_jobs WHERE status IN ('completed', 'failed', 'cancelled') AND finished_at <> '' AND finished_at < $1", [jobCutoff]),
     pool.query('DELETE FROM rate_limit_buckets WHERE expires_at < $1', [nowIso]),
+    pool.query('DELETE FROM import_runs WHERE started_at < $1', [importCutoff]),
+    pool.query('DELETE FROM analytics_events WHERE created_at < $1', [analyticsCutoff]),
+    pool.query('DELETE FROM audit_log WHERE created_at < $1', [auditCutoff]),
+    pool.query("DELETE FROM stripe_webhook_events WHERE status IN ('completed', 'failed') AND updated_at < $1", [stripeCutoff]),
   ]);
   return {
     sessions: sessions.rowCount || 0,
@@ -2059,6 +2095,10 @@ export async function dbPruneExpiredOperationalData({ backgroundJobRetentionDays
     verificationTokens: verificationTokens.rowCount || 0,
     backgroundJobs: backgroundJobs.rowCount || 0,
     rateLimitBuckets: rateLimitBuckets.rowCount || 0,
+    importRuns: importRuns.rowCount || 0,
+    analyticsEvents: analyticsEvents.rowCount || 0,
+    auditLog: auditLog.rowCount || 0,
+    stripeWebhookEvents: stripeWebhookEvents.rowCount || 0,
     cleanedAt: nowIso,
   };
 }

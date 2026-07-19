@@ -42,6 +42,9 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 - [ ] A fresh encrypted backup completed and its SHA-256 was recorded.
   Backup reference: `________________`
+- [ ] `BD_BACKUP_ENCRYPTION_KEY` is a dedicated 32-byte key stored separately
+  from backup archives; a key-loss and key-rotation owner is documented.
+  Evidence: `________________`
 - [ ] That backup restored successfully into a disposable database and semantic
   integrity checks passed. Restore evidence: `________________`
 - [ ] The aggregate duplicate audit was run immediately before deployment.

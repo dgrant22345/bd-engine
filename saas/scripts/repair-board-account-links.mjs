@@ -26,7 +26,7 @@ async function main() {
   if (apply && backupReference.length < 12) {
     throw new Error('Applying requires --backup-reference <verified-backup-id-or-sha>.');
   }
-  if (!await initDb()) throw new Error('DATABASE_URL is required.');
+  if (!await initDb({ migrate: false, readOnly: !apply })) throw new Error('DATABASE_URL is required.');
 
   const candidates = await dbQuery(`
     WITH unique_accounts AS (${uniqueAccountsSql})

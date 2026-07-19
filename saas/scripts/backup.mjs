@@ -1,12 +1,12 @@
 /**
  * BD Engine database backup.
  *
- * Creates a compressed logical backup of the durable Postgres tables. The
- * output contains user records and password hashes, so treat it as sensitive.
+ * Creates a compressed logical backup of the durable Postgres tables. Production
+ * backups are encrypted with AES-256-GCM and fail closed when no key is set.
  *
  * Usage:
  *   npm run backup
- *   node scripts/backup.mjs --out backups/nightly.json.gz
+ *   node scripts/backup.mjs --out backups/nightly.json.gz.enc
  *   node scripts/backup.mjs --url postgres://... --include-volatile
  */
 import pg from 'pg';
@@ -14,36 +14,10 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, resolve } from 'node:path';
-import { gzipSync, gunzipSync } from 'node:zlib';
+import { deserializeBackup, parseBackupEncryptionKey, serializeBackup } from '../src/backup-format.js';
+import { backupTables } from '../src/backup-schema.js';
 
 const { Pool } = pg;
-
-const BASE_TABLES = [
-  { name: 'users', orderBy: 'id' },
-  { name: 'tenants', orderBy: 'id' },
-  { name: 'memberships', orderBy: 'tenant_id, user_id' },
-  { name: 'tenant_data', orderBy: 'tenant_id' },
-  { name: 'accounts', orderBy: 'tenant_id, id' },
-  { name: 'contacts', orderBy: 'tenant_id, id' },
-  { name: 'jobs', orderBy: 'tenant_id, id' },
-  { name: 'board_configs', orderBy: 'tenant_id, id' },
-  { name: 'activities', orderBy: 'tenant_id, id' },
-  { name: 'tasks', orderBy: 'tenant_id, id' },
-  { name: 'import_runs', orderBy: 'tenant_id, started_at, id' },
-  { name: 'import_run_items', orderBy: 'tenant_id, id' },
-  { name: 'audit_log', orderBy: 'tenant_id, id' },
-  { name: 'support_tickets', orderBy: 'tenant_id, created_at, id' },
-  { name: 'support_ticket_messages', orderBy: 'tenant_id, ticket_id, created_at, id' },
-  { name: 'background_jobs', orderBy: 'tenant_id, updated_at, id' },
-  { name: 'stripe_webhook_events', orderBy: 'created_at, event_id' },
-  { name: 'schema_migrations', orderBy: 'id' },
-  { name: 'analytics_events', orderBy: 'id' },
-];
-
-const VOLATILE_TABLES = [
-  { name: 'sessions', orderBy: 'id' },
-  { name: 'password_reset_tokens', orderBy: 'created_at' },
-];
 
 function flag(name) {
   return process.argv.includes(name);
@@ -60,7 +34,7 @@ function positionalOutputDir() {
     .find((value, index, args) => {
       if (value.startsWith('--')) return false;
       const previous = args[index - 1];
-      return !['--url', '--out'].includes(previous);
+      return !['--url', '--out', '--output'].includes(previous);
     });
 }
 
@@ -72,10 +46,10 @@ function sslConfig() {
   return process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false };
 }
 
-function backupPath() {
-  const explicit = arg('--out');
+function backupPath(encrypted) {
+  const explicit = arg('--out') || arg('--output');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `bd-engine-backup-${stamp}.json.gz`;
+  const filename = `bd-engine-backup-${stamp}.json.gz${encrypted ? '.enc' : ''}`;
   if (explicit) {
     const target = resolve(explicit);
     return extname(target) ? target : resolve(target, filename);
@@ -96,17 +70,16 @@ async function dumpTable(client, table) {
   return { skipped: false, rows: result.rows };
 }
 
-async function verifyBackupFile(file) {
+async function verifyBackupFile(file, encryptionKey) {
   if (!existsSync(file)) throw new Error(`Backup was not written: ${file}`);
-  const compressed = await readFile(file);
-  const json = gunzipSync(compressed).toString('utf8');
-  const parsed = JSON.parse(json);
+  const stored = await readFile(file);
+  const parsed = deserializeBackup(stored, encryptionKey);
   if (parsed.app !== 'bd-engine' || !parsed.tables || typeof parsed.tables !== 'object') {
     throw new Error('Backup verification failed: unexpected file format.');
   }
   return {
-    bytes: compressed.byteLength,
-    sha256: createHash('sha256').update(compressed).digest('hex'),
+    bytes: stored.byteLength,
+    sha256: createHash('sha256').update(stored).digest('hex'),
   };
 }
 
@@ -117,12 +90,16 @@ async function main() {
     process.exit(1);
   }
 
+  const production = process.env.BD_CLOUD_ENV === 'production'
+    || process.env.NODE_ENV === 'production'
+    || process.env.RAILWAY_ENVIRONMENT_NAME === 'production';
+  const encryptionKey = parseBackupEncryptionKey(process.env.BD_BACKUP_ENCRYPTION_KEY, {
+    required: production || flag('--require-encryption'),
+  });
   const includeVolatile = flag('--include-volatile');
   const skipAnalytics = flag('--skip-analytics');
-  const tables = BASE_TABLES
-    .filter((table) => !(skipAnalytics && table.name === 'analytics_events'))
-    .concat(includeVolatile ? VOLATILE_TABLES : []);
-  const outFile = backupPath();
+  const tables = backupTables({ includeVolatile, skipAnalytics });
+  const outFile = backupPath(Boolean(encryptionKey));
 
   const pool = new Pool({ connectionString: url, ssl: sslConfig(), max: 2 });
   const client = await pool.connect();
@@ -133,11 +110,15 @@ async function main() {
     createdAt: new Date().toISOString(),
     includesVolatileTables: includeVolatile,
     skippedAnalytics: skipAnalytics,
+    encryption: encryptionKey ? 'aes-256-gcm' : 'none',
     tables: {},
     tableCounts: {},
   };
+  let snapshotOpen = false;
 
   try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    snapshotOpen = true;
     for (const table of tables) {
       const { skipped, rows } = await dumpTable(client, table);
       if (skipped) {
@@ -149,16 +130,22 @@ async function main() {
       backup.tableCounts[table.name] = rows.length;
       console.log(`  ${table.name}: ${rows.length} row(s)`);
     }
+    await client.query('COMMIT');
+    snapshotOpen = false;
 
     await mkdir(dirname(outFile), { recursive: true });
-    await writeFile(outFile, gzipSync(Buffer.from(JSON.stringify(backup))));
-    const verification = await verifyBackupFile(outFile);
+    await writeFile(outFile, serializeBackup(backup, encryptionKey));
+    const verification = await verifyBackupFile(outFile, encryptionKey);
     const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log('');
     console.log(`Backup written: ${outFile}`);
     console.log(`Size: ${(verification.bytes / 1024 / 1024).toFixed(2)} MB`);
     console.log(`SHA-256: ${verification.sha256}`);
+    console.log(`Encrypted: ${encryptionKey ? 'yes (AES-256-GCM)' : 'no (development only)'}`);
     console.log(`Verified: yes (${basename(outFile)}, ${elapsedSeconds}s)`);
+  } catch (error) {
+    if (snapshotOpen) await client.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     client.release();
     await pool.end();

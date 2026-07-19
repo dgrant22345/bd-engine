@@ -1,7 +1,7 @@
 import { dbClassifyLegacyAccounts, initDb, closeDb } from '../src/db.js';
 
 async function main() {
-  if (!await initDb()) throw new Error('DATABASE_URL is required.');
+  if (!await initDb({ migrate: false })) throw new Error('DATABASE_URL is required.');
   const tenantId = `tenant-contract-check-${Date.now()}`;
   const result = await dbClassifyLegacyAccounts(tenantId, [], new Date().toISOString());
   if (!result?.saved || result.relationalUpdated !== 0 || result.legacyUpdated !== 0) {
