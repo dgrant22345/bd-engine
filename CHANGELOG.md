@@ -15,6 +15,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Added a bounded authenticated careers-page renderer fallback plus a scheduled live canary covering all 12 public provider adapters.
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Added authenticated encrypted backups, guarded non-empty restores, bounded data retention, privacy-safe structured logs, and non-migrating read-only operational diagnostics.
+- Added an explicit public-database mode for encrypted Railway operator backups.
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
 - Replaced the broad inline-script CSP exception with a per-response cryptographic nonce.
 - Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.

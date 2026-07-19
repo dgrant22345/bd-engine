@@ -8,6 +8,7 @@
  *   npm run backup
  *   node scripts/backup.mjs --out backups/nightly.json.gz.enc
  *   node scripts/backup.mjs --url postgres://... --include-volatile
+ *   node scripts/backup.mjs --public-url --out backups/railway.json.gz.enc
  */
 import pg from 'pg';
 import { createHash } from 'node:crypto';
@@ -39,6 +40,7 @@ function positionalOutputDir() {
 }
 
 function connectionString() {
+  if (flag('--public-url')) return process.env.DATABASE_PUBLIC_URL;
   return arg('--url') || process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
 }
 
@@ -86,7 +88,9 @@ async function verifyBackupFile(file, encryptionKey) {
 async function main() {
   const url = connectionString();
   if (!url) {
-    console.error('No database connection. Set DATABASE_URL or pass --url.');
+    console.error(flag('--public-url')
+      ? 'No public database connection. DATABASE_PUBLIC_URL is not configured.'
+      : 'No database connection. Set DATABASE_URL or pass --url.');
     process.exit(1);
   }
 

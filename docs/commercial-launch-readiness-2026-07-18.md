@@ -55,6 +55,9 @@ PowerShell/SQLite edition remains supported separately.
   are rejected before their contents are buffered.
 - The cloud shell's inline bootstrap is authorized with a fresh response nonce;
   the script policy no longer permits arbitrary inline JavaScript.
+- A repeatable-read production backup completed and authenticated successfully
+  on 2026-07-19: 20 tables, 15.79 MB encrypted, SHA-256
+  `2ea029a9933b336763c53b11f46761449e2042a8f1b50597b5540ef1a9663d9c`.
 
 ## P0 - launch blockers
 
@@ -89,10 +92,10 @@ PowerShell/SQLite edition remains supported separately.
    network history. A dry-run board-link repair and owner-confirmed target
    curation workflow are now included; neither has changed production data.
 3. The backup tool now produces authenticated AES-256-GCM archives and refuses
-   unencrypted production runs. `BD_BACKUP_ENCRYPTION_KEY`, daily offsite
-   scheduling, retention, and a recent disposable restore drill are not yet
-   proven. Record evidence in the launch checklist; a backup that has never
-   restored is not a recovery plan.
+   unencrypted production runs. A dedicated key is staged and a current archive
+   verified, but an off-platform key copy, daily offsite scheduling, retention,
+   and a disposable restore drill are not yet proven. Record that evidence in
+   the launch checklist; a backup that has never restored is not a recovery plan.
 4. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
    agreements. Refunds, taxes, renewal/cancellation language, processor terms,
    lawful-basis/consent, and Canadian/international privacy obligations need
@@ -110,7 +113,7 @@ PowerShell/SQLite edition remains supported separately.
 - PostgreSQL relational entities still store timestamps as text. Verified
   contact identity, LinkedIn URL, and job natural-key constraints are staged;
   re-run the duplicate gate before deployment. Account and board uniqueness is
-  blocked by 120 production duplicate groups and 638 excess rows, which require
+  blocked by 119 production duplicate groups and 637 excess rows, which require
   an owner-approved, backed-up deduplication rather than an automatic migration.
 - CI now enforces ESLint correctness rules across SaaS source, scripts, and tests.
   Formatting and static typing remain incremental engineering improvements; do

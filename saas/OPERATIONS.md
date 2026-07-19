@@ -128,6 +128,10 @@ random bytes and should be stored separately from the backup. Production and
 npm.cmd --prefix saas run backup -- --output backups/<change-name>.json.gz.enc --require-encryption
 ```
 
+For a local operator backup using Railway's public database endpoint, run the
+same command through the Postgres service and add `--public-url`. The connection
+value stays in the process environment and is never placed in shell history.
+
 All tables are read from one repeatable-read transaction so concurrent customer
 writes cannot produce a mixed-time snapshot. The command decrypts and verifies
 the archive after writing it, then prints its SHA-256 hash without printing the

@@ -40,16 +40,18 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 ## Data and recovery
 
-- [ ] A fresh encrypted backup completed and its SHA-256 was recorded.
-  Backup reference: `________________`
+- [x] A fresh encrypted backup completed and its SHA-256 was recorded.
+  Backup reference: `pre-deploy-1dea508-2026-07-19.json.gz.enc`, SHA-256
+  `2ea029a9933b336763c53b11f46761449e2042a8f1b50597b5540ef1a9663d9c`
 - [ ] `BD_BACKUP_ENCRYPTION_KEY` is a dedicated 32-byte key stored separately
   from backup archives; a key-loss and key-rotation owner is documented.
   Evidence: `________________`
 - [ ] That backup restored successfully into a disposable database and semantic
   integrity checks passed. Restore evidence: `________________`
-- [ ] The aggregate duplicate audit was run immediately before deployment.
+- [x] The aggregate duplicate audit was run immediately before deployment.
   Contact identity, contact LinkedIn URL, and job natural key all reported zero.
-  Evidence: `________________`
+  Evidence: 2026-07-19 read-only production audit; account and board cleanup
+  remains separately gated at 119 groups / 637 excess rows.
 - [ ] Account and board duplicate retention/merge decisions were approved before
   any cleanup. No relational-only deletion was used while legacy blobs could
   recreate records. Decision/evidence: `________________`

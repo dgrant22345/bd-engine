@@ -108,6 +108,7 @@ test('backup and restore commands protect snapshot consistency and destination i
   ]);
   assert.match(backupScript, /BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY/);
   assert.match(backupScript, /if \(snapshotOpen\).*ROLLBACK/s);
+  assert.match(backupScript, /flag\('--public-url'\).*DATABASE_PUBLIC_URL/s);
   assert.match(restoreScript, /assertRestoreTargetEmpty/);
   assert.match(restoreScript, /LOCK TABLE .* IN ACCESS EXCLUSIVE MODE/);
   assert.match(restoreScript, /await client\.query\('BEGIN'\).*await lockRestoreTarget.*await assertRestoreTargetEmpty/s);
