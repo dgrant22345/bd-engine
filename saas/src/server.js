@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
@@ -19,7 +19,7 @@ import { isEmailVerificationRequired, requiresVerifiedEmail } from './verificati
 import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
 import { buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
-import { contentSecurityPolicy } from './security-headers.js';
+import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
@@ -336,12 +336,13 @@ async function startServer() {
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
+    res.bdScriptNonce = randomBytes(16).toString('base64');
     res.bdAcceptsGzip = acceptsGzip(req);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('Content-Security-Policy', contentSecurityPolicy());
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy(res.bdScriptNonce));
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
@@ -2600,6 +2601,9 @@ function serveStaticOrSPA(pathname, req, res) {
   }
 
   // Try cloud public dir first (landing page, auth pages, etc.)
+  if (pathname === '/' || pathname === '/index.html') {
+    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
+  }
   const cloudPath = tryStaticFile(publicDir, pathname);
   if (cloudPath) return streamFile(cloudPath, res);
 
@@ -2609,12 +2613,20 @@ function serveStaticOrSPA(pathname, req, res) {
 
   // SPA fallback: serve cloud index.html for unmatched routes
   const cloudIndex = join(publicDir, 'index.html');
-  if (existsSync(cloudIndex)) return streamFile(cloudIndex, res);
+  if (existsSync(cloudIndex)) return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
 
   return sendJson(res, 404, { error: 'Not found' });
 }
 
 let cachedAppIndexHtml = null;
+let cachedCloudIndexHtml = null;
+
+function getCloudIndexHtml(scriptNonce) {
+  if (!cachedCloudIndexHtml) {
+    cachedCloudIndexHtml = readFileSync(join(publicDir, 'index.html'), 'utf8');
+  }
+  return injectScriptNonce(cachedCloudIndexHtml, scriptNonce);
+}
 
 function getAppIndexHtml() {
   // The file only changes on deploy (= process restart), so cache the
@@ -2630,9 +2642,8 @@ function getAppIndexHtml() {
     .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
     .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
-  // (Removed the persona-labels.js injection — the product is recruiting/BD
-  // only now, so the fragile jobseeker DOM label-swap overlay is no longer
-  // loaded. See #13.)
+  // Persona language is rendered directly by the shared app, so no DOM label
+  // overlay is injected into the cloud shell.
   return cachedAppIndexHtml;
 }
 

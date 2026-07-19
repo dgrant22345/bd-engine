@@ -35,7 +35,7 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 182/182 pass.
+- SaaS unit/contract tests: 183/183 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
@@ -53,6 +53,8 @@ PowerShell/SQLite edition remains supported separately.
 - HTTP requests now have bounded body size, header/request duration, header
   count, keep-alive reuse, and requests per socket; oversized declared uploads
   are rejected before their contents are buffered.
+- The cloud shell's inline bootstrap is authorized with a fresh response nonce;
+  the script policy no longer permits arbitrary inline JavaScript.
 
 ## P0 - launch blockers
 

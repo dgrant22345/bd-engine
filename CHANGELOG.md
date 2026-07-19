@@ -16,6 +16,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Added authenticated encrypted backups, guarded non-empty restores, bounded data retention, privacy-safe structured logs, and non-migrating read-only operational diagnostics.
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
+- Replaced the broad inline-script CSP exception with a per-response cryptographic nonce.
 - Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.
 - Blocked unsafe cross-site browser mutations before API routing while preserving signed webhooks.
 - Bounded upload size, request/header duration, keep-alive reuse, and header counts at the HTTP server boundary.
