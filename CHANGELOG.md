@@ -8,6 +8,10 @@ All notable customer-facing changes are recorded here. The project is currently 
   schedulers that delegate to the Railway deployment branch.
 - Pinned delegated scheduler checkouts to the Railway deployment branch so
   dependency caches and probes run against the intended release.
+- Required both paid Stripe prices before billing reports ready, converted
+  provider failures into actionable customer-safe responses, and added direct
+  coverage for checkout payloads, signed webhooks, referral credits, portal
+  sessions, and subscription cancellation.
 
 - Preserved signup workspace and profile details through first-run setup.
 - Corrected sample-workspace readiness after data is loaded.

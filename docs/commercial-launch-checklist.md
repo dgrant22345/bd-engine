@@ -77,12 +77,16 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   failed-payment, and successful-payment events. Evidence: 2026-07-19 read-only
   production catalog verification passed after the event allowlist correction.
 - [ ] Stripe live checkout succeeds for Job Seeker and Sales Professional.
-- [ ] Signed webhook activation, duplicate delivery, failed payment, grace period,
-  recovery, cancellation, portal access, and invoice access were tested.
+- [x] Signed webhook acceptance, tamper rejection, duplicate delivery, checkout
+  payloads, referral credits, portal sessions, and idempotent account-closure
+  cancellation pass automated contract tests. Evidence: required billing tests.
+- [ ] Live webhook delivery, failed payment, grace period, recovery, cancellation,
+  portal access, and invoice access were tested against Stripe.
 - [x] Plan entitlements and limits match the public pricing page. Evidence:
   `public prices and limits match enforced plan entitlements` required unit test.
-- [ ] Account closure cancels the affected subscription and removes access/data;
-  shared-workspace ownership blockers and retry recovery were tested.
+- [x] Account closure cancellation, shared-workspace ownership blockers, data
+  removal, and failed-dependency recovery pass automated tests and local smoke.
+- [ ] Account closure was exercised with a live test subscription.
 - [ ] Support ownership, response target, escalation path, refund policy, and
   incident communications are documented and staffed.
 
@@ -98,12 +102,11 @@ Evidence for this section: `________________`
   ATS discovery, one job refresh, support, billing, export, and logout passed.
 - [ ] Authenticated status reports database/parity health, queue age below the
   threshold, 5xx rate below 1%, and ingestion success at or above 95%.
-- [ ] The scheduled production probe is green and external paging is active.
+- [x] The default-branch scheduled production probe is registered and green.
   The probe now covers availability, readiness, anonymous authorization,
   pricing, CSP nonces, security headers, secure demo sessions, app mounting,
-  and read-only demo boundaries. The default branch scheduler delegates to the
-  reusable workflow on `deploy/perf-restore`; external paging remains
-  operator-owned.
+  and read-only demo boundaries. Evidence: GitHub Actions run 2 on 2026-07-19.
+- [ ] External paging is active and reaches an accountable operator.
 - [ ] Logs and alerts were watched through the agreed observation window.
 
 Observation owner/window/evidence: `________________`
