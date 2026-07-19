@@ -8347,7 +8347,7 @@ async function renderTasksView() {
       </section>
     `;
   } catch (error) {
-    appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${error.message}</div>`;
+    appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;
   }
 }
 

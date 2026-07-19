@@ -137,6 +137,12 @@ test('customer-visible external links allow only HTTP and HTTPS protocols', asyn
   assert.match(app, /safeExternalHref\(account\.careersUrl\)/);
 });
 
+test('customer-visible task errors are escaped before HTML insertion', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /Failed to load tasks: \$\{escapeHtml\(error\.message \|\| String\(error\)\)\}/);
+  assert.doesNotMatch(app, /Failed to load tasks: \$\{error\.message\}/);
+});
+
 test('dashboard customization matches every rendered core section', async () => {
   const app = await readFile(appPath, 'utf8');
   assert.match(app, /id: 'workflow', label: 'Getting started'/);

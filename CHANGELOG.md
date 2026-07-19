@@ -24,6 +24,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Restored job-seeker terminology and workflows across setup, navigation, company and role views, search, and outreach.
 - Shortened sales outreach around one verified role, fixed reversible account pausing, and added customer-action browser coverage.
 - Restricted imported and customer-visible external links to HTTP and HTTPS protocols.
+- Escaped task-loading errors before rendering them into the customer workspace.
 - Updated product, privacy, provider, troubleshooting, packaging, and release documentation.
 
 ## 0.1.0
