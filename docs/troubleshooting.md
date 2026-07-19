@@ -2,7 +2,7 @@
 
 ## Hosted App
 
-- **Cannot sign in:** use password recovery. If email delivery is unavailable, contact `support@bdengine.io` from the account email.
+- **Cannot sign in:** use password recovery. If email delivery is unavailable, contact `dgfinance15@gmail.com` from the account email.
 - **Import has warnings:** open the import result before retrying. Upload the unzipped LinkedIn `Connections.csv`, not the archive.
 - **Jobs are missing:** check the authenticated ingestion diagnostics. A source may need a careers URL, manual review, or may not expose a public feed.
 - **A scan is still running:** check background status. Refreshing the page does not cancel a durable import.

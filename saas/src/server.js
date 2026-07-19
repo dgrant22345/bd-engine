@@ -25,6 +25,8 @@ import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 
+const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
+
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
 const publicDir = join(rootDir, 'public');
@@ -2198,7 +2200,7 @@ async function handlePasswordResetRequest(req, res) {
     ok: true,
     message: emailConfigured
       ? 'If an account exists for that email, a reset link will be sent shortly.'
-      : 'Password reset email is temporarily unavailable. Contact support@bdengine.io for account recovery.',
+      : `Password reset email is temporarily unavailable. Contact ${PUBLIC_SUPPORT_EMAIL} for account recovery.`,
     emailConfigured,
     ...(devToken ? { resetToken: devToken, resetUrl } : {}),
   });

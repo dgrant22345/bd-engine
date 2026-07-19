@@ -126,8 +126,9 @@ PowerShell/SQLite edition remains supported separately.
 - Cross-workspace support access now requires a recent login or rate-limited
   current-password step-up. Add passkeys or MFA when enrollment, recovery, and
   operator support can be implemented and exercised end to end.
-- Review dependency and pinned GitHub Action updates monthly through an explicit
-  pull request; CI actions are now immutable commit references.
+- Dependabot now opens grouped monthly npm and pinned GitHub Action update pull
+  requests against the deployment branch; each still requires the full CI gate
+  and explicit review before merge.
 
 ## P3 - optional enhancements
 

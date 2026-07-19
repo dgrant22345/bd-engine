@@ -60,8 +60,9 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 - [ ] Account and board duplicate retention/merge decisions were approved before
   any cleanup. No relational-only deletion was used while legacy blobs could
   recreate records. Decision/evidence: `________________`
-- [ ] Deep legacy/relational parity passes for every relational-primary and
-  canary workspace. Evidence: `________________`
+- [x] Deep legacy/relational parity passes for every relational-primary and
+  canary workspace. Evidence: 2026-07-19 production `check:relational -- --deep`,
+  all three workspaces passed.
 - [x] The ten migrations and restore path are exercised from empty PostgreSQL 16
   databases on every CI run. Evidence: `PostgreSQL recovery drill` required job.
 - [ ] Production rollback was rehearsed by redeploying the previous application
@@ -72,7 +73,8 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 - [ ] Stripe live checkout succeeds for Job Seeker and Sales Professional.
 - [ ] Signed webhook activation, duplicate delivery, failed payment, grace period,
   recovery, cancellation, portal access, and invoice access were tested.
-- [ ] Plan entitlements and limits match the public pricing page.
+- [x] Plan entitlements and limits match the public pricing page. Evidence:
+  `public prices and limits match enforced plan entitlements` required unit test.
 - [ ] Account closure cancels the affected subscription and removes access/data;
   shared-workspace ownership blockers and retry recovery were tested.
 - [ ] Support ownership, response target, escalation path, refund policy, and
