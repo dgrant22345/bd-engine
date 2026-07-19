@@ -173,6 +173,9 @@ PowerShell/SQLite edition remains supported separately.
 - Pinned every third-party GitHub Action to an immutable upstream commit.
 - Added a scheduled, read-only production probe for availability, readiness,
   anonymous authorization boundaries, plan visibility, and customer entry.
+- Made the production probe and ATS canary reusable from the default branch so
+  GitHub schedules execute the checks against `deploy/perf-restore`, the branch
+  Railway actually deploys.
 - Added a focused ESLint correctness gate and fixed the defects it exposed.
 - Added expiring, persisted password step-up for cross-workspace support access.
 - Required the current password as well as the exact confirmation phrase for
