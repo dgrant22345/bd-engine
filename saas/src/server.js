@@ -114,7 +114,7 @@ async function rateLimitExceeded(key, max, windowMs) {
       const decision = await dbConsumeRateLimit(hashRateLimitKey(key), max, windowMs, nowMs);
       if (decision) return decision.exceeded;
     } catch (error) {
-      console.error('Shared rate limiter failed; using process fallback:', error.message);
+      console.error('Shared rate limiter failed; using process fallback:', safeErrorSummary(error));
     }
   }
   return consumeMemoryRateLimitBucket(rateBuckets, key, max, windowMs, nowMs);
@@ -156,7 +156,7 @@ async function runOperationalCleanup() {
       stripeWebhookRetentionDays: retentionDays('BD_STRIPE_WEBHOOK_RETENTION_DAYS', 90),
     });
   } catch (error) {
-    console.error('Operational cleanup failed:', error.message);
+    console.error('Operational cleanup failed:', safeErrorSummary(error));
   }
 }
 
@@ -273,7 +273,7 @@ async function refreshRelationalMirrorHealth() {
     relationalMirrorHealth.healthy = false;
     relationalMirrorHealth.checkedAt = new Date().toISOString();
     relationalMirrorHealth.error = 'Parity check unavailable';
-    console.error('Relational mirror health check failed:', error.message);
+    console.error('Relational mirror health check failed:', safeErrorSummary(error));
   }
 }
 
@@ -300,7 +300,7 @@ async function refreshRelationalContentHealth() {
     relationalContentHealth.healthy = false;
     relationalContentHealth.checkedAt = new Date().toISOString();
     relationalContentHealth.error = 'Deep parity check unavailable';
-    console.error('Relational content health check failed:', error.message);
+    console.error('Relational content health check failed:', safeErrorSummary(error));
   }
 }
 
@@ -429,12 +429,12 @@ async function startServer() {
         const flushed = await store.flushPendingSaves();
         if (flushed) console.log(`  Flushed ${flushed} pending tenant save(s) before shutdown`);
       } catch (err) {
-        console.error('  Shutdown flush error:', err.message);
+        console.error('  Shutdown flush error:', safeErrorSummary(err));
       }
       try {
         await closeDb();
       } catch (err) {
-        console.error('  DB close error:', err.message);
+        console.error('  DB close error:', safeErrorSummary(err));
       }
       process.exit(0);
     });
@@ -501,7 +501,7 @@ function startPeriodicPipelineRunner(startupPromise) {
           started += 1;
           console.log(`[Scheduler] Started overdue pipeline for ${tenant.id}.`);
         } catch (err) {
-          console.error(`[Scheduler] Failed to schedule pipeline for ${tenant.id}:`, err.message);
+          console.error('[Scheduler] Failed to schedule workspace pipeline:', safeErrorSummary(err));
         }
       }
       if (started) console.log(`[Scheduler] Started ${started} overdue pipeline${started === 1 ? '' : 's'}.`);
@@ -676,7 +676,7 @@ async function notifySupportOperators(req, { ticket, requester, tenant, message 
       supportUrl: getRequestOrigin(req),
     });
   } catch (error) {
-    console.warn(`Support operator notification failed for ${ticket?.id || 'unknown ticket'}:`, error.message);
+    console.warn('Support operator notification failed:', safeErrorSummary(error));
   }
 }
 
@@ -693,7 +693,7 @@ async function notifySupportCustomer(req, { ticket, message }) {
       supportUrl: getRequestOrigin(req),
     });
   } catch (error) {
-    console.warn(`Support customer notification failed for ${ticket.id}:`, error.message);
+    console.warn('Support customer notification failed:', safeErrorSummary(error));
   }
 }
 
@@ -813,7 +813,8 @@ async function route(req, res) {
     };
     const sessionData = extractSession(req);
     if (sessionData?.tenantId) req.tenantId = sessionData.tenantId;
-    console.error(`  CLIENT ERROR on ${report.route || '(unknown route)'} [${req.requestId}]: ${report.message}`);
+    console.error(`  CLIENT ERROR on ${safeRequestPath(report.route || '/app')} [${req.requestId}]:`,
+      safeErrorSummary({ name: 'ClientError', message: report.message }));
     reportServerError('error', {
       method: 'UI',
       url: report.route || '/app',
@@ -933,7 +934,7 @@ self.addEventListener('activate', (event) => {
     } catch (err) {
       await dbFailStripeWebhook(event.id, err).catch(() => {});
       reportServerError(500, req, err);
-      console.error('Stripe webhook processing failed:', event.type, err.message);
+      console.error('Stripe webhook processing failed:', event.type, safeErrorSummary(err));
       return sendJson(res, 500, { error: 'Stripe webhook processing failed and can be retried.' });
     }
   }
@@ -1960,7 +1961,7 @@ async function recordProductMilestone(event) {
   try {
     return await dbRecordProductEvent(buildProductEvent(event));
   } catch (error) {
-    console.error('Product milestone recording failed:', error.message);
+    console.error('Product milestone recording failed:', safeErrorSummary(error));
     return { recorded: false, reason: error.message };
   }
 }
@@ -2133,7 +2134,7 @@ async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {
     });
     return { credited: true, referrerTenantId, amountCents: referralCreditAmountCents, transactionId: transaction?.id || '' };
   } catch (error) {
-    console.error('Referral credit failed:', error.message || error);
+    console.error('Referral credit failed:', safeErrorSummary(error));
     return { credited: false, reason: error.message || 'credit failed' };
   }
 }
@@ -2185,7 +2186,7 @@ async function handlePasswordResetRequest(req, res) {
       try {
         await sendPasswordResetEmail({ to: user.email, name: user.name, resetUrl });
       } catch (error) {
-        console.error('Password reset email failed:', error.message || error);
+        console.error('Password reset email failed:', safeErrorSummary(error));
       }
     }
     if (exposeDevToken) devToken = token;
@@ -2289,7 +2290,7 @@ async function issueEmailVerification(req, user) {
     });
     return { sent: Boolean(delivery?.sent), emailConfigured };
   } catch (error) {
-    console.error('Email verification delivery failed:', error.message || error);
+    console.error('Email verification delivery failed:', safeErrorSummary(error));
     return { sent: false, emailConfigured };
   }
 }

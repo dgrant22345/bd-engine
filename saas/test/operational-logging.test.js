@@ -10,13 +10,16 @@ test('request logging drops query strings and fragments', () => {
 
 test('operational error summaries redact common customer and credential material', () => {
   const summary = safeErrorSummary(Object.assign(new Error(
-    'Failed for person@example.com at https://provider.example/jobs?token=secret token=abcdef and ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890LONG'
+    'Failed for person@example.com in tenant-secret123 at https://operator:password@provider.example/jobs?token=secret token=abcdef and ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890LONG'
   ), { code: 'UPSTREAM_FAILED' }));
   assert.match(summary, /^Error \(UPSTREAM_FAILED\)/);
   assert.doesNotMatch(summary, /person@example\.com/);
+  assert.doesNotMatch(summary, /tenant-secret123/);
+  assert.doesNotMatch(summary, /operator|password@/);
   assert.doesNotMatch(summary, /\?token=secret/);
   assert.doesNotMatch(summary, /token=abcdef/);
   assert.doesNotMatch(summary, /ABCDEFGHIJKLMNOPQRSTUVWXYZ/);
   assert.match(summary, /\[email\]/);
   assert.match(summary, /\[redacted\]/);
+  assert.match(summary, /https:\/\/provider\.example\/jobs/);
 });

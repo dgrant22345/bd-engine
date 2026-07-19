@@ -190,6 +190,9 @@ PowerShell/SQLite edition remains supported separately.
 - Added structured production request/error logs with path-only request data,
   sanitized error summaries, and privacy-safe alerts that omit workspace IDs,
   query strings, and raw exception messages.
+- Extended error sanitization to database, authentication, scheduler, email,
+  billing-webhook, and ingestion failure paths, including credential-bearing
+  URL and internal record-ID redaction.
 - Made operational reports and dry runs connect without applying migrations and
   use PostgreSQL-enforced read-only sessions; mutating maintenance tools also no
   longer migrate the schema as an undocumented side effect.

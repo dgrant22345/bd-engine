@@ -11,6 +11,7 @@
  */
 
 import pg from 'pg';
+import { safeErrorSummary } from './operational-logging.js';
 
 const { Pool } = pg;
 
@@ -133,7 +134,7 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
     pool.on('error', (error) => {
       // pg removes a failed idle client from the pool. Handle the event so a
       // transient database disconnect does not become an uncaught process exit.
-      console.error('DB: Unexpected idle client error:', error.message);
+      console.error('DB: Unexpected idle client error:', safeErrorSummary(error));
     });
 
     // Test connection
@@ -756,7 +757,7 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
   } catch (err) {
-    console.error('  DB: PostgreSQL connection failed, falling back to in-memory:', err.message);
+    console.error('  DB: PostgreSQL connection failed, falling back to in-memory:', safeErrorSummary(err));
     const failedPool = pool;
     pool = null;
     dbReady = false;
@@ -971,7 +972,7 @@ export async function dbSaveUser(user) {
       [user.id, user.email, user.name, user.passwordHash, user.status, user.emailVerifiedAt || '', user.createdAt, user.updatedAt]
     );
   } catch (err) {
-    console.error('DB: Failed to save user:', err.message);
+    console.error('DB: Failed to save user:', safeErrorSummary(err));
     throw err;
   }
 }
@@ -991,7 +992,7 @@ export async function dbLoadAllUsers() {
       updatedAt: r.updated_at,
     }));
   } catch (err) {
-    console.error('DB: Failed to load users:', err.message);
+    console.error('DB: Failed to load users:', safeErrorSummary(err));
     return [];
   }
 }
@@ -1041,7 +1042,7 @@ export async function dbSaveTenant(tenant) {
       ]
     );
   } catch (err) {
-    console.error('DB: Failed to save tenant:', err.message);
+    console.error('DB: Failed to save tenant:', safeErrorSummary(err));
     throw err;
   }
 }
@@ -1070,7 +1071,7 @@ export async function dbLoadAllTenants() {
       updatedAt: r.updated_at,
     }));
   } catch (err) {
-    console.error('DB: Failed to load tenants:', err.message);
+    console.error('DB: Failed to load tenants:', safeErrorSummary(err));
     return [];
   }
 }
@@ -1087,7 +1088,7 @@ export async function dbSaveMembership(m) {
       [m.tenantId, m.userId, m.role, m.createdAt]
     );
   } catch (err) {
-    console.error('DB: Failed to save membership:', err.message);
+    console.error('DB: Failed to save membership:', safeErrorSummary(err));
     throw err;
   }
 }
@@ -1103,7 +1104,7 @@ export async function dbLoadAllMemberships() {
       createdAt: r.created_at,
     }));
   } catch (err) {
-    console.error('DB: Failed to load memberships:', err.message);
+    console.error('DB: Failed to load memberships:', safeErrorSummary(err));
     return [];
   }
 }
@@ -1142,7 +1143,7 @@ export async function dbSaveTenantData(tenantId, data, { throwOnError = false } 
     );
     return { saved: true };
   } catch (err) {
-    console.error('DB: Failed to save tenant data for', tenantId, ':', err.message);
+    console.error('DB: Failed to save workspace data:', safeErrorSummary(err));
     if (throwOnError) throw err;
     return { saved: false, reason: err.message };
   }
@@ -1169,7 +1170,7 @@ export async function dbLoadTenantData(tenantId, includeContacts = true) {
       updated_at: r.updated_at,
     };
   } catch (err) {
-    console.error('DB: Failed to load tenant data:', err.message);
+    console.error('DB: Failed to load tenant data:', safeErrorSummary(err));
     return null;
   }
 }
@@ -1180,7 +1181,7 @@ export async function dbLoadTenantSettings(tenantId) {
     const result = await pool.query('SELECT settings FROM tenant_data WHERE tenant_id = $1', [tenantId]);
     return result.rows[0]?.settings || {};
   } catch (err) {
-    console.error('DB: Failed to load tenant settings:', err.message);
+    console.error('DB: Failed to load tenant settings:', safeErrorSummary(err));
     return null;
   }
 }
@@ -1243,7 +1244,7 @@ export async function dbRecordImportRun(run = {}) {
     }
     return { recorded: true };
   } catch (err) {
-    console.error('DB: Failed to record import run:', err.message);
+    console.error('DB: Failed to record import run:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
 }
@@ -1261,7 +1262,7 @@ export async function dbGetImportUsageCount(tenantId, runType = 'linkedin_csv') 
     );
     return Number(result.rows[0]?.count || 0);
   } catch (err) {
-    console.error('DB: Failed to count import usage:', err.message);
+    console.error('DB: Failed to count import usage:', safeErrorSummary(err));
     return 0;
   }
 }
@@ -1286,7 +1287,7 @@ export async function dbRecordAuditLog(entry = {}) {
     );
     return { recorded: true };
   } catch (err) {
-    console.error('DB: Failed to record audit log:', err.message);
+    console.error('DB: Failed to record audit log:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
 }
@@ -1568,7 +1569,7 @@ export async function dbSaveBackgroundJob(tenantId, job = {}) {
     );
     return { recorded: true };
   } catch (err) {
-    console.error('DB: Failed to save background job:', err.message);
+    console.error('DB: Failed to save background job:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
 }
@@ -1582,7 +1583,7 @@ export async function dbLoadBackgroundJob(tenantId, jobId) {
     );
     return result.rows[0]?.snapshot || null;
   } catch (err) {
-    console.error('DB: Failed to load background job:', err.message);
+    console.error('DB: Failed to load background job:', safeErrorSummary(err));
     return null;
   }
 }
@@ -1600,7 +1601,7 @@ export async function dbLoadRecentBackgroundJobs(tenantId, limit = 20) {
     );
     return result.rows.map((row) => row.snapshot || {}).filter((job) => job.id);
   } catch (err) {
-    console.error('DB: Failed to load recent background jobs:', err.message);
+    console.error('DB: Failed to load recent background jobs:', safeErrorSummary(err));
     return [];
   }
 }
@@ -1621,7 +1622,7 @@ export async function dbLoadRecoverableBackgroundJobs(limit = 50, { throwOnError
       tenantId: row.tenant_id,
     }));
   } catch (err) {
-    console.error('DB: Failed to load recoverable background jobs:', err.message);
+    console.error('DB: Failed to load recoverable background jobs:', safeErrorSummary(err));
     if (throwOnError) throw err;
     return [];
   }
@@ -1672,7 +1673,7 @@ export async function dbGetTenantDataStats(tenantId) {
       queryMs: elapsedMs,
     };
   } catch (err) {
-    console.error('DB: Failed to load tenant data stats:', err.message);
+    console.error('DB: Failed to load tenant data stats:', safeErrorSummary(err));
     return null;
   }
 }
@@ -1695,7 +1696,7 @@ export async function dbLoadAllTenantData() {
     }
     return result;
   } catch (err) {
-    console.error('DB: Failed to load tenant data:', err.message);
+    console.error('DB: Failed to load tenant data:', safeErrorSummary(err));
     return new Map();
   }
 }
@@ -1731,7 +1732,7 @@ export async function dbRecordAnalyticsVisit(event) {
     );
     return { recorded: true, storage: 'postgres' };
   } catch (err) {
-    console.error('DB: Failed to record analytics visit:', err.message);
+    console.error('DB: Failed to record analytics visit:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
 }
@@ -1815,7 +1816,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
       funnel: funnel.rows.map((row) => ({ eventType: row.event_type, events: row.events, workspaces: row.workspaces, users: row.users })),
     };
   } catch (err) {
-    console.error('DB: Failed to load analytics summary:', err.message);
+    console.error('DB: Failed to load analytics summary:', safeErrorSummary(err));
     return summarizeAnalyticsRows(memoryAnalyticsEvents, sinceDay, today);
   }
 }
@@ -1934,7 +1935,7 @@ export async function dbSaveSession(session) {
       [id, userId, tenantId || null, JSON.stringify(extra || {}), expiresAt, createdAt]
     );
   } catch (err) {
-    console.error('DB: Failed to save session:', err.message);
+    console.error('DB: Failed to save session:', safeErrorSummary(err));
     throw err;
   }
 }
@@ -1944,7 +1945,7 @@ export async function dbDeleteSession(sessionId) {
   try {
     await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
   } catch (err) {
-    console.error('DB: Failed to delete session:', err.message);
+    console.error('DB: Failed to delete session:', safeErrorSummary(err));
     throw err;
   }
 }
@@ -1972,7 +1973,7 @@ export async function dbRecordProductEvent(event) {
     );
     return { recorded: result.rowCount === 1, duplicate: result.rowCount === 0, storage: 'postgres' };
   } catch (err) {
-    console.error('DB: Failed to record product event:', err.message);
+    console.error('DB: Failed to record product event:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
 }
@@ -1992,7 +1993,7 @@ export async function dbLoadActiveSessions() {
       ...(r.data && typeof r.data === 'object' ? r.data : {}),
     }));
   } catch (err) {
-    console.error('DB: Failed to load sessions:', err.message);
+    console.error('DB: Failed to load sessions:', safeErrorSummary(err));
     return [];
   }
 }
@@ -2013,7 +2014,7 @@ export async function dbSavePasswordResetToken(record) {
       [record.tokenHash, record.userId, record.expiresAt, record.usedAt || '', record.createdAt]
     );
   } catch (err) {
-    console.error('DB: Failed to save password reset token:', err.message);
+    console.error('DB: Failed to save password reset token:', safeErrorSummary(err));
   }
 }
 
@@ -2183,7 +2184,7 @@ export async function dbFindPasswordResetToken(tokenHash) {
       createdAt: row.created_at,
     };
   } catch (err) {
-    console.error('DB: Failed to find password reset token:', err.message);
+    console.error('DB: Failed to find password reset token:', safeErrorSummary(err));
     return null;
   }
 }
@@ -2193,7 +2194,7 @@ export async function dbMarkPasswordResetTokenUsed(tokenHash) {
   try {
     await pool.query('UPDATE password_reset_tokens SET used_at = $2 WHERE token_hash = $1', [tokenHash, new Date().toISOString()]);
   } catch (err) {
-    console.error('DB: Failed to mark password reset token used:', err.message);
+    console.error('DB: Failed to mark password reset token used:', safeErrorSummary(err));
   }
 }
 
@@ -2211,7 +2212,7 @@ export async function dbSaveEmailVerificationToken(record) {
       [record.tokenHash, record.userId, record.expiresAt, record.usedAt || '', record.createdAt]
     );
   } catch (err) {
-    console.error('DB: Failed to save email verification token:', err.message);
+    console.error('DB: Failed to save email verification token:', safeErrorSummary(err));
   }
 }
 
@@ -2232,7 +2233,7 @@ export async function dbFindEmailVerificationToken(tokenHash) {
       createdAt: row.created_at,
     };
   } catch (err) {
-    console.error('DB: Failed to find email verification token:', err.message);
+    console.error('DB: Failed to find email verification token:', safeErrorSummary(err));
     return null;
   }
 }
@@ -2242,7 +2243,7 @@ export async function dbMarkEmailVerificationTokenUsed(tokenHash) {
   try {
     await pool.query('UPDATE email_verification_tokens SET used_at = $2 WHERE token_hash = $1', [tokenHash, new Date().toISOString()]);
   } catch (err) {
-    console.error('DB: Failed to mark email verification token used:', err.message);
+    console.error('DB: Failed to mark email verification token used:', safeErrorSummary(err));
   }
 }
 

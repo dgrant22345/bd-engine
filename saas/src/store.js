@@ -7,6 +7,7 @@ import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfig
 import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
+import { safeErrorSummary } from './operational-logging.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1034,7 +1035,7 @@ function trackBackgroundJob(tenantId, job) {
     writable: false,
   });
   backgroundJobs.set(job.id, job);
-  persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', error.message));
+  persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', safeErrorSummary(error)));
   return job;
 }
 
@@ -1145,7 +1146,7 @@ function failInterruptedBackgroundJob(job, decision) {
 
 const backgroundJobSnapshotTimer = setInterval(() => {
   for (const job of backgroundJobs.values()) {
-    persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', error.message));
+    persistBackgroundJob(job).catch((error) => console.error('Background job snapshot error:', safeErrorSummary(error)));
   }
 }, 2 * 1000);
 backgroundJobSnapshotTimer.unref?.();
@@ -1194,7 +1195,7 @@ async function saveTenantNow(tenantId) {
     try {
       await syncTenantRelationalMirror(tenantId, data);
     } catch (err) {
-      console.error('Relational mirror sync error:', tenantId, err.message);
+      console.error('Relational mirror sync error:', safeErrorSummary(err));
     }
   }
   saveRetryCounts.delete(tenantId);
@@ -1208,7 +1209,7 @@ function scheduleTenantSave(tenantId, delayMs) {
       const attempt = (saveRetryCounts.get(tenantId) || 0) + 1;
       saveRetryCounts.set(tenantId, attempt);
       const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(5, attempt - 1)));
-      console.error(`Persist error for ${tenantId}; retrying in ${retryDelay}ms:`, error.message);
+      console.error(`Workspace persist error; retrying in ${retryDelay}ms:`, safeErrorSummary(error));
       scheduleTenantSave(tenantId, retryDelay);
     });
   }, delayMs));
@@ -1243,7 +1244,7 @@ export async function flushPendingSaves() {
     throw new Error(`Flush persist failed for ${tenantId}: ${lastError?.message || 'unknown error'}`);
   }));
   await Promise.all([...backgroundJobs.values()].map((job) =>
-    persistBackgroundJob(job).catch((err) => console.error('Flush background job error:', job.id, err.message))
+    persistBackgroundJob(job).catch((err) => console.error('Flush background job error:', safeErrorSummary(err)))
   ));
   return tenantIds.length;
 }
@@ -1415,7 +1416,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
         console.warn(`Relational read fallback for ${tenantId}:`, parity.mismatches);
       }
     } catch (error) {
-      console.error(`Relational read failed for ${tenantId}; using legacy data:`, error.message);
+      console.error('Relational read failed; using legacy data:', safeErrorSummary(error));
     }
   }
   if (!data) data = await dbLoadTenantData(tenantId, needsContacts);
@@ -1491,7 +1492,7 @@ async function ensureDataLoaded(tenantId, needsContacts = false) {
         primeTenantRelationalMirror(tenantId, mirrorData);
       } else {
         syncTenantRelationalMirror(tenantId, mirrorData)
-          .catch((err) => console.error('Relational mirror lazy backfill error:', tenantId, err.message));
+          .catch((err) => console.error('Relational mirror lazy backfill error:', safeErrorSummary(err)));
       }
     }
   }
@@ -1514,7 +1515,7 @@ function queueResumableBackgroundJob(storeApi, tenantId, job) {
       ? runLiveJobImportBackgroundJob
       : runLinkedInCsvBackgroundJob;
     runner(storeApi, tenantId, job).catch((error) => {
-      console.error(`Background job runner failed for ${job.id}:`, error.message);
+      console.error('Background job runner failed:', safeErrorSummary(error));
     });
   });
 }
@@ -2108,7 +2109,7 @@ export function createStore() {
             console.warn(`Relational usage fallback for ${tenantId}: parity check failed.`);
           }
         } catch (error) {
-          console.error(`Relational usage query failed for ${tenantId}; using memory:`, error.message);
+          console.error('Relational usage query failed; using memory:', safeErrorSummary(error));
         }
       }
       await ensureDataLoaded(tenantId, true);
@@ -2311,7 +2312,7 @@ export function createStore() {
             console.warn(`Relational account query fallback for ${tenantId}: parity check failed.`);
           }
         } catch (error) {
-          console.error(`Relational account query failed for ${tenantId}; using memory:`, error.message);
+          console.error('Relational account query failed; using memory:', safeErrorSummary(error));
         }
       }
       await ensureDataLoaded(tenantId);
@@ -2460,7 +2461,7 @@ export function createStore() {
             console.warn(`Relational contact query fallback for ${tenantId}: parity check failed.`);
           }
         } catch (error) {
-          console.error(`Relational contact query failed for ${tenantId}; using memory:`, error.message);
+          console.error('Relational contact query failed; using memory:', safeErrorSummary(error));
         }
       }
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
@@ -2501,7 +2502,7 @@ export function createStore() {
             console.warn(`Relational job query fallback for ${tenantId}: parity check failed.`);
           }
         } catch (error) {
-          console.error(`Relational job query failed for ${tenantId}; using memory:`, error.message);
+          console.error('Relational job query failed; using memory:', safeErrorSummary(error));
         }
       }
       const queryStartedAt = performance.now();
@@ -2554,7 +2555,7 @@ export function createStore() {
             console.warn(`Relational config query fallback for ${tenantId}: parity check failed.`);
           }
         } catch (error) {
-          console.error(`Relational config query failed for ${tenantId}; using memory:`, error.message);
+          console.error('Relational config query failed; using memory:', safeErrorSummary(error));
         }
       }
       await ensureDataLoaded(tenantId, false);
@@ -3476,7 +3477,7 @@ export function createStore() {
           tenantId,
           eventKey: tenantId,
           dimensions: { source: 'ats_discovery' },
-        })).catch((error) => console.error('Board resolution milestone recording failed:', error.message));
+        })).catch((error) => console.error('Board resolution milestone recording failed:', safeErrorSummary(error)));
       }
       return {
         ok: true,
@@ -3883,7 +3884,7 @@ export function createStore() {
           tenantId,
           eventKey: tenantId,
           dimensions: { source: 'live_job_import' },
-        })).catch((error) => console.error('Useful jobs milestone recording failed:', error.message));
+        })).catch((error) => console.error('Useful jobs milestone recording failed:', safeErrorSummary(error)));
       }
 
       activities.unshift({
@@ -4978,7 +4979,7 @@ export function createStore() {
           tenantId,
           eventKey: tenantId,
           dimensions: { persona: profile?.tenant?.persona || 'bd', planId: profile?.tenant?.plan || 'trial', source: 'csv' },
-        })).catch((error) => console.error('Setup milestone recording failed:', error.message));
+        })).catch((error) => console.error('Setup milestone recording failed:', safeErrorSummary(error)));
       }
 
       // Persist all imported data

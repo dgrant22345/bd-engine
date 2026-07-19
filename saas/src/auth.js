@@ -7,6 +7,7 @@
 
 import { randomUUID, randomBytes, scryptSync, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { dbSaveSession, dbDeleteSession, dbLoadActiveSessions } from './db.js';
+import { safeErrorSummary } from './operational-logging.js';
 
 const SECRET = process.env.SESSION_SECRET || 'bd-engine-dev-secret-do-not-use-in-production';
 const PRODUCTION_AUTH = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.BD_CLOUD_ENV === 'production' || process.env.NODE_ENV === 'production');
@@ -132,7 +133,7 @@ export async function loadSessionsFromDb() {
     }
     if (loaded) console.log(`  Auth: restored ${loaded} active session(s) from DB`);
   } catch (err) {
-    console.error('  Auth: failed to restore sessions:', err.message);
+    console.error('  Auth: failed to restore sessions:', safeErrorSummary(err));
   }
 }
 
