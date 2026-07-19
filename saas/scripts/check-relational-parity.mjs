@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { compareTenantDataCounts } from '../src/relational-reads.js';
+import { workspaceLabel } from '../src/maintenance-safety.js';
 
 const { Pool } = pg;
 
@@ -68,7 +69,7 @@ async function main() {
       params
     );
     let mismatchCount = 0;
-    for (const row of result.rows) {
+    for (const [index, row] of result.rows.entries()) {
       const parity = compareTenantDataCounts({
         accountCount: row.blob_accounts,
         contactCount: row.blob_contacts,
@@ -92,10 +93,10 @@ async function main() {
         parity.matches = parity.mismatches.length === 0;
       }
       if (parity.matches) {
-        console.log(`OK ${row.tenant_id}`);
+        console.log(`OK ${workspaceLabel(index)}`);
       } else {
         mismatchCount += 1;
-        console.error(`MISMATCH ${row.tenant_id}: ${parity.mismatches.map((item) => `${item.entity} ${item.blobCount}/${item.relationalCount}`).join(', ')}`);
+        console.error(`MISMATCH ${workspaceLabel(index)}: ${parity.mismatches.map((item) => `${item.entity} ${item.blobCount}/${item.relationalCount}`).join(', ')}`);
       }
     }
     if (mismatchCount) throw new Error(`${mismatchCount} tenant workspace(s) failed relational parity.`);

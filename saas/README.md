@@ -109,9 +109,13 @@ storage with `BD_RELATIONAL_WRITE_NEW_TENANTS=true`.
 Backfill existing workspaces after deploying the mirror tables:
 
 ```powershell
-npm run backfill:relational -- --dry-run
 npm run backfill:relational
+npm run backfill:relational -- --tenant <tenant-id>
+npm run backfill:relational -- --tenant <tenant-id> --apply --confirm BACKFILL_RELATIONAL --backup-reference <backup-id-or-sha>
 ```
+
+Backfill is read-only by default. Apply mode is intentionally scoped to one
+workspace and requires an exact confirmation plus a verified backup reference.
 
 Set `BD_RELATIONAL_MIRROR=false` to temporarily disable mirror writes. Guarded
 read and query canaries are controlled independently with:

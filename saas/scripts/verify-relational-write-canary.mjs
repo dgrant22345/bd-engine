@@ -13,7 +13,7 @@ function arg(name) {
 async function prepareStore(tenantId) {
   await loadUsersFromDb();
   const tenant = findTenantById(tenantId);
-  if (!tenant) throw new Error(`Tenant not found: ${tenantId}`);
+  if (!tenant) throw new Error('The requested workspace was not found.');
   const store = createStore();
   store.ensureTenant(tenant, { id: 'relational-write-verifier', name: 'Relational Write Verifier', email: '' });
   return store;
@@ -71,8 +71,8 @@ async function cleanupCanary(tenantId) {
     [tenantId, CANARY_ID]
   );
   const parity = await dbCheckRelationalContentParity([tenantId]);
-  if (!parity?.healthy) throw new Error(`Canary cleanup parity failed for ${tenantId}.`);
-  return { mode: 'cleanup', deleted: result?.rowCount || 0, parity };
+  if (!parity?.healthy) throw new Error('Canary cleanup parity failed.');
+  return { mode: 'cleanup', deleted: result?.rowCount || 0, parityVerified: true };
 }
 
 async function main() {
@@ -87,7 +87,7 @@ async function main() {
     : mode === 'cleanup'
       ? await cleanupCanary(tenantId)
       : await verifyCanary(tenantId);
-  console.log(JSON.stringify({ ok: true, tenantId, canaryId: CANARY_ID, ...result }));
+  console.log(JSON.stringify({ ok: true, workspaceCount: 1, ...result }));
 }
 
 main()

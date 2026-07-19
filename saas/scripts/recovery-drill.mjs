@@ -190,6 +190,37 @@ async function rowsFor(client, table) {
   return result.rows;
 }
 
+async function verifyRollupRepair(client) {
+  const relational = await client.query(
+    `SELECT open_role_count, raw
+     FROM accounts WHERE tenant_id = $1 AND id = $2`,
+    [SOURCE_IDS.tenant, SOURCE_IDS.account]
+  );
+  assert.equal(relational.rows[0]?.open_role_count, 1);
+  assert.equal(relational.rows[0]?.raw?.openRoleCount, 1);
+  assert.equal(relational.rows[0]?.raw?.jobCount, 1);
+  assert.equal(relational.rows[0]?.raw?.connectionCount, 1);
+
+  const legacy = await client.query(
+    `SELECT account.item AS raw
+     FROM tenant_data data
+     CROSS JOIN LATERAL jsonb_array_elements(data.accounts) account(item)
+     WHERE data.tenant_id = $1 AND account.item->>'id' = $2`,
+    [SOURCE_IDS.tenant, SOURCE_IDS.account]
+  );
+  assert.equal(legacy.rows[0]?.raw?.openRoleCount, 1);
+  assert.equal(legacy.rows[0]?.raw?.jobCount, 1);
+  assert.equal(legacy.rows[0]?.raw?.connectionCount, 1);
+
+  const audit = await client.query(
+    `SELECT COUNT(*)::int AS count
+     FROM audit_log
+     WHERE tenant_id = $1 AND action = 'account.rollups_repaired'`,
+    [SOURCE_IDS.tenant]
+  );
+  assert.equal(audit.rows[0]?.count, 1);
+}
+
 async function verifyRestore(source, target) {
   const durableTables = backupTables();
   for (const table of durableTables) {
@@ -246,6 +277,7 @@ async function main() {
   const encryptionKey = `hex:${randomBytes(32).toString('hex')}`;
   const directory = await mkdtemp(join(tmpdir(), 'bd-recovery-drill-'));
   const backupFile = join(directory, 'recovery.json.gz.enc');
+  const preRepairBackupFile = join(directory, 'pre-repair.json.gz.enc');
   const admin = new Client({ connectionString: adminUrl, ssl: sslConfig() });
   let targetCreated = false;
 
@@ -263,6 +295,29 @@ async function main() {
       await seedSource(sourceClient);
     } finally {
       await sourceClient.end();
+    }
+
+    await runNode(['scripts/backup.mjs', '--out', preRepairBackupFile, '--require-encryption'], {
+      DATABASE_URL: sourceUrl,
+      BD_BACKUP_ENCRYPTION_KEY: encryptionKey,
+      DB_SSL: process.env.DB_SSL || 'false',
+    });
+    await runNode([
+      'scripts/repair-rollups.mjs',
+      '--tenant', SOURCE_IDS.tenant,
+      '--apply',
+      '--confirm', 'REPAIR_ROLLUPS',
+      '--backup-reference', 'recovery-drill-pre-repair',
+    ], {
+      DATABASE_URL: sourceUrl,
+      DB_SSL: process.env.DB_SSL || 'false',
+    });
+    const repairVerification = new Client({ connectionString: sourceUrl, ssl: sslConfig() });
+    await repairVerification.connect();
+    try {
+      await verifyRollupRepair(repairVerification);
+    } finally {
+      await repairVerification.end();
     }
 
     await runNode(['scripts/backup.mjs', '--out', backupFile, '--require-encryption'], {
@@ -287,7 +342,7 @@ async function main() {
     } finally {
       await Promise.all([sourceVerification.end(), targetVerification.end()]);
     }
-    console.log('Recovery drill passed: encrypted backup, transactional restore, data equality, exclusions, and sequences verified.');
+    console.log('Recovery drill passed: guarded maintenance, encrypted backup, transactional restore, data equality, exclusions, and sequences verified.');
   } finally {
     await closeDb().catch(() => {});
     if (targetCreated) {

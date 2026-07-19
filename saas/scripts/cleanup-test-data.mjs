@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { requireMaintenanceApproval } from '../src/maintenance-safety.js';
 
 const { Pool } = pg;
 
@@ -19,9 +20,16 @@ async function main() {
   const before = arg('--before');
   const apply = process.argv.includes('--apply');
   const confirm = arg('--confirm');
-  if (!connectionString) throw new Error('DATABASE_URL is required.');
   if (!before || !Number.isFinite(new Date(before).getTime())) throw new Error('Pass --before <ISO date>.');
-  if (apply && confirm !== 'DELETE_TEST_DATA') throw new Error('Applying cleanup requires --confirm DELETE_TEST_DATA.');
+  requireMaintenanceApproval({
+    apply,
+    confirmation: confirm,
+    expectedConfirmation: 'DELETE_TEST_DATA',
+    backupReference: String(arg('--backup-reference') || ''),
+    action: 'Applying test-data cleanup',
+    requireTenant: false,
+  });
+  if (!connectionString) throw new Error('DATABASE_URL is required.');
 
   const pool = new Pool({
     connectionString,
@@ -32,8 +40,7 @@ async function main() {
   const client = await pool.connect();
   try {
     const { rows } = await client.query(
-      `SELECT u.id AS user_id, u.email, u.created_at AS user_created_at,
-              t.id AS tenant_id, t.name AS tenant_name, t.created_at AS tenant_created_at,
+      `SELECT u.id AS user_id, u.email, t.id AS tenant_id,
               t.stripe_customer_id, t.stripe_subscription_id
        FROM users u
        LEFT JOIN memberships m ON m.user_id = u.id
@@ -49,7 +56,7 @@ async function main() {
     const userIds = [...new Set(candidates.map((row) => row.user_id).filter(Boolean))];
     const tenantIds = [...new Set(candidates.map((row) => row.tenant_id).filter(Boolean))];
     const orphanTenants = await client.query(
-      `SELECT t.id, t.name
+      `SELECT t.id
        FROM tenants t
        WHERE t.created_at < $1
          AND t.stripe_customer_id = ''
@@ -61,15 +68,13 @@ async function main() {
     tenantIds.push(...orphanTenants.rows.map((row) => row.id).filter((id) => !tenantIds.includes(id)));
 
     const summary = {
-      apply,
       before: new Date(before).toISOString(),
       userCount: userIds.length,
       tenantCount: tenantIds.length,
-      users: candidates.map((row) => ({ id: row.user_id, email: row.email, tenantId: row.tenant_id || '' })),
-      orphanTenants: orphanTenants.rows,
+      orphanTenantCount: orphanTenants.rows.length,
     };
     if (!apply) {
-      console.log(JSON.stringify({ ok: true, ...summary }));
+      console.log(JSON.stringify({ ok: true, mode: 'dry-run', ...summary }));
       return;
     }
 
@@ -85,7 +90,11 @@ async function main() {
       await client.query('COMMIT');
       console.log(JSON.stringify({
         ok: true,
-        ...summary,
+        mode: 'applied',
+        before: summary.before,
+        userCount: summary.userCount,
+        tenantCount: summary.tenantCount,
+        orphanTenantCount: summary.orphanTenantCount,
         deletedUsers: deletedUsers.rowCount || 0,
         deletedTenants: deletedTenants.rowCount || 0,
       }));
