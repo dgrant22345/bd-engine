@@ -28,6 +28,7 @@ const SOURCE_IDS = Object.freeze({
   importRun: 'recovery-import-1',
   ticket: 'recovery-ticket-1',
 });
+const json = (value) => JSON.stringify(value);
 
 function databaseUrl(base, database) {
   const url = new URL(base);
@@ -103,45 +104,45 @@ async function seedSource(client) {
     await client.query(`INSERT INTO tenant_data
       (tenant_id, accounts, contacts, jobs, configs, activities, tasks, settings, updated_at)
       VALUES ($1, $2, $3, $4, $5, '[]', '[]', $6, $7)`,
-    [tenant, [accountRaw], [contactRaw], [jobRaw], [boardRaw], { timezone: 'America/Toronto' }, FIXED_TIME]);
+    [tenant, json([accountRaw]), json([contactRaw]), json([jobRaw]), json([boardRaw]), json({ timezone: 'America/Toronto' }), FIXED_TIME]);
 
     await client.query(`INSERT INTO accounts
       (id, tenant_id, display_name, normalized_name, domain, status, target_score, raw, created_at, updated_at, identity_key, canonical_domain)
       VALUES ($1, $2, 'Recovery Systems', 'recovery systems', 'recovery.example', 'qualified', 91, $3, $4, $4, $5, 'recovery.example')`,
-    [account, tenant, accountRaw, FIXED_TIME, `${tenant}|domain|recovery.example`]);
+    [account, tenant, json(accountRaw), FIXED_TIME, `${tenant}|domain|recovery.example`]);
     await client.query(`INSERT INTO contacts
       (id, tenant_id, account_id, full_name, first_name, last_name, email, company_name, title, source, raw, created_at, updated_at, identity_key, normalized_email)
       VALUES ($1, $2, $3, 'Taylor Restore', 'Taylor', 'Restore', 'taylor@recovery.example', 'Recovery Systems', 'VP Engineering', 'manual', $4, $5, $5, $6, 'taylor@recovery.example')`,
-    [contact, tenant, account, contactRaw, FIXED_TIME, `${tenant}|email|taylor@recovery.example`]);
+    [contact, tenant, account, json(contactRaw), FIXED_TIME, `${tenant}|email|taylor@recovery.example`]);
     await client.query(`INSERT INTO jobs
       (id, tenant_id, account_id, title, company_name, location, source, ats_type, source_url, job_url, posted_at, active, raw, created_at, updated_at, natural_key, first_seen_at, last_seen_at, import_run_id)
       VALUES ($1, $2, $3, 'Recovery Engineer', 'Recovery Systems', 'Toronto, ON', 'ats', 'greenhouse', $4, $5, $6, TRUE, $7, $6, $6, $8, $6, $6, $9)`,
-    [job, tenant, account, 'https://boards.greenhouse.io/recovery', 'https://boards.greenhouse.io/recovery/jobs/1', FIXED_TIME, jobRaw, `${tenant}|greenhouse|1`, importRun]);
+    [job, tenant, account, 'https://boards.greenhouse.io/recovery', 'https://boards.greenhouse.io/recovery/jobs/1', FIXED_TIME, json(jobRaw), `${tenant}|greenhouse|1`, importRun]);
     await client.query(`INSERT INTO board_configs
       (id, tenant_id, account_id, company_name, normalized_company_name, ats_type, board_id, domain, careers_url, discovery_status, review_status, active, raw, created_at, updated_at, identity_key, resolved_board_url, last_checked_at, last_imported_at, last_import_status)
       VALUES ($1, $2, $3, 'Recovery Systems', 'recovery systems', 'greenhouse', 'recovery', 'recovery.example', $4, 'resolved', 'approved', TRUE, $5, $6, $6, $7, $4, $6, $6, 'success')`,
-    [board, tenant, account, 'https://boards.greenhouse.io/recovery', boardRaw, FIXED_TIME, `${tenant}|greenhouse|recovery`]);
+    [board, tenant, account, 'https://boards.greenhouse.io/recovery', json(boardRaw), FIXED_TIME, `${tenant}|greenhouse|recovery`]);
     await client.query(`INSERT INTO activities
       (id, tenant_id, account_id, contact_id, type, summary, notes, occurred_at, created_by_user_id, raw, created_at, updated_at)
       VALUES ('recovery-activity-1', $1, $2, $3, 'note', 'Recovery note', 'Restored exactly', $4, $5, $6, $4, $4)`,
-    [tenant, account, contact, FIXED_TIME, user, { id: 'recovery-activity-1', accountId: account }]);
+    [tenant, account, contact, FIXED_TIME, user, json({ id: 'recovery-activity-1', accountId: account })]);
     await client.query(`INSERT INTO tasks
       (id, tenant_id, account_id, contact_id, title, status, priority, due_date, raw, created_at, updated_at)
       VALUES ('recovery-task-1', $1, $2, $3, 'Verify restored workspace', 'pending', 'high', '2026-07-20', $4, $5, $5)`,
-    [tenant, account, contact, { id: 'recovery-task-1', accountId: account }, FIXED_TIME]);
+    [tenant, account, contact, json({ id: 'recovery-task-1', accountId: account }), FIXED_TIME]);
 
     await client.query(`INSERT INTO import_runs
       (id, tenant_id, run_type, status, source, source_hash, started_at, completed_at, rows_total, rows_created, warnings, errors, metadata)
       VALUES ($1, $2, 'jobs', 'completed', 'recovery-drill', 'sha256:recovery', $3, $3, 1, 1, '[]', '[]', $4)`,
-    [importRun, tenant, FIXED_TIME, { provider: 'greenhouse' }]);
+    [importRun, tenant, FIXED_TIME, json({ provider: 'greenhouse' })]);
     await client.query(`INSERT INTO import_run_items
       (id, import_run_id, tenant_id, entity_type, entity_id, natural_key, status, message, source_row, created_at)
       VALUES (41, $1, $2, 'job', $3, $4, 'created', 'Recovered', $5, $6)`,
-    [importRun, tenant, job, `${tenant}|greenhouse|1`, { title: 'Recovery Engineer' }, FIXED_TIME]);
+    [importRun, tenant, job, `${tenant}|greenhouse|1`, json({ title: 'Recovery Engineer' }), FIXED_TIME]);
     await client.query(`INSERT INTO audit_log
       (id, tenant_id, actor_user_id, action, entity_type, entity_id, before, after, metadata, created_at)
       VALUES (42, $1, $2, 'job.imported', 'job', $3, NULL, $4, $5, $6)`,
-    [tenant, user, job, jobRaw, { requestId: 'recovery-request' }, FIXED_TIME]);
+    [tenant, user, job, json(jobRaw), json({ requestId: 'recovery-request' }), FIXED_TIME]);
     await client.query(`INSERT INTO support_tickets
       (id, tenant_id, created_by_user_id, category, subject, status, priority, page_url, created_at, updated_at)
       VALUES ($1, $2, $3, 'job_discovery', 'Recovery drill ticket', 'open', 'normal', '/app/#/support', $4, $4)`,
@@ -153,23 +154,23 @@ async function seedSource(client) {
     await client.query(`INSERT INTO background_jobs
       (id, tenant_id, type, status, snapshot, queued_at, started_at, finished_at, updated_at)
       VALUES ('recovery-background-1', $1, 'import', 'completed', $2, $3, $3, $3, $3)`,
-    [tenant, { imported: 1 }, FIXED_TIME]);
+    [tenant, json({ imported: 1 }), FIXED_TIME]);
     await client.query(`INSERT INTO account_closures
       (id, subject_hash, status, deleted_tenant_count, metadata, requested_at, updated_at, completed_at)
       VALUES ('recovery-closure-1', 'sha256:anonymous-subject', 'completed', 1, $1, $2, $2, $2)`,
-    [{ reason: 'recovery drill synthetic record' }, FIXED_TIME]);
+    [json({ reason: 'recovery drill synthetic record' }), FIXED_TIME]);
     await client.query(`INSERT INTO stripe_webhook_events
       (event_id, event_type, status, attempts, created_at, updated_at, processed_at)
       VALUES ('evt_recovery_1', 'invoice.paid', 'processed', 1, $1, $1, $1)`, [FIXED_TIME]);
     await client.query(`INSERT INTO analytics_events
       (id, visitor_id, event_type, path, source, tenant_id, user_id, created_at, day, event_key, metadata)
       VALUES (44, 'visitor-recovery', 'activation.completed', '/app/', 'recovery-drill', $1, $2, $3, '2026-07-19', 'recovery-event-1', $4)`,
-    [tenant, user, FIXED_TIME, { persona: 'bd' }]);
+    [tenant, user, FIXED_TIME, json({ persona: 'bd' })]);
 
     // Volatile authentication and rate-limit state is deliberately excluded from standard backups.
     await client.query(`INSERT INTO sessions (id, user_id, tenant_id, data, expires_at, created_at)
       VALUES ('recovery-session-1', $1, $2, $3, '2026-07-20T12:00:00.000Z', $4)`,
-    [user, tenant, { csrfToken: 'synthetic' }, FIXED_TIME]);
+    [user, tenant, json({ csrfToken: 'synthetic' }), FIXED_TIME]);
     await client.query(`INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at)
       VALUES ('recovery-reset-token', $1, '2026-07-20T12:00:00.000Z', $2)`, [user, FIXED_TIME]);
     await client.query(`INSERT INTO email_verification_tokens (token_hash, user_id, expires_at, created_at)
