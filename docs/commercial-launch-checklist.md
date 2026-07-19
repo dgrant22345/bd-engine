@@ -50,6 +50,9 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   Evidence: `________________`
 - [ ] That backup restored successfully into a disposable database and semantic
   integrity checks passed. Restore evidence: `________________`
+- [x] CI restores a representative encrypted archive into disposable PostgreSQL,
+  compares all durable tables, verifies volatile exclusions, and tests sequence
+  recovery. Evidence: `PostgreSQL recovery drill` required CI job.
 - [x] The aggregate duplicate audit was run immediately before deployment.
   Contact identity, contact LinkedIn URL, and job natural key all reported zero.
   Evidence: 2026-07-19 read-only production audit; account and board cleanup
@@ -59,9 +62,10 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   recreate records. Decision/evidence: `________________`
 - [ ] Deep legacy/relational parity passes for every relational-primary and
   canary workspace. Evidence: `________________`
-- [ ] The ten migrations were exercised against a disposable PostgreSQL database,
-  including rollback by redeploying the previous application commit.
-  Evidence: `________________`
+- [x] The ten migrations and restore path are exercised from empty PostgreSQL 16
+  databases on every CI run. Evidence: `PostgreSQL recovery drill` required job.
+- [ ] Production rollback was rehearsed by redeploying the previous application
+  commit and confirming compatibility. Evidence: `________________`
 
 ## Billing and customer operations
 

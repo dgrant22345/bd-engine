@@ -149,6 +149,23 @@ npm.cmd --prefix saas run restore -- --file <backup.json.gz.enc> --apply --url <
 Remove-Item Env:BD_RESTORE_CONFIRM
 ```
 
+CI also runs a complete synthetic recovery rehearsal against PostgreSQL 16. It
+migrates a fresh source and destination, creates an encrypted backup, performs
+the guarded restore, compares every durable table, confirms volatile security
+state was excluded, and verifies repaired serial sequences:
+
+```powershell
+$env:RECOVERY_SOURCE_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/bd_engine_recovery_source'
+$env:DB_SSL='false'
+npm.cmd --prefix saas run test:recovery
+```
+
+The source must be a fresh empty database and the database user must be allowed
+to create and remove the disposable destination. The command rejects remote
+hosts unless an operator explicitly sets `BD_RECOVERY_DRILL_ALLOW_REMOTE=true`.
+This synthetic proof complements, but does not replace, a periodic restore of a
+real production archive into approved disposable infrastructure.
+
 Both `--apply` and the exact confirmation variable are required. Never place the
 encryption key or database URL directly in shell history, and never point an
 apply restore at production unless recovery has been approved and a current

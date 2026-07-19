@@ -91,9 +91,11 @@ PowerShell/SQLite edition remains supported separately.
    curation workflow are now included; neither has changed production data.
 3. The backup tool now produces authenticated AES-256-GCM archives and refuses
    unencrypted production runs. A dedicated key is active and a current archive
-   verified, but an off-platform key copy, daily offsite scheduling, retention,
-   and a disposable restore drill are not yet proven. Record that evidence in
-   the launch checklist; a backup that has never restored is not a recovery plan.
+   verified. CI now proves encrypted backup, transactional restore, exact durable
+   table recovery, volatile-data exclusion, and serial-sequence repair against
+   disposable PostgreSQL 16 databases. Off-platform key custody, daily offsite
+   scheduling and retention, and a restore of an actual production archive still
+   require operator-owned infrastructure and recorded evidence.
 4. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
    agreements. Refunds, taxes, renewal/cancellation language, processor terms,
    lawful-basis/consent, and Canadian/international privacy obligations need
@@ -243,8 +245,8 @@ review, support staffing, or alert ownership.
 
 1. Resolve all P0 environment gates and run `check:production-config` without
    exposing values.
-2. Create and verify a fresh encrypted backup; test its dry-run restore against
-   a disposable database.
+2. Create and verify a fresh encrypted backup; run its dry-run validation and
+   periodically restore the actual archive into an approved disposable database.
 3. Run check, unit tests, browser tests, both dependency audits, ATS contract,
    and renderer tests. Review `git diff` and deploy the exact approved commit.
 4. Verify `/readyz`, `/health`, login/logout, password email, setup, one ATS
