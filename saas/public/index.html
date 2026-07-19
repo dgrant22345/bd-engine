@@ -37,8 +37,10 @@
       resetMessage: '',
       verificationToken: getInitialVerificationToken(),
       verificationMessage: '',
+      accountClosedMessage: '',
       emailVerificationAvailable: false,
       canManageSupport: false,
+      canManageWorkspace: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
     };
@@ -74,7 +76,13 @@
         ...options,
       });
       const data = res.status === 204 ? null : await res.json();
-      if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
+      if (!res.ok) {
+        const error = new Error(data?.error || `Request failed: ${res.status}`);
+        error.code = data?.code || '';
+        error.status = res.status;
+        error.details = data;
+        throw error;
+      }
       return data;
     }
 
@@ -146,6 +154,7 @@
           state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
           state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
           state.canManageSupport = Boolean(data.canManageSupport);
+          state.canManageWorkspace = Boolean(data.canManageWorkspace);
           state.view = 'app';
         } else if (state.resetToken) {
           state.view = 'reset';
@@ -191,6 +200,7 @@
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
+        state.canManageWorkspace = Boolean(data.canManageWorkspace);
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -221,6 +231,7 @@
         state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
+        state.canManageWorkspace = Boolean(data.canManageWorkspace);
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
@@ -296,6 +307,7 @@
         state.demo = true;
         state.readOnly = true;
         state.canManageSupport = false;
+        state.canManageWorkspace = false;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -317,6 +329,7 @@
       state.readOnly = false;
       state.emailVerificationAvailable = false;
       state.canManageSupport = false;
+      state.canManageWorkspace = false;
       state.view = 'landing';
       state.error = '';
       render();
@@ -491,6 +504,7 @@
               <button class="btn btn-primary btn-glow" id="nav-signup">Start free trial</button>
             </div>
           </nav>
+          ${state.accountClosedMessage ? `<div class="cloud-account-notice landing-account-notice" role="status"><span>${escapeHtml(state.accountClosedMessage)}</span><button class="cloud-notice-close" type="button" data-dismiss-account-closed aria-label="Dismiss message">Close</button></div>` : ''}
 
           <section class="hero">
             <div class="hero-content">
@@ -681,6 +695,7 @@
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+      root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
     }
 
     function getTrustContent(kind) {
@@ -922,7 +937,7 @@
             <form id="reset-form" class="auth-form">
               <div class="form-group">
                 <label for="reset-password">New password</label>
-                <input type="password" id="reset-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" autofocus>
+                <input type="password" id="reset-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10" autofocus>
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Resetting...' : 'Reset password'}
@@ -973,7 +988,7 @@
               </div>
               <div class="form-group">
                 <label for="signup-password">Password</label>
-                <input type="password" id="signup-password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6">
+                <input type="password" id="signup-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10">
               </div>
               <div class="form-group">
                 <label for="signup-workspace" id="workspace-label">Workspace name</label>
@@ -1166,6 +1181,189 @@
       }
     }
 
+    function openPrivacyCenter() {
+      root.querySelector('.support-backdrop')?.remove();
+      const expected = `DELETE ${state.tenant?.name || 'Workspace'}`;
+      const deletionPanel = state.canManageWorkspace ? `
+        <form class="support-compose" data-privacy-delete>
+          <div><h3>Delete workspace data</h3><p>Permanently removes accounts, contacts, jobs, boards, tasks, and activity. Your login and empty workspace remain available.</p></div>
+          <label for="privacy-delete-password">Current password</label>
+          <input id="privacy-delete-password" name="password" type="password" autocomplete="current-password" required>
+          <label for="privacy-confirm">Type <strong>${escapeHtml(expected)}</strong> to confirm</label>
+          <input id="privacy-confirm" name="confirm" autocomplete="off" required>
+          <div class="support-form-actions"><button class="btn btn-danger" type="submit" disabled>Delete workspace data</button></div>
+          <div data-privacy-result aria-live="polite"></div>
+        </form>` : `
+        <section class="support-compose">
+          <div><h3>Delete workspace data</h3><p>Only the workspace owner can permanently delete shared workspace data.</p></div>
+          <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-privacy-support>Contact support</button></div>
+        </section>`;
+
+      root.insertAdjacentHTML('beforeend', `
+        <div class="support-backdrop" data-privacy-backdrop>
+          <section class="support-modal" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+            <header class="support-modal-header">
+              <div><span class="support-eyebrow">Account controls</span><h2 id="privacy-title">Privacy and data</h2></div>
+              <button class="support-close" type="button" data-privacy-close aria-label="Close privacy and data">Close</button>
+            </header>
+            <div class="support-modal-body">
+              <div class="support-customer-layout">
+                <section class="support-compose">
+                  <div><h3>Export workspace data</h3><p>Download a JSON copy of your profile, accounts, contacts, jobs, boards, tasks, and activity.</p></div>
+                  <div class="support-form-actions"><button class="btn btn-primary" type="button" data-privacy-export>Download export</button></div>
+                  <p class="support-email-fallback">Need the account closed as well? Send an account request through the support center.</p>
+                </section>
+                ${deletionPanel}
+              </div>
+              <section class="account-closure-panel" data-account-closure aria-live="polite">
+                <div class="support-loading"><span class="btn-spinner"></span> Checking account closure requirements...</div>
+              </section>
+            </div>
+          </section>
+        </div>`);
+
+      const backdrop = root.querySelector('[data-privacy-backdrop]');
+      const onKeydown = (event) => { if (event.key === 'Escape') close(); };
+      const close = () => {
+        document.removeEventListener('keydown', onKeydown);
+        backdrop?.remove();
+      };
+      backdrop.querySelector('[data-privacy-close]')?.addEventListener('click', close);
+      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+      document.addEventListener('keydown', onKeydown);
+      backdrop.querySelector('[data-privacy-close]')?.focus();
+      backdrop.querySelector('[data-privacy-export]')?.addEventListener('click', () => {
+        doExportData();
+      });
+      backdrop.querySelector('[data-privacy-support]')?.addEventListener('click', () => {
+        close();
+        openSupportCenter();
+      });
+
+      const form = backdrop.querySelector('[data-privacy-delete]');
+      const input = form?.elements.confirm;
+      const passwordInput = form?.elements.password;
+      const submit = form?.querySelector('button[type="submit"]');
+      const syncDeleteSubmit = () => {
+        submit.disabled = input.value.trim() !== expected || !passwordInput.value;
+      };
+      input?.addEventListener('input', syncDeleteSubmit);
+      passwordInput?.addEventListener('input', syncDeleteSubmit);
+      form?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        submit.textContent = 'Deleting...';
+        try {
+          const data = await api('/api/privacy/delete-workspace', {
+            method: 'POST',
+            body: JSON.stringify({ confirm: input.value.trim(), password: passwordInput.value }),
+          });
+          close();
+          state.verificationMessage = data.message || 'Workspace data deleted.';
+          render();
+        } catch (error) {
+          submit.textContent = 'Delete workspace data';
+          syncDeleteSubmit();
+          form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
+        }
+      });
+      loadAccountClosure(backdrop);
+    }
+
+    async function loadAccountClosure(backdrop) {
+      const panel = backdrop.querySelector('[data-account-closure]');
+      if (!panel) return;
+      try {
+        const data = await api('/api/privacy/account-closure');
+        if (!data.eligible) {
+          panel.innerHTML = `
+            <div><h3>Close account</h3><p>Your account cannot be closed automatically because doing so would leave a shared workspace without an owner.</p></div>
+            <div class="support-error" role="status"><strong>Ownership transfer required</strong><ul>${(data.blockers || []).map((item) => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul></div>
+            <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-closure-support>Contact support</button></div>`;
+          panel.querySelector('[data-closure-support]')?.addEventListener('click', () => {
+            backdrop.remove();
+            openSupportCenter();
+          });
+          return;
+        }
+
+        const consequences = [
+          ...(data.deleteWorkspaces || []).map((item) => `Delete workspace: ${item.name}`),
+          ...(data.leaveWorkspaces || []).map((item) => `Leave workspace: ${item.name}`),
+          ...(data.subscriptionsToCancel ? [`Cancel ${data.subscriptionsToCancel} active subscription${data.subscriptionsToCancel === 1 ? '' : 's'}`] : []),
+        ];
+        panel.innerHTML = `
+          <form class="support-compose account-closure-form" data-account-closure-form>
+            <div><h3>Close account</h3><p>Permanently removes your login and personal identifiers. Sole-user workspaces are deleted, shared workspaces with another owner remain available, and attached subscriptions are canceled first.</p></div>
+            ${consequences.length ? `<ul class="account-closure-effects">${consequences.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<p>No workspaces or subscriptions are attached to this login.</p>'}
+            <label for="account-closure-reason">Reason (optional)</label>
+            <select id="account-closure-reason" name="reason">
+              <option value="">Prefer not to say</option>
+              <option value="not_useful">Did not provide enough value</option>
+              <option value="coverage">Not enough jobs or ATS coverage</option>
+              <option value="usability">Too difficult to use</option>
+              <option value="price">Price</option>
+              <option value="privacy">Privacy or data concerns</option>
+              <option value="other">Other</option>
+            </select>
+            <label for="account-closure-password">Current password</label>
+            <input id="account-closure-password" name="password" type="password" autocomplete="current-password" required>
+            <label for="account-closure-confirm">Type <strong>${escapeHtml(data.expectedConfirmation)}</strong></label>
+            <input id="account-closure-confirm" name="confirm" autocomplete="off" required>
+            <label class="account-closure-check"><input name="exportAcknowledged" type="checkbox" required> I downloaded my data or choose to continue without an export.</label>
+            <div class="support-form-actions"><button class="btn btn-danger" type="submit" disabled>Close account permanently</button></div>
+            <div data-account-closure-result aria-live="polite"></div>
+          </form>`;
+
+        const form = panel.querySelector('[data-account-closure-form]');
+        const submit = form.querySelector('button[type="submit"]');
+        const syncSubmit = () => {
+          submit.disabled = !form.elements.password.value
+            || form.elements.confirm.value.trim() !== data.expectedConfirmation
+            || !form.elements.exportAcknowledged.checked;
+        };
+        form.addEventListener('input', syncSubmit);
+        form.addEventListener('change', syncSubmit);
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          submit.disabled = true;
+          submit.textContent = 'Closing account...';
+          try {
+            const result = await api('/api/privacy/account-closure', {
+              method: 'POST',
+              body: JSON.stringify({
+                password: form.elements.password.value,
+                confirm: form.elements.confirm.value.trim(),
+                exportAcknowledged: form.elements.exportAcknowledged.checked,
+                reason: form.elements.reason.value,
+              }),
+            });
+            backdrop.remove();
+            state.user = null;
+            state.tenant = null;
+            state.tenants = [];
+            state.plan = null;
+            state.trialDaysRemaining = null;
+            state.referral = null;
+            state.demo = false;
+            state.readOnly = false;
+            state.emailVerificationAvailable = false;
+            state.canManageSupport = false;
+            state.canManageWorkspace = false;
+            state.accountClosedMessage = result.message || 'Your account has been closed.';
+            state.view = 'landing';
+            render();
+          } catch (error) {
+            submit.textContent = 'Close account permanently';
+            syncSubmit();
+            form.querySelector('[data-account-closure-result]').innerHTML = `<div class="support-error" role="alert"><strong>Account was not closed.</strong><p>${escapeHtml(error.message)}</p></div>`;
+          }
+        });
+      } catch (error) {
+        panel.innerHTML = `<div class="support-error" role="alert"><strong>Closure requirements could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
+      }
+    }
+
     function wireCustomerSupportForms(backdrop) {
       backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -1236,8 +1434,44 @@
           </section>`;
         wireOperatorSupportForms(backdrop, requestedStatus);
       } catch (error) {
+        if (error.code === 'step_up_required') {
+          renderOperatorStepUp(backdrop, requestedStatus);
+          return;
+        }
         body.innerHTML = `<div class="support-error" role="alert"><strong>Support inbox could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
       }
+    }
+
+    function renderOperatorStepUp(backdrop, requestedStatus = '') {
+      setSupportTab(backdrop, 'operator');
+      const body = backdrop.querySelector('[data-support-body]');
+      body.innerHTML = `
+        <form class="support-compose" data-operator-step-up>
+          <div><h3>Confirm your identity</h3><p>The support inbox contains customer information. Enter your current password to continue.</p></div>
+          <label for="operator-step-up-password">Current password</label>
+          <input id="operator-step-up-password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <div class="support-form-actions"><button class="btn btn-primary" type="submit">Continue to support inbox</button></div>
+          <div data-operator-step-up-result aria-live="polite"></div>
+        </form>`;
+      const form = body.querySelector('[data-operator-step-up]');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Confirming...';
+        try {
+          await api('/api/auth/step-up', {
+            method: 'POST',
+            body: JSON.stringify({ password: form.elements.password.value }),
+          });
+          await loadOperatorSupport(backdrop, requestedStatus, 'Identity confirmed.');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Continue to support inbox';
+          form.querySelector('[data-operator-step-up-result]').innerHTML = `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`;
+        }
+      });
+      form.elements.password.focus();
     }
 
     function wireOperatorSupportForms(backdrop, requestedStatus) {
@@ -1342,7 +1576,7 @@
                   <hr>
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
                   ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
-                  <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Export my data</button>
+                  <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Privacy and data</button>
                   <button class="cloud-menu-item" id="cloud-support-btn" type="button" role="menuitem">Support center</button>
                   ${state.canManageSupport ? '<button class="cloud-menu-item" id="cloud-support-inbox-btn" type="button" role="menuitem">Support inbox</button>' : ''}
                   ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
@@ -1371,8 +1605,8 @@
       });
       root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
       root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
-        doExportData();
         setUserMenuOpen(false);
+        openPrivacyCenter();
       });
       root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
         setUserMenuOpen(false);

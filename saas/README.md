@@ -25,7 +25,7 @@ Use the signup flow on the landing page to create a trial workspace.
 - Tenant-aware API compatibility layer for the existing frontend routes
 - Seeded demo tenant with accounts, contacts, jobs, activity, and follow-ups
 - Outreach draft and log endpoints
-- Production data model draft in `schema.sql`
+- Advisory-locked PostgreSQL migrations in `src/db.js` with a generated schema contract
 - Dockerfile for containerised deployment
 
 ### Phase 2 (Complete)
@@ -42,23 +42,16 @@ Use the signup flow on the landing page to create a trial workspace.
 
 ## Architecture
 
-```
+```text
 saas/
-├── public/             # Cloud-specific frontend (landing, auth, cloud shell)
-│   ├── index.html      # SPA: landing → login → signup → app shell
-│   └── cloud.css       # Premium dark SaaS design system
-├── src/
-│   ├── server.js       # HTTP server with auth middleware & tenant routing
-│   ├── store.js        # Tenant store adapter with guarded relational reads
-│   ├── auth.js         # Durable sessions, signed cookies, salted password hashing
-│   ├── users.js        # User & tenant CRUD, memberships
-│   └── billing.js      # Plan tiers, feature gating, usage metering
-├── scripts/
-│   └── smoke.mjs       # Local SaaS smoke test
-├── schema.sql          # PostgreSQL production schema
-├── package.json
-├── Dockerfile
-└── .env.example
+|-- public/               # Cloud frontend and authenticated shell
+|-- src/                  # HTTP, auth, billing, storage, and product services
+|-- scripts/              # Release, recovery, migration, and diagnostics tools
+|-- schema-manifest.json  # Generated PostgreSQL migration contract
+|-- schema.sql            # Historical reference only; never apply
+|-- package.json
+|-- Dockerfile
+`-- .env.example
 ```
 
 ## Production Dependencies
@@ -90,16 +83,18 @@ test signups and workspace changes are expected.
 
 ## Backups and Recovery
 
-Create a compressed Postgres backup from the `saas` folder:
+Create an authenticated encrypted Postgres backup from the `saas` folder. Set
+`BD_BACKUP_ENCRYPTION_KEY` to 32 random bytes encoded as `base64:...` or 64
+hexadecimal characters; production backups refuse to run without it.
 
 ```powershell
-npm run backup
+npm run backup -- --require-encryption
 ```
 
 Verify a backup without touching the database:
 
 ```powershell
-npm run restore -- --file .\backups\<backup-file>.json.gz --dry-run
+npm run restore -- --file .\backups\<backup-file>.json.gz.enc --dry-run
 ```
 
 The full runbook lives in `docs/disaster-recovery.md`.

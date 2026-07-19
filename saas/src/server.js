@@ -1,18 +1,29 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
-import { extractSession, createSession, destroySession, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken } from './auth.js';
-import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, getMembership, addMember, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
+import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
+import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
+import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './authorization.js';
+import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js';
+import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
+import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
+import { buildProductEvent } from './product-analytics.js';
+import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
+import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
+import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
+import { clientAddress } from './request-client.js';
+import { isUnsafeCrossSiteRequest } from './request-security.js';
+import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -20,6 +31,7 @@ const publicDir = join(rootDir, 'public');
 const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
+const MIN_PASSWORD_LENGTH = 10;
 const serverStartedAt = new Date();
 const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
 const internalOwnerEmails = new Set(parseEmailList([
@@ -39,11 +51,8 @@ const supportAdminEmails = new Set(parseEmailList([
 const ownerPlanId = 'owner';
 
 // ── Abuse / DoS guards ───────────────────────────────────────────────────────
-// Cap request bodies so one large upload can't OOM the single process. The
-// LinkedIn CSV for a 20k-contact network is a few MB, so 50MB is generous.
-const MAX_BODY_BYTES = Number(process.env.BD_MAX_BODY_BYTES) > 0
-  ? Number(process.env.BD_MAX_BODY_BYTES)
-  : 50 * 1024 * 1024;
+// Cap request bodies so one large upload cannot exhaust the single process.
+const requestLimits = resolveRequestLimits();
 const LOGIN_MAX = Number(process.env.BD_LOGIN_MAX) > 0 ? Number(process.env.BD_LOGIN_MAX) : 20;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const SIGNUP_MAX = Number(process.env.BD_SIGNUP_MAX) > 0 ? Number(process.env.BD_SIGNUP_MAX) : 10;
@@ -55,6 +64,11 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const SUPPORT_CREATE_MAX = Number(process.env.BD_SUPPORT_CREATE_MAX) > 0 ? Number(process.env.BD_SUPPORT_CREATE_MAX) : 10;
 const SUPPORT_REPLY_MAX = Number(process.env.BD_SUPPORT_REPLY_MAX) > 0 ? Number(process.env.BD_SUPPORT_REPLY_MAX) : 30;
 const SUPPORT_WINDOW_MS = 60 * 60 * 1000;
+const PRIVILEGED_STEP_UP_MAX = 10;
+const PRIVILEGED_STEP_UP_WINDOW_MS = 15 * 60 * 1000;
+const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_MAX_AGE_MS) > 0
+  ? Number(process.env.BD_PRIVILEGED_SESSION_MAX_AGE_MS)
+  : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
@@ -72,15 +86,17 @@ const passwordResetTokens = new Map();
 const emailVerificationTokens = new Map();
 const MAX_RATE_BUCKETS = Math.max(1000, Number(process.env.BD_MAX_RATE_BUCKETS) || 10000);
 const MAX_RESET_TOKEN_CACHE = Math.max(100, Number(process.env.BD_MAX_RESET_TOKEN_CACHE) || 5000);
+const PUBLIC_ORIGIN = resolvePublicOrigin(process.env, port);
+if (!PUBLIC_ORIGIN) {
+  throw new Error('BD_CLOUD_BASE_URL or a Railway public domain is required in production.');
+}
 
 // Restrict CORS to known origins instead of "*" (which also can't carry the
 // session cookie). Same-origin app requests are unaffected.
-const allowedOrigins = new Set();
-for (const domain of [process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL].filter(Boolean)) {
-  allowedOrigins.add(`https://${domain}`);
-}
+const allowedOrigins = new Set([PUBLIC_ORIGIN]);
 for (const origin of String(process.env.BD_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
-  allowedOrigins.add(origin);
+  const normalized = normalizePublicOrigin(origin);
+  if (normalized) allowedOrigins.add(normalized);
 }
 allowedOrigins.add(`http://localhost:${port}`);
 allowedOrigins.add(`http://127.0.0.1:${port}`);
@@ -88,21 +104,23 @@ allowedOrigins.add(`http://127.0.0.1:${port}`);
 const rateBuckets = new Map(); // key -> { count, resetAt }
 
 function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket?.remoteAddress || 'unknown';
+  return clientAddress(req);
 }
 
-// Fixed-window limiter. Returns true when the caller is OVER the limit.
-function rateLimitExceeded(key, max, windowMs) {
+// Fixed-window limiter shared through PostgreSQL in production. Memory remains
+// a deterministic fallback for local development and transient DB failures.
+async function rateLimitExceeded(key, max, windowMs) {
   const nowMs = Date.now();
   if (rateBuckets.size >= MAX_RATE_BUCKETS) pruneEphemeralMemory(nowMs);
-  const bucket = rateBuckets.get(key);
-  if (!bucket || nowMs >= bucket.resetAt) {
-    rateBuckets.set(key, { count: 1, resetAt: nowMs + windowMs });
-    return false;
+  if (isDbReady()) {
+    try {
+      const decision = await dbConsumeRateLimit(hashRateLimitKey(key), max, windowMs, nowMs);
+      if (decision) return decision.exceeded;
+    } catch (error) {
+      console.error('Shared rate limiter failed; using process fallback:', safeErrorSummary(error));
+    }
   }
-  bucket.count += 1;
-  return bucket.count > max;
+  return consumeMemoryRateLimitBucket(rateBuckets, key, max, windowMs, nowMs);
 }
 
 function pruneEphemeralMemory(nowMs = Date.now()) {
@@ -133,9 +151,15 @@ async function runOperationalCleanup() {
   pruneEphemeralMemory();
   if (!isDbReady()) return;
   try {
-    await dbPruneExpiredOperationalData();
+    await dbPruneExpiredOperationalData({
+      backgroundJobRetentionDays: retentionDays('BD_BACKGROUND_JOB_RETENTION_DAYS', 14),
+      importHistoryRetentionDays: retentionDays('BD_IMPORT_HISTORY_RETENTION_DAYS', 180),
+      analyticsRetentionDays: retentionDays('BD_ANALYTICS_RETENTION_DAYS', 395),
+      auditRetentionDays: retentionDays('BD_AUDIT_RETENTION_DAYS', 730),
+      stripeWebhookRetentionDays: retentionDays('BD_STRIPE_WEBHOOK_RETENTION_DAYS', 90),
+    });
   } catch (error) {
-    console.error('Operational cleanup failed:', error.message);
+    console.error('Operational cleanup failed:', safeErrorSummary(error));
   }
 }
 
@@ -212,6 +236,7 @@ const relationalContentHealth = {
 const ERROR_WEBHOOK = String(process.env.BD_ERROR_WEBHOOK || '').trim();
 // Release identifier for correlating an alert with the deployed commit.
 const RELEASE = String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.BD_RELEASE || 'dev').slice(0, 12);
+const STRUCTURED_LOGS = (process.env.BD_CLOUD_ENV || process.env.NODE_ENV) === 'production';
 let lastErrorAlertAt = 0;
 const ERROR_ALERT_MIN_INTERVAL_MS = 60 * 1000;
 
@@ -220,13 +245,12 @@ function reportServerError(status, req, error, { kind = 'SERVER' } = {}) {
   const nowMs = Date.now();
   if (nowMs - lastErrorAlertAt < ERROR_ALERT_MIN_INTERVAL_MS) return;
   lastErrorAlertAt = nowMs;
-  const route = (req.url || '').split('?')[0];
+  const route = safeRequestPath(req.url);
   const context = [
     `release ${RELEASE}`,
     req.requestId ? `request ${req.requestId}` : '',
-    req.tenantId ? `workspace ${req.tenantId}` : '',
   ].filter(Boolean).join(', ');
-  const text = `🚨 BD Engine ${kind} ${status} on ${req.method} ${route} — ${error?.message || 'error'} (${context})`;
+  const text = `[ALERT] BD Engine ${kind} ${status} on ${req.method} ${route} (${context})`;
   fetch(ERROR_WEBHOOK, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -252,7 +276,7 @@ async function refreshRelationalMirrorHealth() {
     relationalMirrorHealth.healthy = false;
     relationalMirrorHealth.checkedAt = new Date().toISOString();
     relationalMirrorHealth.error = 'Parity check unavailable';
-    console.error('Relational mirror health check failed:', error.message);
+    console.error('Relational mirror health check failed:', safeErrorSummary(error));
   }
 }
 
@@ -279,7 +303,7 @@ async function refreshRelationalContentHealth() {
     relationalContentHealth.healthy = false;
     relationalContentHealth.checkedAt = new Date().toISOString();
     relationalContentHealth.error = 'Deep parity check unavailable';
-    console.error('Relational content health check failed:', error.message);
+    console.error('Relational content health check failed:', safeErrorSummary(error));
   }
 }
 
@@ -312,13 +336,16 @@ async function startServer() {
 
   const server = createServer(async (req, res) => {
     const startedAt = performance.now();
+    res.bdScriptNonce = randomBytes(16).toString('base64');
     res.bdAcceptsGzip = acceptsGzip(req);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy(res.bdScriptNonce));
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     if ((process.env.BD_CLOUD_ENV || process.env.NODE_ENV) === 'production') {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
@@ -340,6 +367,9 @@ async function startServer() {
     req.requestId = randomUUID();
     res.setHeader('X-Request-Id', req.requestId);
     try {
+      if (isUnsafeCrossSiteRequest(req, allowedOrigins)) {
+        return sendJson(res, 403, { error: 'Cross-site request blocked.' });
+      }
       if (!isHealthRequest(req)) {
         await startupPromise;
       }
@@ -350,14 +380,14 @@ async function startServer() {
       serverStats.lastError = {
         at: new Date().toISOString(),
         method: req.method,
-        url: req.url,
+        url: safeRequestPath(req.url),
         requestId: req.requestId,
-        message: error.message || 'Unexpected server error',
+        message: safeErrorSummary(error),
       };
       // Never leak internal error text to clients on 5xx; 4xx messages are
       // intentional (validation, not-found) so keep those.
       if (status >= 500) {
-        console.error(`  ${status} on ${req.method} ${req.url} [${req.requestId}]:`, error.message);
+        logRequestError(status, req, error);
         reportServerError(status, req, error);
         sendJson(res, status, {
           error: 'Something went wrong on our end. Please try again.',
@@ -374,13 +404,15 @@ async function startServer() {
         statusCode: res.statusCode,
         tenantId: req.tenantId,
         userId: req.actorUserId,
-        url: req.url,
+        url: safeRequestPath(req.url),
         requestId: req.requestId,
       });
       if (auditEntry) await dbRecordAuditLog(auditEntry);
-      console.log(`${req.method} ${req.url} ${res.statusCode || 200} ${elapsedMs}ms`);
+      logRequestCompletion(req, res, elapsedMs);
     }
   });
+
+  configureHttpServer(server, requestLimits);
 
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
@@ -406,16 +438,48 @@ async function startServer() {
         const flushed = await store.flushPendingSaves();
         if (flushed) console.log(`  Flushed ${flushed} pending tenant save(s) before shutdown`);
       } catch (err) {
-        console.error('  Shutdown flush error:', err.message);
+        console.error('  Shutdown flush error:', safeErrorSummary(err));
       }
       try {
         await closeDb();
       } catch (err) {
-        console.error('  DB close error:', err.message);
+        console.error('  DB close error:', safeErrorSummary(err));
       }
       process.exit(0);
     });
   }
+}
+
+function logRequestCompletion(req, res, elapsedMs) {
+  const entry = {
+    level: 'info',
+    event: 'http_request',
+    method: String(req.method || ''),
+    path: safeRequestPath(req.url),
+    status: Number(res.statusCode || 200),
+    elapsedMs: Number(elapsedMs || 0),
+    requestId: String(req.requestId || ''),
+    release: RELEASE,
+  };
+  console.log(STRUCTURED_LOGS
+    ? JSON.stringify(entry)
+    : `${entry.method} ${entry.path} ${entry.status} ${entry.elapsedMs}ms [${entry.requestId}]`);
+}
+
+function logRequestError(status, req, error) {
+  const entry = {
+    level: 'error',
+    event: 'http_error',
+    method: String(req.method || ''),
+    path: safeRequestPath(req.url),
+    status: Number(status || 500),
+    requestId: String(req.requestId || ''),
+    release: RELEASE,
+    error: safeErrorSummary(error),
+  };
+  console.error(STRUCTURED_LOGS
+    ? JSON.stringify(entry)
+    : `${entry.status} on ${entry.method} ${entry.path} [${entry.requestId}]: ${entry.error}`);
 }
 
 function startPeriodicPipelineRunner(startupPromise) {
@@ -446,7 +510,7 @@ function startPeriodicPipelineRunner(startupPromise) {
           started += 1;
           console.log(`[Scheduler] Started overdue pipeline for ${tenant.id}.`);
         } catch (err) {
-          console.error(`[Scheduler] Failed to schedule pipeline for ${tenant.id}:`, err.message);
+          console.error('[Scheduler] Failed to schedule workspace pipeline:', safeErrorSummary(err));
         }
       }
       if (started) console.log(`[Scheduler] Started ${started} overdue pipeline${started === 1 ? '' : 's'}.`);
@@ -460,6 +524,11 @@ function startPeriodicPipelineRunner(startupPromise) {
   const intervalTimer = setInterval(() => void scan(), scanIntervalMs);
   startupTimer.unref?.();
   intervalTimer.unref?.();
+}
+
+function retentionDays(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.max(1, Math.min(3650, Math.floor(value))) : fallback;
 }
 
 let startupComplete = false;
@@ -496,7 +565,7 @@ async function initializeData() {
 
 function isHealthRequest(req) {
   try {
-    const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+    const url = new URL(req.url || '/', 'http://bd-engine.local');
     // Probe endpoints must answer during startup instead of blocking on it:
     // /livez proves the event loop; /readyz reports "startup incomplete" (503).
     return url.pathname === '/health' || url.pathname === '/api/health'
@@ -518,6 +587,15 @@ function canManageSupport(user) {
   const isProduction = (process.env.BD_CLOUD_ENV || process.env.NODE_ENV || 'development') === 'production';
   if (!isProduction && configuredSupportAdminEmails.length === 0) return true;
   return supportAdminEmails.has(String(user?.email || '').trim().toLowerCase());
+}
+
+function requirePrivilegedStepUp(res, sessionData) {
+  if (isRecentAuthentication(sessionData, PRIVILEGED_SESSION_MAX_AGE_MS)) return true;
+  sendJson(res, 428, {
+    error: 'Confirm your password to continue with privileged access.',
+    code: 'step_up_required',
+  });
+  return false;
 }
 
 function isInternalOwner(user) {
@@ -583,15 +661,8 @@ function withEffectiveTenantRoles(tenants, user) {
   return (tenants || []).map((tenant) => ({ ...getEffectiveTenant(tenant, user), role: 'owner' }));
 }
 
-function getRequestOrigin(req) {
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${port}`;
-  const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : String(hostHeader).split(',')[0].trim();
-  let protoValue = Array.isArray(proto) ? proto[0] : String(proto).split(',')[0].trim();
-  if (protoValue === 'http' && !/^(localhost|127\.0\.0\.1)(:|$)/i.test(hostValue)) {
-    protoValue = 'https';
-  }
-  return `${protoValue || 'https'}://${hostValue}`;
+function getRequestOrigin() {
+  return PUBLIC_ORIGIN;
 }
 
 async function notifySupportOperators(req, { ticket, requester, tenant, message }) {
@@ -607,7 +678,7 @@ async function notifySupportOperators(req, { ticket, requester, tenant, message 
       supportUrl: getRequestOrigin(req),
     });
   } catch (error) {
-    console.warn(`Support operator notification failed for ${ticket?.id || 'unknown ticket'}:`, error.message);
+    console.warn('Support operator notification failed:', safeErrorSummary(error));
   }
 }
 
@@ -624,7 +695,7 @@ async function notifySupportCustomer(req, { ticket, message }) {
       supportUrl: getRequestOrigin(req),
     });
   } catch (error) {
-    console.warn(`Support customer notification failed for ${ticket.id}:`, error.message);
+    console.warn('Support customer notification failed:', safeErrorSummary(error));
   }
 }
 
@@ -694,7 +765,7 @@ startServer().catch(err => {
 // ── Routing ─────────────────────────────────────────────────────────────────
 
 async function route(req, res) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+  const url = new URL(req.url || '/', 'http://bd-engine.local');
   const pathname = url.pathname;
 
   // Health checks stay public for Railway. Detailed status is authenticated
@@ -732,7 +803,7 @@ async function route(req, res) {
   // operators learn about broken buttons before customers report them. Public
   // (errors can happen pre-login) but tightly rate limited and truncated.
   if (pathname === '/api/client-error' && req.method === 'POST') {
-    if (rateLimitExceeded(`client-error:${clientIp(req)}`, 10, 60 * 1000)) {
+    if (await rateLimitExceeded(`client-error:${clientIp(req)}`, 10, 60 * 1000)) {
       return sendJson(res, 429, { error: 'Too many error reports.' });
     }
     const payload = await readJson(req);
@@ -744,7 +815,8 @@ async function route(req, res) {
     };
     const sessionData = extractSession(req);
     if (sessionData?.tenantId) req.tenantId = sessionData.tenantId;
-    console.error(`  CLIENT ERROR on ${report.route || '(unknown route)'} [${req.requestId}]: ${report.message}`);
+    console.error(`  CLIENT ERROR on ${safeRequestPath(report.route || '/app')} [${req.requestId}]:`,
+      safeErrorSummary({ name: 'ClientError', message: report.message }));
     reportServerError('error', {
       method: 'UI',
       url: report.route || '/app',
@@ -755,35 +827,35 @@ async function route(req, res) {
   }
 
   if (pathname === '/api/auth/signup' && req.method === 'POST') {
-    if (rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
+    if (await rateLimitExceeded(`signup:${clientIp(req)}`, SIGNUP_MAX, SIGNUP_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many sign-ups from this network. Please wait a few minutes and try again.' });
     }
     return handleSignup(req, res);
   }
 
   if (pathname === '/api/auth/login' && req.method === 'POST') {
-    if (rateLimitExceeded(`login:${clientIp(req)}`, LOGIN_MAX, LOGIN_WINDOW_MS)) {
+    if (await rateLimitExceeded(`login:${clientIp(req)}`, LOGIN_MAX, LOGIN_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many login attempts. Please wait a few minutes and try again.' });
     }
     return handleLogin(req, res);
   }
 
   if (pathname === '/api/auth/password-reset/request' && req.method === 'POST') {
-    if (rateLimitExceeded(`password-reset:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`password-reset:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many reset requests from this network. Please wait a few minutes and try again.' });
     }
     return handlePasswordResetRequest(req, res);
   }
 
   if (pathname === '/api/auth/password-reset/confirm' && req.method === 'POST') {
-    if (rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many reset attempts. Please wait a few minutes and try again.' });
     }
     return handlePasswordResetConfirm(req, res);
   }
 
   if (pathname === '/api/auth/email-verification/confirm' && req.method === 'POST') {
-    if (rateLimitExceeded(`email-verification-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 4, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`email-verification-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 4, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many verification attempts. Please wait a few minutes and try again.' });
     }
     return handleEmailVerificationConfirm(req, res);
@@ -810,7 +882,7 @@ async function route(req, res) {
   }
 
   if (pathname === '/api/demo/start' && req.method === 'POST') {
-    if (rateLimitExceeded(`demo:${clientIp(req)}`, DEMO_MAX, DEMO_WINDOW_MS)) {
+    if (await rateLimitExceeded(`demo:${clientIp(req)}`, DEMO_MAX, DEMO_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many demo starts from this network. Please wait a few minutes and try again.' });
     }
     return handleStartDemo(req, res);
@@ -864,12 +936,15 @@ self.addEventListener('activate', (event) => {
     } catch (err) {
       await dbFailStripeWebhook(event.id, err).catch(() => {});
       reportServerError(500, req, err);
-      console.error('Stripe webhook processing failed:', event.type, err.message);
+      console.error('Stripe webhook processing failed:', event.type, safeErrorSummary(err));
       return sendJson(res, 500, { error: 'Stripe webhook processing failed and can be retried.' });
     }
   }
 
   if (pathname === '/api/analytics/visit' && req.method === 'POST') {
+    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, 120, 60 * 60 * 1000)) {
+      return sendJson(res, 429, { error: 'Too many analytics requests.' });
+    }
     return handleAnalyticsVisit(req, res);
   }
 
@@ -884,6 +959,23 @@ self.addEventListener('activate', (event) => {
   if (!user) {
     clearSessionCookie(res);
     return sendJson(res, 401, { error: 'Session expired. Please log in again.' });
+  }
+
+  if (pathname === '/api/auth/step-up' && req.method === 'POST') {
+    if (await rateLimitExceeded(`privileged-step-up:${user.id}`, PRIVILEGED_STEP_UP_MAX, PRIVILEGED_STEP_UP_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many confirmation attempts. Wait before trying again.' });
+    }
+    const body = await readJson(req);
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 401, { error: 'The password you entered is incorrect.', code: 'password_incorrect' });
+    }
+    const authenticatedAt = new Date().toISOString();
+    await markSessionStepUp(sessionData.id, authenticatedAt);
+    return sendJson(res, 200, {
+      ok: true,
+      authenticatedAt,
+      expiresAt: new Date(Date.parse(authenticatedAt) + PRIVILEGED_SESSION_MAX_AGE_MS).toISOString(),
+    });
   }
 
   let tenantId = sessionData.tenantId;
@@ -901,7 +993,7 @@ self.addEventListener('activate', (event) => {
     tenant = ensureInternalOwnerEntitlement(tenant, user);
     store.ensureTenant(tenant, user);
     await persistUserWorkspace(user, tenant);
-    const { cookie } = createSession(user.id, tenantId, {
+    const { cookie } = await createSession(user.id, tenantId, {
       demo: Boolean(sessionData.demo),
       readOnly: Boolean(sessionData.readOnly),
     });
@@ -929,7 +1021,7 @@ self.addEventListener('activate', (event) => {
   store.ensureTenant(tenant, session.user);
 
   if (pathname === '/api/auth/email-verification/request' && req.method === 'POST') {
-    if (rateLimitExceeded(`email-verification:${user.id}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+    if (await rateLimitExceeded(`email-verification:${user.id}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many verification emails requested. Please wait before trying again.' });
     }
     if (user.emailVerifiedAt) {
@@ -942,7 +1034,23 @@ self.addEventListener('activate', (event) => {
       emailConfigured: result.emailConfigured,
       message: result.sent
         ? `Verification email sent to ${user.email}.`
-        : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+        : isEmailVerificationRequired()
+          ? 'Email verification is temporarily unavailable. You can continue using features that do not import data or run job discovery.'
+          : 'Email verification is temporarily unavailable. Your workspace remains accessible.',
+    });
+  }
+
+  if (
+    isEmailVerificationRequired()
+    && !user.emailVerifiedAt
+    && !isReadOnlyDemoSession(sessionData, tenant)
+    && requiresVerifiedEmail(pathname, req.method)
+  ) {
+    return sendJson(res, 403, {
+      error: 'Verify your email before importing data or running job discovery.',
+      code: 'email_verification_required',
+      emailConfigured: isEmailConfigured(),
+      nextAction: 'Open Account, send a verification email, and follow the link before trying again.',
     });
   }
 
@@ -953,7 +1061,7 @@ self.addEventListener('activate', (event) => {
     }
     if (req.method === 'POST') {
       if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
-      if (rateLimitExceeded(`support-create:${user.id}`, SUPPORT_CREATE_MAX, SUPPORT_WINDOW_MS)) {
+      if (await rateLimitExceeded(`support-create:${user.id}`, SUPPORT_CREATE_MAX, SUPPORT_WINDOW_MS)) {
         return sendJson(res, 429, { error: 'You have sent several support requests recently. Reply to an existing request or try again later.' });
       }
       const validation = validateSupportTicketInput(await readJson(req));
@@ -997,7 +1105,7 @@ self.addEventListener('activate', (event) => {
   const supportReplyMatch = pathname.match(/^\/api\/support\/tickets\/([^/]+)\/messages$/);
   if (supportReplyMatch && req.method === 'POST') {
     if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
-    if (rateLimitExceeded(`support-reply:${user.id}`, SUPPORT_REPLY_MAX, SUPPORT_WINDOW_MS)) {
+    if (await rateLimitExceeded(`support-reply:${user.id}`, SUPPORT_REPLY_MAX, SUPPORT_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many support replies were sent recently. Please wait and try again.' });
     }
     const accessible = await dbGetSupportTicket(supportReplyMatch[1], { tenantId, createdByUserId: user.id });
@@ -1024,6 +1132,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/support/admin/tickets' && req.method === 'GET') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const requestedStatus = String(url.searchParams.get('status') || '');
     const status = SUPPORT_STATUSES.has(requestedStatus) ? requestedStatus : '';
     const tickets = await dbListSupportTickets({ allTenants: true, status, limit: 100 });
@@ -1039,6 +1148,7 @@ self.addEventListener('activate', (event) => {
   const supportAdminTicketMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)$/);
   if (supportAdminTicketMatch && req.method === 'PATCH') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const current = await dbGetSupportTicket(supportAdminTicketMatch[1], { allTenants: true });
     if (!current) return sendJson(res, 404, { error: 'Support request not found.' });
     const validation = validateSupportAdminUpdate(await readJson(req), current);
@@ -1050,6 +1160,7 @@ self.addEventListener('activate', (event) => {
   const supportAdminReplyMatch = pathname.match(/^\/api\/support\/admin\/tickets\/([^/]+)\/messages$/);
   if (supportAdminReplyMatch && req.method === 'POST') {
     if (!canManageSupport(user)) return sendJson(res, 403, { error: 'Support operator access is required.' });
+    if (!requirePrivilegedStepUp(res, sessionData)) return;
     const validation = validateSupportReplyInput(await readJson(req));
     if (validation.error) return sendJson(res, 400, { error: validation.error });
     const ticket = await dbAddSupportTicketMessage({
@@ -1072,6 +1183,13 @@ self.addEventListener('activate', (event) => {
 
   if (isReadOnlyDemoSession(sessionData, tenant) && !canDemoSessionUsePath(pathname, req.method)) {
     return sendDemoReadOnly(res);
+  }
+
+  if (!canMutateWorkspace(session.membership.role, req.method)) {
+    return sendJson(res, 403, {
+      error: 'This workspace role is read-only. Ask a workspace owner to make this change.',
+      code: 'workspace_read_only',
+    });
   }
 
   if (isTenantBillingBlocked(tenant, user) && !isBillingExemptPath(pathname)) {
@@ -1104,6 +1222,7 @@ self.addEventListener('activate', (event) => {
       usage,
       stripe: getStripeConfigStatus(),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
+      canChangeBilling: canManageBilling(session.membership.role),
       tenant: getBillingTenantPayload(tenant, user),
       billingAccess,
       referral: getReferralSummary(tenant, origin),
@@ -1111,6 +1230,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/billing/checkout' && req.method === 'POST') {
+    if (!canManageBilling(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Workspace owner or admin access is required to change billing.' });
+    }
     const body = await readJson(req);
     const planId = body.planId;
     try {
@@ -1133,6 +1255,11 @@ self.addEventListener('activate', (event) => {
       }, {
         customerId,
       });
+      await recordProductMilestone({
+        eventType: 'checkout_started', tenantId, userId: user.id,
+        eventKey: `${tenantId}:${planId}:${new Date().toISOString().slice(0, 10)}`,
+        dimensions: { planId, mode: customerId ? 'existing_customer' : 'new_customer' },
+      });
       return sendJson(res, 200, { url: sessionUrl, mode: 'checkout' });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
@@ -1140,6 +1267,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/billing/portal' && req.method === 'POST') {
+    if (!canManageBilling(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Workspace owner or admin access is required to manage billing.' });
+    }
     const customerId = tenant.stripeCustomerId || tenant.stripe_customer_id || '';
     if (!customerId) {
       return sendJson(res, 400, { error: 'No Stripe customer is attached to this workspace yet. Complete checkout first.' });
@@ -1203,8 +1333,29 @@ self.addEventListener('activate', (event) => {
     }
     // Diagnostics hydrates the complete workspace used by the synchronous
     // resolver reports below. Independent paged reads can then run together.
+    const adminParams = Object.fromEntries(url.searchParams);
+    const configQuery = {
+      page: adminParams.configPage,
+      pageSize: adminParams.configPageSize,
+      q: adminParams.configQ,
+      ats: adminParams.configAts,
+      active: adminParams.configActive,
+      discoveryStatus: adminParams.configDiscoveryStatus,
+      confidenceBand: adminParams.configConfidenceBand,
+      reviewStatus: adminParams.configReviewStatus,
+    };
+    const enrichmentQuery = {
+      page: adminParams.enrichmentPage,
+      pageSize: adminParams.enrichmentPageSize,
+      confidence: adminParams.enrichmentConfidence,
+      missingDomain: adminParams.enrichmentMissingDomain,
+      missingCareersUrl: adminParams.enrichmentMissingCareersUrl,
+      hasConnections: adminParams.enrichmentHasConnections,
+      minTargetScore: adminParams.enrichmentMinTargetScore,
+      topN: adminParams.enrichmentTopN,
+    };
     const [configs, tenantUsage] = await Promise.all([
-      store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      store.findConfigs(tenantId, configQuery),
       getTenantUsage(tenantId),
     ]);
     const origin = getRequestOrigin(req);
@@ -1218,7 +1369,7 @@ self.addEventListener('activate', (event) => {
       enrichmentReport: store.getEnrichmentReport(tenantId),
       unresolvedQueue: store.getResolverQueue(tenantId, 'unresolved'),
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
-      enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
+      enrichmentQueue: store.getEnrichmentQueue(tenantId, enrichmentQuery),
       configs,
       analytics,
       canViewSiteAnalytics: canViewAnalytics,
@@ -1228,6 +1379,7 @@ self.addEventListener('activate', (event) => {
         usage: getUsageSummary(tenantId, effectivePlanId, tenantUsage),
         stripe: getStripeConfigStatus(),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
+        canChangeBilling: canManageBilling(session.membership.role),
         tenant: getBillingTenantPayload(tenant, user),
         billingAccess,
         referral: getReferralSummary(tenant, origin),
@@ -1249,6 +1401,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/privacy/delete-workspace' && req.method === 'POST') {
+    if (!canDeleteWorkspaceData(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Only the workspace owner can delete all workspace data.' });
+    }
     const body = await readJson(req);
     const expected = `DELETE ${tenant.name}`;
     if (String(body.confirm || '').trim() !== expected) {
@@ -1257,10 +1412,142 @@ self.addEventListener('activate', (event) => {
         code: 'confirmation_required',
       });
     }
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 400, {
+        error: 'The password you entered is incorrect.',
+        code: 'password_incorrect',
+      });
+    }
     const result = await store.clearTenantWorkspaceData(tenantId);
     return sendJson(res, 200, {
       ...result,
       message: 'Workspace data deleted. Your account and workspace shell remain available.',
+    });
+  }
+
+  if (pathname === '/api/privacy/account-closure' && req.method === 'GET') {
+    const plan = buildAccountClosurePlan(user.id, listTenants(), listMemberships());
+    return sendJson(res, 200, {
+      eligible: plan.eligible,
+      blockers: plan.blockers,
+      deleteWorkspaces: plan.deleteTenants.map((item) => ({ id: item.id, name: item.name })),
+      leaveWorkspaces: plan.leaveTenants.map((item) => ({ id: item.id, name: item.name, role: item.role })),
+      subscriptionsToCancel: plan.subscriptionIds.length,
+      expectedConfirmation: `DELETE ACCOUNT ${user.email}`,
+    });
+  }
+
+  if (pathname === '/api/privacy/account-closure' && req.method === 'POST') {
+    if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
+    const body = await readJson(req);
+    const expected = `DELETE ACCOUNT ${user.email}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, { error: `Type "${expected}" to close your account.`, code: 'confirmation_required' });
+    }
+    if (!body.exportAcknowledged) {
+      return sendJson(res, 400, { error: 'Confirm that you downloaded your data or chose to continue without an export.' });
+    }
+    if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
+      return sendJson(res, 400, { error: 'The password you entered is incorrect.', code: 'password_incorrect' });
+    }
+
+    const plan = buildAccountClosurePlan(user.id, listTenants(), listMemberships());
+    if (!plan.eligible) {
+      return sendJson(res, 409, {
+        error: 'Your account cannot be closed until workspace ownership is transferred.',
+        code: 'ownership_transfer_required',
+        blockers: plan.blockers,
+      });
+    }
+
+    const closureId = `closure-${randomUUID()}`;
+    const requestedAt = new Date().toISOString();
+    const closureReason = new Set(['not_useful', 'coverage', 'usability', 'price', 'privacy', 'other'])
+      .has(String(body.reason || '')) ? String(body.reason) : '';
+    const closureRecord = {
+      id: closureId,
+      subjectHash: accountClosureSubjectHash(user.id),
+      status: 'pending',
+      deletedTenantCount: plan.deleteTenants.length,
+      leftWorkspaceCount: plan.leaveTenants.length,
+      subscriptionsCanceledCount: 0,
+      requestedAt,
+      updatedAt: requestedAt,
+      metadata: { reason: closureReason },
+    };
+    await dbRecordAccountClosure(closureRecord);
+
+    let subscriptionsCanceledCount = 0;
+    try {
+      for (const subscriptionId of plan.subscriptionIds) {
+        const cancellation = await cancelSubscriptionForAccountClosure(subscriptionId);
+        if (cancellation.canceled || cancellation.alreadyEnded) subscriptionsCanceledCount += 1;
+      }
+      await dbRecordAccountClosure({
+        ...closureRecord,
+        subscriptionsCanceledCount,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const deletedTenantIds = plan.deleteTenants.map((item) => item.id);
+      const result = await dbCloseUserAccount({
+        userId: user.id,
+        deleteTenantIds: deletedTenantIds,
+        closureId,
+      });
+      store.forgetClosedTenants(deletedTenantIds);
+      forgetClosedAccount(user.id, deletedTenantIds);
+      forgetUserSessions(user.id);
+      clearSessionCookie(res);
+      return sendJson(res, 200, {
+        ok: true,
+        closed: true,
+        deletedWorkspaces: deletedTenantIds.length,
+        leftWorkspaces: plan.leaveTenants.length,
+        subscriptionsCanceled: subscriptionsCanceledCount,
+        completedAt: result.completedAt || new Date().toISOString(),
+        message: 'Your account has been closed and you have been signed out.',
+      });
+    } catch (error) {
+      await dbRecordAccountClosure({
+        ...closureRecord,
+        status: 'failed',
+        subscriptionsCanceledCount,
+        error: 'account_closure_dependency_failed',
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+      reportServerError(500, req, error);
+      return sendJson(res, 502, {
+        error: 'Account closure could not finish safely. Your account remains available; retry or contact support.',
+        code: 'account_closure_incomplete',
+        requestId: req.requestId,
+      });
+    }
+  }
+
+  if (pathname === '/api/accounts/legacy-target-curation' && req.method === 'GET') {
+    return sendJson(res, 200, await store.curateLegacyTargets(tenantId, {
+      targetLimit: url.searchParams.get('targetLimit'),
+      apply: false,
+    }));
+  }
+
+  if (pathname === '/api/accounts/legacy-target-curation' && req.method === 'POST') {
+    if (!canDeleteWorkspaceData(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Only the workspace owner can classify all legacy companies.' });
+    }
+    const body = await readJson(req);
+    const expected = `CURATE ${tenant.name}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, { error: `Type "${expected}" to classify legacy companies.` });
+    }
+    const result = await store.curateLegacyTargets(tenantId, {
+      targetLimit: body.targetLimit,
+      apply: true,
+    });
+    return sendJson(res, 200, {
+      ...result,
+      message: `${result.selectedTargets} target companies selected. ${result.networkCompanies} companies remain searchable network context without automatic ATS refresh.`,
     });
   }
 
@@ -1281,6 +1568,10 @@ self.addEventListener('activate', (event) => {
     if (req.method === 'POST') {
       if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts' })) return;
       const item = await store.addAccount(tenantId, await readJson(req));
+      await recordProductMilestone({
+        eventType: 'target_created', tenantId, userId: user.id,
+        eventKey: tenantId, dimensions: { source: 'manual', persona: tenant.persona, planId: tenant.plan },
+      });
       return sendJson(res, 201, item);
     }
     return sendJson(res, 200, await store.findAccounts(tenantId, Object.fromEntries(url.searchParams)));
@@ -1312,6 +1603,10 @@ self.addEventListener('activate', (event) => {
     const payload = await readJson(req);
     const draft = await store.createOutreachDraft(tenantId, accountOutreachMatch[1], payload);
     if (!draft) return sendJson(res, 404, { error: 'Account not found' });
+    await recordProductMilestone({
+      eventType: 'outreach_generated', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
     return sendJson(res, 201, draft);
   }
 
@@ -1410,6 +1705,10 @@ self.addEventListener('activate', (event) => {
     }
 
     store.completeSetup(tenantId, fields);
+    await recordProductMilestone({
+      eventType: 'setup_completed', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan, source: 'no_csv' },
+    });
     return sendJson(res, 200, {
       ok: true,
       setupComplete: true,
@@ -1555,13 +1854,23 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/discovery/run' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const body = await readJson(req);
-    return sendJson(res, 202, store.startAtsDiscovery(tenantId, { ...body, plan }));
+    const accepted = store.startAtsDiscovery(tenantId, { ...body, plan });
+    await recordProductMilestone({
+      eventType: 'discovery_started', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
+    return sendJson(res, 202, accepted);
   }
 
   if (pathname === '/api/import/jobs' && req.method === 'POST') {
     const plan = getPlan(getEffectivePlanId(tenant, user));
     const body = await readJson(req);
-    return sendJson(res, 202, await store.startLiveJobImport(tenantId, { ...body, plan }));
+    const accepted = await store.startLiveJobImport(tenantId, { ...body, plan });
+    await recordProductMilestone({
+      eventType: 'job_import_started', tenantId, userId: user.id,
+      eventKey: tenantId, dimensions: { persona: tenant.persona, planId: tenant.plan },
+    });
+    return sendJson(res, 202, accepted);
   }
 
   if (pathname === '/api/admin/pipeline/start' && req.method === 'POST') {
@@ -1636,7 +1945,7 @@ async function handleAnalyticsVisit(req, res) {
   const startedAt = performance.now();
   const result = await dbRecordAnalyticsVisit({
     visitorId: body.visitorId,
-    eventType: body.eventType || 'pageview',
+    eventType: 'pageview',
     path: body.path || '/',
     referrer: body.referrer || '',
     source: body.source || '',
@@ -1648,6 +1957,15 @@ async function handleAnalyticsVisit(req, res) {
     console.warn(`Slow analytics write: saas/src/db.js dbRecordAnalyticsVisit ${elapsedMs}ms`);
   }
   return sendJson(res, result.recorded ? 202 : 400, result);
+}
+
+async function recordProductMilestone(event) {
+  try {
+    return await dbRecordProductEvent(buildProductEvent(event));
+  } catch (error) {
+    console.error('Product milestone recording failed:', safeErrorSummary(error));
+    return { recorded: false, reason: error.message };
+  }
 }
 
 async function handleStripeBillingEvent(event) {
@@ -1668,6 +1986,11 @@ async function handleStripeBillingEvent(event) {
     });
     const referral = await maybeGrantReferralCredit(tenant, object);
     const pendingReferralCredits = tenant ? await grantPendingReferralCreditsForReferrer(tenant) : [];
+    await recordProductMilestone({
+      eventType: 'subscription_started', tenantId,
+      eventKey: object.id || getStripeId(object.subscription) || tenantId,
+      dimensions: { planId: resolvedPlanId, source: 'stripe_checkout' },
+    });
     return { updated: Boolean(tenant), tenantId, planId: resolvedPlanId, referral, pendingReferralCredits };
   }
 
@@ -1721,6 +2044,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: object.id || '',
       billingGraceEndsAt: '',
     });
+    await recordProductMilestone({
+      eventType: 'subscription_canceled', tenantId,
+      eventKey: object.id || tenantId,
+      dimensions: { planId: tenant?.plan || existingTenant?.plan || '', source: 'stripe_webhook' },
+    });
     return { updated: Boolean(tenant), tenantId, status: 'canceled' };
   }
 
@@ -1734,6 +2062,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
       billingGraceEndsAt: createBillingGraceDeadline(object),
       billingLastPaymentFailedAt: new Date().toISOString(),
+    });
+    await recordProductMilestone({
+      eventType: 'payment_failed', tenantId: tenant.id,
+      eventKey: object.id || `${tenant.id}:${object.created || Date.now()}`,
+      dimensions: { planId: tenant.plan, source: 'stripe_webhook' },
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status: 'past_due' };
   }
@@ -1749,6 +2082,11 @@ async function handleStripeBillingEvent(event) {
       stripeSubscriptionId: getStripeId(object.subscription) || tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
       billingGraceEndsAt: '',
       billingLastPaymentFailedAt: '',
+    });
+    await recordProductMilestone({
+      eventType: 'payment_recovered', tenantId: tenant.id,
+      eventKey: object.id || `${tenant.id}:${object.created || Date.now()}`,
+      dimensions: { planId: tenant.plan, source: 'stripe_webhook' },
     });
     return { updated: Boolean(updated), tenantId: tenant.id, status };
   }
@@ -1798,7 +2136,7 @@ async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {
     });
     return { credited: true, referrerTenantId, amountCents: referralCreditAmountCents, transactionId: transaction?.id || '' };
   } catch (error) {
-    console.error('Referral credit failed:', error.message || error);
+    console.error('Referral credit failed:', safeErrorSummary(error));
     return { credited: false, reason: error.message || 'credit failed' };
   }
 }
@@ -1850,7 +2188,7 @@ async function handlePasswordResetRequest(req, res) {
       try {
         await sendPasswordResetEmail({ to: user.email, name: user.name, resetUrl });
       } catch (error) {
-        console.error('Password reset email failed:', error.message || error);
+        console.error('Password reset email failed:', safeErrorSummary(error));
       }
     }
     if (exposeDevToken) devToken = token;
@@ -1910,8 +2248,8 @@ async function handlePasswordResetConfirm(req, res) {
   if (!token || !password) {
     return sendJson(res, 400, { error: 'Reset token and new password are required.' });
   }
-  if (String(password).length < 6) {
-    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
   }
 
   const tokenHash = hashPasswordResetToken(token);
@@ -1920,7 +2258,7 @@ async function handlePasswordResetConfirm(req, res) {
     return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
   }
 
-  const result = setUserPassword(record.userId, password);
+  const result = await setUserPassword(record.userId, password);
   if (result.error) {
     return sendJson(res, 400, { error: 'This reset link is invalid or expired.' });
   }
@@ -1954,7 +2292,7 @@ async function issueEmailVerification(req, user) {
     });
     return { sent: Boolean(delivery?.sent), emailConfigured };
   } catch (error) {
-    console.error('Email verification delivery failed:', error.message || error);
+    console.error('Email verification delivery failed:', safeErrorSummary(error));
     return { sent: false, emailConfigured };
   }
 }
@@ -2028,7 +2366,7 @@ async function handleStartDemo(req, res) {
   });
   await persistUserWorkspace(user, tenant);
 
-  const { cookie } = createSession(user.id, tenant.id, { demo: true, readOnly: true });
+  const { cookie } = await createSession(user.id, tenant.id, { demo: true, readOnly: true });
   setSessionCookie(res, cookie);
   return sendJson(res, 201, {
     demo: true,
@@ -2039,6 +2377,8 @@ async function handleStartDemo(req, res) {
     plan: getPublicPlanPayload(getPlan('sales')),
     trialDaysRemaining: null,
     persona: 'bd',
+    membership: { role: 'viewer' },
+    canManageWorkspace: false,
     redirect: '/app/#/dashboard',
   });
 }
@@ -2049,8 +2389,8 @@ async function handleSignup(req, res) {
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
   }
-  if (String(password).length < 6) {
-    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
   }
 
   // Create user
@@ -2081,8 +2421,14 @@ async function handleSignup(req, res) {
   store.setPersona(tenantId, userPersona);
   await persistUserWorkspace(userResult.user, tenantResult.tenant);
   const verification = await issueEmailVerification(req, userResult.user);
-  const { cookie } = createSession(userResult.user.id, tenantId);
+  const { cookie } = await createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
+
+  await recordProductMilestone({
+    eventType: 'signup_completed', tenantId, userId: userResult.user.id,
+    eventKey: userResult.user.id,
+    dimensions: { persona: userPersona, planId: getEffectivePlanId(tenantResult.tenant, userResult.user), source: referrerTenant ? 'referral' : 'direct' },
+  });
 
   return sendJson(res, 201, {
     user: safeUser(userResult.user),
@@ -2091,6 +2437,8 @@ async function handleSignup(req, res) {
     plan: getPublicPlanPayload(getPlan(getEffectivePlanId(tenantResult.tenant, userResult.user))),
     trialDaysRemaining: getTrialDaysRemaining(tenantResult.tenant),
     persona: userPersona,
+    membership: { role: 'owner' },
+    canManageWorkspace: true,
     referral: getReferralSummary(tenantResult.tenant, getRequestOrigin(req)),
     emailVerificationAvailable: verification.emailConfigured,
     verificationEmailSent: verification.sent,
@@ -2120,7 +2468,6 @@ async function handleLogin(req, res) {
       return sendJson(res, 500, { error: 'No workspace found for this account.' });
     }
     primaryTenant = repair.tenant;
-    userTenants = repair.tenants || [primaryTenant];
     workspaceRecovered = true;
   }
 
@@ -2129,7 +2476,8 @@ async function handleLogin(req, res) {
   store.ensureTenant(primaryTenant, result.user);
   await persistUserWorkspace(result.user, primaryTenant);
   const persona = store.getPersona(primaryTenant.id);
-  const { cookie } = createSession(result.user.id, primaryTenant.id);
+  const effectiveRole = getEffectiveMembershipRole(getMembership(primaryTenant.id, result.user.id), result.user);
+  const { cookie } = await createSession(result.user.id, primaryTenant.id);
   setSessionCookie(res, cookie);
 
   return sendJson(res, 200, {
@@ -2140,6 +2488,8 @@ async function handleLogin(req, res) {
     trialDaysRemaining: getEffectivePlanId(primaryTenant, result.user) !== ownerPlanId ? getTrialDaysRemaining(primaryTenant) : null,
     referral: getReferralSummary(primaryTenant, getRequestOrigin(req)),
     persona,
+    membership: { role: effectiveRole },
+    canManageWorkspace: canDeleteWorkspaceData(effectiveRole),
     workspaceRecovered,
     emailVerificationAvailable: isEmailConfigured(),
     canManageSupport: canManageSupport(result.user),
@@ -2148,14 +2498,14 @@ async function handleLogin(req, res) {
 
 async function handleLogout(req, res) {
   const sessionData = extractSession(req);
-  if (sessionData) {
-    destroySession(sessionData.id);
-  }
   clearSessionCookie(res);
+  if (sessionData) {
+    await destroySession(sessionData.id);
+  }
   return sendJson(res, 200, { ok: true });
 }
 
-function handleMe(req, res) {
+async function handleMe(req, res) {
   const sessionData = extractSession(req);
   if (!sessionData) {
     return sendJson(res, 200, { authenticated: false });
@@ -2175,13 +2525,12 @@ function handleMe(req, res) {
     const repair = ensureTenantForUser(user);
     if (repair.tenant) {
       tenant = repair.tenant;
-      userTenants = repair.tenants || [tenant];
       membership = getMembership(tenant.id, user.id);
       tenant = ensureInternalOwnerEntitlement(tenant, user);
       userTenants = findTenantsForUser(user.id);
       store.ensureTenant(tenant, user);
-      persistUserWorkspace(user, tenant).catch(() => {});
-      const { cookie } = createSession(user.id, tenant.id);
+      await persistUserWorkspace(user, tenant);
+      const { cookie } = await createSession(user.id, tenant.id);
       setSessionCookie(res, cookie);
     }
   } else {
@@ -2195,6 +2544,7 @@ function handleMe(req, res) {
   const trialDaysRemaining = tenant && effectivePlanId !== ownerPlanId ? getTrialDaysRemaining(tenant) : null;
   const persona = tenant ? store.getPersona(tenant.id) : 'bd';
   const billingRequired = tenant ? isTenantBillingBlocked(tenant, user) : false;
+  const effectiveRole = getEffectiveMembershipRole(membership, user);
 
   return sendJson(res, 200, {
     authenticated: true,
@@ -2203,7 +2553,8 @@ function handleMe(req, res) {
     user: safeUser(user),
     tenant: getEffectiveTenant(tenant, user),
     tenants: withEffectiveTenantRoles(userTenants, user),
-    membership: membership ? { role: getEffectiveMembershipRole(membership, user) } : null,
+    membership: membership ? { role: effectiveRole } : null,
+    canManageWorkspace: canDeleteWorkspaceData(effectiveRole),
     plan: getPublicPlanPayload(plan),
     trialDaysRemaining,
     billingRequired,
@@ -2227,6 +2578,8 @@ async function handleCreateTenant(req, res, user) {
     return sendJson(res, 409, { error: result.error });
   }
   const tenant = ensureInternalOwnerEntitlement(result.tenant, user);
+  store.ensureTenant(tenant, user);
+  await persistUserWorkspace(user, tenant);
   return sendJson(res, 201, { tenant: getEffectiveTenant(tenant, user) });
 }
 
@@ -2248,6 +2601,9 @@ function serveStaticOrSPA(pathname, req, res) {
   }
 
   // Try cloud public dir first (landing page, auth pages, etc.)
+  if (pathname === '/' || pathname === '/index.html') {
+    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
+  }
   const cloudPath = tryStaticFile(publicDir, pathname);
   if (cloudPath) return streamFile(cloudPath, res);
 
@@ -2257,12 +2613,20 @@ function serveStaticOrSPA(pathname, req, res) {
 
   // SPA fallback: serve cloud index.html for unmatched routes
   const cloudIndex = join(publicDir, 'index.html');
-  if (existsSync(cloudIndex)) return streamFile(cloudIndex, res);
+  if (existsSync(cloudIndex)) return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
 
   return sendJson(res, 404, { error: 'Not found' });
 }
 
 let cachedAppIndexHtml = null;
+let cachedCloudIndexHtml = null;
+
+function getCloudIndexHtml(scriptNonce) {
+  if (!cachedCloudIndexHtml) {
+    cachedCloudIndexHtml = readFileSync(join(publicDir, 'index.html'), 'utf8');
+  }
+  return injectScriptNonce(cachedCloudIndexHtml, scriptNonce);
+}
 
 function getAppIndexHtml() {
   // The file only changes on deploy (= process restart), so cache the
@@ -2278,9 +2642,8 @@ function getAppIndexHtml() {
     .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
     .replace(/src="\/app\.js/g, 'src="/app/app.js')
     .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
-  // (Removed the persona-labels.js injection — the product is recruiting/BD
-  // only now, so the fragile jobseeker DOM label-swap overlay is no longer
-  // loaded. See #13.)
+  // Persona language is rendered directly by the shared app, so no DOM label
+  // overlay is injected into the cloud shell.
   return cachedAppIndexHtml;
 }
 
@@ -2322,7 +2685,7 @@ function recordRequestMetric(req, res, elapsedMs) {
   if (!serverStats.slowestRequest || elapsedMs > serverStats.slowestRequest.elapsedMs) {
     serverStats.slowestRequest = {
       method: req.method,
-      path: (req.url || '').split('?')[0],
+      path: safeRequestPath(req.url),
       statusCode: Number(statusCode),
       elapsedMs,
       at: new Date().toISOString(),
@@ -2337,6 +2700,10 @@ function getHealthPayload(includeDetails = false) {
     ? Math.round(serverStats.totalDurationMs / serverStats.requestCount)
     : 0;
   const stripeStatus = getStripeConfigStatus();
+  const operational = store.getOperationalMetrics();
+  const errorRatePercent = serverStats.requestCount
+    ? Math.round((serverStats.errorCount / serverStats.requestCount) * 10000) / 100
+    : 0;
   const checks = {
     server: true,
     databaseConfigured: isDbEnabled(),
@@ -2362,6 +2729,7 @@ function getHealthPayload(includeDetails = false) {
     relationalContentCheckedAt: relationalContentHealth.checkedAt,
     relationalPrimaryWorkspaceCount: getRelationalPrimaryTenantIds().length,
     relationalNewWorkspaceDefault: RELATIONAL_WRITE_NEW_TENANTS,
+    backgroundQueueHealthy: operational.healthy,
   };
   const payload = {
     ok: true,
@@ -2382,6 +2750,20 @@ function getHealthPayload(includeDetails = false) {
       memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
       rateLimitBuckets: rateBuckets.size,
       resetTokenCacheEntries: passwordResetTokens.size,
+      errorRatePercent,
+      background: operational,
+    };
+    payload.slo = {
+      targets: {
+        http5xxRatePercentMax: 1,
+        backgroundJobMaxAgeMs: operational.staleAfterMs,
+        ingestionSuccessRatePercentMin: 95,
+      },
+      observed: {
+        http5xxRatePercent: errorRatePercent,
+        backgroundJobMaxAgeMs: operational.oldestActiveAgeMs,
+        ingestionSuccessRatePercent24h: operational.ingestionSuccessRate24h,
+      },
     };
     payload.lastError = serverStats.lastError;
   }
@@ -2470,15 +2852,12 @@ async function readBody(req) {
 }
 
 async function readRawBody(req) {
+  assertDeclaredBodyWithinLimit(req, requestLimits.maxBodyBytes);
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > MAX_BODY_BYTES) {
-      const error = new Error('Request body too large.');
-      error.status = 413;
-      throw error;
-    }
+    if (total > requestLimits.maxBodyBytes) throw requestBodyTooLargeError();
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);

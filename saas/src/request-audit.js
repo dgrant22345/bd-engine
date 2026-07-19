@@ -6,7 +6,7 @@ export function buildMutationAuditEntry({ method, statusCode, tenantId, userId, 
   if (!MUTATING_METHODS.has(normalizedMethod) || !tenantId || !userId) return null;
   if (normalizedStatus < 200 || normalizedStatus >= 400) return null;
 
-  let pathname = '';
+  let pathname;
   try {
     pathname = new URL(String(url || '/'), 'http://localhost').pathname;
   } catch {

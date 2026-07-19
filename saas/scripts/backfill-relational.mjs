@@ -33,7 +33,7 @@ async function main() {
   const dryRun = flag('--dry-run');
   const missingOnly = flag('--missing-only');
   const tenantId = arg('--tenant');
-  const ready = await initDb();
+  const ready = await initDb({ migrate: false, readOnly: dryRun });
   if (!ready) throw new Error('DATABASE_URL is required for relational backfill.');
 
   const result = await dbQuery(

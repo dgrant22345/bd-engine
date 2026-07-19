@@ -103,7 +103,7 @@ async function main() {
   if (APPLY && !BACKUP_DONE) {
     throw new Error('--apply requires --backup-done (take and verify a backup first).');
   }
-  const ready = await initDb();
+  const ready = await initDb({ migrate: false, readOnly: !APPLY });
   if (!ready) throw new Error('DATABASE_URL is required.');
 
   const tenantFilter = arg('--tenant');

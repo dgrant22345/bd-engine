@@ -199,6 +199,17 @@ a:hover { text-decoration: underline; }
   transform: translateY(0);
 }
 
+.btn-danger {
+  color: #fff;
+  background: #b42318;
+  border-color: #b42318;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #912018;
+  border-color: #912018;
+}
+
 .btn-glow {
   box-shadow: var(--shadow-sm), var(--shadow-glow);
 }
@@ -675,7 +686,7 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-bottom: 12px;
 }
 
@@ -707,7 +718,7 @@ a:hover { text-decoration: underline; }
 
 .price-period {
   font-size: 14px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .pricing-fit,
@@ -727,7 +738,7 @@ a:hover { text-decoration: underline; }
   margin: -12px 0 18px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .pricing-features {
@@ -770,7 +781,7 @@ a:hover { text-decoration: underline; }
 }
 
 .landing-footer-copy {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -1317,6 +1328,40 @@ a:hover { text-decoration: underline; }
   grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
   gap: 24px;
   align-items: start;
+}
+
+.account-closure-panel {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.account-closure-form {
+  max-width: 720px;
+  padding-right: 0;
+  border-right: 0;
+}
+
+.account-closure-effects {
+  margin: 4px 0 8px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.account-closure-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.account-closure-check input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.landing-account-notice {
+  width: min(1120px, calc(100% - 40px));
+  margin: 18px auto 0;
 }
 
 .support-compose,

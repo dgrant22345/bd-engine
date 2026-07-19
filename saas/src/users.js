@@ -101,12 +101,12 @@ export function authenticateUser(email, password) {
 
 // ── Tenant CRUD ─────────────────────────────────────────────────────────────
 
-export function setUserPassword(userId, password) {
+export async function setUserPassword(userId, password) {
   const user = findUserById(userId);
   if (!user) return { error: 'User not found.' };
   user.passwordHash = hashPassword(password);
   user.updatedAt = now();
-  dbSaveUser(user).catch(() => {});
+  await dbSaveUser(user);
   return { user };
 }
 
@@ -275,6 +275,21 @@ export function findTenantsForUser(userId) {
 
 export function getMembership(tenantId, userId) {
   return memberships.find((m) => m.tenantId === tenantId && m.userId === userId) || null;
+}
+
+export function listMemberships() {
+  return memberships.map((membership) => ({ ...membership }));
+}
+
+export function forgetClosedAccount(userId, deletedTenantIds = []) {
+  const deleted = new Set(deletedTenantIds);
+  users.delete(userId);
+  for (const tenantId of deleted) tenants.delete(tenantId);
+  for (let index = memberships.length - 1; index >= 0; index -= 1) {
+    if (memberships[index].userId === userId || deleted.has(memberships[index].tenantId)) {
+      memberships.splice(index, 1);
+    }
+  }
 }
 
 export function addMember(tenantId, userId, role = 'member') {

@@ -12,12 +12,16 @@
 ```powershell
 npm.cmd --prefix saas run check
 npm.cmd --prefix saas test
+npm.cmd --prefix saas audit --omit=dev --audit-level=high
 npm.cmd --prefix saas run benchmark:ats
 npm.cmd --prefix saas run test:browser
+npm.cmd --prefix saas run test:browser:compat
 npm.cmd --prefix renderer run check
 npm.cmd --prefix renderer test
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -SkipInstaller
 ```
+
+Load the intended production environment in a secure operator shell and run `npm.cmd --prefix saas run check:production-config`. The checker reports variable names and readiness messages only; it never prints secret values. Do not proceed with a commercial release while it reports errors.
 
 With Inno Setup 6 installed, also build the installer and test it on a clean Windows profile or VM.
 
