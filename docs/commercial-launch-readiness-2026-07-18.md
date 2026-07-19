@@ -85,24 +85,29 @@ PowerShell/SQLite edition remains supported separately.
 1. `BD_SUPPORT_ADMIN_EMAILS` is active for the named operator, but the full
    support step-up workflow still needs a production test. `BD_ERROR_WEBHOOK`
    remains unset, so server failures still lack accountable real-time routing.
-2. The main legacy workspace has 12,235 mechanically linkable board records and
+2. Both live Stripe prices and products are active with the advertised monthly
+   USD amounts. The canonical webhook is enabled for all six required checkout,
+   subscription, failed-payment, and recovery events, and the read-only catalog
+   verifier passes. Signed test delivery and live checkout/failure/refund
+   exercises are still required before payment operations are launch-approved.
+3. The main legacy workspace has 12,235 mechanically linkable board records and
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target
    curation workflow are now included; neither has changed production data.
-3. The backup tool now produces authenticated AES-256-GCM archives and refuses
+4. The backup tool now produces authenticated AES-256-GCM archives and refuses
    unencrypted production runs. A dedicated key is active and a current archive
    verified. CI now proves encrypted backup, transactional restore, exact durable
    table recovery, volatile-data exclusion, and serial-sequence repair against
    disposable PostgreSQL 16 databases. Off-platform key custody, daily offsite
    scheduling and retention, and a restore of an actual production archive still
    require operator-owned infrastructure and recorded evidence.
-4. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
+5. Privacy/Terms pages are plain-language launch summaries, not reviewed legal
    agreements. Refunds, taxes, renewal/cancellation language, processor terms,
    lawful-basis/consent, and Canadian/international privacy obligations need
    qualified legal/accounting review.
-5. Windows distribution is not proven code-signed. Do not broadly distribute an
+6. Windows distribution is not proven code-signed. Do not broadly distribute an
    unsigned installer to paying customers.
-6. The two relational-primary workspaces have intentionally diverged from their
+7. The two relational-primary workspaces have intentionally diverged from their
    legacy blobs since cutover. Current reads are not impaired, but an immediate
    legacy rollback would restore stale data. Create an encrypted backup, run the
    documented per-workspace snapshot command, and verify deep parity before any
