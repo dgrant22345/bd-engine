@@ -19,6 +19,7 @@ import { isEmailVerificationRequired, requiresVerifiedEmail } from './verificati
 import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
 import { buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
+import { contentSecurityPolicy } from './security-headers.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -338,7 +339,7 @@ async function startServer() {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy());
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
@@ -2673,7 +2674,7 @@ function recordRequestMetric(req, res, elapsedMs) {
   if (!serverStats.slowestRequest || elapsedMs > serverStats.slowestRequest.elapsedMs) {
     serverStats.slowestRequest = {
       method: req.method,
-      path: (req.url || '').split('?')[0],
+      path: safeRequestPath(req.url),
       statusCode: Number(statusCode),
       elapsedMs,
       at: new Date().toISOString(),

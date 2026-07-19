@@ -5,6 +5,13 @@ on:
   schedule:
     - cron: '17 13 * * 1,4'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ats-live-canary
+  cancel-in-progress: true
+
 jobs:
   provider-compatibility:
     name: Public provider compatibility
