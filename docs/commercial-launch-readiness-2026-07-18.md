@@ -35,7 +35,7 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 177/177 pass.
+- SaaS unit/contract tests: 179/179 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
@@ -202,6 +202,8 @@ PowerShell/SQLite edition remains supported separately.
 - Stopped trusting caller-controlled `X-Forwarded-For` for abuse controls;
   Railway deployments use validated `X-Real-IP` and local deployments use the
   socket peer address.
+- Added an explicit cross-site mutation gate using validated Origin and Fetch
+  Metadata headers, beyond response-only CORS protection.
 - Made operational reports and dry runs connect without applying migrations and
   use PostgreSQL-enforced read-only sessions; mutating maintenance tools also no
   longer migrate the schema as an undocumented side effect.

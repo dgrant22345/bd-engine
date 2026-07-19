@@ -22,6 +22,7 @@ import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
+import { isUnsafeCrossSiteRequest } from './request-security.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -367,6 +368,9 @@ async function startServer() {
     req.requestId = randomUUID();
     res.setHeader('X-Request-Id', req.requestId);
     try {
+      if (isUnsafeCrossSiteRequest(req, allowedOrigins)) {
+        return sendJson(res, 403, { error: 'Cross-site request blocked.' });
+      }
       if (!isHealthRequest(req)) {
         await startupPromise;
       }

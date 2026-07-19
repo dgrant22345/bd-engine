@@ -36,6 +36,9 @@ headers are never trusted to construct those links.
 - Railway rate-limit identity uses its validated `X-Real-IP` edge header;
   caller-controlled `X-Forwarded-For` values are ignored and raw IP addresses
   are hashed before durable limiter storage.
+- Unsafe browser requests with a foreign `Origin` or cross-site Fetch Metadata
+  signal are rejected before routing; originless Stripe and server-to-server
+  webhooks remain supported.
 - Customer exports, password-and-phrase-confirmed workspace-data deletion, and self-service account closure are available from the authenticated account surface. Closure verifies the password and exact confirmation, prevents orphaned shared workspaces, cancels affected subscriptions, deletes sessions and customer records transactionally, and retains only a pseudonymous operational closure ledger.
 - Backups include sensitive data and must be encrypted, access controlled, and retention limited.
 
