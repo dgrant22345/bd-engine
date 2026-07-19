@@ -1,6 +1,7 @@
 import { closeDb, dbCheckRelationalContentParity, dbQuery, initDb } from '../src/db.js';
 import { createStore, flushPendingSaves } from '../src/store.js';
 import { findTenantById, loadFromDb as loadUsersFromDb } from '../src/users.js';
+import { requireMaintenanceApproval } from '../src/maintenance-safety.js';
 
 const CANARY_ID = 'cfg-relational-write-canary';
 const CANARY_ATS = 'relational_canary';
@@ -22,7 +23,20 @@ async function prepareStore(tenantId) {
 async function createCanary(tenantId) {
   const store = await prepareStore(tenantId);
   await store.getBootstrap(tenantId, { includeFilters: true });
-  await dbQuery('DELETE FROM board_configs WHERE tenant_id = $1 AND id = $2', [tenantId, CANARY_ID]);
+  const existing = await dbQuery(
+    `SELECT
+       (SELECT COUNT(*)::int FROM board_configs WHERE tenant_id = $1 AND id = $2) AS relational_count,
+       (SELECT COUNT(*)::int FROM tenant_data
+        WHERE tenant_id = $1 AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(configs, '[]'::jsonb)) item
+          WHERE item->>'id' = $2
+        )) AS legacy_count`,
+    [tenantId, CANARY_ID]
+  );
+  const existingRow = existing?.rows?.[0] || {};
+  if (Number(existingRow.relational_count || 0) || Number(existingRow.legacy_count || 0)) {
+    throw new Error('A relational write canary already exists. Verify or clean it up before creating another.');
+  }
   store.addConfig(tenantId, {
     id: CANARY_ID,
     companyName: 'Relational write canary',
@@ -67,7 +81,9 @@ async function verifyCanary(tenantId) {
 async function cleanupCanary(tenantId) {
   const result = await dbQuery(
     `DELETE FROM board_configs
-     WHERE tenant_id = $1 AND (id = $2 OR id LIKE 'cfg-write-canary-%')`,
+     WHERE tenant_id = $1
+       AND (id = $2 OR id LIKE 'cfg-write-canary-%')
+       AND raw->>'source' = 'system_canary'`,
     [tenantId, CANARY_ID]
   );
   const parity = await dbCheckRelationalContentParity([tenantId]);
@@ -78,9 +94,21 @@ async function cleanupCanary(tenantId) {
 async function main() {
   const tenantId = arg('--tenant');
   const mode = arg('--mode') || 'verify';
+  const apply = process.argv.includes('--apply');
   if (!tenantId) throw new Error('Pass --tenant <tenant-id>.');
   if (!['create', 'verify', 'cleanup'].includes(mode)) throw new Error('Pass --mode create, verify, or cleanup.');
-  if (!(await initDb({ migrate: false, readOnly: mode === 'verify' }))) throw new Error('DATABASE_URL is required.');
+  const mutating = mode !== 'verify';
+  if (mutating && !apply) throw new Error(`${mode} mode requires --apply.`);
+  if (!mutating && apply) throw new Error('Verify mode is read-only; remove --apply.');
+  requireMaintenanceApproval({
+    apply: mutating,
+    tenantId,
+    confirmation: String(arg('--confirm') || ''),
+    expectedConfirmation: mode === 'create' ? 'CREATE_RELATIONAL_CANARY' : 'CLEANUP_RELATIONAL_CANARY',
+    backupReference: String(arg('--backup-reference') || ''),
+    action: `${mode === 'create' ? 'Creating' : 'Cleaning up'} the relational write canary`,
+  });
+  if (!(await initDb({ migrate: false, readOnly: !mutating }))) throw new Error('DATABASE_URL is required.');
 
   const result = mode === 'create'
     ? await createCanary(tenantId)

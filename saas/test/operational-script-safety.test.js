@@ -93,6 +93,17 @@ test('rollup repair is atomic across relational, legacy, and audit storage', asy
   assert.doesNotMatch(source, /dbQuery\('BEGIN'/u);
 });
 
+test('relational write canary fails closed before mutating a workspace', async () => {
+  const source = await scriptSource('verify-relational-write-canary.mjs');
+  assert.match(source, /mutating && !apply/u);
+  assert.match(source, /CREATE_RELATIONAL_CANARY/u);
+  assert.match(source, /CLEANUP_RELATIONAL_CANARY/u);
+  assert.match(source, /backupReference/iu);
+  assert.match(source, /A relational write canary already exists/u);
+  assert.doesNotMatch(source, /DELETE FROM board_configs WHERE tenant_id = \$1 AND id = \$2/u);
+  assert.match(source, /raw->>'source' = 'system_canary'/u);
+});
+
 test('routine maintenance output omits direct customer identifiers', async () => {
   const scripts = [
     'backfill-relational.mjs',
