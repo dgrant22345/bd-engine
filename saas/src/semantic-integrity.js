@@ -167,13 +167,23 @@ export function checkTenantIntegrity({ accounts = [], contacts = [], jobs = [], 
   return { checks, totalViolations };
 }
 
-/** Human-readable one-workspace summary for CLI output. */
-export function formatIntegrityReport(tenantId, result) {
-  const lines = [`${tenantId}: ${result.totalViolations} violation(s)`];
-  for (const [name, check] of Object.entries(result.checks)) {
+export function summarizeIntegrityResult(result) {
+  return {
+    totalViolations: Number(result?.totalViolations || 0),
+    checks: Object.fromEntries(Object.entries(result?.checks || {}).map(([name, check]) => [name, {
+      violations: Number(check?.violations || 0),
+      description: String(check?.description || ''),
+    }])),
+  };
+}
+
+/** Human-readable aggregate summary. Samples may contain customer data. */
+export function formatIntegrityReport(workspaceLabel, result) {
+  const summary = summarizeIntegrityResult(result);
+  const lines = [`${workspaceLabel}: ${summary.totalViolations} violation(s)`];
+  for (const [name, check] of Object.entries(summary.checks)) {
     if (!check.violations) continue;
     lines.push(`  ${name}: ${check.violations} — ${check.description}`);
-    for (const sample of check.sample) lines.push(`    e.g. ${JSON.stringify(sample)}`);
   }
   return lines.join('\n');
 }

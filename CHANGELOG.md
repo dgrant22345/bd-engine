@@ -12,6 +12,8 @@ All notable customer-facing changes are recorded here. The project is currently 
   provider failures into actionable customer-safe responses, and added direct
   coverage for checkout payloads, signed webhooks, referral credits, portal
   sessions, and subscription cancellation.
+- Removed customer examples, workspace IDs, and internal record IDs from the
+  default semantic-integrity CLI and JSON reports.
 
 - Preserved signup workspace and profile details through first-run setup.
 - Corrected sample-workspace readiness after data is loaded.
