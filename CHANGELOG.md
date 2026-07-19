@@ -4,6 +4,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Activated the production and ATS scheduled checks through default-branch
+  schedulers that delegate to the Railway deployment branch.
+
 - Preserved signup workspace and profile details through first-run setup.
 - Corrected sample-workspace readiness after data is loaded.
 - Focused the default dashboard on daily actions while keeping advanced sections optional.

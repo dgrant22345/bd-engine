@@ -1,6 +1,7 @@
 name: ATS live canary
 
 on:
+  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: '17 13 * * 1,4'

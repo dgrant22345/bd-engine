@@ -101,7 +101,9 @@ Evidence for this section: `________________`
 - [ ] The scheduled production probe is green and external paging is active.
   The probe now covers availability, readiness, anonymous authorization,
   pricing, CSP nonces, security headers, secure demo sessions, app mounting,
-  and read-only demo boundaries; external paging remains operator-owned.
+  and read-only demo boundaries. The default branch scheduler delegates to the
+  reusable workflow on `deploy/perf-restore`; external paging remains
+  operator-owned.
 - [ ] Logs and alerts were watched through the agreed observation window.
 
 Observation owner/window/evidence: `________________`

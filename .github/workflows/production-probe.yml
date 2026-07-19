@@ -1,6 +1,7 @@
 name: Production read-only probe
 
 on:
+  workflow_call:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
