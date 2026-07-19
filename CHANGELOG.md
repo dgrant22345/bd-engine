@@ -18,6 +18,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
 - Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.
 - Blocked unsafe cross-site browser mutations before API routing while preserving signed webhooks.
+- Bounded upload size, request/header duration, keep-alive reuse, and header counts at the HTTP server boundary.
 - Corrected account-to-board matching and working filters so ATS state, target-company coverage, network paths, and admin review queues agree across blob and relational reads.
 - Restored job-seeker terminology and workflows across setup, navigation, company and role views, search, and outreach.
 - Shortened sales outreach around one verified role, fixed reversible account pausing, and added customer-action browser coverage.

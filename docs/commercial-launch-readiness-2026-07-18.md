@@ -35,7 +35,7 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 179/179 pass.
+- SaaS unit/contract tests: 182/182 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
@@ -50,6 +50,9 @@ PowerShell/SQLite edition remains supported separately.
 - Windows package staging: pass; public code signing was not verified.
 - No repository secret was found by the targeted scan. Test-only fake keys and
   certificate marker parsing remain intentionally present.
+- HTTP requests now have bounded body size, header/request duration, header
+  count, keep-alive reuse, and requests per socket; oversized declared uploads
+  are rejected before their contents are buffered.
 
 ## P0 - launch blockers
 

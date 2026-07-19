@@ -23,6 +23,7 @@ import { contentSecurityPolicy } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
+import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -50,11 +51,8 @@ const supportAdminEmails = new Set(parseEmailList([
 const ownerPlanId = 'owner';
 
 // ── Abuse / DoS guards ───────────────────────────────────────────────────────
-// Cap request bodies so one large upload can't OOM the single process. The
-// LinkedIn CSV for a 20k-contact network is a few MB, so 50MB is generous.
-const MAX_BODY_BYTES = Number(process.env.BD_MAX_BODY_BYTES) > 0
-  ? Number(process.env.BD_MAX_BODY_BYTES)
-  : 50 * 1024 * 1024;
+// Cap request bodies so one large upload cannot exhaust the single process.
+const requestLimits = resolveRequestLimits();
 const LOGIN_MAX = Number(process.env.BD_LOGIN_MAX) > 0 ? Number(process.env.BD_LOGIN_MAX) : 20;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const SIGNUP_MAX = Number(process.env.BD_SIGNUP_MAX) > 0 ? Number(process.env.BD_SIGNUP_MAX) : 10;
@@ -412,6 +410,8 @@ async function startServer() {
       logRequestCompletion(req, res, elapsedMs);
     }
   });
+
+  configureHttpServer(server, requestLimits);
 
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
@@ -2841,15 +2841,12 @@ async function readBody(req) {
 }
 
 async function readRawBody(req) {
+  assertDeclaredBodyWithinLimit(req, requestLimits.maxBodyBytes);
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > MAX_BODY_BYTES) {
-      const error = new Error('Request body too large.');
-      error.status = 413;
-      throw error;
-    }
+    if (total > requestLimits.maxBodyBytes) throw requestBodyTooLargeError();
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
