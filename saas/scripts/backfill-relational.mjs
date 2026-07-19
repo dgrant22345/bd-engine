@@ -2,12 +2,14 @@
  * Backfill the relational mirror from existing tenant_data JSONB blobs.
  *
  * Usage:
- *   npm run backfill:relational -- --dry-run
  *   npm run backfill:relational
  *   npm run backfill:relational -- --tenant tenant-abc123
+ *   npm run backfill:relational -- --tenant tenant-abc123 --apply
+ *     --confirm BACKFILL_RELATIONAL --backup-reference <backup-id-or-sha>
  */
 import { closeDb, dbQuery, initDb } from '../src/db.js';
 import { syncTenantRelationalMirror } from '../src/relational-writes.js';
+import { requireMaintenanceApproval, workspaceLabel } from '../src/maintenance-safety.js';
 
 function flag(name) {
   return process.argv.includes(name);
@@ -30,9 +32,18 @@ function counts(row) {
 }
 
 async function main() {
-  const dryRun = flag('--dry-run');
+  const apply = flag('--apply');
+  const dryRun = !apply;
   const missingOnly = flag('--missing-only');
-  const tenantId = arg('--tenant');
+  const tenantId = String(arg('--tenant') || '').trim();
+  requireMaintenanceApproval({
+    apply,
+    tenantId,
+    confirmation: String(arg('--confirm') || ''),
+    expectedConfirmation: 'BACKFILL_RELATIONAL',
+    backupReference: String(arg('--backup-reference') || ''),
+    action: 'Applying the relational backfill',
+  });
   const ready = await initDb({ migrate: false, readOnly: dryRun });
   if (!ready) throw new Error('DATABASE_URL is required for relational backfill.');
 
@@ -46,9 +57,9 @@ async function main() {
 
   const rows = result?.rows || [];
   console.log(`Found ${rows.length} tenant workspace row(s).`);
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const rowCounts = counts(row);
-    console.log(`  ${row.tenant_id}: ${Object.entries(rowCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+    const summary = { workspace: workspaceLabel(index), records: rowCounts };
     if (!dryRun) {
       const data = {
         accounts: row.accounts || [],
@@ -65,12 +76,13 @@ async function main() {
           const existingIds = new Set((existing?.rows || []).map((item) => item.id));
           data[section] = data[section].filter((item) => !existingIds.has(item.id));
         }
-        console.log(`    missing: ${Object.entries(data).map(([key, items]) => `${key}=${items.length}`).join(', ')}`);
+        summary.missingRecords = Object.fromEntries(Object.entries(data).map(([key, items]) => [key, items.length]));
       }
       await syncTenantRelationalMirror(row.tenant_id, data);
     }
+    console.log(JSON.stringify(summary));
   }
-  console.log(dryRun ? 'Dry run complete. No relational rows were written.' : 'Backfill complete.');
+  console.log(JSON.stringify({ mode: dryRun ? 'dry-run' : 'applied', workspaceCount: rows.length }));
 }
 
 main()

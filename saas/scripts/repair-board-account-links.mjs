@@ -1,4 +1,5 @@
-import { initDb, dbQuery, dbRecordAuditLog, dbTransaction, closeDb } from '../src/db.js';
+import { initDb, dbQuery, dbTransaction, closeDb } from '../src/db.js';
+import { requireMaintenanceApproval } from '../src/maintenance-safety.js';
 
 function arg(name) {
   const index = process.argv.indexOf(name);
@@ -20,12 +21,14 @@ const uniqueAccountsSql = `
 
 async function main() {
   if (!tenantId) throw new Error('Provide --tenant <tenant-id>.');
-  if (apply && confirmation !== 'LINK_BOARD_CONFIGS') {
-    throw new Error('Applying requires --confirm LINK_BOARD_CONFIGS.');
-  }
-  if (apply && backupReference.length < 12) {
-    throw new Error('Applying requires --backup-reference <verified-backup-id-or-sha>.');
-  }
+  requireMaintenanceApproval({
+    apply,
+    tenantId,
+    confirmation,
+    expectedConfirmation: 'LINK_BOARD_CONFIGS',
+    backupReference,
+    action: 'Applying the board-link repair',
+  });
   if (!await initDb({ migrate: false, readOnly: !apply })) throw new Error('DATABASE_URL is required.');
 
   const candidates = await dbQuery(`
@@ -36,7 +39,7 @@ async function main() {
     WHERE config.tenant_id = $1 AND coalesce(config.account_id, '') = ''
   `, [tenantId]);
   const candidateCount = candidates?.rows?.[0]?.count || 0;
-  console.log(JSON.stringify({ tenantId, mode: apply ? 'apply' : 'dry-run', candidateCount }, null, 2));
+  console.log(JSON.stringify({ mode: apply ? 'apply' : 'dry-run', workspaceCount: 1, candidateCount }, null, 2));
   if (!apply || candidateCount === 0) return;
 
   const timestamp = new Date().toISOString();
@@ -80,19 +83,22 @@ async function main() {
       ) repaired
       WHERE data.tenant_id = $1
     `, [tenantId, timestamp]);
-    return relational.rowCount || 0;
+    const linked = relational.rowCount || 0;
+    await query(
+      `INSERT INTO audit_log
+        (tenant_id, actor_user_id, action, entity_type, entity_id, before, after, metadata, created_at)
+       VALUES ($1, '', 'board_config.account_links_repaired', 'tenant', $1, $2, $3, $4, $5)`,
+      [
+        tenantId,
+        JSON.stringify({ unlinked: candidateCount }),
+        JSON.stringify({ linked }),
+        JSON.stringify({ backupReference, privacySafe: true }),
+        timestamp,
+      ]
+    );
+    return linked;
   });
-
-  await dbRecordAuditLog({
-    tenantId,
-    action: 'board_config.account_links_repaired',
-    entityType: 'tenant',
-    entityId: tenantId,
-    before: { unlinked: candidateCount },
-    after: { linked: result },
-    metadata: { backupReference, privacySafe: true },
-  });
-  console.log(JSON.stringify({ tenantId, linked: result, verifiedBackup: backupReference }, null, 2));
+  console.log(JSON.stringify({ mode: 'applied', workspaceCount: 1, linked: result, auditRecorded: true }, null, 2));
 }
 
 main()

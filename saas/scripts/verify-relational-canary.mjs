@@ -13,7 +13,7 @@ async function main() {
   if (!(await initDb({ migrate: false, readOnly: true }))) throw new Error('DATABASE_URL is required.');
   await loadUsersFromDb();
   const tenant = findTenantById(tenantId);
-  if (!tenant) throw new Error(`Tenant not found: ${tenantId}`);
+  if (!tenant) throw new Error('The requested workspace was not found.');
 
   const store = createStore();
   store.ensureTenant(tenant, { id: 'relational-verifier', name: 'Relational Verifier', email: '' });
@@ -36,8 +36,7 @@ async function main() {
   const usageQueryMs = Date.now() - usageStartedAt;
   console.log(JSON.stringify({
     ok: true,
-    tenantId,
-    workspace: bootstrap.workspace?.name || '',
+    workspaceCount: bootstrap.workspace ? 1 : 0,
     accounts: usage.accounts,
     contacts: usage.contacts,
     jobBoards: usage.jobBoards,

@@ -52,7 +52,7 @@ async function main() {
     GROUP BY value ORDER BY accounts DESC
   `, tenantId);
 
-  console.log(JSON.stringify({ tenantId, counts, boards, statuses, providers, activeJobSources, targetFlags }, null, 2));
+  console.log(JSON.stringify({ workspaceCount: 1, counts, boards, statuses, providers, activeJobSources, targetFlags }, null, 2));
 }
 
 main()

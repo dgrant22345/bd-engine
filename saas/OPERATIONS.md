@@ -91,7 +91,12 @@ fails. Do not improvise down migrations against customer data.
 
 Operational reports, dry runs, parity checks, and canary reads use
 PostgreSQL-enforced read-only sessions and never apply migrations. Controlled
-repair/apply commands also connect with migrations disabled. Run and review
+repair/apply commands also connect with migrations disabled. Every bulk
+mutation is dry-run by default and requires `--apply`, an exact action-specific
+confirmation, and a verified backup reference. Apply mode is restricted to one
+explicit workspace except for reserved test-data cleanup. Routine output uses
+sequence labels and aggregate counts instead of customer names, emails, or
+internal IDs. Run and review
 migrations through an approved application deployment, not as a side effect of
 diagnostics.
 
@@ -136,6 +141,17 @@ a current backup; the exact backup reference is recorded in the audit log.
 npm.cmd --prefix saas run repair:board-links -- --tenant <tenant-id>
 npm.cmd --prefix saas run repair:board-links -- --tenant <tenant-id> --apply --confirm LINK_BOARD_CONFIGS --backup-reference <backup-id-or-sha>
 npm.cmd --prefix saas run check:integrity -- --tenant <tenant-id>
+```
+
+Account rollups can be checked across workspaces without writing data. Apply a
+repair to one workspace only after reviewing the dry run. The relational row,
+legacy rollback snapshot, and audit record commit in one serializable
+transaction.
+
+```powershell
+npm.cmd --prefix saas run repair:rollups
+npm.cmd --prefix saas run repair:rollups -- --tenant <tenant-id>
+npm.cmd --prefix saas run repair:rollups -- --tenant <tenant-id> --apply --confirm REPAIR_ROLLUPS --backup-reference <backup-id-or-sha>
 ```
 
 ## Backup and restore
@@ -231,7 +247,7 @@ Create or refresh a legacy rollback snapshot from relational data:
 
 ```powershell
 npm.cmd --prefix saas run snapshot:legacy -- --tenant <tenant-id> --dry-run
-npm.cmd --prefix saas run snapshot:legacy -- --tenant <tenant-id>
+npm.cmd --prefix saas run snapshot:legacy -- --tenant <tenant-id> --apply --confirm SNAPSHOT_LEGACY --backup-reference <backup-id-or-sha>
 ```
 
 Before reverting a relational-primary workspace to legacy reads, create the
@@ -242,14 +258,15 @@ remove its explicit canary flag and redeploy.
 
 The cleanup command only targets old accounts on reserved `example.com` and
 `bd-engine.invalid` smoke patterns. It refuses billed workspaces, defaults to a
-dry run, and requires an exact confirmation phrase to apply:
+dry run, emits counts rather than email addresses or IDs, and requires an exact
+confirmation phrase plus a verified backup reference to apply:
 
 ```powershell
 npm.cmd --prefix saas run cleanup:test-data -- --before 2026-01-01
-npm.cmd --prefix saas run cleanup:test-data -- --before 2026-01-01 --apply --confirm DELETE_TEST_DATA
+npm.cmd --prefix saas run cleanup:test-data -- --before 2026-01-01 --apply --confirm DELETE_TEST_DATA --backup-reference <backup-id-or-sha>
 ```
 
-Review the complete dry-run manifest and create a verified backup first.
+Review the dry-run counts and create a verified backup first.
 
 ## External production services
 
