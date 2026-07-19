@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkTenantIntegrity } from '../src/semantic-integrity.js';
+import { checkTenantIntegrity, formatIntegrityReport, summarizeIntegrityResult } from '../src/semantic-integrity.js';
 
 const cleanWorkspace = () => ({
   accounts: [
@@ -98,4 +98,17 @@ test('board config missing its account link is detected when a match exists', ()
   const result = checkTenantIntegrity(data);
   assert.equal(result.checks.unlinked_board_config.violations, 1);
   assert.equal(result.checks.unlinked_board_config.sample[0].matchingAccountId, 'a1');
+});
+
+test('operator reports omit customer samples and internal identifiers', () => {
+  const data = cleanWorkspace();
+  data.contacts.push({ id: 'contact-private', accountId: 'account-private', fullName: 'Private Person' });
+  const result = checkTenantIntegrity(data);
+  const summary = summarizeIntegrityResult(result);
+  const formatted = formatIntegrityReport('workspace 1', result);
+
+  assert.equal(Object.hasOwn(summary.checks.orphan_contact, 'sample'), false);
+  assert.match(formatted, /workspace 1: 1 violation/);
+  assert.match(formatted, /orphan_contact: 1/);
+  assert.doesNotMatch(formatted, /Private Person|contact-private|account-private|Acme|Alice Ng/);
 });

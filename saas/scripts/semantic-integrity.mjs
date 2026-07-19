@@ -4,12 +4,12 @@
  * Usage:
  *   node scripts/semantic-integrity.mjs                # all workspaces
  *   node scripts/semantic-integrity.mjs --tenant <id>  # one workspace
- *   node scripts/semantic-integrity.mjs --json         # machine output
+ *   node scripts/semantic-integrity.mjs --json         # aggregate machine output
  *
  * Exits 1 when any workspace has violations (usable as a gate), 0 otherwise.
  */
 import { initDb, dbQuery, closeDb } from '../src/db.js';
-import { checkTenantIntegrity, formatIntegrityReport } from '../src/semantic-integrity.js';
+import { checkTenantIntegrity, formatIntegrityReport, summarizeIntegrityResult } from '../src/semantic-integrity.js';
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -42,9 +42,15 @@ async function main() {
     ]);
     const result = checkTenantIntegrity({ accounts, contacts, jobs, configs });
     totalViolations += result.totalViolations;
-    reports.push({ tenantId, counts: { accounts: accounts.length, contacts: contacts.length, jobs: jobs.length, configs: configs.length }, ...result });
+    const workspace = `workspace ${reports.length + 1}`;
+    const report = {
+      workspace,
+      counts: { accounts: accounts.length, contacts: contacts.length, jobs: jobs.length, configs: configs.length },
+      ...summarizeIntegrityResult(result),
+    };
+    reports.push(report);
     if (!asJson) {
-      console.log(formatIntegrityReport(tenantId, result));
+      console.log(formatIntegrityReport(workspace, report));
     }
   }
 

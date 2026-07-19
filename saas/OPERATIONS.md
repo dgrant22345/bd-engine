@@ -125,6 +125,9 @@ For an aggregate-only ATS diagnosis that does not print customer records:
 npm.cmd --prefix saas run report:job-coverage -- --tenant <tenant-id>
 ```
 
+Semantic-integrity text and JSON reports are also aggregate-only. They label
+workspaces by sequence and omit customer examples and internal record IDs.
+
 Legacy board records can be linked to an unambiguous normalized-name match with
 a guarded repair. It is dry-run by default. Before applying, create and verify
 a current backup; the exact backup reference is recorded in the audit log.
