@@ -154,6 +154,17 @@ npm.cmd --prefix saas run repair:rollups -- --tenant <tenant-id>
 npm.cmd --prefix saas run repair:rollups -- --tenant <tenant-id> --apply --confirm REPAIR_ROLLUPS --backup-reference <backup-id-or-sha>
 ```
 
+Relational write-canary verification is read-only by default. Creating or
+cleaning up the reserved canary requires explicit apply mode, a current backup
+reference, and a mode-specific confirmation. Creation refuses to overwrite an
+existing canary; cleanup only deletes records marked `system_canary`.
+
+```powershell
+npm.cmd --prefix saas run verify:relational-write -- --tenant <tenant-id> --mode verify
+npm.cmd --prefix saas run verify:relational-write -- --tenant <tenant-id> --mode create --apply --confirm CREATE_RELATIONAL_CANARY --backup-reference <backup-id-or-sha>
+npm.cmd --prefix saas run verify:relational-write -- --tenant <tenant-id> --mode cleanup --apply --confirm CLEANUP_RELATIONAL_CANARY --backup-reference <backup-id-or-sha>
+```
+
 ## Backup and restore
 
 Create an encrypted, authenticated, checksummed application backup before
