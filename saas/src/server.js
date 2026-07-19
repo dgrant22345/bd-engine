@@ -20,6 +20,7 @@ import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-cl
 import { buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy } from './security-headers.js';
+import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -85,15 +86,17 @@ const passwordResetTokens = new Map();
 const emailVerificationTokens = new Map();
 const MAX_RATE_BUCKETS = Math.max(1000, Number(process.env.BD_MAX_RATE_BUCKETS) || 10000);
 const MAX_RESET_TOKEN_CACHE = Math.max(100, Number(process.env.BD_MAX_RESET_TOKEN_CACHE) || 5000);
+const PUBLIC_ORIGIN = resolvePublicOrigin(process.env, port);
+if (!PUBLIC_ORIGIN) {
+  throw new Error('BD_CLOUD_BASE_URL or a Railway public domain is required in production.');
+}
 
 // Restrict CORS to known origins instead of "*" (which also can't carry the
 // session cookie). Same-origin app requests are unaffected.
-const allowedOrigins = new Set();
-for (const domain of [process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL].filter(Boolean)) {
-  allowedOrigins.add(`https://${domain}`);
-}
+const allowedOrigins = new Set([PUBLIC_ORIGIN]);
 for (const origin of String(process.env.BD_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
-  allowedOrigins.add(origin);
+  const normalized = normalizePublicOrigin(origin);
+  if (normalized) allowedOrigins.add(normalized);
 }
 allowedOrigins.add(`http://localhost:${port}`);
 allowedOrigins.add(`http://127.0.0.1:${port}`);
@@ -557,7 +560,7 @@ async function initializeData() {
 
 function isHealthRequest(req) {
   try {
-    const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+    const url = new URL(req.url || '/', 'http://bd-engine.local');
     // Probe endpoints must answer during startup instead of blocking on it:
     // /livez proves the event loop; /readyz reports "startup incomplete" (503).
     return url.pathname === '/health' || url.pathname === '/api/health'
@@ -653,15 +656,8 @@ function withEffectiveTenantRoles(tenants, user) {
   return (tenants || []).map((tenant) => ({ ...getEffectiveTenant(tenant, user), role: 'owner' }));
 }
 
-function getRequestOrigin(req) {
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${port}`;
-  const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : String(hostHeader).split(',')[0].trim();
-  let protoValue = Array.isArray(proto) ? proto[0] : String(proto).split(',')[0].trim();
-  if (protoValue === 'http' && !/^(localhost|127\.0\.0\.1)(:|$)/i.test(hostValue)) {
-    protoValue = 'https';
-  }
-  return `${protoValue || 'https'}://${hostValue}`;
+function getRequestOrigin() {
+  return PUBLIC_ORIGIN;
 }
 
 async function notifySupportOperators(req, { ticket, requester, tenant, message }) {
@@ -764,7 +760,7 @@ startServer().catch(err => {
 // ── Routing ─────────────────────────────────────────────────────────────────
 
 async function route(req, res) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+  const url = new URL(req.url || '/', 'http://bd-engine.local');
   const pathname = url.pathname;
 
   // Health checks stay public for Railway. Detailed status is authenticated

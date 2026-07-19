@@ -35,7 +35,7 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 172/172 pass.
+- SaaS unit/contract tests: 175/175 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
@@ -196,13 +196,17 @@ PowerShell/SQLite edition remains supported separately.
 - Expanded the Content Security Policy across scripts, styles, APIs, frames,
   workers, images, forms, fonts, manifests, and objects; CI and live-canary
   workflow tokens now have explicit read-only repository permissions.
+- Removed Host-header trust from password reset, verification, support, referral,
+  checkout, and billing-portal URL generation; production now requires one
+  validated canonical public origin.
 - Made operational reports and dry runs connect without applying migrations and
   use PostgreSQL-enforced read-only sessions; mutating maintenance tools also no
   longer migrate the schema as an undocumented side effect.
 
 ## Required production configuration
 
-Core: `DATABASE_URL`, `SESSION_SECRET`, `BD_CLOUD_ENV=production`.
+Core: `DATABASE_URL`, `SESSION_SECRET`, `BD_CLOUD_ENV=production`, and
+`BD_CLOUD_BASE_URL` (or Railway's injected public domain).
 
 Billing: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
 `STRIPE_PRICE_JOBSEEKER`, `STRIPE_PRICE_SALES`.

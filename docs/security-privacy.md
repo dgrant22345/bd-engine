@@ -20,6 +20,10 @@ application log, and alert.
 
 Hosted workspaces store data in PostgreSQL. Data leaves the browser for the BD Engine service and for external services required by enabled features, including public careers providers, Stripe, configured email delivery, and operational monitoring. Windows-local workspaces store application data under `%LOCALAPPDATA%\BD Engine`, while job discovery still makes outbound provider requests.
 
+Customer-facing reset, verification, support, referral, checkout, and billing
+portal URLs use one validated canonical public origin. Forwarded or direct Host
+headers are never trusted to construct those links.
+
 ## Controls
 
 - Production requires a connected database and secure deployment secrets.

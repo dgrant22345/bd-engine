@@ -5,6 +5,7 @@ import { assessProductionReadiness } from '../src/production-readiness.js';
 
 const completeEnvironment = {
   DATABASE_URL: 'postgres://example.invalid/database',
+  BD_CLOUD_BASE_URL: 'https://app.example.invalid',
   SESSION_SECRET: 'a'.repeat(48),
   STRIPE_SECRET_KEY: 'sk_live_configured',
   STRIPE_WEBHOOK_SECRET: 'whsec_configured',
@@ -60,6 +61,7 @@ test('commercial configuration rejects placeholders and unsafe service destinati
     BD_EMAIL_FROM: 'not-an-email',
     BD_SUPPORT_ADMIN_EMAILS: 'valid@example.com, invalid',
     BD_ERROR_WEBHOOK: 'http://alerts.example.com/hook',
+    BD_CLOUD_BASE_URL: 'https://operator:secret@app.example.com',
   });
   assert.equal(result.ready, false);
   assert.ok(result.errors.some((message) => message.startsWith('STRIPE_SECRET_KEY:')));
@@ -67,6 +69,7 @@ test('commercial configuration rejects placeholders and unsafe service destinati
   assert.ok(result.errors.some((message) => message.startsWith('BD_EMAIL_FROM:')));
   assert.ok(result.errors.some((message) => message.startsWith('BD_SUPPORT_ADMIN_EMAILS:')));
   assert.ok(result.errors.some((message) => message.startsWith('BD_ERROR_WEBHOOK:')));
+  assert.ok(result.errors.some((message) => message.startsWith('BD_CLOUD_BASE_URL:')));
 });
 
 test('complete production configuration passes without exposing values', () => {

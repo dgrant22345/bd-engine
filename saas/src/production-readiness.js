@@ -1,4 +1,5 @@
 import { parseBackupEncryptionKey } from './backup-format.js';
+import { resolvePublicOrigin } from './public-origin.js';
 
 function configured(env, name) {
   return Boolean(String(env[name] || '').trim());
@@ -37,6 +38,12 @@ export function assessProductionReadiness(env = process.env) {
   requireValue('SESSION_SECRET', 'signed sessions require a production secret');
   if (configured(env, 'SESSION_SECRET') && String(env.SESSION_SECRET).length < 32) {
     errors.push('SESSION_SECRET: use at least 32 characters of random material');
+  }
+  const publicOrigin = env.BD_CLOUD_BASE_URL || env.RAILWAY_STATIC_URL || env.RAILWAY_PUBLIC_DOMAIN;
+  if (!publicOrigin) {
+    errors.push('BD_CLOUD_BASE_URL: password, verification, support, and billing links need a trusted canonical origin');
+  } else if (!resolvePublicOrigin({ ...env, BD_CLOUD_ENV: 'production' })) {
+    errors.push('BD_CLOUD_BASE_URL: must be an HTTP(S) origin without credentials');
   }
 
   for (const [name, purpose] of [

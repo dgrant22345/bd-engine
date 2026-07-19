@@ -213,6 +213,9 @@ Review the complete dry-run manifest and create a verified backup first.
 
 The app reports these in the authenticated status screen:
 
+- `BD_CLOUD_BASE_URL` is the canonical customer-facing origin for reset,
+  verification, support, referral, checkout, and billing portal links. Railway's
+  injected public domain is the fallback; request Host headers are never used.
 - `BD_INTERNAL_OWNER_EMAILS` grants internal owner entitlements; keep this in
   deployment configuration and never hardcode privileged identities.
 - `BD_ANALYTICS_ADMIN_EMAILS` controls access to site analytics.
