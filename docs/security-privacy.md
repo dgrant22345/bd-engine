@@ -33,6 +33,9 @@ headers are never trusted to construct those links.
 - CSV parsing uses a structured parser and limits import size and resource creation.
 - Successful authenticated mutations create privacy-safe audit records.
 - Cross-workspace support access requires a recent login or rate-limited current-password step-up. The elevation is session-scoped, persisted, and expires after 15 minutes by default.
+- Railway rate-limit identity uses its validated `X-Real-IP` edge header;
+  caller-controlled `X-Forwarded-For` values are ignored and raw IP addresses
+  are hashed before durable limiter storage.
 - Customer exports, password-and-phrase-confirmed workspace-data deletion, and self-service account closure are available from the authenticated account surface. Closure verifies the password and exact confirmation, prevents orphaned shared workspaces, cancels affected subscriptions, deletes sessions and customer records transactionally, and retains only a pseudonymous operational closure ledger.
 - Backups include sensitive data and must be encrypted, access controlled, and retention limited.
 

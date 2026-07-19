@@ -21,6 +21,7 @@ import { buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
+import { clientAddress } from './request-client.js';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const appDir = existsSync(join(rootDir, 'app')) ? join(rootDir, 'app') : join(rootDir, '..', 'app');
@@ -104,8 +105,7 @@ allowedOrigins.add(`http://127.0.0.1:${port}`);
 const rateBuckets = new Map(); // key -> { count, resetAt }
 
 function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket?.remoteAddress || 'unknown';
+  return clientAddress(req);
 }
 
 // Fixed-window limiter shared through PostgreSQL in production. Memory remains

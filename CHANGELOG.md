@@ -16,6 +16,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Added authenticated encrypted backups, guarded non-empty restores, bounded data retention, privacy-safe structured logs, and non-migrating read-only operational diagnostics.
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
+- Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.
 - Corrected account-to-board matching and working filters so ATS state, target-company coverage, network paths, and admin review queues agree across blob and relational reads.
 - Restored job-seeker terminology and workflows across setup, navigation, company and role views, search, and outreach.
 - Shortened sales outreach around one verified role, fixed reversible account pausing, and added customer-action browser coverage.
