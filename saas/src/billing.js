@@ -19,6 +19,16 @@ const stripeSecretKey = normalizeStripeSecretKey(process.env.STRIPE_SECRET_KEY);
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2023-10-16' }) : null;
 const DEFAULT_BILLING_GRACE_DAYS = 7;
 
+export class BillingError extends Error {
+  constructor(message, { code = 'billing_error', status = 400, report = false } = {}) {
+    super(message);
+    this.name = 'BillingError';
+    this.code = code;
+    this.status = status;
+    this.report = report;
+  }
+}
+
 export function getBillingGraceDays() {
   const configured = Number(process.env.BD_BILLING_GRACE_DAYS);
   return Number.isFinite(configured) && configured >= 1 && configured <= 30
@@ -61,36 +71,50 @@ export function isStripeConfigured() {
   return Boolean(stripe);
 }
 
-export function getStripeConfigStatus() {
-  const secretKey = stripeSecretKey;
+export function assessStripeConfig({
+  secretKey = '',
+  webhookSecret = '',
+  priceIds = {},
+  allowTestCheckout = false,
+  clientConfigured = Boolean(secretKey),
+} = {}) {
   const mode = getStripeKeyMode(secretKey);
-  const allowTestCheckout = process.env.BD_ALLOW_TEST_CHECKOUT === 'true';
-  const priceIds = {
-    jobseeker: process.env.STRIPE_PRICE_JOBSEEKER || '',
-    sales: process.env.STRIPE_PRICE_SALES || '',
-  };
-  const ready = Boolean(stripe && process.env.STRIPE_WEBHOOK_SECRET && (priceIds.jobseeker || priceIds.sales));
+  const allPricesConfigured = Boolean(priceIds.jobseeker && priceIds.sales);
+  const ready = Boolean(clientConfigured && webhookSecret && allPricesConfigured);
   const liveMode = mode === 'live';
   const missing = [];
-  if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
-  if (!process.env.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
-  if (!process.env.STRIPE_PRICE_JOBSEEKER) missing.push('STRIPE_PRICE_JOBSEEKER');
-  if (!process.env.STRIPE_PRICE_SALES) missing.push('STRIPE_PRICE_SALES');
+  if (!secretKey) missing.push('STRIPE_SECRET_KEY');
+  if (!webhookSecret) missing.push('STRIPE_WEBHOOK_SECRET');
+  if (!priceIds.jobseeker) missing.push('STRIPE_PRICE_JOBSEEKER');
+  if (!priceIds.sales) missing.push('STRIPE_PRICE_SALES');
   return {
-    configured: Boolean(stripe),
+    configured: Boolean(clientConfigured),
     ready,
     liveMode,
     allowTestCheckout,
     checkoutReady: Boolean(ready && (liveMode || allowTestCheckout)),
     commercialReady: Boolean(ready && liveMode),
     mode,
-    allPricesConfigured: Boolean(priceIds.jobseeker && priceIds.sales),
+    allPricesConfigured,
     missing,
     prices: {
       jobseeker: Boolean(priceIds.jobseeker),
       sales: Boolean(priceIds.sales),
     },
   };
+}
+
+export function getStripeConfigStatus() {
+  return assessStripeConfig({
+    secretKey: stripeSecretKey,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    priceIds: {
+      jobseeker: process.env.STRIPE_PRICE_JOBSEEKER || '',
+      sales: process.env.STRIPE_PRICE_SALES || '',
+    },
+    allowTestCheckout: process.env.BD_ALLOW_TEST_CHECKOUT === 'true',
+    clientConfigured: Boolean(stripe),
+  });
 }
 
 export const PLANS = {
@@ -246,23 +270,25 @@ export function getUsageSummary(tenantId, planId, actualUsage = {}) {
 
 // ── Stripe Checkout ─────────────────────────────────────────────────────────
 
-export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}, options = {}) {
-  if (!stripe) throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY environment variable.');
-  const status = getStripeConfigStatus();
-  if (!status.checkoutReady) {
-    throw new Error('Live Stripe checkout is not enabled yet. Set live Stripe keys before taking public paid upgrades.');
+export function buildStripeCheckoutParams({ tenantId, userEmail, plan, successUrl, cancelUrl, metadata = {}, customerId = '' }) {
+  if (!plan?.stripePriceEnv) {
+    throw new BillingError('Choose the Job Seeker or Sales Professional plan.', {
+      code: 'invalid_billing_plan',
+      status: 400,
+    });
   }
-  
-  const plan = getPlan(planId);
-  if (!plan || !plan.stripePriceId) throw new Error('Invalid plan selected.');
   if (!plan.stripePriceId || plan.stripePriceId.startsWith('price_placeholder')) {
-    throw new Error(`Stripe price ID is not configured for ${plan.displayName}. Set ${plan.stripePriceEnv || 'the plan price environment variable'}.`);
+    throw new BillingError('Checkout is temporarily unavailable. Please contact support.', {
+      code: 'billing_unavailable',
+      status: 503,
+      report: true,
+    });
   }
 
   const checkoutMetadata = {
+    ...Object.fromEntries(Object.entries(metadata || {}).filter(([, value]) => value !== undefined && value !== null && value !== '')),
     tenantId,
     planId: plan.id,
-    ...Object.fromEntries(Object.entries(metadata || {}).filter(([, value]) => value !== undefined && value !== null && value !== '')),
   };
 
   const checkoutParams = {
@@ -278,22 +304,47 @@ export async function createCheckoutSession(tenantId, userEmail, planId, success
     cancel_url: cancelUrl,
   };
 
-  if (options.customerId) {
-    checkoutParams.customer = options.customerId;
+  if (customerId) {
+    checkoutParams.customer = customerId;
   } else {
     checkoutParams.customer_email = userEmail;
   }
 
-  const session = await stripe.checkout.sessions.create(checkoutParams);
+  return checkoutParams;
+}
 
+export async function createStripeCheckoutSession(stripeClient, input) {
+  const session = await stripeClient.checkout.sessions.create(buildStripeCheckoutParams(input));
+  if (!session?.url) throw new Error('Stripe checkout session did not include a URL.');
   return session.url;
 }
 
-export async function createReferralCredit(customerId, { amountCents = 500, currency = 'usd', referredTenantId = '', referrerTenantId = '' } = {}) {
-  if (!stripe) throw new Error('Stripe is not configured.');
-  if (!customerId) throw new Error('Stripe customer is required for referral credit.');
-  return stripe.customers.createBalanceTransaction(customerId, {
-    amount: -Math.abs(Number(amountCents || 0)),
+export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}, options = {}) {
+  const plan = PLANS[planId];
+  if (!plan?.stripePriceEnv) {
+    throw new BillingError('Choose the Job Seeker or Sales Professional plan.', {
+      code: 'invalid_billing_plan',
+      status: 400,
+    });
+  }
+  if (!stripe || !getStripeConfigStatus().checkoutReady) {
+    throw new BillingError('Checkout is temporarily unavailable. Please contact support.', {
+      code: 'billing_unavailable',
+      status: 503,
+      report: true,
+    });
+  }
+
+  return createStripeCheckoutSession(stripe, {
+    tenantId, userEmail, plan, successUrl, cancelUrl, metadata, customerId: options.customerId,
+  });
+}
+
+export function buildStripeReferralCreditParams({ amountCents = 500, currency = 'usd', referredTenantId = '', referrerTenantId = '' } = {}) {
+  const amount = Math.abs(Number(amountCents));
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Referral credit amount must be positive.');
+  return {
+    amount: -amount,
     currency,
     description: 'BD Engine referral credit',
     metadata: {
@@ -301,29 +352,47 @@ export async function createReferralCredit(customerId, { amountCents = 500, curr
       referredTenantId,
       referrerTenantId,
     },
-  });
+  };
 }
 
-export async function createBillingPortalSession(customerId, returnUrl) {
+export async function createStripeReferralCredit(stripeClient, customerId, options = {}) {
+  if (!customerId) throw new Error('Stripe customer is required for referral credit.');
+  return stripeClient.customers.createBalanceTransaction(customerId, buildStripeReferralCreditParams(options));
+}
+
+export async function createReferralCredit(customerId, options = {}) {
   if (!stripe) throw new Error('Stripe is not configured.');
-  
-  const session = await stripe.billingPortal.sessions.create({
+  return createStripeReferralCredit(stripe, customerId, options);
+}
+
+export async function createStripeBillingPortalSession(stripeClient, customerId, returnUrl) {
+  const session = await stripeClient.billingPortal.sessions.create({
     customer: customerId,
     return_url: returnUrl,
   });
-
+  if (!session?.url) throw new Error('Stripe billing portal session did not include a URL.');
   return session.url;
 }
 
-export async function cancelSubscriptionForAccountClosure(subscriptionId) {
-  if (!stripe) throw new Error('Stripe is not configured. The subscription must be canceled before account closure.');
+export async function createBillingPortalSession(customerId, returnUrl) {
+  if (!stripe) {
+    throw new BillingError('The billing portal is temporarily unavailable. Please contact support.', {
+      code: 'billing_unavailable',
+      status: 503,
+      report: true,
+    });
+  }
+  return createStripeBillingPortalSession(stripe, customerId, returnUrl);
+}
+
+export async function cancelStripeSubscription(stripeClient, subscriptionId) {
   if (!subscriptionId) return { canceled: false, alreadyEnded: true };
   try {
-    const existing = await stripe.subscriptions.retrieve(subscriptionId);
+    const existing = await stripeClient.subscriptions.retrieve(subscriptionId);
     if (existing.status === 'canceled') {
       return { canceled: true, alreadyEnded: true, subscriptionId };
     }
-    const canceled = await stripe.subscriptions.cancel(subscriptionId, {
+    const canceled = await stripeClient.subscriptions.cancel(subscriptionId, {
       prorate: false,
       invoice_now: false,
     });
@@ -339,16 +408,44 @@ export async function cancelSubscriptionForAccountClosure(subscriptionId) {
   }
 }
 
+export async function cancelSubscriptionForAccountClosure(subscriptionId) {
+  if (!stripe) throw new Error('Stripe is not configured. The subscription must be canceled before account closure.');
+  return cancelStripeSubscription(stripe, subscriptionId);
+}
+
+export function constructStripeWebhookEvent(stripeClient, payload, signature, endpointSecret) {
+  if (!endpointSecret) throw new Error('Stripe webhook verification is not configured.');
+  try {
+    return stripeClient.webhooks.constructEvent(payload, signature, endpointSecret);
+  } catch (err) {
+    throw new Error('Stripe webhook signature verification failed.', { cause: err });
+  }
+}
+
 export function handleWebhookEvent(payload, signature) {
   if (!stripe) throw new Error('Stripe is not configured.');
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(payload, signature, endpointSecret);
-  } catch (err) {
-    throw new Error(`Webhook Error: ${err.message}`, { cause: err });
+  return constructStripeWebhookEvent(stripe, payload, signature, process.env.STRIPE_WEBHOOK_SECRET);
+}
+
+export function getBillingErrorResponse(error, action = 'checkout') {
+  if (error instanceof BillingError) {
+    return { status: error.status, code: error.code, message: error.message, report: error.report };
   }
-  
-  return event;
+  if (error?.code === 'resource_missing') {
+    return {
+      status: 409,
+      code: 'billing_account_missing',
+      message: 'We could not find this workspace billing account. Please contact support.',
+      report: true,
+    };
+  }
+  const portal = action === 'portal';
+  return {
+    status: 502,
+    code: 'billing_provider_unavailable',
+    message: portal
+      ? 'The billing portal is temporarily unavailable. Please try again.'
+      : 'Checkout is temporarily unavailable. Please try again.',
+    report: true,
+  };
 }

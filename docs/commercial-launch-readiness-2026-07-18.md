@@ -35,7 +35,7 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 184/184 pass.
+- SaaS unit/contract tests: 198/198 pass.
 - Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
@@ -88,8 +88,10 @@ PowerShell/SQLite edition remains supported separately.
 2. Both live Stripe prices and products are active with the advertised monthly
    USD amounts. The canonical webhook is enabled for all six required checkout,
    subscription, failed-payment, and recovery events, and the read-only catalog
-   verifier passes. Signed test delivery and live checkout/failure/refund
-   exercises are still required before payment operations are launch-approved.
+   verifier passes. Local boundary tests now prove signed payload acceptance,
+   tamper rejection, checkout and portal contracts, referral credits, and
+   idempotent subscription cancellation. Live checkout/failure/refund exercises
+   are still required before payment operations are launch-approved.
 3. The main legacy workspace has 12,235 mechanically linkable board records and
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target

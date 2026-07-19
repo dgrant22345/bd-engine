@@ -141,6 +141,19 @@ await mutationCheck('authenticated status includes operator detail', async () =>
   assert(Object.prototype.hasOwnProperty.call(body.checks || {}, 'relationalContentHealthy'), '/api/status omitted relational content readiness');
 });
 
+await mutationCheck('unavailable checkout fails safely without provider details', async () => {
+  const response = await fetch(`${baseUrl}/api/billing/checkout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ planId: 'sales' }),
+  });
+  assert(response.status === 503, `unavailable checkout expected 503, got ${response.status}`);
+  const body = await response.json();
+  assert(body.code === 'billing_unavailable', 'checkout did not return billing_unavailable');
+  assert(Boolean(body.requestId), 'checkout failure did not include a support request ID');
+  assert(!/STRIPE_|secret|price_/i.test(body.error || ''), 'checkout exposed provider configuration details');
+});
+
 await mutationCheck('manual ATS URL creates an import-ready board config', async () => {
   const response = await fetch(`${baseUrl}/api/configs`, {
     method: 'POST',

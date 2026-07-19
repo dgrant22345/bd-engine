@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
 import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
-import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
+import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
@@ -1265,7 +1265,13 @@ self.addEventListener('activate', (event) => {
       });
       return sendJson(res, 200, { url: sessionUrl, mode: 'checkout' });
     } catch (err) {
-      return sendJson(res, 400, { error: err.message });
+      const failure = getBillingErrorResponse(err, 'checkout');
+      if (failure.report) reportServerError(failure.status, req, err);
+      return sendJson(res, failure.status, {
+        error: failure.message,
+        code: failure.code,
+        ...(failure.report ? { requestId: req.requestId } : {}),
+      });
     }
   }
 
@@ -1281,7 +1287,13 @@ self.addEventListener('activate', (event) => {
       const portalUrl = await createBillingPortalSession(customerId, `${getRequestOrigin(req)}/app/#/admin`);
       return sendJson(res, 200, { url: portalUrl });
     } catch (err) {
-      return sendJson(res, 400, { error: err.message });
+      const failure = getBillingErrorResponse(err, 'portal');
+      if (failure.report) reportServerError(failure.status, req, err);
+      return sendJson(res, failure.status, {
+        error: failure.message,
+        code: failure.code,
+        ...(failure.report ? { requestId: req.requestId } : {}),
+      });
     }
   }
 
