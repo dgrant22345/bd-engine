@@ -29,3 +29,7 @@ export function getReadinessDecision({
   }
   return { ready: true };
 }
+
+export function shouldLogReadinessFailure(decision = {}) {
+  return decision.ready === false && decision.reason !== 'startup incomplete';
+}

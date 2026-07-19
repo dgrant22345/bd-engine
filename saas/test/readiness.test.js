@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getReadinessDecision } from '../src/readiness.js';
+import { getReadinessDecision, shouldLogReadinessFailure } from '../src/readiness.js';
 
 test('production with connected database is ready', () => {
   const decision = getReadinessDecision({ isProduction: true, startupComplete: true, dbEnabled: true, dbReady: true });
@@ -40,4 +40,11 @@ test('incomplete startup reports not ready without an error', () => {
 test('development in-memory mode is intentionally ready', () => {
   const decision = getReadinessDecision({ isProduction: false, startupComplete: true, dbEnabled: false, dbReady: false });
   assert.deepEqual(decision, { ready: true });
+});
+
+test('normal startup transition stays quiet while real readiness failures are logged', () => {
+  assert.equal(shouldLogReadinessFailure({ ready: false, reason: 'startup incomplete' }), false);
+  assert.equal(shouldLogReadinessFailure({ ready: false, reason: 'database is not connected' }), true);
+  assert.equal(shouldLogReadinessFailure({ ready: false, reason: 'startup failed: boom' }), true);
+  assert.equal(shouldLogReadinessFailure({ ready: true }), false);
 });

@@ -26,6 +26,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Added read-only live Stripe catalog and webhook verification, and accepted
   both supported successful-invoice event variants for payment recovery.
 - Labeled paid plan prices as USD in public and in-app billing surfaces.
+- Kept expected pre-initialization readiness probes from creating false error alerts.
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
 - Replaced the broad inline-script CSP exception with a per-response cryptographic nonce.
 - Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.

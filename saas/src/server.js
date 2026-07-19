@@ -10,7 +10,7 @@ import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, f
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
-import { getReadinessDecision } from './readiness.js';
+import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
 import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './authorization.js';
@@ -789,7 +789,7 @@ async function route(req, res) {
   // The detailed reason is logged, not published (CG-016).
   if (pathname === '/readyz') {
     const decision = getCurrentReadiness();
-    if (!decision.ready) console.error(`Readiness check failed: ${decision.reason}`);
+    if (shouldLogReadinessFailure(decision)) console.error(`Readiness check failed: ${decision.reason}`);
     return sendJson(res, decision.ready ? 200 : 503, { ok: decision.ready });
   }
 
