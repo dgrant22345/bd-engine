@@ -1,0 +1,15 @@
+name: Production read-only probe scheduler
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    uses: dgrant22345/bd-engine/.github/workflows/production-probe.yml@deploy/perf-restore
+    permissions:
+      contents: read

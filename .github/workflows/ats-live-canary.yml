@@ -1,0 +1,15 @@
+name: ATS live canary scheduler
+
+on:
+  schedule:
+    - cron: '17 13 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-compatibility:
+    uses: dgrant22345/bd-engine/.github/workflows/ats-live-canary.yml@deploy/perf-restore
+    permissions:
+      contents: read
