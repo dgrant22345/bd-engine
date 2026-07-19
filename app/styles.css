@@ -5964,6 +5964,8 @@ textarea:focus-visible {
 .onboarding-guide__title { font-weight: 700; margin-bottom: 12px; font-size: 0.95rem; }
 .onboarding-guide__list { padding-left: 20px; display: grid; gap: 8px; font-size: 0.9rem; }
 .onboarding-guide__note { margin-top: 12px; display: flex; gap: 8px; font-size: 0.85rem; color: var(--muted); font-style: italic; }
+.data-use-notice { display: grid; gap: 4px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); font-size: 0.86rem; }
+.data-use-notice span { color: var(--muted); line-height: 1.45; }
 /* ══════════════════════════════════════════════════
    TASKS & REMINDERS
    ══════════════════════════════════════════════════ */

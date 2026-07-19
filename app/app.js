@@ -4056,6 +4056,11 @@ function renderSetupStepContent(stepKey) {
           <h3>${escapeHtml(importTitle)}</h3>
           <p class="muted">${importCopyHtml}</p>
         </div>
+
+        <div class="data-use-notice" role="note">
+          <strong>Your LinkedIn account stays separate.</strong>
+          <span>BD Engine does not log into LinkedIn or automate LinkedIn activity. It only reads the Connections.csv file you choose so it can match existing contacts to companies in your workspace. Review LinkedIn's terms and your organization's policies before uploading exported data.</span>
+        </div>
         
         <div class="onboarding-guide onboarding-guide--setup">
           <p class="onboarding-guide__title">How to get your Connections.csv:</p>
@@ -5653,6 +5658,10 @@ async function renderAdminView() {
               <p class="eyebrow">Setup and reseed</p>
               <h4>Import LinkedIn contacts</h4>
               <p class="small muted">Preview the file first, then import contacts and companies.</p>
+              <div class="data-use-notice" role="note">
+                <strong>No LinkedIn login or automation</strong>
+                <span>BD Engine only reads the Connections.csv file you select. Review LinkedIn's terms and your organization's policies before uploading exported data.</span>
+              </div>
               <div class="inline-field-stack">
                 <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
                 <input type="file" id="connections-csv-file" accept=".csv">

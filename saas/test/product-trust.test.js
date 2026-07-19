@@ -167,6 +167,13 @@ test('customer-visible task errors are escaped before HTML insertion', async () 
   assert.doesNotMatch(app, /Failed to load tasks: \$\{error\.message\}/);
 });
 
+test('LinkedIn CSV import explains the product boundary before upload', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /BD Engine does not log into LinkedIn or automate LinkedIn activity/);
+  assert.match(app, /Review LinkedIn's terms and your organization's policies before uploading exported data/);
+  assert.equal((app.match(/class="data-use-notice" role="note"/g) || []).length, 2);
+});
+
 test('dashboard customization matches every rendered core section', async () => {
   const app = await readFile(appPath, 'utf8');
   assert.match(app, /id: 'workflow', label: 'Getting started'/);
