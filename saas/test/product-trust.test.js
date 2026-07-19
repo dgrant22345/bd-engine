@@ -38,8 +38,8 @@ test('public prices and limits match enforced plan entitlements', async () => {
   const landing = await readFile(landingPath, 'utf8');
   const expectedClaims = [
     ['trial', /\$0<\/span><span class="price-period">\/14 days/, /25 accounts/, /100 contacts/, /50 ATS job boards/, /3 CSV imports/],
-    ['sales', /\$10<\/span><span class="price-period">\/month/, /1,000 accounts/, /10,000 contacts/, /Unlimited ATS job boards/],
-    ['jobseeker', /\$5<\/span><span class="price-period">\/month/, /200 target companies/, /1,000 network contacts/, /50 CSV imports/],
+    ['sales', /\$10<\/span><span class="price-period">USD \/ month/, /1,000 accounts/, /10,000 contacts/, /Unlimited ATS job boards/],
+    ['jobseeker', /\$5<\/span><span class="price-period">USD \/ month/, /200 target companies/, /1,000 network contacts/, /50 CSV imports/],
   ];
   for (const [planId, price, accounts, contacts, finalClaim] of expectedClaims) {
     assert.match(landing, price, `${planId} public price drifted`);
@@ -75,6 +75,12 @@ test('customer trust copy matches the sanitized production status surface', asyn
   assert.doesNotMatch(landing, /public status page reports server, database, and Stripe/i);
   assert.match(landing, /public status page reports service availability/i);
   assert.match(landing, /Sample workspace/i);
+});
+
+test('billing recovery handles both successful invoice event variants', async () => {
+  const server = await readFile(serverPath, 'utf8');
+  assert.match(server, /event\.type === 'invoice\.payment_succeeded' \|\| event\.type === 'invoice\.paid'/);
+  assert.match(server, /event\.type === 'invoice\.payment_failed'/);
 });
 
 // Handler extraction: the delegated click handler declares `actionName`; the

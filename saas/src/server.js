@@ -876,6 +876,7 @@ async function route(req, res) {
           name: p.name,
           displayName: p.displayName,
           price: p.price,
+          currency: String(process.env.BD_BILLING_CURRENCY || 'usd').toUpperCase(),
           interval: p.interval,
           limits: p.limits,
           features: p.features,
@@ -2073,7 +2074,7 @@ async function handleStripeBillingEvent(event) {
     return { updated: Boolean(updated), tenantId: tenant.id, status: 'past_due' };
   }
 
-  if (event.type === 'invoice.payment_succeeded') {
+  if (event.type === 'invoice.payment_succeeded' || event.type === 'invoice.paid') {
     const tenant = resolveTenantFromStripeInvoice(object);
     if (!tenant) return { updated: false, reason: 'workspace not found for paid invoice' };
     if (tenant.plan === ownerPlanId) return { updated: false, ownerProtected: true };

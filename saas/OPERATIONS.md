@@ -54,6 +54,24 @@ when moving to a custom domain. GitHub workflow failure notifications are a
 secondary signal, not a paging service; route `/health`, `/readyz`, and the
 application error webhook to an accountable on-call destination before launch.
 
+## Billing verification
+
+Before each paid release, run the read-only Stripe catalog check with Railway's
+production variables. It retrieves prices, products, and webhook endpoint
+configuration but does not create or modify customers, charges, subscriptions,
+refunds, invoices, or endpoints:
+
+```powershell
+railway.cmd run --service bd-engine --environment production -- npm.cmd --prefix saas run check:billing-catalog
+```
+
+The check requires active live-mode monthly prices matching the application
+amounts and `BD_BILLING_CURRENCY` (`usd` by default), active products, one
+enabled canonical webhook, and coverage for checkout, subscription lifecycle,
+failed-payment, and successful-payment events. A failure is a paid-launch
+blocker. Update Stripe endpoint subscriptions only through an approved billing
+change, then deliver signed test events before relying on recovery behavior.
+
 ## Schema migrations
 
 `src/db.js` is the executable PostgreSQL migration source. Never apply

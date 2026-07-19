@@ -70,6 +70,12 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 ## Billing and customer operations
 
+- [x] Live Stripe prices are active monthly USD prices attached to active
+  products: Job Seeker $5 and Sales Professional $10. Evidence: 2026-07-19
+  read-only production catalog verification.
+- [x] The enabled production webhook subscribes to checkout, subscription,
+  failed-payment, and successful-payment events. Evidence: 2026-07-19 read-only
+  production catalog verification passed after the event allowlist correction.
 - [ ] Stripe live checkout succeeds for Job Seeker and Sales Professional.
 - [ ] Signed webhook activation, duplicate delivery, failed payment, grace period,
   recovery, cancellation, portal access, and invoice access were tested.

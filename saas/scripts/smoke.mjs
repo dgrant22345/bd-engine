@@ -67,8 +67,10 @@ await check('public plans include sales and job seeker options', async () => {
   const sales = plans.find((plan) => plan.id === 'sales');
   const jobseeker = plans.find((plan) => plan.id === 'jobseeker');
   assert(sales.price === 10 && sales.interval === 'month', 'Sales Professional public price drifted');
+  assert(sales.currency === 'USD', 'Sales Professional public currency drifted');
   assert(sales.limits?.accounts === 1000 && sales.limits?.jobBoards === -1, 'Sales Professional public limits drifted');
   assert(jobseeker.price === 5 && jobseeker.interval === 'month', 'Job Seeker public price drifted');
+  assert(jobseeker.currency === 'USD', 'Job Seeker public currency drifted');
   assert(jobseeker.limits?.accounts === 200 && jobseeker.limits?.jobBoards === 50, 'Job Seeker public limits drifted');
 });
 

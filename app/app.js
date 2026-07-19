@@ -3729,8 +3729,8 @@ async function renderBillingRequiredView(error = {}) {
         <p class="small muted">${escapeHtml(stripeBillingMessage)}</p>
         <div class="inline-field-stack" style="max-width: 420px;">
           <select id="billing-plan-select">
-            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
-            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
+            <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
+            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
           </select>
           <div class="button-row">
             <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${canChangeBilling && (stripeReady || canManageBilling) ? '' : ' disabled'}>${!canChangeBilling ? 'Owner access required' : (canManageBilling ? 'Manage billing' : (stripeReady ? 'Choose this plan' : 'Plan changes unavailable'))}</button>
@@ -5676,8 +5676,8 @@ async function renderAdminView() {
               ${paymentAttentionRequired ? `<div class="billing-notice billing-notice--warning" role="status"><strong>Workspace access remains available during recovery.</strong><span>Update the payment method by ${escapeHtml(billingGraceDate || 'the grace deadline')}${billingAccess.graceDaysRemaining !== null && billingAccess.graceDaysRemaining !== undefined ? ` (${formatNumber(billingAccess.graceDaysRemaining)} day${billingAccess.graceDaysRemaining === 1 ? '' : 's'} remaining)` : ''}.</span></div>` : ''}
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
-                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5/mo)</option>
-                  <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10/mo)</option>
+                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
+                  <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
                 </select>
                 <div class="button-row">
                   <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${canChangeBilling && (stripeReady || billing.canManageBilling) ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>
