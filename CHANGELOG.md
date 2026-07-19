@@ -6,6 +6,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 - Activated the production and ATS scheduled checks through default-branch
   schedulers that delegate to the Railway deployment branch.
+- Pinned delegated scheduler checkouts to the Railway deployment branch so
+  dependency caches and probes run against the intended release.
 
 - Preserved signup workspace and profile details through first-run setup.
 - Corrected sample-workspace readiness after data is loaded.
