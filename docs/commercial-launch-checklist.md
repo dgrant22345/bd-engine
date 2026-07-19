@@ -6,20 +6,22 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 ## Release candidate
 
-- [ ] Approved commit: `________________` Owner/date: `________________`
-- [ ] CI is green for lint, schema contract, unit tests, browser journeys,
+- [x] Approved head: `aa1c7399396c2ca19f0e6f750a8985a327678ba3`
+  Owner/date: `dgrant22345 / 2026-07-19`
+- [x] CI is green for lint, schema contract, unit tests, browser journeys,
   compatibility, renderer tests, dependency audits, and deterministic ATS tests.
-  Evidence: `________________`
-- [ ] Live ATS canary passes all supported providers with no provider errors.
-  Evidence: `________________`
+  Evidence: GitHub CI run 100.
+- [x] Live ATS canary passes all supported providers with no provider errors.
+  Evidence: 2026-07-19, 12/12 providers, 2,408 jobs in 8.8 seconds.
 - [ ] Privacy, Terms, refund/cancellation language, subprocessors, outreach
   obligations, and retention rules were reviewed by qualified professionals.
   Reviewer/date/evidence: `________________`
 
 ## Production configuration
 
-- [ ] `SESSION_SECRET` is at least 32 characters of random material. Rotation is
-  scheduled with the expected one-time logout communicated. Evidence: `________________`
+- [x] `SESSION_SECRET` is at least 32 characters of random material. Rotation is
+  scheduled with the expected one-time logout communicated. Evidence: activated
+  by production deployment `4c42b674-6674-4666-9e62-6020a60af19f`.
 - [ ] `RESEND_API_KEY` and `BD_EMAIL_FROM` use a verified sending domain.
   Evidence: `________________`
 - [ ] Password reset, email verification, support receipt, and customer support
@@ -77,8 +79,9 @@ Evidence for this section: `________________`
 ## Deploy and observe
 
 - [ ] Maintenance risk and rollback owner were announced before deployment.
-- [ ] The exact approved commit was deployed; Railway reports both services and
-  PostgreSQL online. Deployment ID: `________________`
+- [x] The exact approved commit was deployed; Railway reports both services and
+  PostgreSQL online. Merge `b5fd0eb1d6c79535081c477627a4893afd6a2434`,
+  deployment `4c42b674-6674-4666-9e62-6020a60af19f`.
 - [ ] `/livez`, `/readyz`, `/health`, public entry, login, verified signup, one
   ATS discovery, one job refresh, support, billing, export, and logout passed.
 - [ ] Authenticated status reports database/parity health, queue age below the

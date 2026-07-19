@@ -4,7 +4,7 @@
 
 **LIMITED BETA READY. Not ready for a broad paid launch.** The core product is
 real and functional: production is healthy, tenant-scoped workflows work, live
-ATS adapters imported 2,409 public jobs from 12/12 providers in 9.5 seconds,
+ATS adapters imported 2,408 public jobs from 12/12 providers in 8.8 seconds,
 and the main workspace currently holds 6,184 active jobs from 82 resolved
 boards. The remaining launch gates are operational configuration, legacy data
 curation, retention cleanup, and professional legal review rather than a demo
@@ -40,7 +40,7 @@ PowerShell/SQLite edition remains supported separately.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
 - Deterministic ATS contract: 12/12 providers pass.
-- Live ATS canary: 12/12 providers, 2,409 jobs, 0 provider errors.
+- Live ATS canary: 12/12 providers, 2,408 jobs, 0 provider errors.
 - Schema migration contract: 24 tables, 56 indexes, 10 migrations; no drift.
 - Production parity audit: all 3 legacy-primary workspaces pass deep parity. The
   2 relational-primary workspaces correctly serve relational data but have
@@ -58,25 +58,23 @@ PowerShell/SQLite edition remains supported separately.
 - A repeatable-read production backup completed and authenticated successfully
   on 2026-07-19: 20 tables, 15.79 MB encrypted, SHA-256
   `2ea029a9933b336763c53b11f46761449e2042a8f1b50597b5540ef1a9663d9c`.
+- Railway deployment `4c42b674-6674-4666-9e62-6020a60af19f` successfully
+  released merge commit `b5fd0eb1d6c79535081c477627a4893afd6a2434`.
+  Production reports 10 applied migrations, zero recent warnings/5xx responses,
+  valid CSP nonces, and successful live/readiness/anonymous-boundary smoke checks.
 
 ## P0 - launch blockers
 
-1. **The stronger production session secret is staged but not active.** A strong
-   replacement and `BD_SUPPORT_ADMIN_EMAILS` were set in Railway with deployment
-   explicitly skipped, so current sessions have not yet rotated. Impact: the
-   active release still uses its previous signing configuration. Fix: include the
-   planned one-time logout in the approved deployment, then verify login, logout,
-   and restart persistence. Never print or commit the value.
-2. **Production account recovery email is unavailable.** `RESEND_API_KEY` and
+1. **Production account recovery email is unavailable.** `RESEND_API_KEY` and
    `BD_EMAIL_FROM` are unset. Impact: paying users cannot self-recover accounts
    and verification/support email cannot be trusted. Fix: verify a sending
    domain, configure both values, and test reset, verification, support receipt,
    and reply delivery against real inboxes.
-3. **Verified-email enforcement is not enabled in production.** Configure and
+2. **Verified-email enforcement is not enabled in production.** Configure and
    test transactional email first, then set `BD_REQUIRE_EMAIL_VERIFICATION=true`.
    Impact: until rollout, unverified accounts can consume import, discovery, and
    renderer capacity. The production checker now fails until this gate is on.
-4. **Known duplicate personal-data workspace awaits an owner decision.**
+3. **Known duplicate personal-data workspace awaits an owner decision.**
    `docs/workspace-provenance.md` documents 20,509 duplicated real contacts in
    an abandoned trial identity. Impact: unnecessary privacy and breach exposure.
    Fix: obtain explicit approval, take a fresh verified backup, delete through a
@@ -84,15 +82,15 @@ PowerShell/SQLite edition remains supported separately.
 
 ## P1 - serious commercial risks
 
-1. `BD_SUPPORT_ADMIN_EMAILS` is staged for the named operator but will not be
-   active until deployment. `BD_ERROR_WEBHOOK` remains unset, so server failures
-   still lack accountable real-time routing.
+1. `BD_SUPPORT_ADMIN_EMAILS` is active for the named operator, but the full
+   support step-up workflow still needs a production test. `BD_ERROR_WEBHOOK`
+   remains unset, so server failures still lack accountable real-time routing.
 2. The main legacy workspace has 12,235 mechanically linkable board records and
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target
    curation workflow are now included; neither has changed production data.
 3. The backup tool now produces authenticated AES-256-GCM archives and refuses
-   unencrypted production runs. A dedicated key is staged and a current archive
+   unencrypted production runs. A dedicated key is active and a current archive
    verified, but an off-platform key copy, daily offsite scheduling, retention,
    and a disposable restore drill are not yet proven. Record that evidence in
    the launch checklist; a backup that has never restored is not a recovery plan.
@@ -111,8 +109,8 @@ PowerShell/SQLite edition remains supported separately.
 ## P2 - important improvements
 
 - PostgreSQL relational entities still store timestamps as text. Verified
-  contact identity, LinkedIn URL, and job natural-key constraints are staged;
-  re-run the duplicate gate before deployment. Account and board uniqueness is
+  contact identity, LinkedIn URL, and job natural-key constraints are deployed;
+  the production audit was clean before migration. Account and board uniqueness is
   blocked by 119 production duplicate groups and 637 excess rows, which require
   an owner-approved, backed-up deduplication rather than an automatic migration.
 - CI now enforces ESLint correctness rules across SaaS source, scripts, and tests.
