@@ -93,6 +93,9 @@ Evidence for this section: `________________`
 - [ ] Authenticated status reports database/parity health, queue age below the
   threshold, 5xx rate below 1%, and ingestion success at or above 95%.
 - [ ] The scheduled production probe is green and external paging is active.
+  The probe now covers availability, readiness, anonymous authorization,
+  pricing, CSP nonces, security headers, secure demo sessions, app mounting,
+  and read-only demo boundaries; external paging remains operator-owned.
 - [ ] Logs and alerts were watched through the agreed observation window.
 
 Observation owner/window/evidence: `________________`

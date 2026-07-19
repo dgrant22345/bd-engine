@@ -26,6 +26,28 @@ await check('liveness and readiness probes respond', async () => {
   assert(ready.status === 200, `readyz expected 200, got ${ready.status}: ${await ready.text()}`);
 });
 
+await check('browser security headers and CSP nonce are active', async () => {
+  const response = await fetch(`${baseUrl}/`);
+  assert(response.status === 200, `public entry expected 200, got ${response.status}`);
+  assert((response.headers.get('content-type') || '').includes('text/html'), 'public entry is not HTML');
+  assert(response.headers.get('x-content-type-options') === 'nosniff', 'X-Content-Type-Options is missing');
+  assert(response.headers.get('x-frame-options') === 'SAMEORIGIN', 'X-Frame-Options is not SAMEORIGIN');
+  assert(Boolean(response.headers.get('referrer-policy')), 'Referrer-Policy is missing');
+  assert(Boolean(response.headers.get('permissions-policy')), 'Permissions-Policy is missing');
+  assert(Boolean(response.headers.get('x-request-id')), 'X-Request-ID is missing');
+  if (new URL(baseUrl).protocol === 'https:') {
+    assert(Boolean(response.headers.get('strict-transport-security')), 'HSTS is missing on HTTPS');
+  }
+
+  const csp = response.headers.get('content-security-policy') || '';
+  const scriptPolicy = csp.split(';').find((directive) => directive.trim().startsWith('script-src')) || '';
+  const nonce = scriptPolicy.match(/'nonce-([^']+)'/)?.[1] || '';
+  assert(nonce.length >= 16, 'script-src does not contain a cryptographic nonce');
+  assert(!scriptPolicy.includes("'unsafe-inline'"), 'script-src still permits unsafe-inline');
+  const html = await response.text();
+  assert(html.includes(`nonce="${nonce}"`), 'HTML bootstrap does not use the response CSP nonce');
+});
+
 await check('protected API rejects anonymous requests', async () => {
   const response = await fetch(`${baseUrl}/api/bootstrap`);
   assert(response.status === 401, `expected 401, got ${response.status}`);
@@ -38,9 +60,16 @@ await check('detailed status rejects anonymous requests', async () => {
 
 await check('public plans include sales and job seeker options', async () => {
   const body = await getJson('/api/plans');
-  const planIds = (body.plans || []).map((plan) => plan.id);
+  const plans = body.plans || [];
+  const planIds = plans.map((plan) => plan.id);
   assert(planIds.includes('sales'), 'public plans omitted Sales Professional');
   assert(planIds.includes('jobseeker'), 'public plans omitted Job Seeker');
+  const sales = plans.find((plan) => plan.id === 'sales');
+  const jobseeker = plans.find((plan) => plan.id === 'jobseeker');
+  assert(sales.price === 10 && sales.interval === 'month', 'Sales Professional public price drifted');
+  assert(sales.limits?.accounts === 1000 && sales.limits?.jobBoards === -1, 'Sales Professional public limits drifted');
+  assert(jobseeker.price === 5 && jobseeker.interval === 'month', 'Job Seeker public price drifted');
+  assert(jobseeker.limits?.accounts === 200 && jobseeker.limits?.jobBoards === 50, 'Job Seeker public limits drifted');
 });
 
 await mutationCheck('signup creates a session', async () => {
@@ -186,8 +215,14 @@ await check('public demo opens a read-only synthetic workspace', async () => {
     body: JSON.stringify({}),
   });
   assert(response.status === 201, `demo start returned ${response.status}`);
-  const demoCookie = response.headers.get('set-cookie')?.split(';')[0] || '';
+  const setCookie = response.headers.get('set-cookie') || '';
+  const demoCookie = setCookie.split(';')[0] || '';
   assert(demoCookie.includes('bd_session='), 'demo did not set a session cookie');
+  assert(/;\s*HttpOnly/i.test(setCookie), 'demo session cookie is not HttpOnly');
+  assert(/;\s*SameSite=Lax/i.test(setCookie), 'demo session cookie is not SameSite=Lax');
+  if (new URL(baseUrl).protocol === 'https:') {
+    assert(/;\s*Secure/i.test(setCookie), 'demo session cookie is not Secure on HTTPS');
+  }
   const body = await response.json();
   assert(body.demo === true && body.readOnly === true, 'demo response was not marked read-only');
 
