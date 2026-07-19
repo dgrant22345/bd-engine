@@ -84,7 +84,10 @@ PowerShell/SQLite edition remains supported separately.
 
 1. `BD_SUPPORT_ADMIN_EMAILS` is active for the named operator, but the full
    support step-up workflow still needs a production test. `BD_ERROR_WEBHOOK`
-   remains unset, so server failures still lack accountable real-time routing.
+   now routes production alerts to a private Discord channel; a value-safe
+   synthetic alert from the Railway production environment was observed on
+   2026-07-19. Ongoing channel ownership and response-time expectations still
+   need to be documented before a broad launch.
 2. Both live Stripe prices and products are active with the advertised monthly
    USD amounts. The canonical webhook is enabled for all six required checkout,
    subscription, failed-payment, and recovery events, and the read-only catalog

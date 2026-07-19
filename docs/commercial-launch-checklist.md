@@ -29,9 +29,11 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 - [ ] `BD_SUPPORT_ADMIN_EMAILS` names an accountable, least-privilege support
   group. Access was tested after the 15-minute password step-up expired.
   Evidence: `________________`
-- [ ] `BD_ERROR_WEBHOOK` reaches an actively monitored destination; a controlled
+- [x] `BD_ERROR_WEBHOOK` reaches an actively monitored destination; a controlled
   synthetic failure was received with release and request IDs but no customer data.
-  Evidence: `________________`
+  Evidence: 2026-07-19, private Discord `bd-engine-alerts` channel. Railway
+  production environment delivered the value-safe synthetic request
+  `synthetic-setup-20260719` with HTTP 204, and the alert was observed in-channel.
 - [ ] `BD_REQUIRE_EMAIL_VERIFICATION=true` and an unverified test account was
   blocked from import, discovery, and renderer-backed work. Evidence: `________________`
 - [ ] The value-safe check passes without printing values:
