@@ -1286,8 +1286,29 @@ self.addEventListener('activate', (event) => {
     }
     // Diagnostics hydrates the complete workspace used by the synchronous
     // resolver reports below. Independent paged reads can then run together.
+    const adminParams = Object.fromEntries(url.searchParams);
+    const configQuery = {
+      page: adminParams.configPage,
+      pageSize: adminParams.configPageSize,
+      q: adminParams.configQ,
+      ats: adminParams.configAts,
+      active: adminParams.configActive,
+      discoveryStatus: adminParams.configDiscoveryStatus,
+      confidenceBand: adminParams.configConfidenceBand,
+      reviewStatus: adminParams.configReviewStatus,
+    };
+    const enrichmentQuery = {
+      page: adminParams.enrichmentPage,
+      pageSize: adminParams.enrichmentPageSize,
+      confidence: adminParams.enrichmentConfidence,
+      missingDomain: adminParams.enrichmentMissingDomain,
+      missingCareersUrl: adminParams.enrichmentMissingCareersUrl,
+      hasConnections: adminParams.enrichmentHasConnections,
+      minTargetScore: adminParams.enrichmentMinTargetScore,
+      topN: adminParams.enrichmentTopN,
+    };
     const [configs, tenantUsage] = await Promise.all([
-      store.findConfigs(tenantId, Object.fromEntries(url.searchParams)),
+      store.findConfigs(tenantId, configQuery),
       getTenantUsage(tenantId),
     ]);
     const origin = getRequestOrigin(req);
@@ -1301,7 +1322,7 @@ self.addEventListener('activate', (event) => {
       enrichmentReport: store.getEnrichmentReport(tenantId),
       unresolvedQueue: store.getResolverQueue(tenantId, 'unresolved'),
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
-      enrichmentQueue: store.getEnrichmentQueue(tenantId, Object.fromEntries(url.searchParams)),
+      enrichmentQueue: store.getEnrichmentQueue(tenantId, enrichmentQuery),
       configs,
       analytics,
       canViewSiteAnalytics: canViewAnalytics,

@@ -52,7 +52,7 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   recreate records. Decision/evidence: `________________`
 - [ ] Deep legacy/relational parity passes for every relational-primary and
   canary workspace. Evidence: `________________`
-- [ ] The nine migrations were exercised against a disposable PostgreSQL database,
+- [ ] The ten migrations were exercised against a disposable PostgreSQL database,
   including rollback by redeploying the previous application commit.
   Evidence: `________________`
 

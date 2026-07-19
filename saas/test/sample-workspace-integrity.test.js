@@ -59,6 +59,45 @@ test('sample dashboard adapters agree on contacts, stages, and discovered boards
   assert.ok(dashboard.recentlyDiscoveredBoards.every((item) => item.discoveryMethod));
 });
 
+test('sample account rows expose their linked ATS resolution state', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-sample-account-resolution';
+  store.ensureTenant({ id: tenantId, name: 'Sample account resolution' }, { id: 'u1', name: 'Owner' });
+  await store.loadSampleWorkspace(tenantId);
+
+  const { items } = await store.findAccounts(tenantId, { page: 1, pageSize: 100 });
+  assert.ok(items.length >= 3);
+  for (const account of items) {
+    assert.equal(account.configDiscoveryStatus, 'resolved', `${account.displayName} resolution status`);
+    assert.equal(account.enrichmentConfidence, 'high', `${account.displayName} confidence`);
+    assert.ok(account.primaryConfigId, `${account.displayName} primary config`);
+    assert.equal(account.configCount, 1, `${account.displayName} config count`);
+    assert.equal(account.atsTypes.length, 1, `${account.displayName} ATS count`);
+  }
+  const detail = await store.getAccountDetail(tenantId, items[0].id);
+  assert.equal(detail.account.configDiscoveryStatus, 'resolved');
+  assert.equal(detail.account.enrichmentStatus, 'enriched');
+  assert.equal(detail.account.enrichmentConfidence, 'high');
+  assert.deepEqual(detail.account.atsTypes, items[0].atsTypes);
+  assert.equal(detail.account.connectionGraph.shortestPathToDecisionMaker.pathLength, 1);
+  assert.ok(detail.account.connectionGraph.warmIntroCandidates.length > 0);
+  assert.equal(detail.account.networkStrength, 'warm');
+});
+
+test('account filters and sorting affect the returned working list', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-sample-account-filters';
+  store.ensureTenant({ id: tenantId, name: 'Sample account filters' }, { id: 'u1', name: 'Owner' });
+  await store.loadSampleWorkspace(tenantId);
+
+  const greenhouse = await store.findAccounts(tenantId, { ats: 'greenhouse', page: 1, pageSize: 100 });
+  assert.deepEqual(greenhouse.items.map((item) => item.displayName), ['Northstar Robotics']);
+  const strongNetwork = await store.findAccounts(tenantId, { minContacts: '1', sortBy: 'connections', page: 1, pageSize: 100 });
+  assert.deepEqual(strongNetwork.items.map((item) => item.connectionCount), [2, 1, 1]);
+  const researching = await store.findAccounts(tenantId, { status: 'researching', page: 1, pageSize: 100 });
+  assert.equal(researching.total, 2);
+});
+
 test('sample setup status includes current readiness when explicitly requested', async () => {
   const store = createStore();
   const tenantId = 'tenant-sample-readiness';

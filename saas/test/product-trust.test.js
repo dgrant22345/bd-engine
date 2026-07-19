@@ -115,6 +115,28 @@ test('core account actions use accessible app dialogs instead of browser prompts
   assert.match(app, /aria-modal="true"/);
 });
 
+test('pause account uses the supported status update and preserves undo state', async () => {
+  const app = await readFile(appPath, 'utf8');
+  const start = app.indexOf('async function archiveAccount');
+  const end = app.indexOf('\n}', start) + 2;
+  const archiveFunction = app.slice(start, end);
+  assert.match(archiveFunction, /method: 'PATCH'/);
+  assert.match(archiveFunction, /status: 'paused'/);
+  assert.match(archiveFunction, /previousStatus/);
+  assert.doesNotMatch(archiveFunction, /method: 'DELETE'/);
+});
+
+test('customer-visible external links allow only HTTP and HTTPS protocols', async () => {
+  const app = await readFile(appPath, 'utf8');
+  const helperStart = app.indexOf('function safeExternalHref');
+  const helperEnd = app.indexOf('\n}', helperStart) + 2;
+  const helper = app.slice(helperStart, helperEnd);
+  assert.match(helper, /url\.protocol === 'http:' \|\| url\.protocol === 'https:'/);
+  assert.match(app, /safeExternalHref\(item\.linkedinUrl\)/);
+  assert.match(app, /safeExternalHref\(item\.jobUrl \|\| item\.url\)/);
+  assert.match(app, /safeExternalHref\(account\.careersUrl\)/);
+});
+
 test('dashboard customization matches every rendered core section', async () => {
   const app = await readFile(appPath, 'utf8');
   assert.match(app, /id: 'workflow', label: 'Getting started'/);

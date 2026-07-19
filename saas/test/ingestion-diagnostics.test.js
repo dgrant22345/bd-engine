@@ -89,3 +89,40 @@ test('exact job-source lookup cannot cross workspaces', async () => {
   assert.equal((await store.getConfig(ownerTenantId, config.id)).id, config.id);
   assert.equal(await store.getConfig(otherTenantId, config.id), null);
 });
+
+test('ingestion coverage excludes network companies and deduplicates company readiness', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-focused-coverage';
+  store.ensureTenant({ id: tenantId, name: 'Focused coverage' }, { id: `${tenantId}-owner` });
+
+  const tracked = await store.addAccount(tenantId, { displayName: 'Tracked Company' });
+  const network = await store.addAccount(tenantId, { displayName: 'Network Company' });
+  await store.patchAccount(tenantId, network.id, { tracked: false });
+
+  for (const boardId of ['tracked-primary', 'tracked-secondary']) {
+    store.addConfig(tenantId, {
+      accountId: tracked.id,
+      companyName: tracked.displayName,
+      atsType: 'greenhouse',
+      boardId,
+      lastImportStatus: 'success',
+    });
+  }
+  store.addConfig(tenantId, {
+    accountId: network.id,
+    companyName: network.displayName,
+    atsType: 'lever',
+    boardId: 'network-board',
+    lastImportStatus: 'failed',
+  });
+
+  const diagnostics = await store.getIngestionDiagnostics(tenantId);
+  assert.equal(diagnostics.counts.configs, 3);
+  assert.equal(diagnostics.counts.operationalConfigs, 2);
+  assert.equal(diagnostics.counts.networkConfigsExcluded, 1);
+  assert.equal(diagnostics.coverageSummary.importReady, 2);
+  assert.equal(diagnostics.coverageSummary.companiesReady, 1);
+  assert.equal(diagnostics.coverageSummary.readyCoveragePercent, 100);
+  assert.equal(diagnostics.coverageSummary.networkSourcesExcluded, 1);
+  assert.equal(diagnostics.coverageCategories.failed || 0, 0);
+});

@@ -128,6 +128,81 @@ test('sample setup journey: loaded data updates readiness before launch', async 
   await expect.poll(async () => Number(await app.locator('.setup-value-score strong').textContent())).toBeGreaterThan(0);
   await expect(app.locator('.setup-summary-grid')).toContainText('Accounts');
   await expect(app.locator('.setup-summary-grid')).toContainText('Jobs');
+
+  await app.locator('[data-action="setup-open-dashboard"]').click();
+  const endTour = app.locator('[data-action="end-tour"]');
+  try {
+    await endTour.waitFor({ state: 'visible', timeout: 4000 });
+    await endTour.click();
+  } catch {
+    // The tour may already be dismissed for this browser profile.
+  }
+  await gotoAppRoute(page, '#/accounts');
+  const rows = app.locator('table tbody tr:not(.quick-log-row)');
+  await expect(rows).toHaveCount(3, { timeout: 10000 });
+  await expect(rows.first()).toContainText(/greenhouse|lever|ashby/i);
+  await expect(app.locator('table tbody')).not.toContainText(/no board|missing inputs/i);
+
+  const filterForm = app.locator('#accounts-filter-form');
+  await filterForm.locator('input[name="q"]').fill('Vertex');
+  await filterForm.locator('button[type="submit"]').click();
+  await expect(rows).toHaveCount(1, { timeout: 10000 });
+  await expect(rows.first()).toContainText('Vertex Health Systems');
+
+  await rows.first().locator('[data-action="open-account"]').click();
+  const accountForm = app.locator('#account-edit-form');
+  await expect(accountForm).toBeAttached({ timeout: 10000 });
+  await accountForm.locator('select[name="priority"]').selectOption('strategic');
+  await accountForm.locator('input[name="careersUrl"]').fill('https://vertexhealth.example/careers-updated');
+  await accountForm.evaluate((form) => form.requestSubmit());
+  await expect(app.locator('#account-edit-form select[name="priority"]')).toHaveValue('strategic', { timeout: 10000 });
+  await expect(app.locator('#account-edit-form input[name="careersUrl"]')).toHaveValue('https://vertexhealth.example/careers-updated');
+
+  await gotoAppRoute(page, '#/admin');
+  const configHeader = app.locator('[data-collapse-id="ats-config-records"]');
+  if (await configHeader.getAttribute('aria-expanded') === 'false') {
+    await configHeader.evaluate((element) => element.click());
+  }
+  const configForm = app.locator('#configs-filter-form');
+  await expect(configForm).toBeAttached({ timeout: 10000 });
+  await configForm.locator('input[name="q"]').fill('Vertex');
+  await configForm.evaluate((form) => form.requestSubmit());
+  const configRows = app.locator('#admin-section-ats-config-records table tbody tr');
+  await expect(configRows).toHaveCount(1, { timeout: 10000 });
+  await expect(configRows.first()).toContainText('Vertex Health Systems');
+});
+
+test('job seeker journey keeps company, network, role, and outreach language', async ({ page }) => {
+  const { app } = await signup(page, { persona: 'jobseeker' });
+  await expect(app.locator('body')).toContainText('Job search setup', { timeout: 15000 });
+  await fillProfileForm(app.locator('#setup-profile-form'));
+  await app.locator('#setup-profile-form button[type="submit"]').click();
+  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  await app.locator('[data-action="setup-load-sample"]').click();
+  await expect(app.locator('.setup-summary-grid')).toContainText('Companies', { timeout: 15000 });
+  await expect(app.locator('.setup-summary-grid')).toContainText('Network contacts');
+  await expect(app.locator('.setup-summary-grid')).toContainText('Open roles');
+  await expect(app.locator('.setup-summary-grid')).not.toContainText('Accounts');
+
+  await app.locator('[data-action="setup-open-dashboard"]').click();
+  const endTour = app.locator('[data-action="end-tour"]');
+  try {
+    await endTour.waitFor({ state: 'visible', timeout: 4000 });
+    await endTour.click();
+  } catch {
+    // The tour may already be dismissed for this browser profile.
+  }
+  await gotoAppRoute(page, '#/accounts');
+  await expect(app.locator('body')).toContainText('Ranked target companies', { timeout: 10000 });
+  await expect(app.locator('body')).toContainText('Company shortlist');
+  await gotoAppRoute(page, '#/contacts');
+  await expect(app.locator('body')).toContainText('Warm contact paths', { timeout: 10000 });
+  await gotoAppRoute(page, '#/jobs');
+  await expect(app.locator('body')).toContainText('Open roles at target companies', { timeout: 10000 });
+  await gotoAppRoute(page, '#/accounts');
+  await app.locator('[data-action="open-account"]').first().click();
+  await app.locator('#open-outreach-modal').click();
+  await expect(app.locator('#outreach-template-select')).toHaveValue(/job_/);
 });
 
 test('setup journey: whitespace-only workspace name is rejected visibly', async ({ page }) => {

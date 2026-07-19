@@ -6,6 +6,7 @@ import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRela
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
+import { decorateAccountsWithConfigs } from './account-resolution.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1850,15 +1851,20 @@ export function createStore() {
       const legacyUnclassifiedAccounts = tenantAccounts.filter((item) => typeof item.tracked !== 'boolean');
       const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
       const accountsByName = new Map(tenantAccounts.map((item) => [normalizeKey(item.normalizedName || item.displayName), item]));
-      const activeConfigs = tenantConfigs.filter((item) => item.active !== false);
+      const operationalConfigs = tenantConfigs.filter((config) => {
+        const owner = accountForConfig(config, accountsById, accountsByName);
+        return !owner || isTrackedTarget(owner);
+      });
+      const networkConfigsExcluded = tenantConfigs.length - operationalConfigs.length;
+      const activeConfigs = operationalConfigs.filter((item) => item.active !== false);
       const importReadyConfigs = activeConfigs.filter(isImportReadyConfig);
       const supportedConfigs = importReadyConfigs
         .map((config) => ({ config, atsType: getConfigAtsType(config), boardId: getConfigBoardId(config) }))
         .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
-      const linkedCareerConfigs = tenantConfigs.filter((config) => detectAtsTypeFromUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.apiUrl || config.url || ''));
+      const linkedCareerConfigs = operationalConfigs.filter((config) => detectAtsTypeFromUrl(config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.apiUrl || config.url || ''));
       const latestLaunch = activitiesForTenant(tenantId).find((item) => item.type === 'launch_workflow') || null;
       const latestImport = activitiesForTenant(tenantId).find((item) => item.type === 'live_job_import') || null;
-      const coverageRows = tenantConfigs.map((config) => {
+      const coverageRows = operationalConfigs.map((config) => {
         const category = classifyBoardCoverage(config);
         const accountItem = accountForConfig(config, accountsById, accountsByName);
         const meta = BOARD_COVERAGE_META[category];
@@ -1897,8 +1903,12 @@ export function createStore() {
           || b.targetScore - a.targetScore
           || String(a.config.companyName || '').localeCompare(String(b.config.companyName || ''))
         ));
+      const readyTrackedAccountIds = new Set(importReadyConfigs
+        .map((config) => accountForConfig(config, accountsById, accountsByName))
+        .filter((item) => item && isTrackedTarget(item))
+        .map((item) => item.id));
       const readyCoveragePercent = trackedAccounts.length
-        ? Math.round((importReadyConfigs.length / trackedAccounts.length) * 1000) / 10
+        ? Math.round((readyTrackedAccountIds.size / trackedAccounts.length) * 1000) / 10
         : 0;
 
       timings.totalMs = Math.round(performance.now() - startedAt);
@@ -1916,10 +1926,12 @@ export function createStore() {
           jobs: tenantJobs.length,
           activeJobs: tenantJobs.filter((item) => item.active !== false).length,
           configs: tenantConfigs.length,
+          operationalConfigs: operationalConfigs.length,
+          networkConfigsExcluded,
           activeConfigs: activeConfigs.length,
           importReadyConfigs: importReadyConfigs.length,
           supportedImportReadyConfigs: supportedConfigs.length,
-          needsResolutionConfigs: tenantConfigs.length - importReadyConfigs.length,
+          needsResolutionConfigs: operationalConfigs.length - importReadyConfigs.length,
           linkedCareerConfigs: linkedCareerConfigs.length,
         },
         coverageSummary: {
@@ -1927,8 +1939,10 @@ export function createStore() {
           explicitTrackedCompanies: explicitTrackedAccounts.length,
           networkCompanies: networkAccounts.length,
           legacyUnclassifiedCompanies: legacyUnclassifiedAccounts.length,
-          sourceCount: tenantConfigs.length,
+          sourceCount: operationalConfigs.length,
+          networkSourcesExcluded: networkConfigsExcluded,
           importReady: importReadyConfigs.length,
+          companiesReady: readyTrackedAccountIds.size,
           readyCoveragePercent,
           successful: coverageCategories.healthy || 0,
           readyNotRun: coverageCategories.ready_not_run || 0,
@@ -1957,11 +1971,11 @@ export function createStore() {
           careersUrl: item.config.careersUrl || item.config.resolvedBoardUrl || '',
           lastCheckedAt: item.config.lastCheckedAt || item.config.lastResolutionAttemptAt || '',
         })),
-        byAtsType: countValues(tenantConfigs.map((config) => getConfigAtsType(config) || 'unknown')),
-        byDiscoveryStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.discoveryStatus || 'missing'))),
-        byReviewStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.reviewStatus || 'missing'))),
-        byImportStatus: countValues(tenantConfigs.map((config) => normalizeKey(config.lastImportStatus || 'never'))),
-        sampleNeedsResolution: tenantConfigs
+        byAtsType: countValues(operationalConfigs.map((config) => getConfigAtsType(config) || 'unknown')),
+        byDiscoveryStatus: countValues(operationalConfigs.map((config) => normalizeKey(config.discoveryStatus || 'missing'))),
+        byReviewStatus: countValues(operationalConfigs.map((config) => normalizeKey(config.reviewStatus || 'missing'))),
+        byImportStatus: countValues(operationalConfigs.map((config) => normalizeKey(config.lastImportStatus || 'never'))),
+        sampleNeedsResolution: operationalConfigs
           .filter((config) => !isImportReadyConfig(config))
           .slice(0, 10)
           .map((config) => ({
@@ -2280,7 +2294,9 @@ export function createStore() {
 
     async findAccounts(tenantId, query) {
       assertTenant(tenantId);
-      if (relationalSqlEnabledForTenant(tenantId)) {
+      const richFilters = ['hiring', 'ats', 'recencyDays', 'minContacts', 'minTargetScore', 'priority', 'status', 'owner', 'outreachStatus', 'industry', 'geography', 'sortBy'];
+      const needsInMemoryFiltering = richFilters.some((key) => String(query?.[key] || '').trim());
+      if (relationalSqlEnabledForTenant(tenantId) && !needsInMemoryFiltering) {
         try {
           if (await hasRelationalParity(tenantId, false)) {
             const result = await findTenantAccountsRelational(tenantId, query);
@@ -2299,7 +2315,35 @@ export function createStore() {
         }
       }
       await ensureDataLoaded(tenantId);
-      return paginate(filterText(accountsForTenant(tenantId), query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']), query);
+      let items = decorateAccountsWithConfigs(accountsForTenant(tenantId), configsForTenant(tenantId));
+      items = filterText(items, query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']);
+      if (query.hiring === 'true' || query.hiring === true) {
+        items = items.filter((item) => Number(item.openRoleCount || item.jobCount || 0) > 0);
+      }
+      if (query.ats) {
+        const ats = normalizeAtsType(query.ats);
+        items = items.filter((item) => item.atsTypes.some((value) => normalizeAtsType(value) === ats));
+      }
+      const recencyDays = Number(query.recencyDays || 0);
+      if (recencyDays > 0) {
+        items = items.filter((item) => {
+          if (item.lastJobPostedAt) return daysSince(item.lastJobPostedAt) <= recencyDays;
+          if (recencyDays <= 30) return Number(item.jobsLast30Days || 0) > 0;
+          return Number(item.jobsLast90Days || item.jobsLast30Days || 0) > 0;
+        });
+      }
+      const minContacts = Number(query.minContacts || 0);
+      if (minContacts > 0) items = items.filter((item) => Number(item.connectionCount || item.contactCount || 0) >= minContacts);
+      const minTargetScore = Number(query.minTargetScore || 0);
+      if (minTargetScore > 0) items = items.filter((item) => Number(item.targetScore || item.dailyScore || 0) >= minTargetScore);
+      if (query.priority) items = items.filter((item) => accountPriority(item) === normalizeKey(query.priority));
+      if (query.status) items = items.filter((item) => normalizeKey(item.status) === normalizeKey(query.status));
+      if (query.owner) items = items.filter((item) => normalizeKey(item.owner) === normalizeKey(query.owner));
+      if (query.outreachStatus) items = items.filter((item) => normalizeKey(item.outreachStatus) === normalizeKey(query.outreachStatus));
+      if (query.industry) items = items.filter((item) => normalizeKey(item.industry) === normalizeKey(query.industry));
+      if (query.geography) items = items.filter((item) => accountMatchesGeography(item, query.geography));
+      sortAccountRows(items, query.sortBy);
+      return paginate(items, query);
     },
 
     async getAccountDetail(tenantId, accountId) {
@@ -2315,17 +2359,43 @@ export function createStore() {
       const accountContacts = contacts.filter((contactItem) => contactItem.tenantId === tenantId && contactItem.accountId === accountId);
       const accountJobs = jobs.filter((jobItem) => jobItem.tenantId === tenantId && jobItem.accountId === accountId);
       const accountActivities = activities.filter((activity) => activity.tenantId === tenantId && activity.accountId === accountId);
-      const accountConfigs = boardConfigs.filter((config) => config.tenantId === tenantId && config.normalizedCompanyName === item.normalizedName);
+      const accountConfigs = boardConfigs.filter((config) => config.tenantId === tenantId && (
+        config.accountId === item.id
+        || (!config.accountId && normalizeKey(config.normalizedCompanyName || config.companyName) === item.normalizedName)
+      ));
+      const decoratedAccount = decorateAccountsWithConfigs([item], accountConfigs)[0];
+      const relationshipContacts = accountContacts.slice().sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0));
+      const decisionContact = relationshipContacts.find((contactItem) => (
+        contactItem.isTalentLeader
+        || ['director', 'vp', 'head', 'cxo', 'owner'].includes(normalizeKey(contactItem.seniority))
+      ));
+      const accountWithRelationships = {
+        ...decoratedAccount,
+        networkStrength: decoratedAccount.networkStrength || (relationshipContacts.length >= 3 ? 'hot' : relationshipContacts.length ? 'warm' : 'cold'),
+        connectionGraph: decoratedAccount.connectionGraph || {
+          shortestPathToDecisionMaker: decisionContact
+            ? { summary: `${decisionContact.fullName} is a direct connection${decisionContact.title ? ` and works as ${decisionContact.title}` : ''}.`, pathLength: 1 }
+            : { summary: relationshipContacts.length ? 'Direct contacts are mapped, but no likely hiring decision maker is identified yet.' : 'No warm intro path mapped yet.', pathLength: 0 },
+          warmIntroCandidates: relationshipContacts.slice(0, 5).map((contactItem) => ({
+            fullName: contactItem.fullName,
+            title: contactItem.title,
+            relationshipStrengthScore: contactItem.priorityScore || 0,
+            introPath: 'Direct connection',
+            why: contactItem.isTalentLeader ? 'Talent leader in your network' : 'Existing relationship at this company',
+          })),
+          relationshipStrengthScore: decoratedAccount.relationshipStrengthScore || relationshipContacts[0]?.priorityScore || 0,
+        },
+      };
       const persona = this.getPersona(tenantId);
       return {
-        account: item,
+        account: accountWithRelationships,
         contacts: accountContacts,
         jobs: accountJobs,
         activity: accountActivities,
         activities: accountActivities,
         configs: accountConfigs,
         config: accountConfigs[0] || null,
-        actionPlan: buildPersonaActionPlan(persona, item, {
+        actionPlan: buildPersonaActionPlan(persona, accountWithRelationships, {
           contacts: accountContacts,
           jobs: accountJobs,
           configs: accountConfigs,
@@ -2353,7 +2423,17 @@ export function createStore() {
       await ensureDataLoaded(tenantId);
       const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
-      Object.assign(item, pickPatch(patch, ['status', 'outreachStatus', 'priorityTier', 'notes', 'industry', 'location', 'domain', 'nextAction', 'nextActionAt', 'owner']));
+      Object.assign(item, pickPatch(patch, [
+        'status', 'outreachStatus', 'priorityTier', 'priority', 'notes', 'industry', 'location',
+        'domain', 'canonicalDomain', 'careersUrl', 'nextAction', 'nextActionAt', 'owner',
+        'tags', 'aliases', 'linkedinCompanySlug', 'enrichmentStatus', 'enrichmentSource',
+        'enrichmentConfidence', 'enrichmentConfidenceScore', 'enrichmentNotes',
+      ]));
+      if (Array.isArray(item.tags)) item.tags = unique(item.tags.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
+      if (Array.isArray(item.aliases)) item.aliases = unique(item.aliases.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
+      if (Object.prototype.hasOwnProperty.call(patch, 'enrichmentConfidenceScore')) {
+        item.enrichmentConfidenceScore = Math.max(0, Math.min(100, Number(patch.enrichmentConfidenceScore) || 0));
+      }
       if (Object.prototype.hasOwnProperty.call(patch, 'tracked')) {
         item.tracked = patch.tracked === true || patch.tracked === 'true';
       }
@@ -2364,7 +2444,8 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
-      if (relationalContactSqlEnabledForTenant(tenantId)) {
+      const needsInMemoryFiltering = ['minScore', 'outreachStatus'].some((key) => String(query?.[key] || '').trim());
+      if (relationalContactSqlEnabledForTenant(tenantId) && !needsInMemoryFiltering) {
         try {
           if (await hasRelationalParity(tenantId, true)) {
             const result = await findTenantContactsRelational(tenantId, query);
@@ -2383,7 +2464,13 @@ export function createStore() {
         }
       }
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
-      return paginate(filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']), query);
+      let items = filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']);
+      const minScore = Number(query.minScore || 0);
+      if (minScore > 0) items = items.filter((item) => Number(item.priorityScore || 0) >= minScore);
+      if (query.outreachStatus) items = items.filter((item) => normalizeKey(item.outreachStatus) === normalizeKey(query.outreachStatus));
+      items.sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0)
+        || String(a.fullName || '').localeCompare(String(b.fullName || '')));
+      return paginate(items, query);
     },
 
     async patchContact(tenantId, contactId, patch) {
@@ -2450,7 +2537,9 @@ export function createStore() {
 
     async findConfigs(tenantId, query) {
       assertTenant(tenantId);
-      if (relationalConfigSqlEnabledForTenant(tenantId)) {
+      const filterKeys = ['q', 'ats', 'active', 'discoveryStatus', 'confidenceBand', 'reviewStatus'];
+      const needsInMemoryFiltering = filterKeys.some((key) => String(query?.[key] || '').trim());
+      if (relationalConfigSqlEnabledForTenant(tenantId) && !needsInMemoryFiltering) {
         try {
           if (await hasRelationalParity(tenantId, false)) {
             const result = await findTenantConfigsRelational(tenantId, query);
@@ -2468,7 +2557,19 @@ export function createStore() {
           console.error(`Relational config query failed for ${tenantId}; using memory:`, error.message);
         }
       }
-      return paginate(boardConfigs.filter((item) => item.tenantId === tenantId), query);
+      await ensureDataLoaded(tenantId, false);
+      let items = filterText(configsForTenant(tenantId), query.q, ['companyName', 'normalizedCompanyName', 'boardId', 'domain', 'careersUrl', 'resolvedBoardUrl', 'source', 'notes']);
+      if (query.ats) {
+        const ats = normalizeAtsType(query.ats);
+        items = items.filter((item) => normalizeAtsType(item.atsType || item.ats) === ats);
+      }
+      if (query.active === 'true' || query.active === true) items = items.filter((item) => item.active !== false);
+      if (query.active === 'false' || query.active === false) items = items.filter((item) => item.active === false);
+      if (query.discoveryStatus) items = items.filter((item) => normalizeKey(item.discoveryStatus) === normalizeKey(query.discoveryStatus));
+      if (query.confidenceBand) items = items.filter((item) => normalizeKey(item.confidenceBand) === normalizeKey(query.confidenceBand));
+      if (query.reviewStatus) items = items.filter((item) => normalizeKey(item.reviewStatus) === normalizeKey(query.reviewStatus));
+      items.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')) || String(a.id || '').localeCompare(String(b.id || '')));
+      return paginate(items, query);
     },
 
     async getConfig(tenantId, configId) {
@@ -2694,7 +2795,7 @@ export function createStore() {
         const days = parseInt(payload.followUpDays, 10);
         if (!isNaN(days) && days > 0) {
           const task = {
-            id: `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
             tenantId,
             accountId: payload.accountId,
             type: 'follow_up',
@@ -2731,7 +2832,7 @@ export function createStore() {
       if (!summary) throw new Error('Task summary is required');
       const requestedDueDate = new Date(payload.dueDate || Date.now() + 24 * 60 * 60 * 1000);
       const task = {
-        id: `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
         accountId: String(payload.accountId || '').slice(0, 120),
         type: String(payload.type || 'follow_up').slice(0, 60),
@@ -2866,15 +2967,20 @@ export function createStore() {
     getEnrichmentQueue(tenantId, query = {}) {
       assertTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
-      const candidates = accountsForTenant(tenantId).map((item) => ({
+      let candidates = decorateAccountsWithConfigs(accountsForTenant(tenantId), tenantConfigs).map((item) => ({
         ...item,
-        primaryConfigId: tenantConfigs.find((config) => config.normalizedCompanyName === item.normalizedName)?.id || '',
-        configCount: tenantConfigs.filter((config) => config.normalizedCompanyName === item.normalizedName).length,
-        canonicalDomain: item.canonicalDomain || item.domain,
-        enrichmentStatus: item.enrichmentStatus || 'enriched',
-        enrichmentConfidence: item.enrichmentConfidence || 'medium',
         reviewReason: item.reviewReason || item.recommendedAction || 'Review this account before deeper verification.',
       }));
+      if (query.confidence) candidates = candidates.filter((item) => normalizeKey(item.enrichmentConfidence) === normalizeKey(query.confidence));
+      if (query.missingDomain === 'true' || query.missingDomain === true) candidates = candidates.filter((item) => !(item.canonicalDomain || item.domain));
+      if (query.missingCareersUrl === 'true' || query.missingCareersUrl === true) candidates = candidates.filter((item) => !item.careersUrl);
+      if (query.hasConnections === 'true' || query.hasConnections === true) candidates = candidates.filter((item) => Number(item.connectionCount || item.contactCount || 0) > 0);
+      const minTargetScore = Number(query.minTargetScore || 0);
+      if (minTargetScore > 0) candidates = candidates.filter((item) => Number(item.targetScore || item.dailyScore || 0) >= minTargetScore);
+      candidates.sort((a, b) => Number(b.targetScore || b.dailyScore || 0) - Number(a.targetScore || a.dailyScore || 0)
+        || String(a.displayName || '').localeCompare(String(b.displayName || '')));
+      const topN = Number(query.topN || 0);
+      if (topN > 0) candidates = candidates.slice(0, topN);
       return paginate(candidates, query);
     },
 
@@ -2958,7 +3064,7 @@ export function createStore() {
           || inferredDomainsByAccount.get(item.id)
           || '';
         const config = normalizeConfigPatch({
-          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
           tenantId,
           accountId: item.id,
           companyName: item.displayName,
@@ -3181,7 +3287,7 @@ export function createStore() {
         const inferredDomain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
           || inferDomainFromContacts(tenantId, item.id);
         const config = normalizeConfigPatch({
-          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
           tenantId,
           accountId: item.id,
           companyName: item.displayName,
@@ -3607,6 +3713,8 @@ export function createStore() {
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
           if (!normalizedJob) continue;
+          normalizedJob.jobUrl = normalizePublicHttpUrl(normalizedJob.jobUrl || normalizedJob.url);
+          normalizedJob.url = normalizedJob.jobUrl;
           if (!jobMatchesGeography(normalizedJob, accountItem, geographyFilter)) {
             filteredOutNonCanada++;
             continue;
@@ -3649,7 +3757,7 @@ export function createStore() {
           } else {
             const newJob = job({
               ...normalizedJob,
-              id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
               tenantId,
               naturalKey,
               firstSeenAt: now(),
@@ -3779,7 +3887,7 @@ export function createStore() {
       }
 
       activities.unshift({
-        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
         type: 'live_job_import',
         summary: `Live job import fetched ${fetched} jobs across ${supportedConfigs.length} import-ready ATS configs and imported ${kept} jobs.`,
@@ -3836,7 +3944,7 @@ export function createStore() {
     // its ATS board for real, and report honest results.
     startAccountResolution(tenantId, { accountId = '', configId = '', deep = false, label = 'ATS resolution' } = {}) {
       assertTenant(tenantId);
-      const jobId = `resolve-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const jobId = `resolve-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const job = {
         id: jobId,
         type: 'ats-resolution',
@@ -3874,7 +3982,7 @@ export function createStore() {
               || null;
             if (!config) {
               config = normalizeConfigPatch({
-                id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
                 tenantId,
                 accountId: item.id,
                 companyName: item.displayName,
@@ -4077,7 +4185,7 @@ export function createStore() {
             const domain = getUsableCompanyDomain(item.domain || item.canonicalDomain)
               || inferDomainFromContacts(tenantId, item.id);
             const config = normalizeConfigPatch({
-              id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              id: `cfg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
               tenantId,
               accountId: item.id,
               companyName: item.displayName,
@@ -4386,7 +4494,7 @@ export function createStore() {
     async addAccount(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
-      const id = `acct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const id = `acct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const item = account({
         id,
         tenantId,
@@ -4516,7 +4624,7 @@ export function createStore() {
     async addContact(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
-      const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const item = contact({
         id,
         tenantId,
@@ -4529,7 +4637,7 @@ export function createStore() {
         companyName: payload.companyName || '',
         title: payload.title || payload.position || '',
         connectedOn: payload.connectedOn || '',
-        outreachStatus: 'not_started',
+        outreachStatus: payload.outreachStatus || 'not_started',
         priorityScore: payload.priorityScore || 0,
         seniority: payload.seniority || '',
         isTalentLeader: payload.isTalentLeader || false,
@@ -5068,6 +5176,7 @@ function buildDraft({ account: itemAccount, contact: itemContact, jobs: accountJ
       signalSentence,
       activeRoleCount,
       specificJob,
+      focusRole: jobLabel,
       grounding,
     });
 
@@ -5181,11 +5290,16 @@ function buildJobSeekerDraft({ companyName, firstName, contactTitle, templateKey
   };
 }
 
-function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, signalSentence, activeRoleCount, specificJob, grounding }) {
+function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, roleSignal, activeRoleCount, specificJob, focusRole: requestedFocusRole, grounding }) {
   const hasVerifiedSignal = Boolean(roleSignal);
-  const roleReference = hasVerifiedSignal ? roleSignal : 'your current hiring priorities';
-  const roleCountText = activeRoleCount > 1 ? `${activeRoleCount} visible openings` : roleReference;
-  const focusRole = specificJob?.title || roleSignal || 'a priority search';
+  const focusRole = specificJob?.title || requestedFocusRole || 'a priority search';
+  const additionalRoleCount = Math.max(0, activeRoleCount - 1);
+  const roleReference = hasVerifiedSignal
+    ? additionalRoleCount > 0
+      ? `${focusRole} and ${additionalRoleCount} other open ${additionalRoleCount === 1 ? 'role' : 'roles'}`
+      : focusRole
+    : 'your current hiring priorities';
+  const roleCountText = activeRoleCount > 1 ? `${activeRoleCount} open roles` : roleReference;
   const familyValue = {
     data: 'For data searches, I help teams map the relevant talent pool and qualify a focused shortlist before the process absorbs more manager time.',
     engineering: 'For technical searches, I help teams reach qualified people outside the active applicant pool and narrow the market to a credible shortlist.',
@@ -5199,7 +5313,7 @@ function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, ro
     general: 'I help teams map the relevant market and build a focused shortlist for priority searches.',
   }[grounding.roleFamily];
   const roleQuestion = hasVerifiedSignal
-    ? `Is ${focusRole} already well covered, or would an outside market map be useful?`
+    ? 'Is that search already well covered, or would a quick market map be useful?'
     : 'Who owns the searches where outside market coverage would be most useful?';
   const approaches = {
     executive: {
@@ -5208,14 +5322,14 @@ function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, ro
       value: activeRoleCount > 1
         ? `${roleCountText} suggests there may be a few searches competing for attention. I help teams add focused market coverage around the one role tied most closely to delivery.`
         : familyValue,
-      question: hasVerifiedSignal ? `Is ${focusRole} important enough to warrant additional search coverage?` : 'Is there one role where additional search coverage would materially help the team?',
+      question: hasVerifiedSignal ? 'Would additional search coverage be useful for that role?' : 'Is there one role where additional search coverage would materially help the team?',
       angle: 'Tie visible hiring demand to a specific search decision without claiming delivery is at risk.',
     },
     hiring_manager: {
       label: 'Hiring manager note',
       subject: `${roleReference} at ${companyName}`,
       value: familyValue,
-      question: hasVerifiedSignal ? `For ${focusRole}, is the harder part reaching the right people or narrowing the shortlist?` : 'Is the harder part reaching the right people or narrowing the shortlist?',
+      question: hasVerifiedSignal ? 'For that role, is the harder part reaching the right people or narrowing the shortlist?' : 'Is the harder part reaching the right people or narrowing the shortlist?',
       angle: 'Ask where the search is constrained and keep the offer tied to the visible role.',
     },
     talent_partner: {
@@ -5255,10 +5369,10 @@ function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, ro
     },
   };
   const approach = approaches[templateKey] || approaches.cold;
-  const contactLine = contactTitle ? `Your role as ${contactTitle} made you the most relevant person to ask.` : 'I may not have the right owner, so a redirect would be helpful.';
+  const contactLine = contactTitle ? `Given your role as ${contactTitle}, I thought you might be the right person to ask.` : 'I may not have the right owner, so a redirect would be helpful.';
   const messageBody = [
     `Hi ${firstName},`, '',
-    hasVerifiedSignal ? `I noticed that ${signalSentence}` : `I am reaching out about hiring at ${companyName}, but I do not have a verified open role to reference.`, '',
+    hasVerifiedSignal ? `I noticed ${companyName} is hiring for ${roleReference}.` : `I am reaching out about hiring at ${companyName}, but I do not have a verified open role to reference.`, '',
     approach.value, '',
     contactLine, '',
     approach.question,
@@ -5269,11 +5383,11 @@ function buildSalesDraft({ companyName, firstName, contactTitle, templateKey, ro
     subject_options: unique([approach.subject, `${roleReference} at ${companyName}`, `A question about hiring at ${companyName}`]),
     message_body: messageBody,
     linkedin_message: `Hi ${firstName}, ${hasVerifiedSignal ? `I noticed ${companyName} is hiring for ${roleReference}` : `I am trying to find the right hiring contact at ${companyName}`}. ${approach.question}`,
-    follow_up_message: `Hi ${firstName}, one quick follow-up on ${roleReference}. I can send a one-page sample market map if that would be useful; otherwise I am happy to close the loop.`,
+    follow_up_message: `Hi ${firstName}, one quick follow-up on ${focusRole}. I can send a short sample market map if useful; otherwise I am happy to close the loop.`,
     call_opener: hasVerifiedSignal
       ? `I noticed ${companyName} is hiring for ${focusRole}. I am calling to ask whether that search is already well covered or could use additional market reach.`
       : `I am trying to find the person who owns priority hiring at ${companyName}. I do not want to assume there is an active need.`,
-    why_now: hasVerifiedSignal ? signalSentence : 'No verified role signal is available; the draft does not claim one.',
+    why_now: hasVerifiedSignal ? `${companyName} has a verified opening for ${roleReference}.` : 'No verified role signal is available; the draft does not claim one.',
     contact_hook: contactTitle ? `${contactTitle} is the known reason this contact may be relevant.` : 'No contact title is available, so the note keeps the assumption light.',
     angle_summary: approach.angle,
     suggested_next_step: 'Review the factual role signal, send the shortest suitable channel, and follow up once.',
@@ -5304,6 +5418,46 @@ function paginate(items, query = {}) {
     pageSize,
     total: items.length,
   };
+}
+
+function accountPriority(item = {}) {
+  const explicit = normalizeKey(item.priority);
+  if (['strategic', 'high', 'medium', 'low'].includes(explicit)) return explicit;
+  return ({ a: 'high', b: 'medium', c: 'low' })[normalizeKey(item.priorityTier)] || 'medium';
+}
+
+function accountMatchesGeography(item = {}, geography = '') {
+  const location = normalizeKey(item.location);
+  if (!location) return false;
+  const canada = /\b(canada|ontario|quebec|alberta|british columbia|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island)\b/.test(location)
+    || /(?:^|,\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe)(?:\s|,|$)/i.test(String(item.location));
+  const us = /\b(united states|usa|u\.s\.|us)\b/.test(location)
+    || /(?:^|,\s*)(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(String(item.location));
+  const requested = normalizeKey(geography);
+  if (requested === 'canada') return canada;
+  if (requested === 'us') return us;
+  if (requested === 'canada_us') return canada || us;
+  return true;
+}
+
+function sortAccountRows(items, sortBy = '') {
+  const timestamp = (value, fallback) => {
+    const parsed = new Date(value || '').getTime();
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  items.sort((a, b) => {
+    let difference;
+    if (sortBy === 'new_roles') difference = Number(b.newRoleCount7d || 0) - Number(a.newRoleCount7d || 0);
+    else if (sortBy === 'connections') difference = Number(b.connectionCount || b.contactCount || 0) - Number(a.connectionCount || a.contactCount || 0);
+    else if (sortBy === 'follow_up') difference = timestamp(a.nextActionAt, Number.MAX_SAFE_INTEGER) - timestamp(b.nextActionAt, Number.MAX_SAFE_INTEGER);
+    else if (sortBy === 'recent_jobs') difference = timestamp(b.lastJobPostedAt, 0) - timestamp(a.lastJobPostedAt, 0)
+      || Number(b.jobsLast30Days || 0) - Number(a.jobsLast30Days || 0);
+    else difference = Number(b.targetScore || b.dailyScore || 0) - Number(a.targetScore || a.dailyScore || 0);
+    return difference
+      || Number(b.targetScore || b.dailyScore || 0) - Number(a.targetScore || a.dailyScore || 0)
+      || String(a.displayName || '').localeCompare(String(b.displayName || ''))
+      || String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
 function filterText(items, query, fields) {
@@ -7065,6 +7219,20 @@ function normalizeAbsoluteUrl(value, baseUrl = '') {
   if (!raw || raw === '#') return '';
   try {
     const parsed = new URL(raw, baseUrl || undefined);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function normalizePublicHttpUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) return '';
     parsed.hash = '';
     return parsed.toString();
   } catch {

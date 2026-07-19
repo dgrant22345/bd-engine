@@ -3041,7 +3041,7 @@ function getFormValues(form) {
 function getContactLinkedInHref(contact, companyName = '') {
   const directUrl = String(contact?.linkedinUrl || '').trim();
   if (directUrl) {
-    return directUrl;
+    return safeExternalHref(directUrl);
   }
 
   const searchTerms = [
@@ -3054,6 +3054,17 @@ function getContactLinkedInHref(contact, companyName = '') {
   }
 
   return `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchTerms)}`;
+}
+
+function safeExternalHref(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, window.location.origin);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
 }
 
 function splitTags(value) {
@@ -3219,7 +3230,7 @@ function renderSavedFilters() {
 function renderActiveFilterStrip(query, labels = accountFilterLabels) {
   const entries = normalizedFilterEntries(query);
   if (!entries.length) {
-    return '<div class="active-filter-strip active-filter-strip--empty"><span>All accounts visible</span></div>';
+    return `<div class="active-filter-strip active-filter-strip--empty"><span>All ${isJobSeekerPersona() ? 'companies' : 'accounts'} visible</span></div>`;
   }
   return `
     <div class="active-filter-strip">
@@ -3231,8 +3242,9 @@ function renderActiveFilterStrip(query, labels = accountFilterLabels) {
 }
 
 function renderAccountPresetStrip() {
+  const jobSeeker = isJobSeekerPersona();
   return `
-    <section class="account-preset-strip" aria-label="Account working lanes">
+    <section class="account-preset-strip" aria-label="${jobSeeker ? 'Company' : 'Account'} working lanes">
       <div class="preset-strip-copy">
         <p class="eyebrow">Working lanes</p>
         <strong>Jump to the queue that matches the moment.</strong>
@@ -3241,7 +3253,7 @@ function renderAccountPresetStrip() {
         ${accountPresets.map((preset) => `
           <button class="preset-button${isAccountPresetActive(preset) ? ' active' : ''}" type="button" data-action="apply-account-preset" data-preset="${escapeAttr(preset.id)}">
             <span>${escapeHtml(preset.label)}</span>
-            <small>${escapeHtml(preset.description)}</small>
+            <small>${escapeHtml(jobSeeker ? preset.description.replace('Accounts', 'Companies').replace('accounts', 'companies') : preset.description)}</small>
           </button>
         `).join('')}
       </div>
@@ -3442,8 +3454,9 @@ function renderPersonaActionCard(item = {}, options = {}) {
   const openAccountButton = accountId
     ? `<button class="ghost-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">Open</button>`
     : '';
-  const externalButton = item.href
-    ? `<a class="ghost-button ghost-button--xs" href="${escapeAttr(item.href)}" target="_blank" rel="noreferrer">${escapeHtml(item.cta || 'Open link')}</a>`
+  const safeHref = safeExternalHref(item.href);
+  const externalButton = safeHref
+    ? `<a class="ghost-button ghost-button--xs" href="${escapeAttr(safeHref)}" target="_blank" rel="noreferrer">${escapeHtml(item.cta || 'Open link')}</a>`
     : '';
   const templateButton = detail && item.template && accountId
     ? `<button class="primary-button ghost-button--xs" type="button" data-action="generate-outreach-template" data-id="${escapeAttr(accountId)}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}">${escapeHtml(item.cta || 'Draft note')}</button>`
@@ -3771,11 +3784,12 @@ async function renderRoute() {
   }
 
   if (root === 'accounts' && parts[1]) {
+    const personaCopy = getPersonaUiCopy();
     activateNav('accounts');
     renderBreadcrumbs([
       { label: 'Dashboard', href: '#/dashboard' },
-      { label: 'Accounts', href: '#/accounts' },
-      { label: 'Account' },
+      { label: humanize(personaCopy.accountPlural), href: '#/accounts' },
+      { label: humanize(personaCopy.accountSingular) },
     ]);
     await renderAccountDetail(parts[1]);
     return;
@@ -3783,14 +3797,14 @@ async function renderRoute() {
 
   if (root === 'accounts') {
     activateNav('accounts');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Accounts' }]);
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: humanize(getPersonaUiCopy().accountPlural) }]);
     await renderAccountsView();
     return;
   }
 
   if (root === 'contacts') {
     activateNav('contacts');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Contacts' }]);
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: isJobSeekerPersona() ? 'Network' : 'Contacts' }]);
     await renderContactsView();
     return;
   }
@@ -3804,7 +3818,7 @@ async function renderRoute() {
 
   if (root === 'jobs') {
     activateNav('jobs');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Jobs' }]);
+    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: isJobSeekerPersona() ? 'Open roles' : 'Jobs' }]);
     await renderJobsView();
     return;
   }
@@ -4082,9 +4096,9 @@ function renderSetupStepContent(stepKey) {
   const sampleLoaded = Boolean(result.sample || result.sampleLoaded);
   const summaryItems = sampleLoaded
     ? [
-      { label: 'Accounts', value: stats.accounts || 0 },
-      { label: 'Contacts', value: stats.contacts || 0 },
-      { label: 'Jobs', value: stats.jobs || 0 },
+      { label: jobSeeker ? 'Companies' : 'Accounts', value: stats.accounts || 0 },
+      { label: jobSeeker ? 'Network contacts' : 'Contacts', value: stats.contacts || 0 },
+      { label: jobSeeker ? 'Open roles' : 'Jobs', value: stats.jobs || 0 },
       { label: 'Boards', value: stats.configs || 0 },
     ]
     : [
@@ -4911,6 +4925,8 @@ async function renderAccountsView() {
   const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
   const industryOptions = filters.industries || [];
+  const personaCopy = getPersonaUiCopy();
+  const jobSeeker = personaCopy.persona === 'jobseeker';
   const industryField = industryOptions.length
     ? `<select name="industry"><option value="">All industries</option>${industryOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.industry, value)}>${escapeHtml(value)}</option>`).join('')}</select>`
     : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
@@ -4919,9 +4935,9 @@ async function renderAccountsView() {
     <section class="hero-card hero-card--compact">
       <div class="hero-layout">
         <div class="hero-copy">
-          <p class="eyebrow">Account command center</p>
-          <h3>Ranked target accounts</h3>
-          <p class="subtitle">Focus the day on companies with the strongest combination of hiring motion, relationship access, and follow-up urgency.</p>
+          <p class="eyebrow">${jobSeeker ? 'Target company shortlist' : 'Account command center'}</p>
+          <h3>Ranked target ${escapeHtml(personaCopy.accountPlural)}</h3>
+          <p class="subtitle">${jobSeeker ? 'Focus on employers with the strongest mix of live roles, fit, warm contacts, and timely next steps.' : 'Focus the day on companies with the strongest combination of hiring motion, relationship access, and follow-up urgency.'}</p>
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Results', formatNumber(result.total))}
@@ -4938,8 +4954,8 @@ async function renderAccountsView() {
       <div class="table-card">
         <div class="panel-header">
           <div>
-            <h3>Account queue</h3>
-            <p class="muted small">This is the working list. Use filters to narrow it to the accounts you can act on right now.</p>
+            <h3>${jobSeeker ? 'Company shortlist' : 'Account queue'}</h3>
+            <p class="muted small">${jobSeeker ? 'Use filters to find the companies where a role, a warm contact, or a timely follow-up gives you a credible next move.' : 'This is the working list. Use filters to narrow it to the accounts you can act on right now.'}</p>
           </div>
           <div class="panel-header-actions">
             <div class="view-toggle">
@@ -4948,7 +4964,7 @@ async function renderAccountsView() {
             </div>
             ${renderExportButton('accounts')}
             <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
-            <span class="table-meta">${formatNumber(result.total)} tracked accounts</span>
+            <span class="table-meta">${formatNumber(result.total)} tracked ${escapeHtml(personaCopy.accountPlural)}</span>
           </div>
         </div>
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
@@ -5056,7 +5072,7 @@ async function renderAccountDetail(accountId) {
   setViewTitle(detail.account.displayName);
   renderBreadcrumbs([
     { label: 'Dashboard', href: '#/dashboard' },
-    { label: 'Accounts', href: '#/accounts' },
+    { label: humanize(getPersonaUiCopy().accountPlural), href: '#/accounts' },
     { label: detail.account.displayName },
   ]);
   const targetScore = getTargetScore(detail.account);
@@ -5069,6 +5085,9 @@ async function renderAccountDetail(accountId) {
   const suggestedOutreachTemplate = getSuggestedOutreachTemplate(detail);
   const accountActionPlan = detail.actionPlan && typeof detail.actionPlan === 'object' ? detail.actionPlan : {};
   const personaCopy = getPersonaUiCopy(accountActionPlan.persona || appState.persona);
+  const priorityLabel = detail.account.priority
+    || ({ A: 'high', B: 'medium', C: 'low' })[String(detail.account.priorityTier || '').toUpperCase()]
+    || 'medium';
 
   // Fetch hiring velocity in background (non-blocking)
   let hiringVelocity = [];
@@ -5087,8 +5106,8 @@ async function renderAccountDetail(accountId) {
           <h3>${escapeHtml(detail.account.displayName)}</h3>
           <p class="subtitle">${escapeHtml(targetScoreExplanation)}</p>
           <div class="button-row">
-            ${detail.account.careersUrl ? `<a class="ghost-button" href="${escapeAttr(detail.account.careersUrl)}" target="_blank" rel="noreferrer">Open careers page</a>` : ''}
-            ${detail.jobs[0]?.jobUrl || detail.jobs[0]?.url ? `<a class="ghost-button" href="${escapeAttr(detail.jobs[0].jobUrl || detail.jobs[0].url)}" target="_blank" rel="noreferrer">Open newest job</a>` : ''}
+            ${safeExternalHref(detail.account.careersUrl) ? `<a class="ghost-button" href="${escapeAttr(safeExternalHref(detail.account.careersUrl))}" target="_blank" rel="noreferrer">Open careers page</a>` : ''}
+            ${safeExternalHref(detail.jobs[0]?.jobUrl || detail.jobs[0]?.url) ? `<a class="ghost-button" href="${escapeAttr(safeExternalHref(detail.jobs[0]?.jobUrl || detail.jobs[0]?.url))}" target="_blank" rel="noreferrer">Open newest job</a>` : ''}
           </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
@@ -5100,10 +5119,10 @@ async function renderAccountDetail(accountId) {
         </div>
       </div>
       <div class="status-pills-compact">
-        ${renderStatusPill(detail.account.priority || 'medium', 'warm')}
-        ${renderStatusPill(detail.account.status || 'new', 'neutral')}
-        ${renderStatusPill(detail.account.outreachStatus || 'not_started', 'neutral')}
-        ${renderStatusPill(detail.account.networkStrength, toneForNetwork(detail.account.networkStrength))}
+        ${renderStatusPill(`Priority: ${priorityLabel}`, 'warm')}
+        ${renderStatusPill(`Account: ${detail.account.status || 'new'}`, 'neutral')}
+        ${renderStatusPill(`Outreach: ${detail.account.outreachStatus || 'not_started'}`, 'neutral')}
+        ${detail.account.networkStrength ? renderStatusPill(`Network: ${detail.account.networkStrength}`, toneForNetwork(detail.account.networkStrength)) : ''}
         ${appState.statusPillsExpanded ? `
           ${renderStatusPill(detail.account.hiringStatus, detail.account.jobCount > 0 ? 'success' : 'neutral')}
           ${renderStatusPill(detail.account.enrichmentStatus || 'missing_inputs', toneForEnrichmentStatus(detail.account.enrichmentStatus || 'missing_inputs'))}
@@ -5233,7 +5252,7 @@ async function renderAccountDetail(accountId) {
             <div class="field-row-4">
               ${renderField('Status', renderAccountStatusSelect('status', detail.account.status))}
               ${renderField('Outreach stage', '<select name="outreachStatus">' + renderOutreachStageOptions(detail.account.outreachStatus) + '</select>')}
-              ${renderField('Priority', renderPrioritySelect('priority', detail.account.priority || 'medium'))}
+            ${renderField('Priority', renderPrioritySelect('priority', detail.account.priority || priorityLabel))}
               ${renderField('Owner', renderOwnerSelect('owner', detail.account.owner || ''))}
             </div>
             ${renderField('Next action', '<input name="nextAction" value="' + escapeAttr(detail.account.nextAction || '') + '" placeholder="Reach out to VP Talent">')}
@@ -5340,14 +5359,15 @@ async function renderContactsView() {
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
   setViewTitle(isJobSeekerPersona() ? 'Network' : 'Contacts');
   const result = await api(`/api/contacts${buildQuery(appState.contactQuery)}`);
+  const jobSeeker = isJobSeekerPersona();
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Relationship intelligence</p>
-          <h3>Prioritized contacts</h3>
-          <p class="subtitle">Your network ranked by relevance, title strength, and company overlap so you can route outreach through the best people first.</p>
+          <h3>${jobSeeker ? 'Warm contact paths' : 'Prioritized contacts'}</h3>
+          <p class="subtitle">${jobSeeker ? 'Your network ranked by company overlap and role relevance so you can ask the right person for context, direction, or a referral.' : 'Your network ranked by relevance, title strength, and company overlap so you can route outreach through the best people first.'}</p>
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Results', formatNumber(result.total))}
@@ -5358,12 +5378,12 @@ async function renderContactsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Contact intelligence</h3><p class="muted small">Your network ranked by company overlap and title relevance.</p></div>${renderExportButton('contacts')}</div>
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>${renderExportButton('contacts')}</div>
       <form id="contacts-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
-        <div class="field field--action"><label>Filter contacts</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
+        <div class="field field--action"><label>${jobSeeker ? 'Filter network' : 'Filter contacts'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
       </form>
       ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts match these filters', copy: 'Reset filters or import your LinkedIn Connections.csv to see mapped contacts.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset filters</button><a class="secondary-button" href="#/admin">Import contacts</a>' })}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
@@ -5377,14 +5397,15 @@ async function renderJobsView() {
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
   const atsOptions = stateBootstrap.filters?.atsTypes || [];
+  const jobSeeker = isJobSeekerPersona();
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Hiring feed</p>
-          <h3>Imported job activity</h3>
-          <p class="subtitle">Normalized open roles from supported ATS boards, deduped and ready to use as outreach context.</p>
+          <h3>${jobSeeker ? 'Open roles at target companies' : 'Imported job activity'}</h3>
+          <p class="subtitle">${jobSeeker ? 'Current roles from supported careers boards, deduped and ready to compare against your target list and network.' : 'Normalized open roles from supported ATS boards, deduped and ready to use as outreach context.'}</p>
         </div>
         <div class="kpi-ribbon headline-metrics">
           ${renderMetricTile('Results', formatNumber(result.total))}
@@ -5395,7 +5416,7 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>Imported jobs</h3><p class="muted small">Use filters to isolate imported roles by company, ATS, and posting recency.</p></div>${renderExportButton('jobs')}</div>
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">Use filters to isolate roles by company, careers platform, and posting recency.</p></div>${renderExportButton('jobs')}</div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
@@ -5403,7 +5424,7 @@ async function renderJobsView() {
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
-        <div class="field field--action"><label>Filter jobs</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
+        <div class="field field--action"><label>${jobSeeker ? 'Filter roles' : 'Filter jobs'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
@@ -5877,8 +5898,8 @@ function renderAccountsTable(items) {
   return `
     <div id="bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Bulk actions">
       <span id="bulk-count">0 selected</span>
-      <select id="bulk-status" aria-label="Bulk status change"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="outreach">Outreach</option><option value="engaged">Engaged</option><option value="client">Client</option><option value="paused">Paused</option></select>
-      <select id="bulk-priority" aria-label="Bulk priority change"><option value="">Change priority...</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      <select id="bulk-status" aria-label="Bulk status change"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="contacted">Contacted</option><option value="in_conversation">In conversation</option><option value="client">Client</option><option value="paused">Paused</option></select>
+      <select id="bulk-priority" aria-label="Bulk priority change"><option value="">Change priority...</option><option value="strategic">Strategic</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
       ${renderOwnerSelect('bulk-owner', '', true).replace('name="bulk-owner"', 'id="bulk-owner" aria-label="Bulk owner change"')}
       <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
@@ -5915,7 +5936,7 @@ function renderContactsTable(items) {
     <div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Company</th><th>Title</th><th>Score</th><th>Connected</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${item.linkedinUrl ? `<a class="row-link" href="${escapeAttr(item.linkedinUrl)}" target="_blank" rel="noreferrer">LinkedIn</a>` : 'No URL'}</div></td>
+          <td><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${safeExternalHref(item.linkedinUrl) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.linkedinUrl))}" target="_blank" rel="noreferrer">LinkedIn</a>` : 'No URL'}</div></td>
           <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
           <td>${escapeHtml(item.title || '')}</td>
           <td>${formatNumber(item.priorityScore)}</td>
@@ -5939,7 +5960,7 @@ function renderJobsTable(items, compact) {
     <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td>${(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(item.jobUrl || item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
+          <td>${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
           <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
           <td>${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
           <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
@@ -6203,7 +6224,14 @@ function renderIdentityResolutionCard(detail) {
     primaryConfig ? renderStatusPill(primaryConfig.discoveryStatus || 'unknown', 'neutral') : '',
   ].filter(Boolean).join('');
 
-  const evidenceText = account.enrichmentEvidence || account.enrichmentNotes || account.enrichmentFailureReason || 'No enrichment evidence stored yet.';
+  const resolvedConfig = primaryConfig && ['resolved', 'mapped', 'discovered', 'manual'].includes(String(primaryConfig.discoveryStatus || '').toLowerCase());
+  const configType = primaryConfig?.atsType || primaryConfig?.ats || 'job board';
+  const evidenceText = account.enrichmentEvidence
+    || account.enrichmentNotes
+    || account.enrichmentFailureReason
+    || (resolvedConfig ? `Resolved from the ${humanize(configType)} board${primaryConfig.boardId ? ` (${primaryConfig.boardId})` : ''}.` : 'No identity evidence stored yet.');
+  const sourceText = account.enrichmentSource || primaryConfig?.discoveryMethod || primaryConfig?.source || 'unknown';
+  const lastEnrichedAt = account.lastEnrichedAt || primaryConfig?.lastCheckedAt || primaryConfig?.updatedAt;
   return `
     <div class="detail-card">
       <div class="panel-header">
@@ -6217,18 +6245,18 @@ function renderIdentityResolutionCard(detail) {
       })}
       <div class="definition-grid" style="margin-top:14px;">
         <div><span class="small muted">Canonical domain</span><strong>${escapeHtml(account.canonicalDomain || account.domain || 'Not set')}</strong></div>
-        <div><span class="small muted">Careers URL</span><strong>${account.careersUrl ? `<a class="row-link" href="${escapeAttr(account.careersUrl)}" target="_blank" rel="noreferrer">${escapeHtml(account.careersUrl)}</a>` : 'Not set'}</strong></div>
-        <div><span class="small muted">Source</span><strong>${escapeHtml(humanize(account.enrichmentSource || 'unknown'))}</strong></div>
-        <div><span class="small muted">Last enriched</span><strong>${escapeHtml(formatDate(account.lastEnrichedAt) || 'Never')}</strong></div>
+        <div><span class="small muted">Careers URL</span><strong>${safeExternalHref(account.careersUrl) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(account.careersUrl))}" target="_blank" rel="noreferrer">${escapeHtml(account.careersUrl)}</a>` : 'Not set'}</strong></div>
+        <div><span class="small muted">Source</span><strong>${escapeHtml(humanize(sourceText))}</strong></div>
+        <div><span class="small muted">Last checked</span><strong>${escapeHtml(formatDate(lastEnrichedAt) || 'Never')}</strong></div>
       </div>
       <div class="empty-state empty-state--compact" style="margin-top:14px;">${escapeHtml(evidenceText)}</div>
       <div class="button-row button-row--wrap" style="margin-top:14px;">
-        <button class="secondary-button" data-action="account-quick-enrich" data-id="${account.id}">Quick enrich</button>
-        <button class="primary-button" data-action="account-resolve-now" data-id="${account.id}">Resolve now</button>
-        <button class="ghost-button" data-action="account-deep-verify" data-id="${account.id}">Deep verify</button>
+        <button class="secondary-button" data-action="account-quick-enrich" data-id="${account.id}">Refresh local identity</button>
+        ${needsDeepResolve(account) ? `<button class="primary-button" data-action="account-resolve-now" data-id="${account.id}">Resolve now</button>` : ''}
+        ${needsDeepResolve(account) ? `<button class="ghost-button" data-action="account-deep-verify" data-id="${account.id}">Deep verify</button>` : ''}
         ${primaryConfig ? `<button class="ghost-button" data-action="rerun-enrichment-resolution" data-id="${account.id}">Rerun ATS</button>` : ''}
       </div>
-      <p class="small muted" style="margin-top:10px;">Quick enrich only uses local signals already in the app. Resolve now uses the balanced web verifier. Deep verify spends more time probing the public web when a high-value account still looks unresolved.</p>
+      <p class="small muted" style="margin-top:10px;">Refresh local identity uses data already in this workspace. Resolve now checks the company's public careers presence. Deep verify is best for important companies that still need review.</p>
     </div>
   `;
 }
@@ -6498,10 +6526,11 @@ function renderJobCoverageHealth(diagnostics = {}) {
   const issues = Array.isArray(diagnostics.coverageIssues) ? diagnostics.coverageIssues : [];
   const tracked = Number(summary.trackedCompanies || 0);
   const ready = Number(summary.importReady || 0);
+  const companiesReady = Number(summary.companiesReady ?? ready);
   const issueCount = Number(summary.totalIssues || 0);
   const legacyUnclassified = Number(summary.legacyUnclassifiedCompanies || 0);
   const coverageCopy = tracked
-    ? `${formatNumber(ready)} of ${formatNumber(tracked)} tracked companies have a refresh-ready job source.`
+    ? `${formatNumber(companiesReady)} of ${formatNumber(tracked)} tracked companies have a refresh-ready job source.`
     : 'Track companies to begin finding job sources.';
 
   return `
@@ -7662,10 +7691,15 @@ async function curateLegacyTargets() {
     }
     const workspaceName = appState.bootstrap?.workspace?.name || 'Workspace';
     const expected = `CURATE ${workspaceName}`;
-    const examples = (preview.preview || []).slice(0, 4).map((item) => item.displayName).filter(Boolean).join(', ');
+    const examples = (preview.preview || []).slice(0, 4).map((item) => {
+      const detail = [`score ${formatNumber(item.targetScore || 0)}`];
+      if (Number(item.openRoleCount || 0) > 0) detail.push(`${formatNumber(item.openRoleCount)} open roles`);
+      if (Number(item.connectionCount || 0) > 0) detail.push(`${formatNumber(item.connectionCount)} connections`);
+      return `${item.displayName} (${detail.join(', ')})`;
+    }).filter(Boolean).join('; ');
     const confirmation = await showAppDialog({
       title: 'Confirm target classification',
-      message: `${formatNumber(preview.selectedTargets)} companies will receive automatic ATS discovery and ${formatNumber(preview.networkCompanies)} will remain network context. Top-ranked examples: ${examples || 'none available'}. This changes classification, not customer records or historical jobs.`,
+      message: `${formatNumber(preview.selectedTargets)} companies will receive automatic ATS discovery and ${formatNumber(preview.networkCompanies)} will remain searchable network context. Top-ranked examples: ${examples || 'none available'}. This updates company classifications; it does not delete contacts, activity, or historical jobs.`,
       confirmLabel: 'Classify companies',
       cancelLabel: 'Keep current setup',
       danger: true,
@@ -7955,8 +7989,10 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
 
 async function archiveAccount(accountId) {
   if (!accountId) return;
-
-  await api(`/api/accounts/${accountId}`, { method: 'DELETE' });
+  const previousStatus = appState.accountDetail?.account?.id === accountId
+    ? appState.accountDetail.account.status || 'new'
+    : 'new';
+  await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: 'paused' }) });
   invalidateAppData();
 
   if ((location.hash || '').endsWith(`/accounts/${accountId}`)) {
@@ -7966,7 +8002,7 @@ async function archiveAccount(accountId) {
   }
 
   showUndoToast('Account paused.', async () => {
-    await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: 'new' }) });
+    await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: previousStatus }) });
     invalidateAppData();
     await renderRoute();
   });
@@ -7986,9 +8022,9 @@ async function runSearch(value) {
     searchResults.setAttribute('aria-busy', 'false');
     searchResults.innerHTML = `
     ${total ? '' : `<div class="empty-state empty-state--compact">No matches for "${escapeHtml(value)}". Try a company, person, or role name.</div>`}
-    ${renderSearchGroup('Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(getTargetScore(item))} target score · ${formatNumber(item.hiringVelocity || 0)} hiring velocity · ${formatNumber(item.engagementScore || 0)} engagement`)}
-    ${renderSearchGroup('Contacts', results.contacts, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.companyName || '')} · ${formatNumber(item.priorityScore)} score`)}
-    ${renderSearchGroup('Jobs', results.jobs, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/jobs', (item) => escapeHtml(item.title), (item) => `${escapeHtml(item.companyName || '')} · ${formatDate(item.postedAt)}`)}
+    ${renderSearchGroup(isJobSeekerPersona() ? 'Companies' : 'Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(getTargetScore(item))} target score · ${formatNumber(item.hiringVelocity || 0)} hiring velocity · ${formatNumber(item.engagementScore || 0)} engagement`)}
+    ${renderSearchGroup(isJobSeekerPersona() ? 'Network' : 'Contacts', results.contacts, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.companyName || '')} · ${formatNumber(item.priorityScore)} score`)}
+    ${renderSearchGroup(isJobSeekerPersona() ? 'Open roles' : 'Jobs', results.jobs, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/jobs', (item) => escapeHtml(item.title), (item) => `${escapeHtml(item.companyName || '')} · ${formatDate(item.postedAt)}`)}
     `;
   } catch (error) {
     searchResults.setAttribute('aria-busy', 'false');
@@ -8109,7 +8145,7 @@ function renderAccountResolutionSummary(item = {}) {
     <div class="table-cell-stack">
       <div class="inline-badge-row inline-badge-row--compact">
         ${atsTypes.length ? atsTypes.map((type) => renderStatusPill(type, 'neutral')).join('') : renderStatusPill('no board', 'neutral')}
-        ${renderStatusPill(humanize(discoveryStatus), discoveryStatus === 'mapped' || discoveryStatus === 'discovered' ? 'success' : 'neutral')}
+        ${renderStatusPill(humanize(discoveryStatus), ['resolved', 'mapped', 'discovered', 'manual'].includes(String(discoveryStatus).toLowerCase()) ? 'success' : 'neutral')}
         ${renderStatusPill(confidence, toneForEnrichmentConfidence(confidence))}
       </div>
       ${renderEnrichmentSignalPills({

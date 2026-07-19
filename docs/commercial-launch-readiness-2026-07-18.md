@@ -4,7 +4,7 @@
 
 **LIMITED BETA READY. Not ready for a broad paid launch.** The core product is
 real and functional: production is healthy, tenant-scoped workflows work, live
-ATS adapters imported 2,406 public jobs from 12/12 providers in 9.0 seconds,
+ATS adapters imported 2,409 public jobs from 12/12 providers in 9.5 seconds,
 and the main workspace currently holds 6,184 active jobs from 82 resolved
 boards. The remaining launch gates are operational configuration, legacy data
 curation, retention cleanup, and professional legal review rather than a demo
@@ -35,13 +35,13 @@ PowerShell/SQLite edition remains supported separately.
 ## Verified baseline
 
 - SaaS syntax checks: pass.
-- SaaS unit/contract tests: 143/143 pass.
-- Chromium customer journeys and accessibility checks: 21/21 pass.
+- SaaS unit/contract tests: 154/154 pass.
+- Chromium customer journeys and accessibility checks: 22/22 pass.
 - Compact compatibility journey: Chromium, Firefox, and WebKit pass.
 - Renderer checks/tests: 4/4 pass.
 - Deterministic ATS contract: 12/12 providers pass.
-- Live ATS canary: 12/12 providers, 2,406 jobs, 0 provider errors.
-- Schema migration contract: 24 tables, 54 indexes, 9 migrations; no drift.
+- Live ATS canary: 12/12 providers, 2,409 jobs, 0 provider errors.
+- Schema migration contract: 24 tables, 56 indexes, 10 migrations; no drift.
 - Production relational parity: 3/3 workspaces pass deep parity.
 - Production health: `{"ok":true,"status":"operational"}`.
 - Production dependency audits: 0 known vulnerabilities in SaaS and renderer.
@@ -51,12 +51,12 @@ PowerShell/SQLite edition remains supported separately.
 
 ## P0 - launch blockers
 
-1. **Production session secret is below the new 32-character minimum.** Evidence:
-   the value-safe production checker reports only the variable name and length
-   failure. Impact: reduced signing-key strength; deploying the hardened build
-   will fail closed until this is rotated. Fix: generate a strong random secret,
-   schedule the expected one-time session logout, set it in Railway, and verify
-   login/logout/restart persistence. Never print or commit the value.
+1. **The stronger production session secret is staged but not active.** A strong
+   replacement and `BD_SUPPORT_ADMIN_EMAILS` were set in Railway with deployment
+   explicitly skipped, so current sessions have not yet rotated. Impact: the
+   active release still uses its previous signing configuration. Fix: include the
+   planned one-time logout in the approved deployment, then verify login, logout,
+   and restart persistence. Never print or commit the value.
 2. **Production account recovery email is unavailable.** `RESEND_API_KEY` and
    `BD_EMAIL_FROM` are unset. Impact: paying users cannot self-recover accounts
    and verification/support email cannot be trusted. Fix: verify a sending
@@ -74,8 +74,9 @@ PowerShell/SQLite edition remains supported separately.
 
 ## P1 - serious commercial risks
 
-1. Production has no `BD_SUPPORT_ADMIN_EMAILS` and no `BD_ERROR_WEBHOOK`.
-   Customer requests and server failures lack accountable real-time routing.
+1. `BD_SUPPORT_ADMIN_EMAILS` is staged for the named operator but will not be
+   active until deployment. `BD_ERROR_WEBHOOK` remains unset, so server failures
+   still lack accountable real-time routing.
 2. The main legacy workspace has 12,235 mechanically linkable board records and
    12,317 unclassified legacy companies. Discovery is diluted across an entire
    network history. A dry-run board-link repair and owner-confirmed target
@@ -155,6 +156,19 @@ PowerShell/SQLite edition remains supported separately.
   workspace-wide data deletion.
 - Added a read-only production duplicate gate and staged only the contact/job
   constraints proven clean by aggregate production evidence.
+- Corrected account-to-board resolution across blob and relational reads, made
+  all visible account/contact/board/enrichment filters functional, and added
+  account-linked board lookup indexes.
+- Excluded network-only companies from discovery coverage metrics and legacy
+  refresh work while preserving them as searchable relationship context.
+- Restored job-seeker terminology and workflows across setup, navigation,
+  companies, network contacts, open roles, search, and outreach.
+- Reworked sales outreach around one verified role plus a compact role count,
+  with shorter LinkedIn, email, follow-up, and call copy.
+- Fixed Pause account to use the supported reversible status transition and
+  added contract coverage for every literal customer action.
+- Restricted customer-visible and imported external links to HTTP/HTTPS and
+  discarded unsafe job-link protocols before persistence.
 
 ## Required production configuration
 

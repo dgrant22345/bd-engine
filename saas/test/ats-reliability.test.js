@@ -150,6 +150,35 @@ test('US geography recognizes state codes without accepting Canadian cities', as
   }
 });
 
+test('job imports discard non-HTTP links before they reach the customer UI', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-unsafe-job-url';
+  addTenant(store, tenantId);
+  await addReadyBoard(store, tenantId, {
+    companyName: 'Safe Link Labs',
+    atsType: 'greenhouse',
+    boardId: 'safe-link-labs',
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ jobs: [{
+    id: 'unsafe-url',
+    title: 'Security Engineer',
+    location: { name: 'Toronto, ON' },
+    absolute_url: 'javascript:alert(1)',
+  }] });
+
+  try {
+    await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    const imported = await store.findJobs(tenantId, { page: 1, pageSize: 20 });
+    assert.equal(imported.total, 1);
+    assert.equal(imported.items[0].jobUrl, '');
+    assert.equal(imported.items[0].url, '');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('XML and HTML providers retry transient rate limits', async () => {
   const store = createStore();
   const tenantId = 'tenant-text-provider-retry';

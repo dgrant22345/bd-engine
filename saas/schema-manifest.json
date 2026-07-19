@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "a311cda4a30e1575d0cba3d54147ae5f72439bec55e980688969f01d6210dfe7",
+  "sourceSha256": "09a2b6011ec1d6eb95dd89b50c9dc23b851e17acd1221e0c27f5b6f82423f1ff",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -37,6 +37,10 @@
     {
       "id": "20260718_relational_identity_constraints",
       "description": "Enforce verified contact and job natural identities"
+    },
+    {
+      "id": "20260718_board_config_account_index",
+      "description": "Index account-linked job board lookups"
     }
   ],
   "tables": [
@@ -84,8 +88,10 @@
     "audit_log_tenant_action_idx",
     "audit_log_tenant_entity_idx",
     "background_jobs_tenant_updated_idx",
+    "board_configs_tenant_account_idx",
     "board_configs_tenant_board_idx",
     "board_configs_tenant_checked_idx",
+    "board_configs_tenant_company_idx",
     "board_configs_tenant_identity_idx",
     "board_configs_tenant_status_idx",
     "board_configs_tenant_updated_idx",

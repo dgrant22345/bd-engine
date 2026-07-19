@@ -660,6 +660,52 @@ test('outreach drafts use verified role context and return real alternate angles
   }
 });
 
+test('sales outreach keeps multi-role first touches concise and non-repetitive', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-outreach-multiple-roles';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Northstar Robotics' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Northstar Robotics',
+    atsType: 'greenhouse',
+    boardId: 'northstar',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    jobs: [
+      { id: 301, title: 'Senior Controls Engineer', location: { name: 'Toronto, ON' }, absolute_url: 'https://boards.greenhouse.io/northstar/jobs/301', updated_at: new Date().toISOString() },
+      { id: 302, title: 'Embedded Robotics Developer', location: { name: 'Toronto, ON' }, absolute_url: 'https://boards.greenhouse.io/northstar/jobs/302', updated_at: new Date().toISOString() },
+      { id: 303, title: 'Platform Engineer', location: { name: 'Remote' }, absolute_url: 'https://boards.greenhouse.io/northstar/jobs/303', updated_at: new Date().toISOString() },
+    ],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'Test', limits: { jobBoards: -1 } },
+      autoDiscover: false,
+    });
+    const jobs = await store.findJobs(tenantId, { q: 'Senior Controls Engineer', page: 1, pageSize: 10 });
+    const draft = await store.createOutreachDraft(tenantId, account.id, {
+      contactName: 'Priya Shah',
+      contactTitle: 'Director of Talent',
+      template: 'talent_partner',
+      jobId: jobs.items[0].id,
+    });
+    assert.match(draft.linkedin_message, /and 2 other open roles/);
+    assert.equal((draft.linkedin_message.match(/Senior Controls Engineer/g) || []).length, 1);
+    assert.doesNotMatch(draft.linkedin_message, /Toronto.*Toronto|visible openings/i);
+    assert.ok(draft.linkedin_message.length <= 260, draft.linkedin_message);
+    assert.match(draft.message_body, /Given your role as Director of Talent/);
+    assert.doesNotMatch(draft.message_body, /Your role as .* made you/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('outreach drafts expose limited context instead of inventing a hiring problem', async () => {
   const store = createStore();
   const tenantId = 'tenant-outreach-limited';

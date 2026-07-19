@@ -1,4 +1,5 @@
 import { dbQuery, isDbReady } from './db.js';
+import { decorateAccountsWithConfigs } from './account-resolution.js';
 
 function rawOrRow(row) {
   return row?.raw && typeof row.raw === 'object' ? row.raw : row;
@@ -148,8 +149,22 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
     ),
     dbQuery(`SELECT COUNT(*)::int AS total FROM accounts WHERE tenant_id = $1${searchSql}`, countParams),
   ]);
+  const accountRows = (rowsResult?.rows || []).map(rawOrRow);
+  const accountIds = accountRows.map((item) => item.id).filter(Boolean);
+  const accountNames = accountRows.map((item) => String(item.normalizedName || '').trim().toLowerCase()).filter(Boolean);
+  const configResult = accountRows.length
+    ? await dbQuery(
+      `SELECT raw FROM board_configs
+       WHERE tenant_id = $1 AND (
+         account_id = ANY($2::text[]) OR
+         ((account_id IS NULL OR account_id = '') AND normalized_company_name = ANY($3::text[]))
+       )`,
+      [tenantId, accountIds, accountNames]
+    )
+    : null;
+  const configRows = (configResult?.rows || []).map(rawOrRow);
   return {
-    items: (rowsResult?.rows || []).map(rawOrRow),
+    items: decorateAccountsWithConfigs(accountRows, configRows),
     page,
     pageSize,
     total: Number(countResult?.rows?.[0]?.total || 0),

@@ -730,6 +730,17 @@ export async function initDb() {
       `);
     });
 
+    await runSchemaMigration('20260718_board_config_account_index', 'Index account-linked job board lookups', async (client) => {
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_account_idx
+          ON board_configs (tenant_id, account_id, updated_at DESC, id)
+          WHERE account_id IS NOT NULL AND account_id <> '';
+        CREATE INDEX IF NOT EXISTS board_configs_tenant_company_idx
+          ON board_configs (tenant_id, normalized_company_name, updated_at DESC, id)
+          WHERE normalized_company_name <> '';
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
