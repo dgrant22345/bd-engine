@@ -34,15 +34,33 @@ test('Sales Professional does not advertise unavailable login seats', () => {
   assert.equal(getPlan('sales').limits.users, 1);
 });
 
+test('public prices and limits match enforced plan entitlements', async () => {
+  const landing = await readFile(landingPath, 'utf8');
+  const expectedClaims = [
+    ['trial', /\$0<\/span><span class="price-period">\/14 days/, /25 accounts/, /100 contacts/, /50 ATS job boards/, /3 CSV imports/],
+    ['sales', /\$10<\/span><span class="price-period">\/month/, /1,000 accounts/, /10,000 contacts/, /Unlimited ATS job boards/],
+    ['jobseeker', /\$5<\/span><span class="price-period">\/month/, /200 target companies/, /1,000 network contacts/, /50 CSV imports/],
+  ];
+  for (const [planId, price, accounts, contacts, finalClaim] of expectedClaims) {
+    assert.match(landing, price, `${planId} public price drifted`);
+    assert.match(landing, accounts, `${planId} public account limit drifted`);
+    assert.match(landing, contacts, `${planId} public contact limit drifted`);
+    assert.match(landing, finalClaim, `${planId} public feature limit drifted`);
+  }
+  assert.deepEqual(getPlan('trial').limits, { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 });
+  assert.deepEqual(getPlan('jobseeker').limits, { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 });
+  assert.deepEqual(getPlan('sales').limits, { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 });
+});
+
 test('password recovery gives users a next step when email delivery is unavailable', async () => {
   const landing = await readFile(landingPath, 'utf8');
   assert.match(landing, /Password reset email is temporarily unavailable/);
-  assert.match(landing, /support@bdengine\.io/);
+  assert.match(landing, /dgfinance15@gmail\.com/);
 });
 
 test('authenticated shell exposes actionable support and verification states', async () => {
   const landing = await readFile(landingPath, 'utf8');
-  assert.match(landing, /mailto:support@bdengine\.io/);
+  assert.match(landing, /mailto:dgfinance15@gmail\.com/);
   assert.match(landing, /Support center/);
   assert.match(landing, /Your requests/);
   assert.match(landing, /Support inbox/);

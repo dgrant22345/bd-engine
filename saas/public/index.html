@@ -257,7 +257,7 @@
         });
         state.resetMessage = data.message || (data.emailConfigured
           ? 'If an account exists for that email, a reset link will be sent shortly.'
-          : 'Password reset email is temporarily unavailable. Contact support@bdengine.io for account recovery.');
+          : 'Password reset email is temporarily unavailable. Contact dgfinance15@gmail.com for account recovery.');
         if (data.resetToken) {
           state.resetToken = data.resetToken;
           state.view = 'reset';
@@ -702,7 +702,7 @@
       const updated = 'April 26, 2026';
       const shared = {
         updated,
-        support: 'Support: support@bdengine.io',
+        support: 'Support: dgfinance15@gmail.com',
       };
       const pages = {
         trust: {
@@ -749,7 +749,7 @@
             ['Authentication', 'Sessions use secure HTTP-only cookies in production. Passwords are hashed before storage.'],
             ['Secrets', 'Stripe and database secrets must live in Railway environment variables, never in the client bundle or repository.'],
             ['Monitoring', 'The public health endpoint exposes only service availability. Detailed operational diagnostics require an authenticated account.'],
-            ['Incident contact', 'Security, privacy, or account concerns can be sent to support@bdengine.io.'],
+            ['Incident contact', 'Security, privacy, or account concerns can be sent to dgfinance15@gmail.com.'],
           ],
           cta: 'Open status',
         },
@@ -809,7 +809,7 @@
           <main class="trust-main">
             <p class="hero-badge">System status</p>
             <h1>Service status</h1>
-            <p class="trust-intro">Current availability of BD Engine Cloud. If something looks wrong that is not reflected here, email support@bdengine.io.</p>
+            <p class="trust-intro">Current availability of BD Engine Cloud. If something looks wrong that is not reflected here, email dgfinance15@gmail.com.</p>
             <div id="status-panel" class="status-panel">Checking status...</div>
           </main>
         </div>`;
@@ -828,7 +828,7 @@
         `;
       } catch (err) {
         const panel = root.querySelector('#status-panel');
-        if (panel) panel.innerHTML = '<div class="auth-error">We could not reach the service just now. Please try again shortly or email support@bdengine.io.</div>';
+        if (panel) panel.innerHTML = '<div class="auth-error">We could not reach the service just now. Please try again shortly or email dgfinance15@gmail.com.</div>';
       }
     }
 
@@ -1167,7 +1167,7 @@
               <label for="support-description">Details</label>
               <textarea id="support-description" name="body" rows="7" maxlength="5000" placeholder="What were you trying to do? What did you see instead?" required></textarea>
               <div class="support-form-actions"><button class="btn btn-primary" type="submit">Send request</button></div>
-              <p class="support-email-fallback">Cannot use this form? <a href="mailto:support@bdengine.io?subject=BD%20Engine%20support">Email support@bdengine.io</a>.</p>
+              <p class="support-email-fallback">Cannot use this form? <a href="mailto:dgfinance15@gmail.com?subject=BD%20Engine%20support">Email dgfinance15@gmail.com</a>.</p>
             </form>
             <section class="support-history" aria-labelledby="support-history-title">
               <div class="support-section-heading"><div><h3 id="support-history-title">Your requests</h3><p>${tickets.length ? `${tickets.length} recent request${tickets.length === 1 ? '' : 's'}` : 'Updates and replies will appear here.'}</p></div></div>
@@ -1177,7 +1177,7 @@
           </div>`;
         wireCustomerSupportForms(backdrop);
       } catch (error) {
-        body.innerHTML = `<div class="support-error" role="alert"><strong>Support requests could not load.</strong><p>${escapeHtml(error.message)}</p><a href="mailto:support@bdengine.io?subject=BD%20Engine%20support">Email support instead</a></div>`;
+        body.innerHTML = `<div class="support-error" role="alert"><strong>Support requests could not load.</strong><p>${escapeHtml(error.message)}</p><a href="mailto:dgfinance15@gmail.com?subject=BD%20Engine%20support">Email support instead</a></div>`;
       }
     }
 

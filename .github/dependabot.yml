@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /saas
+    target-branch: deploy/perf-restore
+    schedule:
+      interval: monthly
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+    open-pull-requests-limit: 4
+
+  - package-ecosystem: npm
+    directory: /renderer
+    target-branch: deploy/perf-restore
+    schedule:
+      interval: monthly
+    groups:
+      renderer-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 2
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: deploy/perf-restore
+    schedule:
+      interval: monthly
+    groups:
+      workflow-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 2

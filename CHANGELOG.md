@@ -16,6 +16,13 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Added grounded outreach variants, support conversations, mutation auditing, subscription recovery states, backup/restore tools, and production storage safeguards.
 - Added authenticated encrypted backups, guarded non-empty restores, bounded data retention, privacy-safe structured logs, and non-migrating read-only operational diagnostics.
 - Added an explicit public-database mode for encrypted Railway operator backups.
+- Added a required PostgreSQL 16 recovery drill that proves encrypted backup,
+  transactional restore, exact durable-table recovery, volatile-data exclusion,
+  and sequence repair on disposable databases.
+- Added a published vulnerability-reporting path, a functional support fallback,
+  pricing-to-entitlement contract coverage, and grouped monthly dependency PRs.
+- Expanded the scheduled production probe to detect browser-security, CSP nonce,
+  secure-cookie, and public pricing regressions.
 - Restricted browser resource loading with a full Content Security Policy, stopped trusting Host headers for customer URLs, and reduced CI workflow tokens to read-only permissions.
 - Replaced the broad inline-script CSP exception with a per-response cryptographic nonce.
 - Hardened signup, login, reset, demo, analytics, and client-error rate limits against spoofed forwarded IP headers.
