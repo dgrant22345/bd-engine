@@ -5,6 +5,7 @@ const defaultAdminCollapsed = {
   'runtime-status': true,
   'background-jobs': true,
   'pipeline-ops': false,
+  'search-focus': false,
   'scoring-settings': true,
   'automation-rules': true,
   'alert-thresholds': true,
@@ -70,7 +71,7 @@ const appState = {
   activeView: 'dashboard',
   accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
@@ -263,7 +264,7 @@ const hamburgerBtn = document.getElementById('mobile-hamburger');
 const defaultQueries = {
   accounts: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
 };
@@ -2867,15 +2868,22 @@ function bindEvents() {
     }
 
     if (form.id === 'settings-form') {
-      const payload = getFormValues(form);
-      payload.gtaPriority = payload.gtaPriority === 'true';
-      await api('/api/settings', {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
+      const values = getFormValues(form);
+      const result = await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          searchFocus: {
+            targetRoles: values.targetRoles,
+            excludedRoles: values.excludedRoles,
+            targetIndustries: values.targetIndustries,
+            workStyle: values.workStyle,
+            minimumRelevanceScore: Number(values.minimumRelevanceScore || 45),
+          },
+        }),
       });
       invalidateAppData();
       await renderAdminView();
-      showToast('Scoring settings saved.', 'success');
+      showToast(`Search focus saved. ${formatNumber(result.rescoredJobs || 0)} existing jobs rescored.`, 'success');
       return;
     }
 
@@ -4898,7 +4906,6 @@ async function renderDashboardView(options = {}) {
         if (!payload || getRouteRoot(routeAtRequest) !== 'dashboard' || getRouteRoot() !== 'dashboard') return;
         void renderDashboardView({
           dashboardPayload,
-          tasksPayload,
           extendedPayload: payload,
           skipLoading: true,
         });
@@ -5400,9 +5407,13 @@ async function renderJobsView() {
   renderLoadingState('Jobs', 'Loading job activity...');
   setViewTitle(isJobSeekerPersona() ? 'Open roles' : 'Jobs');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
   const atsOptions = stateBootstrap.filters?.atsTypes || [];
   const jobSeeker = isJobSeekerPersona();
+  const personaKey = jobSeeker ? 'jobseeker' : 'bd';
+  const searchFocus = stateBootstrap.settings?.searchFocusByPersona?.[personaKey] || {};
+  const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
+  if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
+  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -5421,14 +5432,15 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">Use filters to isolate roles by company, careers platform, and posting recency.</p></div>${renderExportButton('jobs')}</div>
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Set a search focus in Tools to rank jobs by fit, then filter by company, platform, and recency.'}</p></div>${renderExportButton('jobs')}</div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
         ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
-        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
+        ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option><option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
+        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
         <div class="field field--action"><label>${jobSeeker ? 'Filter roles' : 'Filter jobs'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
@@ -5564,6 +5576,23 @@ async function renderAdminView() {
       ? 'Secure checkout is available for configured plans.'
       : 'Online plan changes are not available in this workspace. Your current access is unchanged.');
   const billingAccess = billing.billingAccess || {};
+  const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+  const searchFocus = stateBootstrap.settings.searchFocusByPersona?.[personaKey] || {};
+  const searchFocusCopy = personaKey === 'jobseeker'
+    ? {
+        title: 'Your role search focus',
+        subtitle: 'Tell BD Engine what a good opportunity looks like. This changes job ranking and which company boards are checked first.',
+        roleLabel: 'Roles you want',
+        rolePlaceholder: 'Financial analyst, strategy manager, business operations',
+        industryLabel: 'Preferred industries',
+      }
+    : {
+        title: 'Your demand signal focus',
+        subtitle: 'Define the hiring signals that suggest a company may need what you sell. This changes job ranking and board-discovery priority.',
+        roleLabel: 'Roles that signal demand',
+        rolePlaceholder: 'Recruiter, sales engineer, implementation manager',
+        industryLabel: 'Industries you sell into',
+      };
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
   const canChangeBilling = billing.canChangeBilling !== false;
@@ -5672,6 +5701,16 @@ async function renderAdminView() {
               </div>
             </div>
           </div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
+          <form id="settings-form" class="settings-grid">
+            ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate role titles with commas. Specific phrases produce better rankings.')}
+            ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases are ranked at the bottom.')}
+            ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Used to prioritize limited board-discovery batches when company industry data is available.')}
+            ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`)}
+            ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="0" max="100" step="5" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, '45 is a useful starting point. Raise it for a tighter shortlist.')}
+            <div class="field field--action"><label>Update rankings</label><button class="primary-button" type="submit">Save focus and rescore jobs</button></div>
+          </form>
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}
           <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
@@ -5879,8 +5918,8 @@ async function exportContactsCsv() {
 async function exportJobsCsv() {
   const items = await fetchAllForExport('/api/jobs', appState.jobQuery);
   exportToCsv('jobs.csv',
-    ['Title', 'Company', 'Location', 'ATS', 'Posted', 'Active', 'URL'],
-    items.map(j => [j.title, j.companyName, j.location, j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
+    ['Title', 'Company', 'Location', 'Fit score', 'Fit reasons', 'ATS', 'Posted', 'Active', 'URL'],
+    items.map(j => [j.title, j.companyName, j.location, j.relevanceScore ?? '', (j.relevanceReasons || []).join('; '), j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
   );
 }
 
@@ -5966,11 +6005,12 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
           <td>${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
           <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+          <td>${renderJobRelevance(item)}</td>
           <td>${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
           <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
           <td>${formatDate(item.postedAt)}</td>
@@ -5978,6 +6018,16 @@ function renderJobsTable(items, compact) {
           <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">Recent posting</div>' : ''}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
+}
+
+function renderJobRelevance(item) {
+  if (item.relevanceScore === null || item.relevanceScore === undefined) {
+    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">Set a search focus</div>`;
+  }
+  const band = item.relevanceBand || 'low';
+  const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
+  const reasons = Array.isArray(item.relevanceReasons) ? item.relevanceReasons.filter(Boolean).slice(0, 2).join(' · ') : '';
+  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons ? `<div class="small muted">${escapeHtml(reasons)}</div>` : ''}`;
 }
 
 function renderMiniStatList(items) {
@@ -6681,10 +6731,10 @@ function renderStoryCard(label, value, description, tone = 'neutral') {
 }
 
 let fieldIdCounter = 0;
-function renderField(label, control) {
+function renderField(label, control, hint = '') {
   const id = `field-${++fieldIdCounter}`;
   const controlWithId = control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
-  return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}</div>`;
+  return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}${hint ? `<span class="small muted">${escapeHtml(hint)}</span>` : ''}</div>`;
 }
 
 function renderEmptyState({ icon = 'i', title = 'Nothing to show yet', copy = '', action = '', compact = false } = {}) {

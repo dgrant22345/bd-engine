@@ -277,14 +277,19 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
     const ref = addParam(Math.floor(recencyDays));
     clauses.push(`j.posted_at ~ '^\\d{4}-\\d{2}-\\d{2}' AND (CURRENT_DATE - substring(j.posted_at, 1, 10)::date) <= ${ref}`);
   }
+  const relevanceExpression = `CASE WHEN COALESCE(j.raw->>'relevanceScore', '') ~ '^\\d+(\\.\\d+)?$' THEN (j.raw->>'relevanceScore')::numeric ELSE -1 END`;
+  const minRelevance = Number(query.minRelevance || 0);
+  if (minRelevance > 0) clauses.push(`${relevanceExpression} >= ${addParam(minRelevance)}`);
 
   const whereSql = clauses.join(' AND ');
   const countParams = [...params];
   const limitRef = addParam(pageSize);
   const offsetRef = addParam(offset);
-  const orderSql = query.sortBy === 'retrieved'
-    ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
-    : 'source_order.position ASC';
+  const orderSql = query.sortBy === 'relevance'
+    ? `${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
+    : query.sortBy === 'retrieved'
+      ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
+      : 'source_order.position ASC';
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `WITH source_order AS (

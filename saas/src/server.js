@@ -1688,7 +1688,7 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, config);
   }
 
-  if (pathname === '/api/settings' && req.method === 'POST') {
+  if (pathname === '/api/settings' && ['POST', 'PATCH'].includes(req.method)) {
     return sendJson(res, 200, await store.patchSettings(tenantId, await readJson(req)));
   }
 
