@@ -6,8 +6,8 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 ## Release candidate
 
-- [x] Approved head: `aa1c7399396c2ca19f0e6f750a8985a327678ba3`
-  Owner/date: `dgrant22345 / 2026-07-19`
+- [x] Approved head: `b47026aadd19aa331588a25f927ccc2d5608ccbe`
+  Owner/date: `dgrant22345 / 2026-07-26`
 - [x] CI is green for lint, schema contract, unit tests, browser journeys,
   compatibility, renderer tests, dependency audits, and deterministic ATS tests.
   Evidence: GitHub CI run 100.
@@ -42,11 +42,15 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   railway.cmd run --service bd-engine --environment production -- npm.cmd --prefix saas run check:production-config
   ```
 
+  Current result on 2026-07-26: all checks pass except `RESEND_API_KEY`,
+  `BD_EMAIL_FROM`, and `BD_REQUIRE_EMAIL_VERIFICATION=true`.
+
 ## Data and recovery
 
 - [x] A fresh encrypted backup completed and its SHA-256 was recorded.
-  Backup reference: `pre-deploy-1dea508-2026-07-19.json.gz.enc`, SHA-256
-  `2ea029a9933b336763c53b11f46761449e2042a8f1b50597b5540ef1a9663d9c`
+  Latest backup reference: `pre-target-curation-20260726.json.gz.enc`, SHA-256
+  `be2f3b305e9180e09272857684455c90552f9652145f4014a039a7049e99b45f`.
+  The AES-256-GCM archive was verified before the production classification.
 - [ ] `BD_BACKUP_ENCRYPTION_KEY` is a dedicated 32-byte key stored separately
   from backup archives; a key-loss and key-rotation owner is documented.
   Evidence: `________________`
@@ -98,10 +102,14 @@ Evidence for this section: `________________`
 
 - [ ] Maintenance risk and rollback owner were announced before deployment.
 - [x] The exact approved commit was deployed; Railway reports both services and
-  PostgreSQL online. Merge `b5fd0eb1d6c79535081c477627a4893afd6a2434`,
-  deployment `4c42b674-6674-4666-9e62-6020a60af19f`.
+  PostgreSQL online. Commit `b47026aadd19aa331588a25f927ccc2d5608ccbe`,
+  deployment `c228dde5-2d0a-4311-b24a-2b93503279e2`, image digest
+  `sha256:241b1e2116ea565fcb5e5d1b383d46bd09e6b0a28c98b2ff86b432538463b4a1`.
 - [ ] `/livez`, `/readyz`, `/health`, public entry, login, verified signup, one
   ATS discovery, one job refresh, support, billing, export, and logout passed.
+  Partial evidence: all three health endpoints returned HTTP 200, and authenticated
+  production ATS discovery and a live job refresh completed on 2026-07-26. The
+  remaining flows still require one recorded pass.
 - [ ] Authenticated status reports database/parity health, queue age below the
   threshold, 5xx rate below 1%, and ingestion success at or above 95%.
 - [x] The default-branch scheduled production probe is registered and green.
@@ -112,6 +120,27 @@ Evidence for this section: `________________`
 - [ ] Logs and alerts were watched through the agreed observation window.
 
 Observation owner/window/evidence: `________________`
+
+## Focused portfolio and ingestion evidence
+
+- [x] The existing production workspace was classified without deletion into
+  100 tracked companies and 12,217 searchable network-only companies. No legacy
+  unclassified companies remain.
+- [x] Actionable tracked-company ATS coverage is 91%: 91 of 100 tracked companies
+  have a refresh-ready source, 89 currently return usable jobs, nine need company
+  identity details, and two return no open jobs.
+- [x] A bounded discovery run checked the nine uncovered tracked companies and
+  completed without errors. It found no additional trustworthy public boards;
+  weak matches were not imported.
+- [x] A focused live ATS import completed at 100% and retained 8,625 active jobs.
+  The durable job history increased by 31 rows, from 12,916 to 12,947, without
+  changing the active count.
+- [x] The UI distinguishes actionable tracked-company coverage from the historical
+  all-company resolver rate. The historical 1% figure includes 12,217 network-only
+  records and is not the operational refresh coverage for the focused portfolio.
+- [ ] Configure job-search or sales role focus and review the 100 selected targets.
+  The deterministic legacy ranking had no role terms to use, and some inherited
+  company identities or domains remain low quality. No records were deleted.
 
 ## Rollback decision
 
