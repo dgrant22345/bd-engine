@@ -6976,28 +6976,60 @@ function buildBoardCandidates(config) {
 async function discoverAtsBoardFromCareersPages(config) {
   const urls = buildCareerPageUrls(config);
   const batchSize = 3;
+  const renderCandidates = [];
   for (let offset = 0; offset < urls.length; offset += batchSize) {
     const batch = urls.slice(offset, offset + batchSize);
     const results = await mapSettledWithConcurrency(batch, batchSize, async (url, batchIndex) => {
       const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
       const directResult = await inspectCareerPage(config, page, url, 'careers_page_link');
-      if (directResult) return directResult;
-
-      // Rendering is intentionally bounded to the highest-confidence URL for
-      // each company. A renderer is optional and receives public careers URLs
-      // only; ordinary provider imports never depend on it.
-      if (offset === 0 && batchIndex === 0 && ATS_RENDER_SERVICE_URL) {
-        const renderedPage = await fetchRenderedCareerPage(url);
-        if (renderedPage) {
-          return inspectCareerPage(config, renderedPage, url, 'rendered_careers_page');
-        }
-      }
-      return null;
+      return {
+        directResult,
+        page,
+        url,
+        order: offset + batchIndex,
+      };
     });
-    const match = results.find((result) => result.status === 'fulfilled' && result.value)?.value;
+    const match = results.find((result) => result.status === 'fulfilled' && result.value.directResult)?.value.directResult;
     if (match) return match;
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      const score = scoreRenderedCareerCandidate(result.value.page, result.value.url);
+      if (score > 0) renderCandidates.push({ ...result.value, score });
+    }
+  }
+
+  // Rendering is intentionally bounded to one public careers URL per company.
+  // Pick from pages that actually loaded so a dead careers subdomain does not
+  // consume the only render while the real /careers page sits one URL later.
+  if (ATS_RENDER_SERVICE_URL && renderCandidates.length) {
+    renderCandidates.sort((a, b) => b.score - a.score || a.order - b.order);
+    const candidate = renderCandidates[0];
+    const renderUrl = candidate.page?.finalUrl || candidate.url;
+    const renderedPage = await fetchRenderedCareerPage(renderUrl);
+    if (renderedPage) {
+      return inspectCareerPage(config, renderedPage, renderUrl, 'rendered_careers_page');
+    }
   }
   return null;
+}
+
+function scoreRenderedCareerCandidate(page, requestedUrl) {
+  const content = String(page?.content || '').trim();
+  if (content.length < 20) return 0;
+  const normalizedContent = normalizeSearchText(content.slice(0, 100000));
+  if (/(domain for sale|buy this domain|parked domain|under construction|coming soon)/.test(normalizedContent)) return 0;
+  const target = getUsableCareerUrl(page?.finalUrl || requestedUrl);
+  if (!target) return 0;
+  let score = 10;
+  try {
+    const parsed = new URL(target);
+    if (/^(careers|jobs)\./i.test(parsed.hostname)) score += 300;
+    if (/\/(careers?|jobs?|opportunities|open-positions|vacancies|join-us)(?:\/|$)/i.test(parsed.pathname)) score += 250;
+  } catch {
+    return 0;
+  }
+  if (/\b(careers?|jobs?|openings?|positions?|vacancies|hiring|recruiting)\b/.test(normalizedContent)) score += 75;
+  return score;
 }
 
 async function inspectCareerPage(config, page, requestedUrl, method) {
