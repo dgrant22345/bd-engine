@@ -8,6 +8,7 @@ import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
+import { validatePublicUrl } from './public-url.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -6724,13 +6725,30 @@ async function fetchStaticCareersJobs(config) {
   return { jobs: parseStaticCareersJobs(content, url) };
 }
 
+async function fetchWithPublicRedirects(url, init = {}) {
+  let currentUrl = await validatePublicUrl(url);
+  const method = String(init.method || 'GET').toUpperCase();
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return { response, finalUrl: response.url || currentUrl };
+    }
+    const location = response.headers.get('location');
+    if (!location) return { response, finalUrl: response.url || currentUrl };
+    if (!['GET', 'HEAD'].includes(method)) throw new Error('ATS write requests cannot follow redirects.');
+    if (redirects === 5) throw new Error('ATS request exceeded the redirect limit.');
+    currentUrl = await validatePublicUrl(new URL(location, currentUrl).toString());
+  }
+  throw new Error('ATS request exceeded the redirect limit.');
+}
+
 async function fetchJson(url, timeoutMs = 15000, init = {}) {
   let lastError = null;
   for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      const { response } = await fetchWithPublicRedirects(url, {
         ...init,
         headers: {
           accept: 'application/json',
@@ -6781,7 +6799,7 @@ async function fetchTextPage(url, timeoutMs = 15000) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      const { response, finalUrl } = await fetchWithPublicRedirects(url, {
         headers: {
           accept: 'text/html,application/xml,text/xml,application/json',
           'accept-language': 'en-US,en;q=0.9',
@@ -6797,7 +6815,7 @@ async function fetchTextPage(url, timeoutMs = 15000) {
       }
       return {
         content: await response.text(),
-        finalUrl: response.url || String(url),
+        finalUrl,
       };
     } catch (error) {
       lastError = error;

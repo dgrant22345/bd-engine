@@ -356,3 +356,33 @@ test('discovery follows direct ATS links exposed on an official company homepage
     globalThis.fetch = originalFetch;
   }
 });
+
+test('static career fetches never follow redirects into a private network', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-private-redirect';
+  addTenant(store, tenantId);
+  await addReadyBoard(store, tenantId, {
+    companyName: 'Redirect Safety Labs',
+    atsType: 'custom_static',
+    boardId: 'redirect-safety-labs',
+    resolvedBoardUrl: 'https://redirect-safety-labs.example/jobs',
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(null, {
+      status: 302,
+      headers: { location: 'http://127.0.0.1/internal-jobs' },
+    });
+  };
+
+  try {
+    const result = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    assert.equal(result.stats.errors, 1);
+    assert.deepEqual(requestedUrls, ['https://redirect-safety-labs.example/jobs']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
