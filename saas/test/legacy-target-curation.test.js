@@ -25,3 +25,23 @@ test('legacy target curation previews and applies a bounded ranked portfolio', a
   assert.equal(accounts.filter((item) => item.tracked).length, 2);
   assert.equal(accounts.find((item) => item.displayName === 'Low Co').tracked, false);
 });
+
+test('legacy target curation prefers role-fit evidence over a generic account score', async () => {
+  const store = createStore();
+  const tenantId = `tenant-role-curation-${Date.now()}`;
+  store.ensureTenant({ id: tenantId, name: 'Role Curation' }, { id: 'owner', name: 'Owner' });
+  const generic = await store.addAccount(tenantId, { displayName: 'Generic High Score', targetScore: 99 });
+  const roleFit = await store.addAccount(tenantId, {
+    displayName: 'Focused Role Fit',
+    targetScore: 40,
+    strongFitRoleCount: 1,
+    relevantRoleCount: 3,
+  });
+  delete generic.tracked;
+  delete roleFit.tracked;
+
+  const preview = await store.curateLegacyTargets(tenantId, { targetLimit: 1 });
+  assert.equal(preview.preview[0].displayName, 'Focused Role Fit');
+  assert.equal(preview.preview[0].strongFitRoleCount, 1);
+  assert.equal(preview.preview[0].relevantRoleCount, 3);
+});

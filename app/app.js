@@ -69,7 +69,7 @@ const appState = {
   localData: null,
   localOverlays: null,
   activeView: 'dashboard',
-  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -262,7 +262,7 @@ const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
 
 const defaultQueries = {
-  accounts: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -3176,6 +3176,7 @@ const accountPresets = [
 ];
 
 const accountFilterLabels = {
+  portfolio: 'Portfolio',
   q: 'Search',
   hiring: 'Hiring',
   ats: 'ATS',
@@ -3203,7 +3204,7 @@ function normalizedFilterEntries(query) {
 
 function isAccountPresetActive(preset) {
   const activeEntries = normalizedFilterEntries(appState.accountQuery);
-  const presetEntries = normalizedFilterEntries(preset.query);
+  const presetEntries = normalizedFilterEntries({ ...defaultQueries.accounts, ...preset.query });
   return activeEntries.length === presetEntries.length
     && presetEntries.every(([key, value]) => String(appState.accountQuery[key] || '') === value);
 }
@@ -4939,6 +4940,13 @@ async function renderAccountsView() {
   const industryOptions = filters.industries || [];
   const personaCopy = getPersonaUiCopy();
   const jobSeeker = personaCopy.persona === 'jobseeker';
+  const portfolioSummary = result.portfolioSummary || {};
+  const legacyUnclassified = Number(portfolioSummary.legacyUnclassified || 0);
+  const portfolioLabel = appState.accountQuery.portfolio === 'network'
+    ? 'network companies'
+    : appState.accountQuery.portfolio === 'all'
+      ? 'companies'
+      : 'tracked ' + personaCopy.accountPlural;
   const industryField = industryOptions.length
     ? `<select name="industry"><option value="">All industries</option>${industryOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.industry, value)}>${escapeHtml(value)}</option>`).join('')}</select>`
     : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
@@ -4960,6 +4968,8 @@ async function renderAccountsView() {
       </div>
     </section>
 
+    ${legacyUnclassified ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>` : ''}
+
     ${renderAccountPresetStrip()}
 
     <section class="detail-grid detail-grid--workspace">
@@ -4976,11 +4986,12 @@ async function renderAccountsView() {
             </div>
             ${renderExportButton('accounts')}
             <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
-            <span class="table-meta">${formatNumber(result.total)} tracked ${escapeHtml(personaCopy.accountPlural)}</span>
+            <span class="table-meta">${formatNumber(result.total)} ${escapeHtml(portfolioLabel)}</span>
           </div>
         </div>
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
+          ${renderField('Portfolio', `<select name="portfolio"><option value="tracked" ${selected(appState.accountQuery.portfolio, 'tracked')}>Tracked targets</option><option value="network" ${selected(appState.accountQuery.portfolio, 'network')}>Network only</option><option value="all" ${selected(appState.accountQuery.portfolio, 'all')}>All companies</option></select>`)}
           ${renderField('Hiring', `<select name="hiring"><option value="">All</option><option value="true" ${selected(appState.accountQuery.hiring, 'true')}>Active hiring</option></select>`)}
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
@@ -7728,7 +7739,7 @@ function renderOutreachPiece(title, body, actionsHtml, className = '', fieldName
 async function curateLegacyTargets() {
   const rawLimit = await showAppDialog({
     title: 'Choose the target portfolio size',
-    message: 'BD Engine will rank legacy companies by target score, live roles, and relationship strength. Other companies remain searchable but stop consuming automatic ATS discovery.',
+    message: 'BD Engine will rank legacy companies by your role focus, live hiring signals, target score, and relationship strength. Other companies remain searchable but stop consuming automatic ATS discovery.',
     confirmLabel: 'Preview selection',
     inputLabel: 'Number of target companies (1-1,000)',
     inputPlaceholder: '100',
@@ -7752,6 +7763,8 @@ async function curateLegacyTargets() {
     const expected = `CURATE ${workspaceName}`;
     const examples = (preview.preview || []).slice(0, 4).map((item) => {
       const detail = [`score ${formatNumber(item.targetScore || 0)}`];
+      if (Number(item.strongFitRoleCount || 0) > 0) detail.push(`${formatNumber(item.strongFitRoleCount)} strong-fit roles`);
+      else if (Number(item.relevantRoleCount || 0) > 0) detail.push(`${formatNumber(item.relevantRoleCount)} relevant roles`);
       if (Number(item.openRoleCount || 0) > 0) detail.push(`${formatNumber(item.openRoleCount)} open roles`);
       if (Number(item.connectionCount || 0) > 0) detail.push(`${formatNumber(item.connectionCount)} connections`);
       return `${item.displayName} (${detail.join(', ')})`;
@@ -7774,7 +7787,8 @@ async function curateLegacyTargets() {
       body: JSON.stringify({ targetLimit, confirm: confirmation }),
     });
     showToast(result.message || 'Legacy companies classified.', 'success', 7000);
-    await renderAdminView();
+    if (getRouteRoot() === 'accounts') await renderAccountsView();
+    else await renderAdminView();
   } catch (error) {
     showToast(`Target classification failed: ${error.message}`, 'error', 7000);
   }

@@ -1769,7 +1769,9 @@ export function createStore() {
       const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
       const legacyAccounts = accountsForTenant(tenantId).filter((item) => typeof item.tracked !== 'boolean');
       const ranked = [...legacyAccounts].sort((a, b) => (
-        Number(b.targetScore || 0) - Number(a.targetScore || 0)
+        Number(b.strongFitRoleCount || 0) - Number(a.strongFitRoleCount || 0)
+        || Number(b.relevantRoleCount || 0) - Number(a.relevantRoleCount || 0)
+        || Number(b.targetScore || 0) - Number(a.targetScore || 0)
         || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
         || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
         || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
@@ -1786,6 +1788,8 @@ export function createStore() {
           id: item.id,
           displayName: item.displayName,
           targetScore: Number(item.targetScore || 0),
+          strongFitRoleCount: Number(item.strongFitRoleCount || 0),
+          relevantRoleCount: Number(item.relevantRoleCount || 0),
           openRoleCount: Number(item.openRoleCount || item.jobCount || 0),
           connectionCount: Number(item.connectionCount || 0),
         })),
@@ -2341,7 +2345,18 @@ export function createStore() {
         }
       }
       await ensureDataLoaded(tenantId);
-      let items = decorateAccountsWithConfigs(accountsForTenant(tenantId), configsForTenant(tenantId));
+      const tenantAccounts = accountsForTenant(tenantId);
+      const portfolioSummary = {
+        trackedCompanies: tenantAccounts.filter(isTrackedTarget).length,
+        networkCompanies: tenantAccounts.filter((item) => item.tracked === false).length,
+        legacyUnclassified: tenantAccounts.filter((item) => typeof item.tracked !== 'boolean').length,
+      };
+      let items = decorateAccountsWithConfigs(tenantAccounts, configsForTenant(tenantId));
+      if (query.portfolio === 'tracked') {
+        items = items.filter(isTrackedTarget);
+      } else if (query.portfolio === 'network') {
+        items = items.filter((item) => item.tracked === false);
+      }
       items = filterText(items, query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']);
       if (query.hiring === 'true' || query.hiring === true) {
         items = items.filter((item) => Number(item.openRoleCount || item.jobCount || 0) > 0);
@@ -2369,7 +2384,7 @@ export function createStore() {
       if (query.industry) items = items.filter((item) => normalizeKey(item.industry) === normalizeKey(query.industry));
       if (query.geography) items = items.filter((item) => accountMatchesGeography(item, query.geography));
       sortAccountRows(items, query.sortBy);
-      return paginate(items, query);
+      return { ...paginate(items, query), portfolioSummary };
     },
 
     async getAccountDetail(tenantId, accountId) {

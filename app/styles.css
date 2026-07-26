@@ -907,7 +907,14 @@ a {
 
 .ingestion-health__notice span {
   flex: 1;
-  color: var(--ink-muted);
+  color: var(--muted);
+}
+
+.account-portfolio-notice {
+  margin: 16px 0;
+  border-color: rgba(169, 111, 23, 0.28);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .coverage-health {
