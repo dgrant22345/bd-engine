@@ -2968,9 +2968,12 @@ export function createStore() {
     getResolverReport(tenantId) {
       assertTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+      const operationalConfigs = getOperationalBoardConfigs(tenantId, tenantConfigs);
       const resolved = tenantConfigs.filter(isResolvedBoardConfig);
-      const medium = tenantConfigs.filter((item) => item.confidenceBand === 'medium');
+      const operationalResolved = operationalConfigs.filter(isResolvedBoardConfig);
+      const medium = operationalConfigs.filter((item) => item.confidenceBand === 'medium');
       const unresolved = tenantConfigs.filter((item) => !isResolvedBoardConfig(item));
+      const operationalUnresolved = operationalConfigs.filter((item) => !isResolvedBoardConfig(item));
       return {
         summary: {
           totalCompanies: tenantConfigs.length,
@@ -2978,11 +2981,21 @@ export function createStore() {
           activeCount: tenantConfigs.filter((item) => item.active).length,
           unresolvedCount: unresolved.length,
           mediumReviewQueueCount: medium.length,
-          unresolvedReviewQueueCount: unresolved.length,
+          unresolvedReviewQueueCount: operationalUnresolved.length,
           coveragePercent: tenantConfigs.length ? Math.round((resolved.length / tenantConfigs.length) * 100) : 0,
+          operationalTotalCompanies: operationalConfigs.length,
+          operationalResolvedCount: operationalResolved.length,
+          operationalActiveCount: operationalConfigs.filter((item) => item.active).length,
+          operationalUnresolvedCount: operationalUnresolved.length,
+          operationalCoveragePercent: operationalConfigs.length
+            ? Math.round((operationalResolved.length / operationalConfigs.length) * 100)
+            : 0,
+          networkSourcesExcluded: tenantConfigs.length - operationalConfigs.length,
         },
-        byConfidenceBand: countBy(tenantConfigs, 'confidenceBand'),
-        topFailureReasons: unresolved.length ? [{ failureReason: 'Missing verified ATS evidence', count: unresolved.length }] : [],
+        byConfidenceBand: countBy(operationalConfigs, 'confidenceBand'),
+        topFailureReasons: operationalUnresolved.length
+          ? [{ failureReason: 'Missing verified ATS evidence', count: operationalUnresolved.length }]
+          : [],
       };
     },
 
@@ -3010,7 +3023,7 @@ export function createStore() {
 
     getResolverQueue(tenantId, band) {
       assertTenant(tenantId);
-      const items = configsForTenant(tenantId)
+      const items = getOperationalBoardConfigs(tenantId)
         .filter((item) => band === 'medium' ? item.confidenceBand === 'medium' : !isResolvedBoardConfig(item));
       return paginate(items, { page: 1, pageSize: 10 });
     },
@@ -6339,6 +6352,20 @@ function isTrackedTarget(item) {
   return Boolean(item) && item.tracked !== false;
 }
 
+function getOperationalBoardConfigs(tenantId, tenantConfigs = configsForTenant(tenantId)) {
+  const tenantAccounts = accountsForTenant(tenantId);
+  const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+  const accountsByName = new Map(
+    tenantAccounts
+      .map((item) => [normalizeKey(item.normalizedName || item.displayName), item])
+      .filter(([key]) => key)
+  );
+  return tenantConfigs.filter((config) => {
+    const owner = accountForConfig(config, accountsById, accountsByName);
+    return !owner || isTrackedTarget(owner);
+  });
+}
+
 function rankLinkedInCompanyCandidates(companyMap, existingAccountsMap, availableAccountSlots) {
   const candidates = [...companyMap.entries()].map(([key, company]) => {
     const existingAccount = existingAccountsMap.get(key) || null;
@@ -7090,6 +7117,10 @@ function buildCareerPageUrls(config = {}) {
       add(`https://${domain}/company/careers`);
       add(`https://${domain}/about/careers`);
       add(`https://${domain}/job-openings`);
+      // The official homepage often links directly to a hosted ATS even when
+      // the site's own careers path is localized or nonstandard.
+      add(`https://${domain}/`);
+      add(`https://www.${domain}/`);
     }
   }
   // Known domain gets a deeper crawl; guessed domains are capped so a batch of

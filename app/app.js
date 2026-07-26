@@ -5630,7 +5630,7 @@ async function renderAdminView() {
           <h3>Keep coverage fresh</h3>
           <p class="subtitle">Refresh company data, find job boards, import live roles, and keep the daily account queue ready for action.</p>
           <div class="hero-signal-strip">
-            ${renderSignalChip('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`, 'success')}
+            ${renderSignalChip('Tracked coverage', `${formatNumber(operationalCoveragePercent)}%`, 'success')}
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
             ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
             ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
@@ -5813,11 +5813,11 @@ async function renderAdminView() {
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the company universe.')}
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Tracked-company readiness first, with the full imported history shown separately for context.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Actionable companies', operationalCompanyCount, `${formatNumber(operationalCoveragePercent)}% have resolved boards`)}
             ${renderMetricCard('Need resolver work', operationalUnresolvedCount, 'Actionable companies still missing a resolved board')}
-            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, 'All imported company records with ATS resolution state')}
+            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, `${formatNumber(summary.networkSourcesExcluded || 0)} network-only sources excluded from automatic work`)}
             ${renderMetricCard('Resolved rows', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total resolver rows`)}
             ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
             ${renderMetricCard('Unresolved rows', summary.unresolvedCount || 0, 'Imported rows still missing strong ATS evidence')}

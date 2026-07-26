@@ -299,3 +299,60 @@ test('discovery decodes ATS links embedded as escaped JavaScript strings', async
     globalThis.fetch = originalFetch;
   }
 });
+
+test('discovery follows direct ATS links exposed on an official company homepage', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-homepage-ats-discovery';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, {
+    displayName: 'Homepage Link Labs',
+    domain: 'homepage-link-labs.example',
+  });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: account.displayName,
+    domain: account.domain,
+    discoveryStatus: 'needs_review',
+    reviewStatus: 'pending',
+    active: false,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    requestedUrls.push(value);
+    if (value === 'https://homepage-link-labs.example/') {
+      return new Response('<footer><a href="https://jobs.lever.co/homepage-link-labs">Careers</a></footer>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    if (value.includes('api.lever.co/v0/postings/homepage-link-labs')) {
+      return Response.json([{
+        id: 'homepage-role-1',
+        text: 'Strategy Manager',
+        hostedUrl: 'https://jobs.lever.co/homepage-link-labs/homepage-role-1',
+        categories: { location: 'Remote' },
+      }]);
+    }
+    return new Response('not found', { status: 404 });
+  };
+
+  try {
+    const result = await store.runAtsDiscovery(tenantId, {
+      limit: 1,
+      discoveryConcurrency: 1,
+      plan,
+    });
+    assert.equal(result.stats.mapped, 1);
+    assert.ok(requestedUrls.includes('https://homepage-link-labs.example/'));
+    const config = (await store.findConfigs(tenantId, { page: 1, pageSize: 20 })).items[0];
+    assert.equal(config.atsType, 'lever');
+    assert.equal(config.boardId, 'homepage-link-labs');
+    assert.equal(config.discoveryStatus, 'resolved');
+    assert.equal(config.discoveryMethod, 'careers_page_link');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
