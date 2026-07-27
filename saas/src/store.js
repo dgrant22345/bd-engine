@@ -2540,6 +2540,13 @@ export function createStore() {
         'tags', 'aliases', 'linkedinCompanySlug', 'enrichmentStatus', 'enrichmentSource',
         'enrichmentConfidence', 'enrichmentConfidenceScore', 'enrichmentNotes',
       ]));
+      if (Object.prototype.hasOwnProperty.call(patch, 'domain')
+        && !Object.prototype.hasOwnProperty.call(patch, 'canonicalDomain')) {
+        item.canonicalDomain = String(item.domain || '').trim();
+      } else if (Object.prototype.hasOwnProperty.call(patch, 'canonicalDomain')
+        && !Object.prototype.hasOwnProperty.call(patch, 'domain')) {
+        item.domain = String(item.canonicalDomain || '').trim();
+      }
       if (Array.isArray(item.tags)) item.tags = unique(item.tags.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
       if (Array.isArray(item.aliases)) item.aliases = unique(item.aliases.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
       if (Object.prototype.hasOwnProperty.call(patch, 'enrichmentConfidenceScore')) {

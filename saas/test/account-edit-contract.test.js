@@ -51,11 +51,13 @@ test('verified account identity repairs stale linked config identity without rep
 
   await store.patchAccount(tenantId, account.id, {
     domain: 'example.com',
-    canonicalDomain: 'example.com',
     careersUrl: 'https://example.com/careers',
   });
 
+  const updatedAccount = await store.getAccountDetail(tenantId, account.id);
   const updated = await store.getConfig(tenantId, config.id);
+  assert.equal(updatedAccount.account.domain, 'example.com');
+  assert.equal(updatedAccount.account.canonicalDomain, 'example.com');
   assert.equal(updated.domain, 'example.com');
   assert.equal(updated.careersUrl, 'https://example.com/careers');
   assert.equal(updated.source, 'https://job-boards.greenhouse.io/example');
