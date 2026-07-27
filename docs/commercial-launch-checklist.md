@@ -126,16 +126,16 @@ Observation owner/window/evidence: `________________`
 - [x] The existing production workspace was classified without deletion into
   100 tracked companies and 12,217 searchable network-only companies. No legacy
   unclassified companies remain.
-- [x] Actionable tracked-company ATS coverage is 98%: 98 of 100 tracked companies
-  have a refresh-ready source and currently return usable active jobs. The two
-  remaining companies have no trustworthy supported public board.
-- [x] A bounded discovery run checked the two uncovered tracked companies and
-  completed without errors. It found no additional trustworthy public boards;
-  weak matches were not imported.
+- [x] Actionable tracked-company ATS coverage is 99%: 99 of 100 tracked companies
+  have a refresh-ready source and currently return usable active jobs. TD resolved
+  through its official Workday board; Scotiabank remains the one honest gap because
+  its public SAP careers site does not expose a supported import feed.
+- [x] Bounded discovery checked every uncovered tracked company and completed
+  without errors. Weak or unverifiable matches were not imported.
 - [x] A focused live ATS import completed at 100% with zero provider errors. It
-  fetched 19,646 postings from 98 configs, retained 8,657 in-scope rows, created
-  15 jobs, closed 16 stale jobs, and left 8,625 active jobs. Role scoring marked
-  937 active jobs relevant to the configured search focus.
+  fetched 20,646 postings from 99 configs, retained 9,381 in-scope rows, created
+  one job, closed 14 stale jobs, and left 8,622 active jobs. Role scoring marked
+  936 active jobs relevant to the configured search focus.
 - [x] The UI distinguishes actionable tracked-company coverage from the historical
   all-company resolver rate. The historical 1% figure includes 12,217 network-only
   records and is not the operational refresh coverage for the focused portfolio.
@@ -149,7 +149,8 @@ Observation owner/window/evidence: `________________`
   contains 76 companies with relevant roles and 30 with strong-fit roles.
 - [x] Fourteen retained companies with inherited personal-email or mismatched
   domains were corrected. Account and linked ATS config domains now agree for all
-  14, and no tracked company retains those invalid domains.
+  14, no tracked company retains those invalid domains, and the two remaining
+  companies without identities received verified official careers entry points.
 
 ## Rollback decision
 
