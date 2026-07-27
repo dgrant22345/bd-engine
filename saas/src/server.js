@@ -1566,6 +1566,32 @@ self.addEventListener('activate', (event) => {
     });
   }
 
+  if (pathname === '/api/accounts/target-rebalance' && req.method === 'GET') {
+    return sendJson(res, 200, await store.rebalanceTrackedTargets(tenantId, {
+      targetLimit: url.searchParams.get('targetLimit'),
+      apply: false,
+    }));
+  }
+
+  if (pathname === '/api/accounts/target-rebalance' && req.method === 'POST') {
+    if (!canDeleteWorkspaceData(session.membership.role)) {
+      return sendJson(res, 403, { error: 'Only the workspace owner can rebalance the target portfolio.' });
+    }
+    const body = await readJson(req);
+    const expected = `REBALANCE ${tenant.name}`;
+    if (String(body.confirm || '').trim() !== expected) {
+      return sendJson(res, 400, { error: `Type "${expected}" to rebalance the target portfolio.` });
+    }
+    const result = await store.rebalanceTrackedTargets(tenantId, {
+      targetLimit: body.targetLimit,
+      apply: true,
+    });
+    return sendJson(res, 200, {
+      ...result,
+      message: `${result.selectedTargets} target companies selected. ${result.additions} added and ${result.removals} moved to network context.`,
+    });
+  }
+
   if (pathname === '/api/owners') {
     const bootstrapData = await store.getBootstrap(tenantId, { session });
     return sendJson(res, 200, { owners: bootstrapData.ownerRoster });

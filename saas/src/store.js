@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
@@ -1768,16 +1768,7 @@ export function createStore() {
       await ensureDataLoaded(tenantId, false);
       const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
       const legacyAccounts = accountsForTenant(tenantId).filter((item) => typeof item.tracked !== 'boolean');
-      const ranked = [...legacyAccounts].sort((a, b) => (
-        Number(b.strongFitRoleCount || 0) - Number(a.strongFitRoleCount || 0)
-        || Number(b.relevantRoleCount || 0) - Number(a.relevantRoleCount || 0)
-        || Number(b.targetScore || 0) - Number(a.targetScore || 0)
-        || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
-        || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
-        || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
-        || Number(b.connectionCount || 0) - Number(a.connectionCount || 0)
-        || String(a.displayName || '').localeCompare(String(b.displayName || ''))
-      ));
+      const ranked = rankPortfolioCandidates(legacyAccounts);
       const selectedIds = new Set(ranked.slice(0, limit).map((item) => item.id));
       const summary = {
         legacyCompanies: legacyAccounts.length,
@@ -1812,6 +1803,81 @@ export function createStore() {
         for (const item of legacyAccounts) {
           delete item.tracked;
           item.updatedAt = previous.get(item.id)?.updatedAt;
+        }
+        throw error;
+      }
+      return { ok: true, applied: true, ...summary };
+    },
+
+    async rebalanceTrackedTargets(tenantId, { targetLimit = 100, apply = false } = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
+      const tenantAccounts = accountsForTenant(tenantId);
+      const ranked = rankPortfolioCandidates(tenantAccounts);
+      const selected = ranked.slice(0, limit);
+      const selectedIds = new Set(selected.map((item) => item.id));
+      const currentIds = new Set(tenantAccounts.filter(isTrackedTarget).map((item) => item.id));
+      const additions = selected.filter((item) => !currentIds.has(item.id));
+      const removals = tenantAccounts.filter((item) => currentIds.has(item.id) && !selectedIds.has(item.id));
+      const toPreview = (item) => ({
+        id: item.id,
+        displayName: item.displayName,
+        targetScore: Number(item.targetScore || 0),
+        strongFitRoleCount: Number(item.strongFitRoleCount || 0),
+        relevantRoleCount: Number(item.relevantRoleCount || 0),
+        openRoleCount: Number(item.openRoleCount || item.jobCount || 0),
+        connectionCount: Number(item.connectionCount || 0),
+        identityIssues: getPortfolioIdentityIssues(item),
+      });
+      const summary = {
+        totalCompanies: tenantAccounts.length,
+        currentTargets: currentIds.size,
+        selectedTargets: selected.length,
+        networkCompanies: Math.max(0, tenantAccounts.length - selected.length),
+        additions: additions.length,
+        removals: removals.length,
+        targetLimit: limit,
+        preview: selected.slice(0, 12).map(toPreview),
+        addedPreview: additions.slice(0, 8).map(toPreview),
+        removedPreview: removals.slice(0, 8).map(toPreview),
+        identityReview: selected.filter((item) => getPortfolioIdentityIssues(item).length).slice(0, 12).map(toPreview),
+      };
+      if (!apply || !tenantAccounts.length) return { ok: true, applied: false, ...summary };
+
+      const timestamp = now();
+      const previous = new Map(tenantAccounts.map((item) => [item.id, {
+        hadTracked: Object.prototype.hasOwnProperty.call(item, 'tracked'),
+        tracked: item.tracked,
+        updatedAt: item.updatedAt,
+      }]));
+      for (const item of tenantAccounts) {
+        item.tracked = selectedIds.has(item.id);
+        item.updatedAt = timestamp;
+      }
+      try {
+        if (isDbEnabled()) {
+          const result = await dbRebalanceTrackedAccounts(tenantId, [...selectedIds], timestamp);
+          if (!result?.saved) throw new Error(`Portfolio rebalance save failed: ${result?.reason || 'unknown error'}`);
+          primeTenantRelationalMirror(tenantId, { accounts: tenantAccounts });
+        } else {
+          persistTenant(tenantId);
+        }
+        await dbRecordAuditLog({
+          tenantId,
+          action: 'portfolio.rebalance',
+          entityType: 'tenant',
+          entityId: tenantId,
+          before: { trackedCompanies: currentIds.size },
+          after: { trackedCompanies: selected.length },
+          metadata: { targetLimit: limit, additions: additions.length, removals: removals.length, privacySafe: true },
+        });
+      } catch (error) {
+        for (const item of tenantAccounts) {
+          const old = previous.get(item.id);
+          if (old?.hadTracked) item.tracked = old.tracked;
+          else delete item.tracked;
+          item.updatedAt = old?.updatedAt;
         }
         throw error;
       }
@@ -2464,6 +2530,10 @@ export function createStore() {
       await ensureDataLoaded(tenantId);
       const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
+      const previousIdentity = {
+        domain: String(item.canonicalDomain || item.domain || '').trim(),
+        careersUrl: String(item.careersUrl || '').trim(),
+      };
       Object.assign(item, pickPatch(patch, [
         'status', 'outreachStatus', 'priorityTier', 'priority', 'notes', 'industry', 'location',
         'domain', 'canonicalDomain', 'careersUrl', 'nextAction', 'nextActionAt', 'owner',
@@ -2478,7 +2548,30 @@ export function createStore() {
       if (Object.prototype.hasOwnProperty.call(patch, 'tracked')) {
         item.tracked = patch.tracked === true || patch.tracked === 'true';
       }
-      item.updatedAt = now();
+      const timestamp = now();
+      item.updatedAt = timestamp;
+      const identityChanged = ['domain', 'canonicalDomain', 'careersUrl']
+        .some((field) => Object.prototype.hasOwnProperty.call(patch, field));
+      if (identityChanged) {
+        const nextDomain = String(item.canonicalDomain || item.domain || '').trim();
+        const nextCareersUrl = String(item.careersUrl || '').trim();
+        for (const config of configsForTenant(tenantId)) {
+          if (!configMatchesAccount(config, item)) continue;
+          let changed = false;
+          const currentDomain = String(config.canonicalDomain || config.domain || '').trim();
+          if (nextDomain && (!getUsableCompanyDomain(currentDomain) || normalizeKey(currentDomain) === normalizeKey(previousIdentity.domain))) {
+            config.domain = nextDomain;
+            config.canonicalDomain = nextDomain;
+            changed = true;
+          }
+          const currentCareersUrl = String(config.careersUrl || '').trim();
+          if (nextCareersUrl && (!getUsableCareerUrl(currentCareersUrl) || normalizeKey(currentCareersUrl) === normalizeKey(previousIdentity.careersUrl))) {
+            config.careersUrl = nextCareersUrl;
+            changed = true;
+          }
+          if (changed) config.updatedAt = timestamp;
+        }
+      }
       persistTenant(tenantId);
       return item;
     },
@@ -6366,6 +6459,60 @@ function configMatchesAccount(config = {}, account = {}) {
 // existing workspaces keep their current behavior until curated.
 function isTrackedTarget(item) {
   return Boolean(item) && item.tracked !== false;
+}
+
+const PORTFOLIO_PLACEHOLDER_NAMES = new Set([
+  'confidential', 'freelance', 'n a', 'n/a', 'none', 'not applicable', 'retired',
+  'self employed', 'self-employed', 'unknown',
+]);
+const COMPANY_NAME_STOP_WORDS = new Set([
+  'and', 'canada', 'canadian', 'company', 'corp', 'corporation', 'group',
+  'holdings', 'inc', 'incorporated', 'international', 'limited', 'ltd',
+  'services', 'solutions', 'the', 'technology', 'technologies',
+]);
+
+function getPortfolioIdentityIssues(item = {}) {
+  const issues = [];
+  const normalizedName = normalizeKey(item.displayName || item.normalizedName || '');
+  if (!normalizedName || PORTFOLIO_PLACEHOLDER_NAMES.has(normalizedName)) {
+    issues.push('Placeholder company name');
+  }
+
+  const rawDomain = String(item.canonicalDomain || item.domain || '').trim();
+  const usableDomain = getUsableCompanyDomain(rawDomain);
+  if (rawDomain && !usableDomain) {
+    issues.push('Personal or invalid company domain');
+  } else if (usableDomain && normalizedName && !PORTFOLIO_PLACEHOLDER_NAMES.has(normalizedName)) {
+    const compactName = normalizedName.replace(/[^a-z0-9]/g, '');
+    const hostStem = usableDomain.split('.').slice(0, -1).join('').replace(/[^a-z0-9]/g, '');
+    const nameTokens = normalizedName.split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 3 && !COMPANY_NAME_STOP_WORDS.has(token));
+    const tokenMatch = nameTokens.some((token) => hostStem.includes(token) || token.includes(hostStem));
+    if (hostStem.length >= 4 && !tokenMatch && !hostStem.includes(compactName) && !compactName.includes(hostStem)) {
+      issues.push('Domain does not appear to match company name');
+    }
+  }
+  return issues;
+}
+
+function rankPortfolioCandidates(items = []) {
+  return [...items].sort((a, b) => {
+    const aIssues = getPortfolioIdentityIssues(a);
+    const bIssues = getPortfolioIdentityIssues(b);
+    const aPlaceholder = aIssues.includes('Placeholder company name') ? 1 : 0;
+    const bPlaceholder = bIssues.includes('Placeholder company name') ? 1 : 0;
+    return aPlaceholder - bPlaceholder
+      || Number(b.strongFitRoleCount || 0) - Number(a.strongFitRoleCount || 0)
+      || Number(b.relevantRoleCount || 0) - Number(a.relevantRoleCount || 0)
+      || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
+      || aIssues.length - bIssues.length
+      || Number(b.targetScore || 0) - Number(a.targetScore || 0)
+      || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
+      || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
+      || Number(b.connectionCount || 0) - Number(a.connectionCount || 0)
+      || Number(isTrackedTarget(b)) - Number(isTrackedTarget(a))
+      || String(a.displayName || '').localeCompare(String(b.displayName || ''));
+  });
 }
 
 function getOperationalBoardConfigs(tenantId, tenantConfigs = configsForTenant(tenantId)) {

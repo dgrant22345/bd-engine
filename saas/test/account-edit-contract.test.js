@@ -30,6 +30,37 @@ test('account controls persist every customer-visible editable field', async () 
   assert.equal(detail.account.enrichmentNotes, 'Verified by the workspace owner.');
 });
 
+test('verified account identity repairs stale linked config identity without replacing a direct ATS source', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-account-identity-sync';
+  store.ensureTenant({ id: tenantId, name: 'Identity sync' }, { id: 'owner-1', name: 'Owner' });
+  const account = await store.addAccount(tenantId, {
+    displayName: 'Example Company',
+    domain: 'gmail.com',
+    careersUrl: 'https://gmail.com/careers',
+  });
+  const config = store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: 'Example Company',
+    atsType: 'greenhouse',
+    boardId: 'example',
+    domain: 'gmail.com',
+    careersUrl: 'https://gmail.com/careers',
+    source: 'https://job-boards.greenhouse.io/example',
+  });
+
+  await store.patchAccount(tenantId, account.id, {
+    domain: 'example.com',
+    canonicalDomain: 'example.com',
+    careersUrl: 'https://example.com/careers',
+  });
+
+  const updated = await store.getConfig(tenantId, config.id);
+  assert.equal(updated.domain, 'example.com');
+  assert.equal(updated.careersUrl, 'https://example.com/careers');
+  assert.equal(updated.source, 'https://job-boards.greenhouse.io/example');
+});
+
 test('contact score and outreach filters narrow the network list', async () => {
   const store = createStore();
   const tenantId = 'tenant-contact-filter-contract';

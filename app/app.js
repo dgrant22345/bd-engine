@@ -2375,6 +2375,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'rebalance-targets') {
+      await rebalanceTrackedTargets();
+      return;
+    }
+
     if (actionName === 'run-target-score-rollout') {
       await runTargetScoreRollout(action);
       return;
@@ -4942,6 +4947,7 @@ async function renderAccountsView() {
   const jobSeeker = personaCopy.persona === 'jobseeker';
   const portfolioSummary = result.portfolioSummary || {};
   const legacyUnclassified = Number(portfolioSummary.legacyUnclassified || 0);
+  const trackedCompanies = Number(portfolioSummary.trackedCompanies || 0);
   const portfolioLabel = appState.accountQuery.portfolio === 'network'
     ? 'network companies'
     : appState.accountQuery.portfolio === 'all'
@@ -4968,7 +4974,11 @@ async function renderAccountsView() {
       </div>
     </section>
 
-    ${legacyUnclassified ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>` : ''}
+    ${legacyUnclassified
+      ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>`
+      : trackedCompanies
+        ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Keep this shortlist aligned with your focus.</strong><span>Preview a fresh ranking after changing target roles, industries, or work style. Weak company identities are flagged before anything changes.</span><button class="secondary-button" type="button" data-action="rebalance-targets">Review and rebalance</button></div>`
+        : ''}
 
     ${renderAccountPresetStrip()}
 
@@ -7791,6 +7801,64 @@ async function curateLegacyTargets() {
     else await renderAdminView();
   } catch (error) {
     showToast(`Target classification failed: ${error.message}`, 'error', 7000);
+  }
+}
+
+async function rebalanceTrackedTargets() {
+  const currentTracked = Number(appState.bootstrap?.portfolioSummary?.trackedCompanies || 100);
+  const rawLimit = await showAppDialog({
+    title: 'Review the target portfolio',
+    message: 'BD Engine will rerank every company using your saved role focus, relevant openings, relationship strength, and company identity quality. Previewing does not change any records.',
+    confirmLabel: 'Preview changes',
+    inputLabel: 'Number of target companies (1-1,000)',
+    inputPlaceholder: String(currentTracked || 100),
+    inputValue: String(currentTracked || 100),
+  });
+  if (rawLimit === null) return;
+  const targetLimit = Number(rawLimit);
+  if (!Number.isInteger(targetLimit) || targetLimit < 1 || targetLimit > 1000) {
+    showToast('Enter a whole number from 1 to 1,000.', 'warning');
+    return;
+  }
+
+  try {
+    const preview = await api(`/api/accounts/target-rebalance?targetLimit=${targetLimit}`, { skipCache: true });
+    const workspaceName = appState.bootstrap?.workspace?.name || 'Workspace';
+    const expected = `REBALANCE ${workspaceName}`;
+    const additions = (preview.addedPreview || []).slice(0, 4).map((item) => item.displayName).join(', ');
+    const removals = (preview.removedPreview || []).slice(0, 4).map((item) => item.displayName).join(', ');
+    const identityWarnings = (preview.identityReview || []).slice(0, 4).map((item) => (
+      `${item.displayName}: ${(item.identityIssues || []).join(', ')}`
+    )).join('; ');
+    const changeSummary = preview.additions || preview.removals
+      ? `${formatNumber(preview.additions)} companies enter the target list and ${formatNumber(preview.removals)} move to searchable network context. ${additions ? `Examples entering: ${additions}. ` : ''}${removals ? `Examples leaving: ${removals}. ` : ''}`
+      : 'The selected companies do not change at this portfolio size. ';
+    const warningSummary = identityWarnings
+      ? `Selected records still needing identity review: ${identityWarnings}.`
+      : 'No selected company identity warnings were found.';
+    const confirmation = await showAppDialog({
+      title: 'Confirm portfolio rebalance',
+      message: `${changeSummary}${warningSummary} Contacts, activity, and historical jobs are never deleted.`,
+      confirmLabel: 'Apply rebalance',
+      cancelLabel: 'Keep current portfolio',
+      danger: true,
+      inputLabel: `Type ${expected} to confirm`,
+    });
+    if (confirmation === null) return;
+    if (confirmation !== expected) {
+      showToast(`Type ${expected} exactly to continue.`, 'warning');
+      return;
+    }
+    const result = await api('/api/accounts/target-rebalance', {
+      method: 'POST',
+      body: JSON.stringify({ targetLimit, confirm: confirmation }),
+    });
+    invalidateAppData();
+    showToast(result.message || 'Target portfolio rebalanced.', 'success', 7000);
+    if (getRouteRoot() === 'accounts') await renderAccountsView();
+    else await renderAdminView();
+  } catch (error) {
+    showToast(`Portfolio rebalance failed: ${error.message}`, 'error', 7000);
   }
 }
 
