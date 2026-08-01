@@ -17,7 +17,7 @@ import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './
 import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js';
 import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
 import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
-import { buildProductEvent } from './product-analytics.js';
+import { buildAcquisitionSource, buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
@@ -73,6 +73,7 @@ const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_M
   : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
+const PUBLIC_ANALYTICS_EVENT_TYPES = new Set(['pageview', 'tool_used', 'demo_started', 'signup_started']);
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
@@ -1985,10 +1986,11 @@ self.addEventListener('activate', (event) => {
 async function handleAnalyticsVisit(req, res) {
   const body = await readJson(req);
   const sessionData = extractSession(req);
+  const eventType = PUBLIC_ANALYTICS_EVENT_TYPES.has(body.eventType) ? body.eventType : 'pageview';
   const startedAt = performance.now();
   const result = await dbRecordAnalyticsVisit({
     visitorId: body.visitorId,
-    eventType: 'pageview',
+    eventType,
     path: body.path || '/',
     referrer: body.referrer || '',
     source: body.source || '',
@@ -2427,7 +2429,7 @@ async function handleStartDemo(req, res) {
 }
 
 async function handleSignup(req, res) {
-  const { email, password, name, workspaceName, persona, referralCode } = await readJson(req);
+  const { email, password, name, workspaceName, persona, referralCode, acquisition } = await readJson(req);
 
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
@@ -2470,7 +2472,11 @@ async function handleSignup(req, res) {
   await recordProductMilestone({
     eventType: 'signup_completed', tenantId, userId: userResult.user.id,
     eventKey: userResult.user.id,
-    dimensions: { persona: userPersona, planId: getEffectivePlanId(tenantResult.tenant, userResult.user), source: referrerTenant ? 'referral' : 'direct' },
+    dimensions: {
+      persona: userPersona,
+      planId: getEffectivePlanId(tenantResult.tenant, userResult.user),
+      source: referrerTenant ? 'referral' : buildAcquisitionSource(acquisition),
+    },
   });
 
   return sendJson(res, 201, {
@@ -2644,6 +2650,12 @@ function serveStaticOrSPA(pathname, req, res) {
   }
 
   // Try cloud public dir first (landing page, auth pages, etc.)
+  if (pathname === '/ats-checker' || pathname === '/ats-checker/') {
+    return sendHtml(res, getAtsCheckerHtml(res.bdScriptNonce));
+  }
+  if (pathname === '/job-search' || pathname === '/job-search/') {
+    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker'));
+  }
   if (pathname === '/' || pathname === '/index.html') {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
   }
@@ -2663,12 +2675,42 @@ function serveStaticOrSPA(pathname, req, res) {
 
 let cachedAppIndexHtml = null;
 let cachedCloudIndexHtml = null;
+let cachedJobSeekerIndexHtml = null;
+let cachedAtsCheckerHtml = null;
 
-function getCloudIndexHtml(scriptNonce) {
+function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (!cachedCloudIndexHtml) {
     cachedCloudIndexHtml = readFileSync(join(publicDir, 'index.html'), 'utf8');
   }
-  return injectScriptNonce(cachedCloudIndexHtml, scriptNonce);
+  if (persona === 'jobseeker' && !cachedJobSeekerIndexHtml) {
+    cachedJobSeekerIndexHtml = cachedCloudIndexHtml
+      .replace(
+        'BD Engine helps staffing teams and job seekers prioritize target companies, public hiring signals, relevant roles, warm contacts, and next actions.',
+        'BD Engine helps job seekers prioritize target companies, relevant public roles, warm contacts, and the next action for a focused search.'
+      )
+      .replace('rel="canonical" href="https://bd-engine-production.up.railway.app/"', 'rel="canonical" href="https://bd-engine-production.up.railway.app/job-search"')
+      .replace('property="og:title" content="BD Engine Cloud | Focused hiring-signal workflows"', 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace(
+        'property="og:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action for staffing business development or an active job search."',
+        'property="og:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
+      )
+      .replace('property="og:url" content="https://bd-engine-production.up.railway.app/"', 'property="og:url" content="https://bd-engine-production.up.railway.app/job-search"')
+      .replace('name="twitter:title" content="BD Engine Cloud | Focused hiring-signal workflows"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace(
+        'name="twitter:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action."',
+        'name="twitter:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
+      )
+      .replace('"url": "https://bd-engine-production.up.railway.app/"', '"url": "https://bd-engine-production.up.railway.app/job-search"')
+      .replace('<title>BD Engine Cloud | Focused Hiring-Signal Workflows</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
+  }
+  return injectScriptNonce(persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml, scriptNonce);
+}
+
+function getAtsCheckerHtml(scriptNonce) {
+  if (!cachedAtsCheckerHtml) {
+    cachedAtsCheckerHtml = readFileSync(join(publicDir, 'ats-checker.html'), 'utf8');
+  }
+  return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
 }
 
 function getAppIndexHtml() {

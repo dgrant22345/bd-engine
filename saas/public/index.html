@@ -90,6 +90,7 @@
       canManageWorkspace: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
+      acquisition: getInitialAcquisition(),
     };
 
     function getInitialReferralCode() {
@@ -112,7 +113,50 @@
     }
 
     function getInitialSignupPersona() {
-      return new URLSearchParams(window.location.search).get('persona') === 'jobseeker' ? 'jobseeker' : 'bd';
+      const requestedPersona = new URLSearchParams(window.location.search).get('persona');
+      return window.location.pathname === '/job-search' || requestedPersona === 'jobseeker' ? 'jobseeker' : 'bd';
+    }
+
+    function getInitialAcquisition() {
+      const params = new URLSearchParams(window.location.search);
+      const current = {
+        source: normalizeAcquisitionToken(params.get('utm_source')),
+        medium: normalizeAcquisitionToken(params.get('utm_medium')),
+        campaign: normalizeAcquisitionToken(params.get('utm_campaign')),
+      };
+      let stored = {};
+      try {
+        stored = JSON.parse(localStorage.getItem('bd_acquisition') || '{}');
+      } catch {}
+      const acquisition = current.source || current.campaign
+        ? current
+        : {
+            source: normalizeAcquisitionToken(stored.source),
+            medium: normalizeAcquisitionToken(stored.medium),
+            campaign: normalizeAcquisitionToken(stored.campaign),
+          };
+      if (!acquisition.source) {
+        acquisition.source = params.get('ref') ? 'referral' : (document.referrer ? 'referrer' : 'direct');
+      }
+      try { localStorage.setItem('bd_acquisition', JSON.stringify(acquisition)); } catch {}
+      return acquisition;
+    }
+
+    function normalizeAcquisitionToken(value) {
+      const raw = String(value || '').trim();
+      if (raw.includes('@')) return '';
+      return raw
+        .toLowerCase()
+        .replace(/[^a-z0-9_.-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^[.-]+|[.-]+$/g, '')
+        .slice(0, 32);
+    }
+
+    function getAcquisitionSource() {
+      const source = normalizeAcquisitionToken(state.acquisition?.source) || 'direct';
+      const campaign = normalizeAcquisitionToken(state.acquisition?.campaign);
+      return (campaign && campaign !== source ? `${source}.${campaign}` : source).slice(0, 48);
     }
 
     // ── API helper ────────────────────────────────────────────────────────
@@ -143,15 +187,13 @@
       return visitorId;
     }
 
-    async function trackPageVisit() {
-      const params = new URLSearchParams(window.location.search);
-      const source = params.get('utm_source') || (params.get('ref') ? 'referral' : (document.referrer ? 'referrer' : 'direct'));
+    async function trackAcquisitionEvent(eventType = 'pageview') {
       const payload = {
         visitorId: getVisitorId(),
-        eventType: 'pageview',
+        eventType,
         path: `${window.location.pathname}${window.location.hash || ''}`,
         referrer: document.referrer || '',
-        source,
+        source: getAcquisitionSource(),
       };
       const body = JSON.stringify(payload);
       if (navigator.sendBeacon) {
@@ -165,6 +207,10 @@
         body,
         keepalive: true,
       });
+    }
+
+    async function trackPageVisit() {
+      return trackAcquisitionEvent('pageview');
     }
 
     // ── Check auth status on load ─────────────────────────────────────────
@@ -278,6 +324,13 @@
       }
     }
 
+    function openSignup(persona = state.signupPersona) {
+      state.signupPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+      trackAcquisitionEvent('signup_started').catch(() => {});
+      state.view = 'signup';
+      render();
+    }
+
     async function doSignup(email, password, name, workspaceName, persona) {
       state.busy = true;
       state.error = '';
@@ -285,7 +338,15 @@
       try {
         const data = await api('/api/auth/signup', {
           method: 'POST',
-          body: JSON.stringify({ email, password, name, workspaceName, persona: persona || 'bd', referralCode: state.referralCode || '' }),
+          body: JSON.stringify({
+            email,
+            password,
+            name,
+            workspaceName,
+            persona: persona || 'bd',
+            referralCode: state.referralCode || '',
+            acquisition: state.acquisition,
+          }),
         });
         state.user = data.user;
         state.tenant = data.tenant;
@@ -377,6 +438,7 @@
         state.canManageWorkspace = false;
         state.view = 'app';
         state.error = '';
+        trackAcquisitionEvent('demo_started').catch(() => {});
       } catch (err) {
         state.error = err.message;
       } finally {
@@ -422,9 +484,8 @@
 
     async function exitDemoToSignup() {
       await doLogout();
-      state.view = 'signup';
       state.error = '';
-      render();
+      openSignup();
     }
 
     async function doExportData() {
@@ -565,6 +626,8 @@
         note: 'No credit card required · 14-day trial includes 25 companies, 100 network contacts, and 50 ATS boards',
         sectionTitle: 'Keep the search relevant, explainable, and ready for action',
         footer: 'Built for focused staffing business development and job searches.',
+        referralTitle: 'Share a focused search, earn billing credit.',
+        referralBody: 'Every workspace gets a referral link. Share BD Engine with another job seeker, recruiter, or founder and earn credit when they become a paid customer.',
         stats: [
           ['42', 'Target companies'],
           ['18', 'Relevant open roles'],
@@ -585,6 +648,8 @@
         note: 'No credit card required · 14-day trial includes 25 accounts, 100 contacts, and 50 ATS boards',
         sectionTitle: 'Everything you need to find and win the right accounts',
         footer: 'Built for staffing and recruiting teams.',
+        referralTitle: 'Share BD Engine, earn billing credit.',
+        referralBody: 'Every workspace gets a referral link. Invite another founder, recruiter, or sales team and earn credit when they become a paid customer.',
         stats: [
           ['47', 'Active accounts'],
           ['186', 'Open roles tracked'],
@@ -693,8 +758,8 @@
           <section class="referral-program" id="referrals">
             <div class="referral-copy">
               <span class="section-kicker">Referral program</span>
-              <h2>Share BD Engine, earn billing credit.</h2>
-              <p>Every workspace gets a referral link. Invite another founder, recruiter, or sales team and earn credit when they become a paid customer.</p>
+              <h2>${landingCopy.referralTitle}</h2>
+              <p>${landingCopy.referralBody}</p>
             </div>
             <div class="referral-flow" aria-label="Referral program steps">
               <div class="referral-step">
@@ -733,8 +798,8 @@
                 <p class="pricing-upgrade">Upgrade when your readiness score shows enough live data to run the workflow every week.</p>
                 <button class="btn btn-primary btn-block" data-signup>Start free trial</button>
               </div>
-              <div class="pricing-card pricing-card--popular">
-                <div class="pricing-badge popular">Complete workflow</div>
+              <div class="pricing-card ${isJobSeekerLanding ? '' : 'pricing-card--popular'}">
+                <div class="pricing-badge ${isJobSeekerLanding ? '' : 'popular'}">${isJobSeekerLanding ? 'For staffing teams' : 'Complete workflow'}</div>
                 <h3>Sales Professional</h3>
                 <div class="pricing-price"><span class="price-amount">$10</span><span class="price-period">USD / month</span></div>
                 <p class="pricing-fit">Best for sales, recruiting, and BD teams using live hiring signals to prioritize outreach.</p>
@@ -749,8 +814,8 @@
                 <p class="pricing-upgrade">Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account across devices. Personal display preferences stay on each device.</p>
                 <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
               </div>
-              <div class="pricing-card">
-                <div class="pricing-badge">For job seekers</div>
+              <div class="pricing-card ${isJobSeekerLanding ? 'pricing-card--popular' : ''}" ${isJobSeekerLanding ? 'style="order:-1"' : ''}>
+                <div class="pricing-badge ${isJobSeekerLanding ? 'popular' : ''}">${isJobSeekerLanding ? 'Recommended' : 'For job seekers'}</div>
                 <h3>Job Seeker</h3>
                 <div class="pricing-price"><span class="price-amount">$5</span><span class="price-period">USD / month</span></div>
                 <p class="pricing-fit">Best for prioritizing target companies, open roles, and warm contacts during an active search.</p>
@@ -784,13 +849,13 @@
 
       // Wire events
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
-      root.querySelector('#nav-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
-      root.querySelector('#hero-signup')?.addEventListener('click', () => { state.view = 'signup'; render(); });
-      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => { state.signupPersona = 'jobseeker'; state.view = 'signup'; render(); }));
-      root.querySelectorAll('[data-bd-signup]').forEach(btn => btn.addEventListener('click', () => { state.signupPersona = 'bd'; state.view = 'signup'; render(); }));
+      root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
+      root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
+      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker')));
+      root.querySelectorAll('[data-bd-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd')));
       root.querySelector('[data-jobseeker-details]')?.addEventListener('click', () => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' }));
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
-      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => { state.view = 'signup'; render(); }));
+      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup()));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
       root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
     }
@@ -890,8 +955,12 @@
 
       root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
       root.querySelector('[data-trust-cta]')?.addEventListener('click', () => {
-        state.view = kind === 'security' ? 'status' : 'signup';
-        render();
+        if (kind === 'security') {
+          state.view = 'status';
+          render();
+          return;
+        }
+        openSignup();
       });
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
     }
@@ -976,7 +1045,7 @@
         doLogin(email, password);
       });
       root.querySelector('#goto-forgot')?.addEventListener('click', () => { state.view = 'forgot'; state.error = ''; state.resetMessage = ''; render(); });
-      root.querySelector('#goto-signup')?.addEventListener('click', () => { state.view = 'signup'; state.error = ''; render(); });
+      root.querySelector('#goto-signup')?.addEventListener('click', () => { state.error = ''; openSignup(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
     }

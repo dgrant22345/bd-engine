@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildProductEvent } from '../src/product-analytics.js';
+import { buildAcquisitionSource, buildProductEvent } from '../src/product-analytics.js';
+
+test('acquisition sources retain a bounded campaign identifier without customer data', () => {
+  assert.equal(
+    buildAcquisitionSource({ source: 'LinkedIn', campaign: 'Coverage Denominator' }),
+    'linkedin.coverage-denominator'
+  );
+  assert.equal(buildAcquisitionSource({ source: 'HRNxt' }), 'hrnxt');
+  const privateSource = buildAcquisitionSource({ source: 'person@example.com', campaign: 'x'.repeat(80) });
+  assert.equal(privateSource.startsWith('direct.'), true);
+  assert.equal(privateSource.includes('person'), false);
+  assert.equal(privateSource.length, 39);
+  assert.equal(buildAcquisitionSource({}, 'referral'), 'referral');
+});
 
 test('product events use hashed idempotency and visitor identifiers', () => {
   const event = buildProductEvent({
