@@ -32,6 +32,29 @@ test('LinkedIn import creates network companies, not tracked targets', async () 
   for (const item of items) assert.equal(item.tracked, false, `${item.displayName} should be a network company`);
 });
 
+test('account portfolio queries separate tracked targets from network context', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-account-portfolio';
+  store.ensureTenant({ id: tenantId, name: 'Portfolio' }, { id: 'portfolio-owner' });
+  await store.addAccount(tenantId, { displayName: 'Tracked Company' });
+  const network = await store.addAccount(tenantId, { displayName: 'Network Company' });
+  await store.patchAccount(tenantId, network.id, { tracked: false });
+  const legacy = await store.addAccount(tenantId, { displayName: 'Legacy Company' });
+  delete legacy.tracked;
+
+  const tracked = await store.findAccounts(tenantId, { portfolio: 'tracked', page: 1, pageSize: 20 });
+  assert.deepEqual(tracked.items.map((item) => item.displayName).sort(), ['Legacy Company', 'Tracked Company']);
+  assert.deepEqual(tracked.portfolioSummary, {
+    trackedCompanies: 2,
+    networkCompanies: 1,
+    legacyUnclassified: 1,
+  });
+
+  const networkOnly = await store.findAccounts(tenantId, { portfolio: 'network', page: 1, pageSize: 20 });
+  assert.deepEqual(networkOnly.items.map((item) => item.displayName), ['Network Company']);
+  assert.equal((await store.findAccounts(tenantId, { portfolio: 'all', page: 1, pageSize: 20 })).total, 3);
+});
+
 test('manual add and pasted target lists create tracked targets', async () => {
   const store = createStore();
   const tenantId = 'tenant-tracked';

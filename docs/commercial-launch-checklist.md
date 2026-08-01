@@ -6,8 +6,8 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 ## Release candidate
 
-- [x] Approved head: `aa1c7399396c2ca19f0e6f750a8985a327678ba3`
-  Owner/date: `dgrant22345 / 2026-07-19`
+- [x] Approved head: `3345c56218854a1b997ba516d10762e3ac42e107`
+  Owner/date: `dgrant22345 / 2026-07-26`
 - [x] CI is green for lint, schema contract, unit tests, browser journeys,
   compatibility, renderer tests, dependency audits, and deterministic ATS tests.
   Evidence: GitHub CI run 100.
@@ -42,11 +42,15 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
   railway.cmd run --service bd-engine --environment production -- npm.cmd --prefix saas run check:production-config
   ```
 
+  Current result on 2026-07-26: all checks pass except `RESEND_API_KEY`,
+  `BD_EMAIL_FROM`, and `BD_REQUIRE_EMAIL_VERIFICATION=true`.
+
 ## Data and recovery
 
 - [x] A fresh encrypted backup completed and its SHA-256 was recorded.
-  Backup reference: `pre-deploy-1dea508-2026-07-19.json.gz.enc`, SHA-256
-  `2ea029a9933b336763c53b11f46761449e2042a8f1b50597b5540ef1a9663d9c`
+  Latest backup reference: `pre-portfolio-rebalance-20260726.json.gz.enc`,
+  SHA-256 `dd950a46751d36daa339a103fc3934e0c4cf9bd83ede420de2950de9d448eeb8`.
+  The 17.94 MB AES-256-GCM archive was verified before the production rebalance.
 - [ ] `BD_BACKUP_ENCRYPTION_KEY` is a dedicated 32-byte key stored separately
   from backup archives; a key-loss and key-rotation owner is documented.
   Evidence: `________________`
@@ -98,10 +102,14 @@ Evidence for this section: `________________`
 
 - [ ] Maintenance risk and rollback owner were announced before deployment.
 - [x] The exact approved commit was deployed; Railway reports both services and
-  PostgreSQL online. Merge `b5fd0eb1d6c79535081c477627a4893afd6a2434`,
-  deployment `4c42b674-6674-4666-9e62-6020a60af19f`.
+  PostgreSQL online. Commit `3345c56218854a1b997ba516d10762e3ac42e107`,
+  deployment `470f6f0a-93ce-4b7e-8a61-c599a6b25468`, image digest
+  `sha256:8efa5000d9fcc2193b705b49187e099f78421b2b9ea32d59dfce88f87a06364e`.
 - [ ] `/livez`, `/readyz`, `/health`, public entry, login, verified signup, one
   ATS discovery, one job refresh, support, billing, export, and logout passed.
+  Partial evidence: all three health endpoints returned HTTP 200, and authenticated
+  production ATS discovery and a live job refresh completed on 2026-07-26. The
+  remaining flows still require one recorded pass.
 - [ ] Authenticated status reports database/parity health, queue age below the
   threshold, 5xx rate below 1%, and ingestion success at or above 95%.
 - [x] The default-branch scheduled production probe is registered and green.
@@ -112,6 +120,37 @@ Evidence for this section: `________________`
 - [ ] Logs and alerts were watched through the agreed observation window.
 
 Observation owner/window/evidence: `________________`
+
+## Focused portfolio and ingestion evidence
+
+- [x] The existing production workspace was classified without deletion into
+  100 tracked companies and 12,217 searchable network-only companies. No legacy
+  unclassified companies remain.
+- [x] Actionable tracked-company ATS coverage is 99%: 99 of 100 tracked companies
+  have a refresh-ready source and currently return usable active jobs. TD resolved
+  through its official Workday board; Scotiabank remains the one honest gap because
+  its public SAP careers site does not expose a supported import feed.
+- [x] Bounded discovery checked every uncovered tracked company and completed
+  without errors. Weak or unverifiable matches were not imported.
+- [x] A focused live ATS import completed at 100% with zero provider errors. It
+  fetched 20,646 postings from 99 configs, retained 9,381 in-scope rows, created
+  one job, closed 14 stale jobs, and left 8,622 active jobs. Role scoring marked
+  936 active jobs relevant to the configured search focus.
+- [x] The UI distinguishes actionable tracked-company coverage from the historical
+  all-company resolver rate. The historical 1% figure includes 12,217 network-only
+  records and is not the operational refresh coverage for the focused portfolio.
+- [x] Job-search focus is configured for MBA-relevant talent acquisition, people
+  operations, customer success, account management, program, business operations,
+  strategy, consulting, and workforce-planning roles, with remote work preferred
+  and low-value role families excluded.
+- [x] The 100-company target portfolio was previewed and rebalanced without
+  deleting history: 12 stronger companies entered, 12 moved to searchable network
+  context, and all five placeholder employers left the tracked list. The result
+  contains 76 companies with relevant roles and 30 with strong-fit roles.
+- [x] Fourteen retained companies with inherited personal-email or mismatched
+  domains were corrected. Account and linked ATS config domains now agree for all
+  14, no tracked company retains those invalid domains, and the two remaining
+  companies without identities received verified official careers entry points.
 
 ## Rollback decision
 

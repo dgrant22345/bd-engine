@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Check whether a public career-site URL matches an ATS provider supported by BD Engine, with clear coverage caveats.">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://bd-engine-production.up.railway.app/ats-checker">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="BD Engine Cloud">
+  <meta property="og:title" content="Free ATS Compatibility Checker | BD Engine">
+  <meta property="og:description" content="Identify whether a public career-site URL matches a supported ATS provider. No signup required.">
+  <meta property="og:url" content="https://bd-engine-production.up.railway.app/ats-checker">
+  <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Free ATS Compatibility Checker | BD Engine">
+  <meta name="twitter:description" content="Check a public career-site URL against BD Engine's supported ATS providers.">
+  <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta name="theme-color" content="#080d18">
+  <title>Free ATS Compatibility Checker | BD Engine</title>
+  <link rel="stylesheet" href="/ats-checker.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "BD Engine ATS Compatibility Checker",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Web",
+    "url": "https://bd-engine-production.up.railway.app/ats-checker",
+    "description": "A free browser-based check for public career-site URLs that match ATS providers supported by BD Engine.",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="BD Engine home">
+      <img src="/bd-engine-logo.png" alt="" width="34" height="34">
+      <span>BD Engine</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="/job-search">Job search</a>
+      <a class="header-cta" href="/?utm_source=ats-checker&utm_medium=tool&utm_campaign=checker_navigation">Staffing workflow</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="checker-intro" aria-labelledby="checker-title">
+      <p class="eyebrow">Free public utility</p>
+      <h1 id="checker-title">Check a public career-site URL</h1>
+      <p class="lede">See whether a URL matches an ATS provider that BD Engine can work with. The check runs in your browser and does not fetch the submitted site.</p>
+    </section>
+
+    <div class="checker-layout">
+      <section class="checker-panel" aria-label="ATS compatibility check">
+        <form id="ats-checker-form" novalidate>
+          <label for="career-url">Career site or job-board URL</label>
+          <div class="input-row">
+            <input id="career-url" name="careerUrl" type="text" inputmode="url" autocomplete="url" placeholder="https://jobs.example.com/company" required aria-describedby="url-help">
+            <button type="submit">Check URL</button>
+          </div>
+          <p id="url-help" class="field-help">Use a public company careers page or hosted ATS board. Do not enter login links or private systems.</p>
+        </form>
+
+        <div id="checker-result" class="checker-result" role="status" aria-live="polite" hidden>
+          <p id="result-status" class="result-status"></p>
+          <h2 id="result-title"></h2>
+          <p id="result-message"></p>
+          <div id="result-actions" class="result-actions"></div>
+        </div>
+      </section>
+
+      <aside class="coverage-notes" aria-labelledby="coverage-title">
+        <p class="eyebrow">What this checks</p>
+        <h2 id="coverage-title">Recognized public providers</h2>
+        <p>Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and Rippling.</p>
+        <ul>
+          <li>A recognized host is a compatibility signal, not a coverage guarantee.</li>
+          <li>Employers can change, hide, or customize public career pages.</li>
+          <li>Ordinary company careers pages may still need discovery and review.</li>
+        </ul>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <span>BD Engine Cloud</span>
+    <span>Decision support for focused staffing and job-search workflows.</span>
+  </footer>
+
+  <script type="module" src="/ats-checker.js"></script>
+</body>
+</html>

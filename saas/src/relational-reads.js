@@ -127,6 +127,12 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
   const search = String(query.q || '').trim();
   const params = [tenantId];
   let searchSql = '';
+  let portfolioSql = '';
+  if (query.portfolio === 'tracked') {
+    portfolioSql = ` AND COALESCE(raw->>'tracked', 'true') <> 'false'`;
+  } else if (query.portfolio === 'network') {
+    portfolioSql = ` AND raw->>'tracked' = 'false'`;
+  }
   if (search) {
     params.push(escapedSearchPattern(search));
     searchSql = ` AND (
@@ -142,12 +148,20 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `SELECT raw FROM accounts
-       WHERE tenant_id = $1${searchSql}
+       WHERE tenant_id = $1${portfolioSql}${searchSql}
        ORDER BY target_score DESC, updated_at DESC, id ASC
        LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       params
     ),
-    dbQuery(`SELECT COUNT(*)::int AS total FROM accounts WHERE tenant_id = $1${searchSql}`, countParams),
+    dbQuery(
+      `SELECT
+         COUNT(*) FILTER (WHERE TRUE${portfolioSql}${searchSql})::int AS total,
+         COUNT(*) FILTER (WHERE COALESCE(raw->>'tracked', 'true') <> 'false')::int AS tracked_companies,
+         COUNT(*) FILTER (WHERE raw->>'tracked' = 'false')::int AS network_companies,
+         COUNT(*) FILTER (WHERE NOT (COALESCE(raw, '{}'::jsonb) ? 'tracked'))::int AS legacy_unclassified
+       FROM accounts WHERE tenant_id = $1`,
+      countParams
+    ),
   ]);
   const accountRows = (rowsResult?.rows || []).map(rawOrRow);
   const accountIds = accountRows.map((item) => item.id).filter(Boolean);
@@ -168,6 +182,11 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
     page,
     pageSize,
     total: Number(countResult?.rows?.[0]?.total || 0),
+    portfolioSummary: {
+      trackedCompanies: Number(countResult?.rows?.[0]?.tracked_companies || 0),
+      networkCompanies: Number(countResult?.rows?.[0]?.network_companies || 0),
+      legacyUnclassified: Number(countResult?.rows?.[0]?.legacy_unclassified || 0),
+    },
   };
 }
 
@@ -277,14 +296,19 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
     const ref = addParam(Math.floor(recencyDays));
     clauses.push(`j.posted_at ~ '^\\d{4}-\\d{2}-\\d{2}' AND (CURRENT_DATE - substring(j.posted_at, 1, 10)::date) <= ${ref}`);
   }
+  const relevanceExpression = `CASE WHEN COALESCE(j.raw->>'relevanceScore', '') ~ '^\\d+(\\.\\d+)?$' THEN (j.raw->>'relevanceScore')::numeric ELSE -1 END`;
+  const minRelevance = Number(query.minRelevance || 0);
+  if (minRelevance > 0) clauses.push(`${relevanceExpression} >= ${addParam(minRelevance)}`);
 
   const whereSql = clauses.join(' AND ');
   const countParams = [...params];
   const limitRef = addParam(pageSize);
   const offsetRef = addParam(offset);
-  const orderSql = query.sortBy === 'retrieved'
-    ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
-    : 'source_order.position ASC';
+  const orderSql = query.sortBy === 'relevance'
+    ? `${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
+    : query.sortBy === 'retrieved'
+      ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
+      : 'source_order.position ASC';
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `WITH source_order AS (

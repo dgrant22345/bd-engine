@@ -5,6 +5,7 @@ const defaultAdminCollapsed = {
   'runtime-status': true,
   'background-jobs': true,
   'pipeline-ops': false,
+  'search-focus': false,
   'scoring-settings': true,
   'automation-rules': true,
   'alert-thresholds': true,
@@ -68,9 +69,9 @@ const appState = {
   localData: null,
   localOverlays: null,
   activeView: 'dashboard',
-  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
@@ -261,9 +262,9 @@ const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
 
 const defaultQueries = {
-  accounts: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', sortBy: '' },
+  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
 };
@@ -2374,6 +2375,11 @@ function bindEvents() {
       return;
     }
 
+    if (actionName === 'rebalance-targets') {
+      await rebalanceTrackedTargets();
+      return;
+    }
+
     if (actionName === 'run-target-score-rollout') {
       await runTargetScoreRollout(action);
       return;
@@ -2867,15 +2873,22 @@ function bindEvents() {
     }
 
     if (form.id === 'settings-form') {
-      const payload = getFormValues(form);
-      payload.gtaPriority = payload.gtaPriority === 'true';
-      await api('/api/settings', {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
+      const values = getFormValues(form);
+      const result = await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          searchFocus: {
+            targetRoles: values.targetRoles,
+            excludedRoles: values.excludedRoles,
+            targetIndustries: values.targetIndustries,
+            workStyle: values.workStyle,
+            minimumRelevanceScore: Number(values.minimumRelevanceScore || 45),
+          },
+        }),
       });
       invalidateAppData();
       await renderAdminView();
-      showToast('Scoring settings saved.', 'success');
+      showToast(`Search focus saved. ${formatNumber(result.rescoredJobs || 0)} existing jobs rescored.`, 'success');
       return;
     }
 
@@ -3168,6 +3181,7 @@ const accountPresets = [
 ];
 
 const accountFilterLabels = {
+  portfolio: 'Portfolio',
   q: 'Search',
   hiring: 'Hiring',
   ats: 'ATS',
@@ -3195,7 +3209,7 @@ function normalizedFilterEntries(query) {
 
 function isAccountPresetActive(preset) {
   const activeEntries = normalizedFilterEntries(appState.accountQuery);
-  const presetEntries = normalizedFilterEntries(preset.query);
+  const presetEntries = normalizedFilterEntries({ ...defaultQueries.accounts, ...preset.query });
   return activeEntries.length === presetEntries.length
     && presetEntries.every(([key, value]) => String(appState.accountQuery[key] || '') === value);
 }
@@ -4898,7 +4912,6 @@ async function renderDashboardView(options = {}) {
         if (!payload || getRouteRoot(routeAtRequest) !== 'dashboard' || getRouteRoot() !== 'dashboard') return;
         void renderDashboardView({
           dashboardPayload,
-          tasksPayload,
           extendedPayload: payload,
           skipLoading: true,
         });
@@ -4932,6 +4945,14 @@ async function renderAccountsView() {
   const industryOptions = filters.industries || [];
   const personaCopy = getPersonaUiCopy();
   const jobSeeker = personaCopy.persona === 'jobseeker';
+  const portfolioSummary = result.portfolioSummary || {};
+  const legacyUnclassified = Number(portfolioSummary.legacyUnclassified || 0);
+  const trackedCompanies = Number(portfolioSummary.trackedCompanies || 0);
+  const portfolioLabel = appState.accountQuery.portfolio === 'network'
+    ? 'network companies'
+    : appState.accountQuery.portfolio === 'all'
+      ? 'companies'
+      : 'tracked ' + personaCopy.accountPlural;
   const industryField = industryOptions.length
     ? `<select name="industry"><option value="">All industries</option>${industryOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.industry, value)}>${escapeHtml(value)}</option>`).join('')}</select>`
     : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
@@ -4953,6 +4974,12 @@ async function renderAccountsView() {
       </div>
     </section>
 
+    ${legacyUnclassified
+      ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>`
+      : trackedCompanies
+        ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Keep this shortlist aligned with your focus.</strong><span>Preview a fresh ranking after changing target roles, industries, or work style. Weak company identities are flagged before anything changes.</span><button class="secondary-button" type="button" data-action="rebalance-targets">Review and rebalance</button></div>`
+        : ''}
+
     ${renderAccountPresetStrip()}
 
     <section class="detail-grid detail-grid--workspace">
@@ -4969,11 +4996,12 @@ async function renderAccountsView() {
             </div>
             ${renderExportButton('accounts')}
             <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
-            <span class="table-meta">${formatNumber(result.total)} tracked ${escapeHtml(personaCopy.accountPlural)}</span>
+            <span class="table-meta">${formatNumber(result.total)} ${escapeHtml(portfolioLabel)}</span>
           </div>
         </div>
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
+          ${renderField('Portfolio', `<select name="portfolio"><option value="tracked" ${selected(appState.accountQuery.portfolio, 'tracked')}>Tracked targets</option><option value="network" ${selected(appState.accountQuery.portfolio, 'network')}>Network only</option><option value="all" ${selected(appState.accountQuery.portfolio, 'all')}>All companies</option></select>`)}
           ${renderField('Hiring', `<select name="hiring"><option value="">All</option><option value="true" ${selected(appState.accountQuery.hiring, 'true')}>Active hiring</option></select>`)}
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
@@ -5400,9 +5428,13 @@ async function renderJobsView() {
   renderLoadingState('Jobs', 'Loading job activity...');
   setViewTitle(isJobSeekerPersona() ? 'Open roles' : 'Jobs');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
-  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
   const atsOptions = stateBootstrap.filters?.atsTypes || [];
   const jobSeeker = isJobSeekerPersona();
+  const personaKey = jobSeeker ? 'jobseeker' : 'bd';
+  const searchFocus = stateBootstrap.settings?.searchFocusByPersona?.[personaKey] || {};
+  const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
+  if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
+  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -5421,14 +5453,15 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">Use filters to isolate roles by company, careers platform, and posting recency.</p></div>${renderExportButton('jobs')}</div>
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Set a search focus in Tools to rank jobs by fit, then filter by company, platform, and recency.'}</p></div>${renderExportButton('jobs')}</div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
         ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
         ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
-        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
+        ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option><option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
+        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
         <div class="field field--action"><label>${jobSeeker ? 'Filter roles' : 'Filter jobs'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
@@ -5564,6 +5597,23 @@ async function renderAdminView() {
       ? 'Secure checkout is available for configured plans.'
       : 'Online plan changes are not available in this workspace. Your current access is unchanged.');
   const billingAccess = billing.billingAccess || {};
+  const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+  const searchFocus = stateBootstrap.settings.searchFocusByPersona?.[personaKey] || {};
+  const searchFocusCopy = personaKey === 'jobseeker'
+    ? {
+        title: 'Your role search focus',
+        subtitle: 'Tell BD Engine what a good opportunity looks like. This changes job ranking and which company boards are checked first.',
+        roleLabel: 'Roles you want',
+        rolePlaceholder: 'Financial analyst, strategy manager, business operations',
+        industryLabel: 'Preferred industries',
+      }
+    : {
+        title: 'Your demand signal focus',
+        subtitle: 'Define the hiring signals that suggest a company may need what you sell. This changes job ranking and board-discovery priority.',
+        roleLabel: 'Roles that signal demand',
+        rolePlaceholder: 'Recruiter, sales engineer, implementation manager',
+        industryLabel: 'Industries you sell into',
+      };
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
   const canChangeBilling = billing.canChangeBilling !== false;
@@ -5601,7 +5651,7 @@ async function renderAdminView() {
           <h3>Keep coverage fresh</h3>
           <p class="subtitle">Refresh company data, find job boards, import live roles, and keep the daily account queue ready for action.</p>
           <div class="hero-signal-strip">
-            ${renderSignalChip('Coverage', `${formatNumber(summary.coveragePercent || 0)}%`, 'success')}
+            ${renderSignalChip('Tracked coverage', `${formatNumber(operationalCoveragePercent)}%`, 'success')}
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
             ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
             ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
@@ -5672,6 +5722,16 @@ async function renderAdminView() {
               </div>
             </div>
           </div>
+        ${renderCollapsibleEnd()}
+        ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
+          <form id="settings-form" class="settings-grid">
+            ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate role titles with commas. Specific phrases produce better rankings.')}
+            ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases are ranked at the bottom.')}
+            ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Used to prioritize limited board-discovery batches when company industry data is available.')}
+            ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`)}
+            ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="0" max="100" step="5" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, '45 is a useful starting point. Raise it for a tighter shortlist.')}
+            <div class="field field--action"><label>Update rankings</label><button class="primary-button" type="submit">Save focus and rescore jobs</button></div>
+          </form>
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}
           <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
@@ -5774,11 +5834,11 @@ async function renderAdminView() {
           ${renderEnrichmentFilters()}
           ${renderEnrichmentQueuePanel(enrichmentQueue)}
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Coverage, confidence mix, and failure reasons for ATS resolution across the company universe.')}
+        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Tracked-company readiness first, with the full imported history shown separately for context.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Actionable companies', operationalCompanyCount, `${formatNumber(operationalCoveragePercent)}% have resolved boards`)}
             ${renderMetricCard('Need resolver work', operationalUnresolvedCount, 'Actionable companies still missing a resolved board')}
-            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, 'All imported company records with ATS resolution state')}
+            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, `${formatNumber(summary.networkSourcesExcluded || 0)} network-only sources excluded from automatic work`)}
             ${renderMetricCard('Resolved rows', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total resolver rows`)}
             ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
             ${renderMetricCard('Unresolved rows', summary.unresolvedCount || 0, 'Imported rows still missing strong ATS evidence')}
@@ -5879,8 +5939,8 @@ async function exportContactsCsv() {
 async function exportJobsCsv() {
   const items = await fetchAllForExport('/api/jobs', appState.jobQuery);
   exportToCsv('jobs.csv',
-    ['Title', 'Company', 'Location', 'ATS', 'Posted', 'Active', 'URL'],
-    items.map(j => [j.title, j.companyName, j.location, j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
+    ['Title', 'Company', 'Location', 'Fit score', 'Fit reasons', 'ATS', 'Posted', 'Active', 'URL'],
+    items.map(j => [j.title, j.companyName, j.location, j.relevanceScore ?? '', (j.relevanceReasons || []).join('; '), j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
   );
 }
 
@@ -5966,11 +6026,12 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
           <td>${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
           <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+          <td>${renderJobRelevance(item)}</td>
           <td>${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
           <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
           <td>${formatDate(item.postedAt)}</td>
@@ -5978,6 +6039,16 @@ function renderJobsTable(items, compact) {
           <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">Recent posting</div>' : ''}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
+}
+
+function renderJobRelevance(item) {
+  if (item.relevanceScore === null || item.relevanceScore === undefined) {
+    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">Set a search focus</div>`;
+  }
+  const band = item.relevanceBand || 'low';
+  const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
+  const reasons = Array.isArray(item.relevanceReasons) ? item.relevanceReasons.filter(Boolean).slice(0, 2).join(' · ') : '';
+  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons ? `<div class="small muted">${escapeHtml(reasons)}</div>` : ''}`;
 }
 
 function renderMiniStatList(items) {
@@ -6681,10 +6752,10 @@ function renderStoryCard(label, value, description, tone = 'neutral') {
 }
 
 let fieldIdCounter = 0;
-function renderField(label, control) {
+function renderField(label, control, hint = '') {
   const id = `field-${++fieldIdCounter}`;
   const controlWithId = control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
-  return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}</div>`;
+  return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}${hint ? `<span class="small muted">${escapeHtml(hint)}</span>` : ''}</div>`;
 }
 
 function renderEmptyState({ icon = 'i', title = 'Nothing to show yet', copy = '', action = '', compact = false } = {}) {
@@ -7678,7 +7749,7 @@ function renderOutreachPiece(title, body, actionsHtml, className = '', fieldName
 async function curateLegacyTargets() {
   const rawLimit = await showAppDialog({
     title: 'Choose the target portfolio size',
-    message: 'BD Engine will rank legacy companies by target score, live roles, and relationship strength. Other companies remain searchable but stop consuming automatic ATS discovery.',
+    message: 'BD Engine will rank legacy companies by your role focus, live hiring signals, target score, and relationship strength. Other companies remain searchable but stop consuming automatic ATS discovery.',
     confirmLabel: 'Preview selection',
     inputLabel: 'Number of target companies (1-1,000)',
     inputPlaceholder: '100',
@@ -7702,6 +7773,8 @@ async function curateLegacyTargets() {
     const expected = `CURATE ${workspaceName}`;
     const examples = (preview.preview || []).slice(0, 4).map((item) => {
       const detail = [`score ${formatNumber(item.targetScore || 0)}`];
+      if (Number(item.strongFitRoleCount || 0) > 0) detail.push(`${formatNumber(item.strongFitRoleCount)} strong-fit roles`);
+      else if (Number(item.relevantRoleCount || 0) > 0) detail.push(`${formatNumber(item.relevantRoleCount)} relevant roles`);
       if (Number(item.openRoleCount || 0) > 0) detail.push(`${formatNumber(item.openRoleCount)} open roles`);
       if (Number(item.connectionCount || 0) > 0) detail.push(`${formatNumber(item.connectionCount)} connections`);
       return `${item.displayName} (${detail.join(', ')})`;
@@ -7724,9 +7797,68 @@ async function curateLegacyTargets() {
       body: JSON.stringify({ targetLimit, confirm: confirmation }),
     });
     showToast(result.message || 'Legacy companies classified.', 'success', 7000);
-    await renderAdminView();
+    if (getRouteRoot() === 'accounts') await renderAccountsView();
+    else await renderAdminView();
   } catch (error) {
     showToast(`Target classification failed: ${error.message}`, 'error', 7000);
+  }
+}
+
+async function rebalanceTrackedTargets() {
+  const currentTracked = Number(appState.bootstrap?.portfolioSummary?.trackedCompanies || 100);
+  const rawLimit = await showAppDialog({
+    title: 'Review the target portfolio',
+    message: 'BD Engine will rerank every company using your saved role focus, relevant openings, relationship strength, and company identity quality. Previewing does not change any records.',
+    confirmLabel: 'Preview changes',
+    inputLabel: 'Number of target companies (1-1,000)',
+    inputPlaceholder: String(currentTracked || 100),
+    inputValue: String(currentTracked || 100),
+  });
+  if (rawLimit === null) return;
+  const targetLimit = Number(rawLimit);
+  if (!Number.isInteger(targetLimit) || targetLimit < 1 || targetLimit > 1000) {
+    showToast('Enter a whole number from 1 to 1,000.', 'warning');
+    return;
+  }
+
+  try {
+    const preview = await api(`/api/accounts/target-rebalance?targetLimit=${targetLimit}`, { skipCache: true });
+    const workspaceName = appState.bootstrap?.workspace?.name || 'Workspace';
+    const expected = `REBALANCE ${workspaceName}`;
+    const additions = (preview.addedPreview || []).slice(0, 4).map((item) => item.displayName).join(', ');
+    const removals = (preview.removedPreview || []).slice(0, 4).map((item) => item.displayName).join(', ');
+    const identityWarnings = (preview.identityReview || []).slice(0, 4).map((item) => (
+      `${item.displayName}: ${(item.identityIssues || []).join(', ')}`
+    )).join('; ');
+    const changeSummary = preview.additions || preview.removals
+      ? `${formatNumber(preview.additions)} companies enter the target list and ${formatNumber(preview.removals)} move to searchable network context. ${additions ? `Examples entering: ${additions}. ` : ''}${removals ? `Examples leaving: ${removals}. ` : ''}`
+      : 'The selected companies do not change at this portfolio size. ';
+    const warningSummary = identityWarnings
+      ? `Selected records still needing identity review: ${identityWarnings}.`
+      : 'No selected company identity warnings were found.';
+    const confirmation = await showAppDialog({
+      title: 'Confirm portfolio rebalance',
+      message: `${changeSummary}${warningSummary} Contacts, activity, and historical jobs are never deleted.`,
+      confirmLabel: 'Apply rebalance',
+      cancelLabel: 'Keep current portfolio',
+      danger: true,
+      inputLabel: `Type ${expected} to confirm`,
+    });
+    if (confirmation === null) return;
+    if (confirmation !== expected) {
+      showToast(`Type ${expected} exactly to continue.`, 'warning');
+      return;
+    }
+    const result = await api('/api/accounts/target-rebalance', {
+      method: 'POST',
+      body: JSON.stringify({ targetLimit, confirm: confirmation }),
+    });
+    invalidateAppData();
+    showToast(result.message || 'Target portfolio rebalanced.', 'success', 7000);
+    if (getRouteRoot() === 'accounts') await renderAccountsView();
+    else await renderAdminView();
+  } catch (error) {
+    showToast(`Portfolio rebalance failed: ${error.message}`, 'error', 7000);
   }
 }
 

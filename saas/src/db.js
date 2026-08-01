@@ -90,6 +90,40 @@ export async function dbClassifyLegacyAccounts(tenantId, selectedIds, timestamp)
   });
 }
 
+export async function dbRebalanceTrackedAccounts(tenantId, selectedIds, timestamp) {
+  if (!dbReady || !pool) return { saved: false, reason: 'database_not_ready' };
+  const ids = Array.isArray(selectedIds) ? selectedIds : [];
+  return dbTransaction(async (query) => {
+    const relational = await query(`
+      UPDATE accounts
+      SET raw = jsonb_set(
+            jsonb_set(coalesce(raw, '{}'::jsonb), '{tracked}', to_jsonb(id = ANY($2::text[])), true),
+            '{updatedAt}', to_jsonb($3::text), true
+          ),
+          updated_at = $3
+      WHERE tenant_id = $1
+    `, [tenantId, ids, timestamp]);
+    const legacy = await query(`
+      UPDATE tenant_data data
+      SET accounts = classified.accounts, updated_at = $3
+      FROM (
+        SELECT coalesce(jsonb_agg(
+          jsonb_set(
+            jsonb_set(account.item, '{tracked}', to_jsonb((account.item->>'id') = ANY($2::text[])), true),
+            '{updatedAt}', to_jsonb($3::text), true
+          )
+          ORDER BY account.ordinality
+        ), '[]'::jsonb) AS accounts
+        FROM tenant_data source
+        CROSS JOIN LATERAL jsonb_array_elements(source.accounts) WITH ORDINALITY AS account(item, ordinality)
+        WHERE source.tenant_id = $1
+      ) classified
+      WHERE data.tenant_id = $1
+    `, [tenantId, ids, timestamp]);
+    return { saved: true, relationalUpdated: relational.rowCount || 0, legacyUpdated: legacy.rowCount || 0 };
+  });
+}
+
 async function runSchemaMigration(id, description, migrate) {
   const client = await pool.connect();
   try {

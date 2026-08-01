@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
+import { validatePublicUrl } from './public-url.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -207,6 +208,9 @@ function job(input) {
     active: true,
     atsType: input.atsType || input.source || 'unknown',
     sourceUrl: '',
+    relevanceScore: null,
+    relevanceBand: 'unscored',
+    relevanceReasons: [],
     createdAt: now(),
     updatedAt: now(),
     ...input,
@@ -235,6 +239,8 @@ function dashboardAccountSummary(item) {
     jobCount: item.jobCount,
     jobsLast30Days: item.jobsLast30Days,
     jobsLast90Days: item.jobsLast90Days,
+    relevantRoleCount: item.relevantRoleCount,
+    strongFitRoleCount: item.strongFitRoleCount,
     hiringVelocity: item.hiringVelocity,
     hiringStatus: item.hiringStatus,
     connectionCount: item.connectionCount,
@@ -276,6 +282,9 @@ function dashboardJobSummary(item) {
     active: item.active,
     isNew: item.isNew,
     isGta: item.isGta,
+    relevanceScore: item.relevanceScore,
+    relevanceBand: item.relevanceBand,
+    relevanceReasons: item.relevanceReasons,
   };
 }
 
@@ -675,6 +684,22 @@ const settings = {
   geographyFocus: 'Canada + US',
   gtaPriority: false,
   jobRetentionDays: 28,
+  searchFocusByPersona: {
+    bd: {
+      targetRoles: '',
+      excludedRoles: '',
+      targetIndustries: '',
+      workStyle: 'any',
+      minimumRelevanceScore: 45,
+    },
+    jobseeker: {
+      targetRoles: '',
+      excludedRoles: '',
+      targetIndustries: '',
+      workStyle: 'any',
+      minimumRelevanceScore: 45,
+    },
+  },
   ownerRoster: [
     { id: 'owner-founder', name: 'BD Engine Founder', displayName: 'BD Engine Founder', email: 'founder@example.com', role: 'Owner' },
     { id: 'owner-ae', name: 'Cloud AE', displayName: 'Cloud AE', email: 'ae@example.com', role: 'BD' },
@@ -1743,14 +1768,7 @@ export function createStore() {
       await ensureDataLoaded(tenantId, false);
       const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
       const legacyAccounts = accountsForTenant(tenantId).filter((item) => typeof item.tracked !== 'boolean');
-      const ranked = [...legacyAccounts].sort((a, b) => (
-        Number(b.targetScore || 0) - Number(a.targetScore || 0)
-        || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
-        || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
-        || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
-        || Number(b.connectionCount || 0) - Number(a.connectionCount || 0)
-        || String(a.displayName || '').localeCompare(String(b.displayName || ''))
-      ));
+      const ranked = rankPortfolioCandidates(legacyAccounts);
       const selectedIds = new Set(ranked.slice(0, limit).map((item) => item.id));
       const summary = {
         legacyCompanies: legacyAccounts.length,
@@ -1761,6 +1779,8 @@ export function createStore() {
           id: item.id,
           displayName: item.displayName,
           targetScore: Number(item.targetScore || 0),
+          strongFitRoleCount: Number(item.strongFitRoleCount || 0),
+          relevantRoleCount: Number(item.relevantRoleCount || 0),
           openRoleCount: Number(item.openRoleCount || item.jobCount || 0),
           connectionCount: Number(item.connectionCount || 0),
         })),
@@ -1783,6 +1803,81 @@ export function createStore() {
         for (const item of legacyAccounts) {
           delete item.tracked;
           item.updatedAt = previous.get(item.id)?.updatedAt;
+        }
+        throw error;
+      }
+      return { ok: true, applied: true, ...summary };
+    },
+
+    async rebalanceTrackedTargets(tenantId, { targetLimit = 100, apply = false } = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const limit = Math.max(1, Math.min(1000, Math.floor(Number(targetLimit) || 100)));
+      const tenantAccounts = accountsForTenant(tenantId);
+      const ranked = rankPortfolioCandidates(tenantAccounts);
+      const selected = ranked.slice(0, limit);
+      const selectedIds = new Set(selected.map((item) => item.id));
+      const currentIds = new Set(tenantAccounts.filter(isTrackedTarget).map((item) => item.id));
+      const additions = selected.filter((item) => !currentIds.has(item.id));
+      const removals = tenantAccounts.filter((item) => currentIds.has(item.id) && !selectedIds.has(item.id));
+      const toPreview = (item) => ({
+        id: item.id,
+        displayName: item.displayName,
+        targetScore: Number(item.targetScore || 0),
+        strongFitRoleCount: Number(item.strongFitRoleCount || 0),
+        relevantRoleCount: Number(item.relevantRoleCount || 0),
+        openRoleCount: Number(item.openRoleCount || item.jobCount || 0),
+        connectionCount: Number(item.connectionCount || 0),
+        identityIssues: getPortfolioIdentityIssues(item),
+      });
+      const summary = {
+        totalCompanies: tenantAccounts.length,
+        currentTargets: currentIds.size,
+        selectedTargets: selected.length,
+        networkCompanies: Math.max(0, tenantAccounts.length - selected.length),
+        additions: additions.length,
+        removals: removals.length,
+        targetLimit: limit,
+        preview: selected.slice(0, 12).map(toPreview),
+        addedPreview: additions.slice(0, 8).map(toPreview),
+        removedPreview: removals.slice(0, 8).map(toPreview),
+        identityReview: selected.filter((item) => getPortfolioIdentityIssues(item).length).slice(0, 12).map(toPreview),
+      };
+      if (!apply || !tenantAccounts.length) return { ok: true, applied: false, ...summary };
+
+      const timestamp = now();
+      const previous = new Map(tenantAccounts.map((item) => [item.id, {
+        hadTracked: Object.prototype.hasOwnProperty.call(item, 'tracked'),
+        tracked: item.tracked,
+        updatedAt: item.updatedAt,
+      }]));
+      for (const item of tenantAccounts) {
+        item.tracked = selectedIds.has(item.id);
+        item.updatedAt = timestamp;
+      }
+      try {
+        if (isDbEnabled()) {
+          const result = await dbRebalanceTrackedAccounts(tenantId, [...selectedIds], timestamp);
+          if (!result?.saved) throw new Error(`Portfolio rebalance save failed: ${result?.reason || 'unknown error'}`);
+          primeTenantRelationalMirror(tenantId, { accounts: tenantAccounts });
+        } else {
+          persistTenant(tenantId);
+        }
+        await dbRecordAuditLog({
+          tenantId,
+          action: 'portfolio.rebalance',
+          entityType: 'tenant',
+          entityId: tenantId,
+          before: { trackedCompanies: currentIds.size },
+          after: { trackedCompanies: selected.length },
+          metadata: { targetLimit: limit, additions: additions.length, removals: removals.length, privacySafe: true },
+        });
+      } catch (error) {
+        for (const item of tenantAccounts) {
+          const old = previous.get(item.id);
+          if (old?.hadTracked) item.tracked = old.tracked;
+          else delete item.tracked;
+          item.updatedAt = old?.updatedAt;
         }
         throw error;
       }
@@ -2316,7 +2411,18 @@ export function createStore() {
         }
       }
       await ensureDataLoaded(tenantId);
-      let items = decorateAccountsWithConfigs(accountsForTenant(tenantId), configsForTenant(tenantId));
+      const tenantAccounts = accountsForTenant(tenantId);
+      const portfolioSummary = {
+        trackedCompanies: tenantAccounts.filter(isTrackedTarget).length,
+        networkCompanies: tenantAccounts.filter((item) => item.tracked === false).length,
+        legacyUnclassified: tenantAccounts.filter((item) => typeof item.tracked !== 'boolean').length,
+      };
+      let items = decorateAccountsWithConfigs(tenantAccounts, configsForTenant(tenantId));
+      if (query.portfolio === 'tracked') {
+        items = items.filter(isTrackedTarget);
+      } else if (query.portfolio === 'network') {
+        items = items.filter((item) => item.tracked === false);
+      }
       items = filterText(items, query.q, ['displayName', 'domain', 'industry', 'location', 'owner', 'notes']);
       if (query.hiring === 'true' || query.hiring === true) {
         items = items.filter((item) => Number(item.openRoleCount || item.jobCount || 0) > 0);
@@ -2344,7 +2450,7 @@ export function createStore() {
       if (query.industry) items = items.filter((item) => normalizeKey(item.industry) === normalizeKey(query.industry));
       if (query.geography) items = items.filter((item) => accountMatchesGeography(item, query.geography));
       sortAccountRows(items, query.sortBy);
-      return paginate(items, query);
+      return { ...paginate(items, query), portfolioSummary };
     },
 
     async getAccountDetail(tenantId, accountId) {
@@ -2424,12 +2530,23 @@ export function createStore() {
       await ensureDataLoaded(tenantId);
       const item = accountById(accountId, tenantId);
       if (!item || item.tenantId !== tenantId) return null;
+      const previousIdentity = {
+        domain: String(item.canonicalDomain || item.domain || '').trim(),
+        careersUrl: String(item.careersUrl || '').trim(),
+      };
       Object.assign(item, pickPatch(patch, [
         'status', 'outreachStatus', 'priorityTier', 'priority', 'notes', 'industry', 'location',
         'domain', 'canonicalDomain', 'careersUrl', 'nextAction', 'nextActionAt', 'owner',
         'tags', 'aliases', 'linkedinCompanySlug', 'enrichmentStatus', 'enrichmentSource',
         'enrichmentConfidence', 'enrichmentConfidenceScore', 'enrichmentNotes',
       ]));
+      if (Object.prototype.hasOwnProperty.call(patch, 'domain')
+        && !Object.prototype.hasOwnProperty.call(patch, 'canonicalDomain')) {
+        item.canonicalDomain = String(item.domain || '').trim();
+      } else if (Object.prototype.hasOwnProperty.call(patch, 'canonicalDomain')
+        && !Object.prototype.hasOwnProperty.call(patch, 'domain')) {
+        item.domain = String(item.canonicalDomain || '').trim();
+      }
       if (Array.isArray(item.tags)) item.tags = unique(item.tags.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
       if (Array.isArray(item.aliases)) item.aliases = unique(item.aliases.map((value) => String(value).trim()).filter(Boolean)).slice(0, 50);
       if (Object.prototype.hasOwnProperty.call(patch, 'enrichmentConfidenceScore')) {
@@ -2438,7 +2555,30 @@ export function createStore() {
       if (Object.prototype.hasOwnProperty.call(patch, 'tracked')) {
         item.tracked = patch.tracked === true || patch.tracked === 'true';
       }
-      item.updatedAt = now();
+      const timestamp = now();
+      item.updatedAt = timestamp;
+      const identityChanged = ['domain', 'canonicalDomain', 'careersUrl']
+        .some((field) => Object.prototype.hasOwnProperty.call(patch, field));
+      if (identityChanged) {
+        const nextDomain = String(item.canonicalDomain || item.domain || '').trim();
+        const nextCareersUrl = String(item.careersUrl || '').trim();
+        for (const config of configsForTenant(tenantId)) {
+          if (!configMatchesAccount(config, item)) continue;
+          let changed = false;
+          const currentDomain = String(config.canonicalDomain || config.domain || '').trim();
+          if (nextDomain && (!getUsableCompanyDomain(currentDomain) || normalizeKey(currentDomain) === normalizeKey(previousIdentity.domain))) {
+            config.domain = nextDomain;
+            config.canonicalDomain = nextDomain;
+            changed = true;
+          }
+          const currentCareersUrl = String(config.careersUrl || '').trim();
+          if (nextCareersUrl && (!getUsableCareerUrl(currentCareersUrl) || normalizeKey(currentCareersUrl) === normalizeKey(previousIdentity.careersUrl))) {
+            config.careersUrl = nextCareersUrl;
+            changed = true;
+          }
+          if (changed) config.updatedAt = timestamp;
+        }
+      }
       persistTenant(tenantId);
       return item;
     },
@@ -2525,7 +2665,14 @@ export function createStore() {
       if (recencyDays > 0) {
         items = items.filter((item) => daysSince(item.postedAt) <= recencyDays);
       }
-      if (query.sortBy === 'retrieved') {
+      const minRelevance = Number(query.minRelevance || 0);
+      if (minRelevance > 0) {
+        items = items.filter((item) => Number(item.relevanceScore ?? -1) >= minRelevance);
+      }
+      if (query.sortBy === 'relevance') {
+        items.sort((a, b) => Number(b.relevanceScore ?? -1) - Number(a.relevanceScore ?? -1)
+          || String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')));
+      } else if (query.sortBy === 'retrieved') {
         items.sort((a, b) => String(b.retrievedAt || b.importedAt || '').localeCompare(String(a.retrievedAt || a.importedAt || '')));
       }
       const result = paginate(items, query);
@@ -2636,6 +2783,7 @@ export function createStore() {
     async patchSettings(tenantId, patch) {
       assertTenant(tenantId);
       await ensureTenantSettingsLoaded(tenantId);
+      await ensureDataLoaded(tenantId, false);
       const profile = getTenantProfile(tenantId);
       Object.assign(profile.settings, pickPatch(patch, [
         'minCompanyConnections',
@@ -2646,8 +2794,26 @@ export function createStore() {
         'gtaPriority',
         'jobRetentionDays',
       ]));
+      const persona = normalizePersona(profile.persona || profile.settings.persona);
+      if (patch.searchFocus && typeof patch.searchFocus === 'object') {
+        const currentByPersona = profile.settings.searchFocusByPersona || {};
+        profile.settings.searchFocusByPersona = {
+          ...currentByPersona,
+          [persona]: sanitizeSearchFocus(patch.searchFocus, currentByPersona[persona]),
+        };
+      }
+      const focus = getSearchFocus(profile.settings, persona);
+      const tenantJobs = jobsForTenant(tenantId);
+      const accountMap = new Map(accountsForTenant(tenantId).map((item) => [item.id, item]));
+      let rescoredJobs = 0;
+      for (const item of tenantJobs) {
+        const relevance = scoreJobRelevance(item, accountMap.get(item.accountId), focus);
+        Object.assign(item, relevance, { relevanceUpdatedAt: now(), updatedAt: now() });
+        rescoredJobs++;
+      }
+      for (const item of accountMap.values()) refreshAccountHiringStats(item, tenantJobs, focus);
       persistTenant(tenantId);
-      return { ok: true, settings: { ...profile.settings } };
+      return { ok: true, settings: { ...profile.settings }, rescoredJobs };
     },
 
     async getWorkspacePreferences(tenantId) {
@@ -2918,9 +3084,12 @@ export function createStore() {
     getResolverReport(tenantId) {
       assertTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+      const operationalConfigs = getOperationalBoardConfigs(tenantId, tenantConfigs);
       const resolved = tenantConfigs.filter(isResolvedBoardConfig);
-      const medium = tenantConfigs.filter((item) => item.confidenceBand === 'medium');
+      const operationalResolved = operationalConfigs.filter(isResolvedBoardConfig);
+      const medium = operationalConfigs.filter((item) => item.confidenceBand === 'medium');
       const unresolved = tenantConfigs.filter((item) => !isResolvedBoardConfig(item));
+      const operationalUnresolved = operationalConfigs.filter((item) => !isResolvedBoardConfig(item));
       return {
         summary: {
           totalCompanies: tenantConfigs.length,
@@ -2928,11 +3097,21 @@ export function createStore() {
           activeCount: tenantConfigs.filter((item) => item.active).length,
           unresolvedCount: unresolved.length,
           mediumReviewQueueCount: medium.length,
-          unresolvedReviewQueueCount: unresolved.length,
+          unresolvedReviewQueueCount: operationalUnresolved.length,
           coveragePercent: tenantConfigs.length ? Math.round((resolved.length / tenantConfigs.length) * 100) : 0,
+          operationalTotalCompanies: operationalConfigs.length,
+          operationalResolvedCount: operationalResolved.length,
+          operationalActiveCount: operationalConfigs.filter((item) => item.active).length,
+          operationalUnresolvedCount: operationalUnresolved.length,
+          operationalCoveragePercent: operationalConfigs.length
+            ? Math.round((operationalResolved.length / operationalConfigs.length) * 100)
+            : 0,
+          networkSourcesExcluded: tenantConfigs.length - operationalConfigs.length,
         },
-        byConfidenceBand: countBy(tenantConfigs, 'confidenceBand'),
-        topFailureReasons: unresolved.length ? [{ failureReason: 'Missing verified ATS evidence', count: unresolved.length }] : [],
+        byConfidenceBand: countBy(operationalConfigs, 'confidenceBand'),
+        topFailureReasons: operationalUnresolved.length
+          ? [{ failureReason: 'Missing verified ATS evidence', count: operationalUnresolved.length }]
+          : [],
       };
     },
 
@@ -2960,7 +3139,7 @@ export function createStore() {
 
     getResolverQueue(tenantId, band) {
       assertTenant(tenantId);
-      const items = configsForTenant(tenantId)
+      const items = getOperationalBoardConfigs(tenantId)
         .filter((item) => band === 'medium' ? item.confidenceBand === 'medium' : !isResolvedBoardConfig(item));
       return paginate(items, { page: 1, pageSize: 10 });
     },
@@ -3356,7 +3535,18 @@ export function createStore() {
           .map((item) => [normalizeKey(item.normalizedName || item.displayName), item])
           .filter(([key]) => key)
       );
-      candidates = prioritizeDiscoveryCandidates(candidates, accountsById, accountsByName).slice(0, limit);
+      const profile = getTenantProfile(tenantId);
+      const searchFocus = getSearchFocus(profile?.settings, profile?.persona);
+      const relevantJobsByAccount = new Map();
+      for (const item of jobsForTenant(tenantId)) {
+        if (!item.accountId || item.active === false) continue;
+        if (Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
+        relevantJobsByAccount.set(item.accountId, (relevantJobsByAccount.get(item.accountId) || 0) + 1);
+      }
+      candidates = prioritizeDiscoveryCandidates(candidates, accountsById, accountsByName, {
+        searchFocus,
+        relevantJobsByAccount,
+      }).slice(0, limit);
       let linkedAccountConfigs = 0;
       for (const config of candidates) {
         if (config.accountId) continue;
@@ -3536,7 +3726,9 @@ export function createStore() {
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantJobs = getTenantArray(jobsByTenant, tenantId);
       const tenantConfigs = configsForTenant(tenantId);
-      const geographyFilter = parseGeographyFocus(getTenantProfile(tenantId)?.settings?.geographyFocus);
+      const profile = getTenantProfile(tenantId);
+      const geographyFilter = parseGeographyFocus(profile?.settings?.geographyFocus);
+      const searchFocus = getSearchFocus(profile?.settings, profile?.persona);
 
       const identityRepairStartedAt = performance.now();
       let directResolvedConfigs = 0;
@@ -3720,6 +3912,9 @@ export function createStore() {
             filteredOutNonCanada++;
             continue;
           }
+          Object.assign(normalizedJob, scoreJobRelevance(normalizedJob, accountItem, searchFocus), {
+            relevanceUpdatedAt: now(),
+          });
 
           kept++;
           configKept++;
@@ -3806,7 +4001,7 @@ export function createStore() {
 
       for (const accountId of touchedAccountIds) {
         const item = accountsById.get(accountId);
-        if (item) refreshAccountHiringStats(item, tenantJobs);
+        if (item) refreshAccountHiringStats(item, tenantJobs, searchFocus);
       }
 
       tenantJobs.sort((a, b) => String(b.postedAt || b.importedAt || b.updatedAt).localeCompare(String(a.postedAt || a.importedAt || a.updatedAt)));
@@ -3842,6 +4037,7 @@ export function createStore() {
         kept,
         canadaKept: kept,
         filteredOutNonCanada,
+        relevantJobs: tenantJobs.filter((item) => item.active !== false && Number(item.relevanceScore ?? -1) >= searchFocus.minimumRelevanceScore).length,
         imported: activeTrackedJobs,
         runImported: newJobs + updatedJobs,
         jobsTouched: newJobs + updatedJobs + closedJobs,
@@ -5988,10 +6184,10 @@ function getConfigAtsType(config = {}) {
   return detectAtsTypeFromUrl(getConfigAtsUrl(config));
 }
 
-function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map(), accountsByName = new Map()) {
+function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map(), accountsByName = new Map(), context = {}) {
   return [...configs].sort((a, b) => {
-    const scoreDelta = getDiscoveryCandidateScore(b, accountForConfig(b, accountsById, accountsByName))
-      - getDiscoveryCandidateScore(a, accountForConfig(a, accountsById, accountsByName));
+    const scoreDelta = getDiscoveryCandidateScore(b, accountForConfig(b, accountsById, accountsByName), context)
+      - getDiscoveryCandidateScore(a, accountForConfig(a, accountsById, accountsByName), context);
     if (scoreDelta) return scoreDelta;
     const checkedDelta = String(a.lastDiscoveryCheckedAt || '').localeCompare(String(b.lastDiscoveryCheckedAt || ''));
     if (checkedDelta) return checkedDelta;
@@ -5999,7 +6195,7 @@ function prioritizeDiscoveryCandidates(configs = [], accountsById = new Map(), a
   });
 }
 
-function getDiscoveryCandidateScore(config = {}, accountItem = null) {
+function getDiscoveryCandidateScore(config = {}, accountItem = null, context = {}) {
   let score = 0;
   if (getConfigAtsUrl(config)) score += 1000;
   if (getConfigUrlCandidates(config).some((value) => getUsableCareerUrl(value))) score += 500;
@@ -6007,6 +6203,16 @@ function getDiscoveryCandidateScore(config = {}, accountItem = null) {
   if (accountItem) {
     score += Math.min(300, Math.max(0, Number(accountItem.targetScore || accountItem.dailyScore || 0)) * 3);
     score += Math.min(100, Math.max(0, Number(accountItem.connectionCount || accountItem.contactCount || 0)) * 2);
+    const focus = context.searchFocus || {};
+    const accountText = normalizeSearchText([
+      accountItem.industry,
+      accountItem.location,
+      accountItem.notes,
+      ...(Array.isArray(accountItem.tags) ? accountItem.tags : []),
+    ].filter(Boolean).join(' '));
+    if (parseFocusTerms(focus.targetIndustries).some((term) => phraseMatchesText(term, accountText))) score += 350;
+    if (parseFocusTerms(focus.targetRoles).some((term) => phraseMatchesText(term, accountText))) score += 125;
+    score += Math.min(300, Number(context.relevantJobsByAccount?.get(accountItem.id) || 0) * 75);
   }
   if (!config.lastDiscoveryCheckedAt) score += 80;
   const lastCheckedMs = Date.parse(config.lastDiscoveryCheckedAt || '');
@@ -6260,6 +6466,74 @@ function configMatchesAccount(config = {}, account = {}) {
 // existing workspaces keep their current behavior until curated.
 function isTrackedTarget(item) {
   return Boolean(item) && item.tracked !== false;
+}
+
+const PORTFOLIO_PLACEHOLDER_NAMES = new Set([
+  'confidential', 'freelance', 'n a', 'n/a', 'none', 'not applicable', 'retired',
+  'self employed', 'self-employed', 'unknown',
+]);
+const COMPANY_NAME_STOP_WORDS = new Set([
+  'and', 'canada', 'canadian', 'company', 'corp', 'corporation', 'group',
+  'holdings', 'inc', 'incorporated', 'international', 'limited', 'ltd',
+  'services', 'solutions', 'the', 'technology', 'technologies',
+]);
+
+function getPortfolioIdentityIssues(item = {}) {
+  const issues = [];
+  const normalizedName = normalizeKey(item.displayName || item.normalizedName || '');
+  if (!normalizedName || PORTFOLIO_PLACEHOLDER_NAMES.has(normalizedName)) {
+    issues.push('Placeholder company name');
+  }
+
+  const rawDomain = String(item.canonicalDomain || item.domain || '').trim();
+  const usableDomain = getUsableCompanyDomain(rawDomain);
+  if (rawDomain && !usableDomain) {
+    issues.push('Personal or invalid company domain');
+  } else if (usableDomain && normalizedName && !PORTFOLIO_PLACEHOLDER_NAMES.has(normalizedName)) {
+    const compactName = normalizedName.replace(/[^a-z0-9]/g, '');
+    const hostStem = usableDomain.split('.').slice(0, -1).join('').replace(/[^a-z0-9]/g, '');
+    const nameTokens = normalizedName.split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 3 && !COMPANY_NAME_STOP_WORDS.has(token));
+    const tokenMatch = nameTokens.some((token) => hostStem.includes(token) || token.includes(hostStem));
+    if (hostStem.length >= 4 && !tokenMatch && !hostStem.includes(compactName) && !compactName.includes(hostStem)) {
+      issues.push('Domain does not appear to match company name');
+    }
+  }
+  return issues;
+}
+
+function rankPortfolioCandidates(items = []) {
+  return [...items].sort((a, b) => {
+    const aIssues = getPortfolioIdentityIssues(a);
+    const bIssues = getPortfolioIdentityIssues(b);
+    const aPlaceholder = aIssues.includes('Placeholder company name') ? 1 : 0;
+    const bPlaceholder = bIssues.includes('Placeholder company name') ? 1 : 0;
+    return aPlaceholder - bPlaceholder
+      || Number(b.strongFitRoleCount || 0) - Number(a.strongFitRoleCount || 0)
+      || Number(b.relevantRoleCount || 0) - Number(a.relevantRoleCount || 0)
+      || Number(b.openRoleCount || b.jobCount || 0) - Number(a.openRoleCount || a.jobCount || 0)
+      || aIssues.length - bIssues.length
+      || Number(b.targetScore || 0) - Number(a.targetScore || 0)
+      || Number(b.talentContactCount || 0) - Number(a.talentContactCount || 0)
+      || Number(b.seniorContactCount || 0) - Number(a.seniorContactCount || 0)
+      || Number(b.connectionCount || 0) - Number(a.connectionCount || 0)
+      || Number(isTrackedTarget(b)) - Number(isTrackedTarget(a))
+      || String(a.displayName || '').localeCompare(String(b.displayName || ''));
+  });
+}
+
+function getOperationalBoardConfigs(tenantId, tenantConfigs = configsForTenant(tenantId)) {
+  const tenantAccounts = accountsForTenant(tenantId);
+  const accountsById = new Map(tenantAccounts.map((item) => [item.id, item]));
+  const accountsByName = new Map(
+    tenantAccounts
+      .map((item) => [normalizeKey(item.normalizedName || item.displayName), item])
+      .filter(([key]) => key)
+  );
+  return tenantConfigs.filter((config) => {
+    const owner = accountForConfig(config, accountsById, accountsByName);
+    return !owner || isTrackedTarget(owner);
+  });
 }
 
 function rankLinkedInCompanyCandidates(companyMap, existingAccountsMap, availableAccountSlots) {
@@ -6620,13 +6894,30 @@ async function fetchStaticCareersJobs(config) {
   return { jobs: parseStaticCareersJobs(content, url) };
 }
 
+async function fetchWithPublicRedirects(url, init = {}) {
+  let currentUrl = await validatePublicUrl(url);
+  const method = String(init.method || 'GET').toUpperCase();
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return { response, finalUrl: response.url || currentUrl };
+    }
+    const location = response.headers.get('location');
+    if (!location) return { response, finalUrl: response.url || currentUrl };
+    if (!['GET', 'HEAD'].includes(method)) throw new Error('ATS write requests cannot follow redirects.');
+    if (redirects === 5) throw new Error('ATS request exceeded the redirect limit.');
+    currentUrl = await validatePublicUrl(new URL(location, currentUrl).toString());
+  }
+  throw new Error('ATS request exceeded the redirect limit.');
+}
+
 async function fetchJson(url, timeoutMs = 15000, init = {}) {
   let lastError = null;
   for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      const { response } = await fetchWithPublicRedirects(url, {
         ...init,
         headers: {
           accept: 'application/json',
@@ -6677,7 +6968,7 @@ async function fetchTextPage(url, timeoutMs = 15000) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      const { response, finalUrl } = await fetchWithPublicRedirects(url, {
         headers: {
           accept: 'text/html,application/xml,text/xml,application/json',
           'accept-language': 'en-US,en;q=0.9',
@@ -6693,7 +6984,7 @@ async function fetchTextPage(url, timeoutMs = 15000) {
       }
       return {
         content: await response.text(),
-        finalUrl: response.url || String(url),
+        finalUrl,
       };
     } catch (error) {
       lastError = error;
@@ -6854,28 +7145,60 @@ function buildBoardCandidates(config) {
 async function discoverAtsBoardFromCareersPages(config) {
   const urls = buildCareerPageUrls(config);
   const batchSize = 3;
+  const renderCandidates = [];
   for (let offset = 0; offset < urls.length; offset += batchSize) {
     const batch = urls.slice(offset, offset + batchSize);
     const results = await mapSettledWithConcurrency(batch, batchSize, async (url, batchIndex) => {
       const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
       const directResult = await inspectCareerPage(config, page, url, 'careers_page_link');
-      if (directResult) return directResult;
-
-      // Rendering is intentionally bounded to the highest-confidence URL for
-      // each company. A renderer is optional and receives public careers URLs
-      // only; ordinary provider imports never depend on it.
-      if (offset === 0 && batchIndex === 0 && ATS_RENDER_SERVICE_URL) {
-        const renderedPage = await fetchRenderedCareerPage(url);
-        if (renderedPage) {
-          return inspectCareerPage(config, renderedPage, url, 'rendered_careers_page');
-        }
-      }
-      return null;
+      return {
+        directResult,
+        page,
+        url,
+        order: offset + batchIndex,
+      };
     });
-    const match = results.find((result) => result.status === 'fulfilled' && result.value)?.value;
+    const match = results.find((result) => result.status === 'fulfilled' && result.value.directResult)?.value.directResult;
     if (match) return match;
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      const score = scoreRenderedCareerCandidate(result.value.page, result.value.url);
+      if (score > 0) renderCandidates.push({ ...result.value, score });
+    }
+  }
+
+  // Rendering is intentionally bounded to one public careers URL per company.
+  // Pick from pages that actually loaded so a dead careers subdomain does not
+  // consume the only render while the real /careers page sits one URL later.
+  if (ATS_RENDER_SERVICE_URL && renderCandidates.length) {
+    renderCandidates.sort((a, b) => b.score - a.score || a.order - b.order);
+    const candidate = renderCandidates[0];
+    const renderUrl = candidate.page?.finalUrl || candidate.url;
+    const renderedPage = await fetchRenderedCareerPage(renderUrl);
+    if (renderedPage) {
+      return inspectCareerPage(config, renderedPage, renderUrl, 'rendered_careers_page');
+    }
   }
   return null;
+}
+
+function scoreRenderedCareerCandidate(page, requestedUrl) {
+  const content = String(page?.content || '').trim();
+  if (content.length < 20) return 0;
+  const normalizedContent = normalizeSearchText(content.slice(0, 100000));
+  if (/(domain for sale|buy this domain|parked domain|under construction|coming soon)/.test(normalizedContent)) return 0;
+  const target = getUsableCareerUrl(page?.finalUrl || requestedUrl);
+  if (!target) return 0;
+  let score = 10;
+  try {
+    const parsed = new URL(target);
+    if (/^(careers|jobs)\./i.test(parsed.hostname)) score += 300;
+    if (/\/(careers?|jobs?|opportunities|open-positions|vacancies|join-us)(?:\/|$)/i.test(parsed.pathname)) score += 250;
+  } catch {
+    return 0;
+  }
+  if (/\b(careers?|jobs?|openings?|positions?|vacancies|hiring|recruiting)\b/.test(normalizedContent)) score += 75;
+  return score;
 }
 
 async function inspectCareerPage(config, page, requestedUrl, method) {
@@ -6947,11 +7270,26 @@ async function fetchRenderedCareerPage(url) {
 function guessDomainsFromName(companyName) {
   if (isGenericCompanyIdentity(companyName)) return [];
   const literalDomain = getUsableCompanyDomain(companyName);
-  const slug = normalizeKey(companyName)
-    .replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|the|a|of|and)\b/g, '')
-    .replace(/[^a-z0-9]/g, '');
+  const words = normalizeKey(companyName)
+    .replace(/\b(inc|incorporated|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems|solutions|group|holdings|the|a|of|and)\b/g, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const slug = words.join('');
   if (slug.length < 3) return literalDomain ? [literalDomain] : [];
-  return [literalDomain, `${slug}.com`, `${slug}.ca`, `${slug}.io`].filter(Boolean);
+  const acronym = words.length >= 2 && words.length <= 8 ? words.map((word) => word[0]).join('') : '';
+  const firstWord = words[0] || '';
+  const firstTwo = words.slice(0, 2).join('');
+  return [...new Set([
+    literalDomain,
+    `${slug}.com`,
+    acronym.length >= 2 ? `${acronym}.com` : '',
+    firstTwo !== slug && firstTwo.length >= 4 ? `${firstTwo}.com` : '',
+    firstWord !== slug && firstWord.length >= 4 ? `${firstWord}.com` : '',
+    `${slug}.ca`,
+    acronym.length >= 2 ? `${acronym}.ca` : '',
+    `${slug}.io`,
+  ].filter(Boolean))].slice(0, 8);
 }
 
 function isGenericCompanyIdentity(value) {
@@ -6976,11 +7314,10 @@ function buildCareerPageUrls(config = {}) {
   };
   const untrustedNameProbe = config.discoveryMethod === 'public_ats_probe'
     && normalizeKey(config.reviewStatus || '') !== 'approved';
-  const directCareerSource = untrustedNameProbe
-    ? (config.careersUrl || config.sourceUrl || config.boardUrl || config.url)
-    : (config.careersUrl || config.resolvedBoardUrl || config.sourceUrl || config.boardUrl || config.url);
-  const directCareerUrl = getUsableCareerUrl(directCareerSource);
-  add(directCareerUrl);
+  const directCareerSources = untrustedNameProbe
+    ? [config.careersUrl, config.sourceUrl, config.boardUrl, config.url]
+    : getConfigUrlCandidates(config);
+  for (const source of directCareerSources) add(getUsableCareerUrl(source));
   const knownDomain = getUsableCompanyDomain(config.domain || config.canonicalDomain);
   const domains = knownDomain ? [knownDomain] : guessDomainsFromName(config.companyName);
   // Companies host careers on both paths (/careers) and subdomains
@@ -6993,10 +7330,21 @@ function buildCareerPageUrls(config = {}) {
     add(`https://${domain}/careers/jobs`);
     add(`https://jobs.${domain}`);
     add(`https://${domain}/jobs`);
+    if (knownDomain) {
+      add(`https://${domain}/join-us`);
+      add(`https://${domain}/open-positions`);
+      add(`https://${domain}/company/careers`);
+      add(`https://${domain}/about/careers`);
+      add(`https://${domain}/job-openings`);
+      // The official homepage often links directly to a hosted ATS even when
+      // the site's own careers path is localized or nonstandard.
+      add(`https://${domain}/`);
+      add(`https://www.${domain}/`);
+    }
   }
   // Known domain gets a deeper crawl; guessed domains are capped so a batch of
   // unresolved companies does not explode into hundreds of blind fetches.
-  return urls.slice(0, knownDomain ? 6 : 9);
+  return urls.slice(0, knownDomain ? 12 : 15);
 }
 
 function extractAtsLinks(content, baseUrl = '') {
@@ -7916,6 +8264,154 @@ function getProviderJobIdentity(item = {}) {
   return `${tenant}|${atsType}|${normalizeKey(item.companyName)}|id:${normalizeKey(providerJobId)}`;
 }
 
+function sanitizeFocusText(value) {
+  return parseFocusTerms(value).slice(0, 30).join(', ').slice(0, 600);
+}
+
+function sanitizeSearchFocus(value = {}, fallback = {}) {
+  const workStyle = ['any', 'remote', 'hybrid', 'onsite'].includes(normalizeKey(value.workStyle))
+    ? normalizeKey(value.workStyle)
+    : (['any', 'remote', 'hybrid', 'onsite'].includes(normalizeKey(fallback.workStyle)) ? normalizeKey(fallback.workStyle) : 'any');
+  const minimum = Number(value.minimumRelevanceScore ?? fallback.minimumRelevanceScore ?? 45);
+  return {
+    targetRoles: sanitizeFocusText(value.targetRoles ?? fallback.targetRoles),
+    excludedRoles: sanitizeFocusText(value.excludedRoles ?? fallback.excludedRoles),
+    targetIndustries: sanitizeFocusText(value.targetIndustries ?? fallback.targetIndustries),
+    workStyle,
+    minimumRelevanceScore: Math.max(0, Math.min(100, Number.isFinite(minimum) ? Math.round(minimum) : 45)),
+  };
+}
+
+function getSearchFocus(settingsValue = {}, personaValue = '') {
+  const persona = normalizePersona(personaValue || settingsValue?.persona);
+  const byPersona = settingsValue?.searchFocusByPersona || {};
+  return sanitizeSearchFocus(byPersona[persona] || {});
+}
+
+function parseFocusTerms(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[,;\n]+/);
+  const seen = new Set();
+  const terms = [];
+  for (const item of source) {
+    const term = normalizeSearchText(item);
+    if (!term || term.length < 2 || seen.has(term)) continue;
+    seen.add(term);
+    terms.push(term);
+  }
+  return terms;
+}
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9+#.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function phraseMatchesText(phrase, normalizedText) {
+  const term = normalizeSearchText(phrase);
+  const text = normalizeSearchText(normalizedText);
+  if (!term || !text) return false;
+  return ` ${text} `.includes(` ${term} `) || text.includes(term);
+}
+
+function roleMatchStrength(term, titleText, detailText) {
+  const normalizedTerm = normalizeSearchText(term);
+  if (!normalizedTerm) return 0;
+  if (phraseMatchesText(normalizedTerm, titleText)) return 60;
+  if (phraseMatchesText(normalizedTerm, detailText)) return 35;
+  const words = normalizedTerm.split(' ').filter((word) => word.length > 2);
+  if (!words.length) return 0;
+  const titleTokens = new Set(normalizeSearchText(titleText).split(' ').filter(Boolean));
+  const detailTokens = new Set(normalizeSearchText(detailText).split(' ').filter(Boolean));
+  const titleCoverage = words.filter((word) => titleTokens.has(word)).length / words.length;
+  const detailCoverage = words.filter((word) => detailTokens.has(word)).length / words.length;
+  if (titleCoverage === 1) return 52;
+  if (titleCoverage >= 0.5) return 30;
+  if (detailCoverage === 1) return 25;
+  return 0;
+}
+
+function classifyWorkStyle(item = {}) {
+  const text = normalizeSearchText([item.location, item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' '));
+  if (/\bhybrid\b/.test(text)) return 'hybrid';
+  if (/\b(remote|work from home|distributed|anywhere)\b/.test(text)) return 'remote';
+  if (/\b(on site|onsite|in office|office based)\b/.test(text)) return 'onsite';
+  return 'unknown';
+}
+
+function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
+  const focus = sanitizeSearchFocus(focusValue);
+  const targetRoles = parseFocusTerms(focus.targetRoles);
+  const excludedRoles = parseFocusTerms(focus.excludedRoles);
+  const targetIndustries = parseFocusTerms(focus.targetIndustries);
+  const configured = targetRoles.length || excludedRoles.length || targetIndustries.length || focus.workStyle !== 'any';
+  if (!configured) {
+    return { relevanceScore: null, relevanceBand: 'unscored', relevanceReasons: ['Set a search focus to rank this role'] };
+  }
+
+  const titleText = normalizeSearchText(item.title);
+  const detailText = normalizeSearchText([item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' '));
+  const excluded = excludedRoles.find((term) => phraseMatchesText(term, detailText));
+  if (excluded) {
+    return { relevanceScore: 5, relevanceBand: 'low', relevanceReasons: [`Excluded role: ${excluded}`] };
+  }
+
+  let score = targetRoles.length ? 5 : 25;
+  const reasons = [];
+  if (targetRoles.length) {
+    const matches = targetRoles
+      .map((term) => ({ term, strength: roleMatchStrength(term, titleText, detailText) }))
+      .sort((a, b) => b.strength - a.strength);
+    const best = matches[0];
+    if (best?.strength) {
+      score += best.strength;
+      reasons.push(`Role match: ${best.term}`);
+    } else {
+      reasons.push('Outside target roles');
+    }
+  }
+
+  const accountText = normalizeSearchText([
+    accountItem?.industry,
+    accountItem?.notes,
+    ...(Array.isArray(accountItem?.tags) ? accountItem.tags : []),
+  ].filter(Boolean).join(' '));
+  const industryMatch = targetIndustries.find((term) => phraseMatchesText(term, accountText));
+  if (industryMatch) {
+    score += 25;
+    reasons.push(`Industry match: ${industryMatch}`);
+  }
+
+  const workStyle = classifyWorkStyle(item);
+  if (focus.workStyle !== 'any') {
+    if (workStyle === focus.workStyle) {
+      score += 10;
+      reasons.push(`${focus.workStyle} preference`);
+    } else if (workStyle !== 'unknown') {
+      score -= 15;
+      reasons.push(`${workStyle} role`);
+    }
+  }
+
+  const age = daysSince(item.postedAt || item.importedAt || item.retrievedAt);
+  if (age <= 7) {
+    score += 10;
+    reasons.push('Posted recently');
+  } else if (age <= 30) {
+    score += 5;
+  }
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    relevanceScore: score,
+    relevanceBand: score >= 70 ? 'strong' : score >= focus.minimumRelevanceScore ? 'possible' : 'low',
+    relevanceReasons: reasons.slice(0, 3),
+  };
+}
+
 const CANADA_COUNTRY_RE = /\b(canada|canadian)\b/i;
 const US_COUNTRY_RE = /\b(us|usa|u\.s\.a?|united states(?: of america)?)\b/i;
 const NORTH_AMERICA_REGION_RE = /\bnorth america\b/i;
@@ -7994,7 +8490,7 @@ function isGtaLocation(location) {
   return /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill)\b/i.test(String(location || ''));
 }
 
-function refreshAccountHiringStats(item, tenantJobs) {
+function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
   const accountJobs = tenantJobs.filter((jobItem) => jobItem.accountId === item.id && jobItem.active !== false);
   const recent30 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 30);
   const recent90 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 90);
@@ -8004,14 +8500,26 @@ function refreshAccountHiringStats(item, tenantJobs) {
   item.jobsLast30Days = recent30.length;
   item.jobsLast90Days = recent90.length;
   item.newRoleCount7d = recent7.length;
+  const focus = focusValue ? sanitizeSearchFocus(focusValue) : null;
+  const hasFocus = Boolean(focus && (parseFocusTerms(focus.targetRoles).length
+    || parseFocusTerms(focus.excludedRoles).length
+    || parseFocusTerms(focus.targetIndustries).length
+    || focus.workStyle !== 'any'));
+  const relevantJobs = hasFocus
+    ? accountJobs.filter((jobItem) => Number(jobItem.relevanceScore ?? -1) >= focus.minimumRelevanceScore)
+    : accountJobs;
+  item.relevantRoleCount = hasFocus ? relevantJobs.length : null;
+  item.strongFitRoleCount = hasFocus ? accountJobs.filter((jobItem) => jobItem.relevanceBand === 'strong').length : null;
   item.lastJobPostedAt = accountJobs[0]?.postedAt || accountJobs[0]?.importedAt || '';
-  item.hiringStatus = accountJobs.length ? 'Active hiring' : 'No active roles found';
+  item.hiringStatus = accountJobs.length
+    ? (hasFocus && !relevantJobs.length ? 'Hiring outside focus' : 'Active hiring')
+    : 'No active roles found';
   item.hiringVelocity = Math.min(100, Math.round((recent30.length * 8) + (recent7.length * 10)));
   item.targetScore = Math.min(100, Math.round(
     (Number(item.connectionCount || 0) * 8) +
     (Number(item.seniorContactCount || 0) * 12) +
     (Number(item.talentContactCount || 0) * 16) +
-    (Number(item.jobCount || 0) * 10)
+    (Number(hasFocus ? relevantJobs.length : item.jobCount || 0) * 10)
   ));
   item.dailyScore = item.targetScore;
   item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);

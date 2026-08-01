@@ -363,6 +363,7 @@ a {
 .detail-form textarea,
 .settings-grid input,
 .settings-grid select,
+.settings-grid textarea,
 .inline-field-stack input,
 .inline-field-stack select {
   width: 100%;
@@ -370,6 +371,13 @@ a {
   background: transparent;
   color: var(--ink);
   outline: none;
+}
+
+.settings-grid textarea {
+  min-height: 76px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.45;
 }
 
 .view-root {
@@ -899,7 +907,14 @@ a {
 
 .ingestion-health__notice span {
   flex: 1;
-  color: var(--ink-muted);
+  color: var(--muted);
+}
+
+.account-portfolio-notice {
+  margin: 16px 0;
+  border-color: rgba(169, 111, 23, 0.28);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .coverage-health {

@@ -281,6 +281,8 @@ test('account journey: accounts list renders and account detail opens', async ({
   await startDemo(page);
   await gotoAppRoute(page, '#/accounts');
   const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('select[name="portfolio"]')).toHaveValue('tracked');
+  await expect(app.locator('.table-meta')).toContainText('tracked');
   await expect(app.locator('table tbody tr').first()).toBeVisible({ timeout: 15000 });
   await app.locator('[data-action="open-account"]').first().click();
   await expect(app.locator('body')).toContainText(/contacts|jobs|outreach|score/i, { timeout: 10000 });
