@@ -39,26 +39,41 @@ test('clean job-search route publishes focused metadata and campaign attribution
   expect(source).toMatchObject({ source: 'linkedin', campaign: 'role_focus' });
 });
 
-test('ATS checker recognizes supported hosts and explains uncertain pages', async ({ page }) => {
+test('ATS checker audits a target list with an explicit denominator', async ({ page }) => {
   await page.goto('/ats-checker');
-  const input = page.getByLabel('Career site or job-board URL');
+  const input = page.getByLabel('Career-site or job-board URLs');
 
-  await input.fill('https://boards.greenhouse.io/example');
-  await page.getByRole('button', { name: 'Check URL' }).click();
-  await expect(page.getByRole('heading', { name: 'Greenhouse provider detected' })).toBeVisible();
-  await expect(page.getByText(/not a coverage guarantee/i)).toBeVisible();
-
-  await input.fill('https://example.com/careers');
-  await page.getByRole('button', { name: 'Check URL' }).click();
-  await expect(page.getByRole('heading', { name: 'Discovery and review are still needed' })).toBeVisible();
+  await input.fill([
+    'https://boards.greenhouse.io/example',
+    'https://jobs.lever.co/example',
+    'https://example.com/careers',
+    'http://localhost:8787',
+  ].join('\n'));
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+  await expect(page.getByRole('heading', { name: '2 of 3 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expect(page.getByText('67%', { exact: true })).toBeVisible();
+  await expect(page.locator('td[data-label="Provider"]', { hasText: 'Greenhouse' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Unknown host' })).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download CSV' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('bd-engine-ats-coverage-audit.csv');
+  await expect(page.getByText(/compatibility signal, not a coverage guarantee/i)).toBeVisible();
 });
 
 test('ATS checker remains usable on mobile without horizontal overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/ats-checker');
 
-  await expect(page.getByRole('heading', { name: 'Check a public career-site URL' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Check URL' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Audit ATS coverage for a target list' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Audit coverage' })).toBeVisible();
+  await page.getByLabel('Career-site or job-board URLs').fill([
+    'https://boards.greenhouse.io/example',
+    'https://example.com/careers',
+  ].join('\n'));
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+  await expect(page.getByRole('heading', { name: '1 of 2 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expect(page.locator('td[data-label="Provider"]', { hasText: 'Greenhouse' })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,
     documentWidth: document.documentElement.scrollWidth,

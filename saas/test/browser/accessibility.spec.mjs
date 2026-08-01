@@ -23,6 +23,19 @@ test('public account entry is accessible', async ({ page }) => {
   await expectNoBlockingViolations(page);
 });
 
+test('ATS coverage audit is accessible before and after results render', async ({ page }) => {
+  await page.goto('/ats-checker');
+  await expectNoBlockingViolations(page);
+
+  await page.getByLabel('Career-site or job-board URLs').fill([
+    'https://boards.greenhouse.io/example',
+    'https://example.com/careers',
+  ].join('\n'));
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+  await expect(page.getByRole('heading', { name: '1 of 2 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expectNoBlockingViolations(page);
+});
+
 test('demo workspace has no blocking structural accessibility violations', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-demo-start]').first().click();

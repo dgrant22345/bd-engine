@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyCareerUrl } from '../public/ats-checker.js';
+import { buildCoverageAudit, buildCoverageCsv, classifyCareerUrl } from '../public/ats-checker.js';
 
 test('ATS checker recognizes every provider advertised on the public page', () => {
   const examples = [
@@ -35,4 +35,38 @@ test('ATS checker rejects invalid and private destinations', () => {
   assert.equal(classifyCareerUrl('http://localhost:8787').status, 'invalid');
   assert.equal(classifyCareerUrl('http://192.168.1.5/jobs').status, 'invalid');
   assert.equal(classifyCareerUrl('not a url').status, 'invalid');
+});
+
+test('ATS coverage audit reports an explicit valid-URL denominator', () => {
+  const audit = buildCoverageAudit([
+    'https://boards.greenhouse.io/example',
+    'https://jobs.lever.co/example',
+    'https://example.com/careers',
+    'http://localhost:8787',
+    'https://boards.greenhouse.io/example/',
+  ].join('\n'));
+
+  assert.equal(audit.totalCount, 4);
+  assert.equal(audit.validCount, 3);
+  assert.equal(audit.recognizedCount, 2);
+  assert.equal(audit.reviewCount, 1);
+  assert.equal(audit.invalidCount, 1);
+  assert.equal(audit.recognitionRate, 67);
+  assert.equal(audit.duplicateCount, 1);
+});
+
+test('ATS coverage audit enforces its 50-entry browser limit', () => {
+  const urls = Array.from({ length: 52 }, (_, index) => `https://company-${index}.example.com/careers`);
+  const audit = buildCoverageAudit(urls.join('\n'));
+
+  assert.equal(audit.totalCount, 50);
+  assert.equal(audit.truncatedCount, 2);
+});
+
+test('ATS coverage CSV exports every audited row and neutralizes formulas', () => {
+  const audit = buildCoverageAudit('https://jobs.ashbyhq.com/example\n=not-a-url');
+  const csv = buildCoverageCsv(audit);
+
+  assert.match(csv, /"https:\/\/jobs\.ashbyhq\.com\/example","jobs\.ashbyhq\.com","Recognized","Ashby"/);
+  assert.match(csv, /"'=not-a-url","","Invalid",""/);
 });
