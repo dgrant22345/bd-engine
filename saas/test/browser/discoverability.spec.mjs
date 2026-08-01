@@ -39,6 +39,19 @@ test('clean job-search route publishes focused metadata and campaign attribution
   expect(source).toMatchObject({ source: 'linkedin', campaign: 'role_focus' });
 });
 
+test('coverage-denominator campaign routes to the ATS audit and preserves attribution', async ({ page }) => {
+  await page.goto('/?utm_source=linkedin&utm_medium=organic&utm_campaign=coverage_denominator');
+
+  await expect(page).toHaveURL((url) => (
+    url.pathname === '/ats-checker'
+    && url.searchParams.get('utm_source') === 'linkedin'
+    && url.searchParams.get('utm_medium') === 'organic'
+    && url.searchParams.get('utm_campaign') === 'coverage_denominator'
+  ));
+  await expect(page).toHaveTitle('Free Bulk ATS Coverage Checker | BD Engine');
+  await expect(page.getByRole('heading', { name: 'Audit ATS coverage for a target list' })).toBeVisible();
+});
+
 test('ATS checker audits a target list with an explicit denominator', async ({ page }) => {
   await page.goto('/ats-checker');
   const input = page.getByLabel('Career-site or job-board URLs');

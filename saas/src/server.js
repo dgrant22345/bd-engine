@@ -915,6 +915,12 @@ self.addEventListener('activate', (event) => {
   }
 
   // Static file serving — check cloud public dir first, then app dir
+  if (req.method === 'GET'
+    && pathname === '/'
+    && url.searchParams.get('utm_campaign') === 'coverage_denominator') {
+    return sendRedirect(res, `/ats-checker${url.search}`);
+  }
+
   if (!pathname.startsWith('/api/')) {
     return serveStaticOrSPA(pathname, req, res);
   }
@@ -2897,6 +2903,14 @@ function sendHtml(res, body) {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
   }, body);
+}
+
+function sendRedirect(res, location, status = 302) {
+  res.writeHead(status, {
+    'Location': location,
+    'Cache-Control': 'no-store',
+  });
+  res.end();
 }
 
 function sendJavaScript(res, body) {
