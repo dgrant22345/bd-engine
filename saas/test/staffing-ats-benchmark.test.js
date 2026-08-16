@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   SOURCE_SHA256,
+  applyAccessibleReportTheme,
   buildBenchmarkAnalysis,
   buildProviderCsv,
   buildReportArtifact,
@@ -13,6 +14,7 @@ import {
 const datasetPath = new URL('../data/state-of-ats-2026-companies.csv', import.meta.url);
 const artifactPath = new URL('../reports/staffing-ats-benchmark.artifact.json', import.meta.url);
 const providerCsvPath = new URL('../public/bd-engine-ats-coverage-benchmark.csv', import.meta.url);
+const reportHtmlPath = new URL('../public/staffing-ats-benchmark.html', import.meta.url);
 
 async function analysisFixture() {
   const sourceText = await readFile(datasetPath, 'utf8');
@@ -80,4 +82,16 @@ test('public report follows the answer-first stakeholder structure', async () =>
   assert.equal(artifact.snapshot.status, 'ready');
   assert.match(blocks.find((block) => block.id === 'next_steps').body, /https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker/);
   assert.match(blocks.find((block) => block.id === 'caveats').body, /not a claim that BD Engine independently re-verified every employer/);
+});
+
+test('public report keeps the accessible light-theme contrast override after regeneration', async () => {
+  const reportHtml = await readFile(reportHtmlPath, 'utf8');
+  const fixture = '<!doctype html><html><head><title>Report</title></head><body></body></html>';
+  const themedFixture = applyAccessibleReportTheme(fixture);
+
+  assert.match(reportHtml, /data-bd-engine-accessible-theme="true"/);
+  assert.match(reportHtml, /--portable-tertiary:#5d5d5d/);
+  assert.match(reportHtml, /--portable-accent:#005ea8/);
+  assert.match(themedFixture, /data-bd-engine-accessible-theme="true"/);
+  assert.equal(applyAccessibleReportTheme(themedFixture), themedFixture);
 });

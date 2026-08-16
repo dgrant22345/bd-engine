@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -14,6 +14,13 @@ export const SOURCE_DATASET_PATH = join(SAAS_DIR, 'data', 'state-of-ats-2026-com
 export const SOURCE_SQL_PATH = join(SAAS_DIR, 'reports', 'staffing-ats-benchmark.sql');
 export const ARTIFACT_PATH = join(SAAS_DIR, 'reports', 'staffing-ats-benchmark.artifact.json');
 export const PROVIDER_CSV_PATH = join(SAAS_DIR, 'public', 'bd-engine-ats-coverage-benchmark.csv');
+export const REPORT_HTML_PATH = join(SAAS_DIR, 'public', 'staffing-ats-benchmark.html');
+
+const ACCESSIBLE_REPORT_THEME = `<style data-bd-engine-accessible-theme="true">
+:root{--portable-tertiary:#5d5d5d;--portable-accent:#005ea8}
+@media(prefers-color-scheme:dark){:root{--portable-tertiary:#afafaf;--portable-accent:#66b5ff}}
+@media print{:root{--portable-tertiary:#5d5d5d;--portable-accent:#005ea8}}
+</style>`;
 
 export const IMPORT_READY_PROVIDERS = new Set([
   'Ashby',
@@ -439,6 +446,13 @@ export function buildProviderCsv(analysis) {
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
 
+export function applyAccessibleReportTheme(html) {
+  const document = String(html || '');
+  if (document.includes('data-bd-engine-accessible-theme="true"')) return document;
+  if (!document.includes('</head>')) throw new Error('ATS benchmark report is missing its closing head element.');
+  return document.replace('</head>', `${ACCESSIBLE_REPORT_THEME}\n</head>`);
+}
+
 export function buildStaffingAtsBenchmark() {
   const sourceText = readFileSync(SOURCE_DATASET_PATH, 'utf8');
   const rows = parseDataset(sourceText);
@@ -446,6 +460,10 @@ export function buildStaffingAtsBenchmark() {
   const artifact = buildReportArtifact(analysis);
   writeFileSync(ARTIFACT_PATH, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
   writeFileSync(PROVIDER_CSV_PATH, `${buildProviderCsv(analysis)}\r\n`, 'utf8');
+  if (existsSync(REPORT_HTML_PATH)) {
+    const reportHtml = readFileSync(REPORT_HTML_PATH, 'utf8');
+    writeFileSync(REPORT_HTML_PATH, applyAccessibleReportTheme(reportHtml), 'utf8');
+  }
   return analysis;
 }
 

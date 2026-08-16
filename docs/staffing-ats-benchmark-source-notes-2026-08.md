@@ -47,6 +47,10 @@ Bars begin at zero, use one quantitative series, and expose counts or denominato
 - Canonical report input: `saas/reports/staffing-ats-benchmark.artifact.json`
 - Derived download: `saas/public/bd-engine-ats-coverage-benchmark.csv`
 
+After the portable report renderer writes the HTML, run
+`npm run build:ats-report` once more. The build is idempotent and applies the
+checked-in WCAG contrast override to the final report without changing its data.
+
 The artifact's visible structure maps to the stakeholder report contract:
 title; Executive Summary; evidence-backed findings; next steps; further
 questions; and caveats. Each chart has adjacent interpretation.
