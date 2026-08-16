@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const checkerPath = new URL('../public/ats-checker.html', import.meta.url);
+const playbookPath = new URL('../public/staffing-bd-playbook.html', import.meta.url);
 const indexNowKeyPath = new URL('../public/9252ff32fcf3a7589799d0826f50459b.txt', import.meta.url);
 const robotsPath = new URL('../public/robots.txt', import.meta.url);
 const sitemapPath = new URL('../public/sitemap.xml', import.meta.url);
@@ -59,8 +60,32 @@ test('ATS checker is a crawlable no-signup utility with explicit caveats', async
   assert.match(checker, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker">/);
   assert.match(checker, /The check runs in your browser and does not fetch the submitted site/);
   assert.match(checker, /compatibility signal, not a coverage guarantee/);
+  assert.match(checker, /staffing-bd-playbook/);
   assert.match(checker, /<script type="module" src="\/ats-checker\.js"><\/script>/);
   assert.doesNotMatch(checker, /password|credit card/i);
+});
+
+test('staffing BD playbook publishes focused article and FAQ discovery metadata', async () => {
+  const [playbook, server] = await Promise.all([
+    readFile(playbookPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+  ]);
+
+  assert.match(playbook, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/staffing-bd-playbook">/);
+  assert.match(playbook, /A hiring-signal playbook for staffing business development/);
+  assert.match(playbook, /"@type": "Article"/);
+  assert.match(playbook, /"@type": "FAQPage"/);
+  assert.match(playbook, /BD Engine does not auto-send outreach/);
+  assert.match(server, /getStaffingBdPlaybookHtml/);
+});
+
+test('landing page exposes the free audit and explains the pre-outreach workflow', async () => {
+  const landing = await readFile(landingPath, 'utf8');
+
+  assert.match(landing, /Free ATS audit/);
+  assert.match(landing, /From a target list to the next client conversation/);
+  assert.match(landing, /BD Engine does not auto-send outreach/);
+  assert.match(landing, /staffing-bd-playbook/);
 });
 
 test('landing attribution distinguishes campaigns and records acquisition actions', async () => {
@@ -77,6 +102,9 @@ test('landing attribution distinguishes campaigns and records acquisition action
   assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(\['pageview', 'tool_used', 'demo_started', 'signup_started'\]\)/);
   assert.match(server, /buildAcquisitionSource\(acquisition\)/);
   assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /trackCheckerEvent\('tool_used'\)/);
+  assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /signup=1&persona=bd/);
+  assert.match(landing, /getInitialAuditSummary/);
+  assert.match(landing, /getRequestedUnauthenticatedView/);
 });
 
 test('crawler files point to the canonical public origin and have explicit MIME types', async () => {
@@ -92,6 +120,7 @@ test('crawler files point to the canonical public origin and have explicit MIME 
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/job-search<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/staffing-bd-playbook<\/loc>/);
   assert.match(server, /getAtsCheckerHtml/);
   assert.match(server, /'\.txt': 'text\/plain; charset=utf-8'/);
   assert.match(server, /'\.xml': 'application\/xml; charset=utf-8'/);

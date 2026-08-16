@@ -164,6 +164,14 @@ a:hover { text-decoration: underline; }
   background: var(--accent-soft);
 }
 
+.nav-tool-link {
+  text-decoration: none;
+}
+
+.nav-tool-link:hover {
+  text-decoration: none;
+}
+
 /* ── Buttons ── */
 
 .btn {
@@ -575,6 +583,91 @@ a:hover { text-decoration: underline; }
   line-height: 1.6;
 }
 
+/* ── Workflow proof ── */
+
+.workflow-proof {
+  width: min(100% - 48px, 1120px);
+  margin: 0 auto;
+  padding: 64px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+  gap: 54px;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at 10% 10%, rgba(99, 102, 241, 0.14), transparent 34%),
+    linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(10, 22, 40, 0.92));
+  box-shadow: var(--shadow-md);
+}
+
+.workflow-proof-copy h2 {
+  margin-bottom: 16px;
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1.08;
+  letter-spacing: -0.8px;
+}
+
+.workflow-proof-copy > p,
+.workflow-proof-steps p {
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.workflow-proof-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 26px;
+}
+
+.workflow-proof-link {
+  font-size: 14px;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.workflow-proof-steps {
+  display: grid;
+  gap: 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-proof-steps li {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.workflow-step-number {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workflow-proof-steps strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 16px;
+}
+
+.workflow-proof-steps p {
+  font-size: 13px;
+}
+
 /* ── Referrals ── */
 
 .referral-program {
@@ -973,6 +1066,35 @@ a:hover { text-decoration: underline; }
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   margin-bottom: 20px;
+}
+
+.auth-audit-intent {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.auth-audit-intent > span {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-audit-intent strong {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.auth-audit-intent p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .auth-success {
@@ -1802,6 +1924,7 @@ a:hover { text-decoration: underline; }
   .hero-visual { height: 360px; }
 
   .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .workflow-proof { grid-template-columns: 1fr; padding: 44px; }
   .referral-program { grid-template-columns: 1fr; }
   .referral-flow { grid-template-columns: 1fr; }
   .pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
@@ -1844,6 +1967,15 @@ a:hover { text-decoration: underline; }
   .features-grid { grid-template-columns: 1fr; }
   .section-title { font-size: 26px; }
 
+  .workflow-proof {
+    width: calc(100% - 32px);
+    padding: 32px 20px;
+    gap: 32px;
+  }
+  .workflow-proof-copy h2 { font-size: 28px; }
+  .workflow-proof-actions { align-items: stretch; flex-direction: column; }
+  .workflow-proof-actions .btn { width: 100%; }
+
   .referral-program { padding: 56px 16px; }
   .referral-copy h2 { font-size: 28px; }
 
@@ -1854,6 +1986,7 @@ a:hover { text-decoration: underline; }
   .landing-nav-brand .brand-text { font-size: 16px; white-space: nowrap; }
   .landing-nav-actions { gap: 6px; margin-left: auto; }
   .landing-nav-actions [data-trust-page] { display: none; }
+  .landing-nav-actions .nav-tool-link { display: none; }
   .landing-nav-actions .nav-link { padding: 8px; font-size: 13px; }
   .landing-nav-actions .btn { padding: 9px 12px; font-size: 13px; }
   .auth-card { padding: 28px 20px; }

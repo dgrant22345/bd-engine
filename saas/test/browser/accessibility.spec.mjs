@@ -36,6 +36,12 @@ test('ATS coverage audit is accessible before and after results render', async (
   await expectNoBlockingViolations(page);
 });
 
+test('staffing BD playbook is accessible', async ({ page }) => {
+  await page.goto('/staffing-bd-playbook');
+  await expect(page.getByRole('heading', { name: 'A hiring-signal playbook for staffing business development' })).toBeVisible();
+  await expectNoBlockingViolations(page);
+});
+
 test('demo workspace has no blocking structural accessibility violations', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-demo-start]').first().click();

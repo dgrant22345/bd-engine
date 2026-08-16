@@ -39,6 +39,14 @@ test('clean job-search route publishes focused metadata and campaign attribution
   expect(source).toMatchObject({ source: 'linkedin', campaign: 'role_focus' });
 });
 
+test('staffing landing explains the operating loop and exposes the free audit', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(page.getByRole('heading', { name: 'From a target list to the next client conversation' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Audit a target list free' })).toHaveAttribute('href', /\/ats-checker/);
+  await expect(page.getByText('BD Engine does not auto-send outreach.')).toBeVisible();
+});
+
 test('coverage-denominator campaign routes to the ATS audit and preserves attribution', async ({ page }) => {
   await page.goto('/?utm_source=linkedin&utm_medium=organic&utm_campaign=coverage_denominator');
 
@@ -72,6 +80,41 @@ test('ATS checker audits a target list with an explicit denominator', async ({ p
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('bd-engine-ats-coverage-audit.csv');
   await expect(page.getByText(/compatibility signal, not a coverage guarantee/i)).toBeVisible();
+});
+
+test('ATS audit continues directly into a contextual trial form', async ({ page }) => {
+  await page.goto('/ats-checker?utm_source=linkedin&utm_campaign=coverage_denominator');
+  await page.getByLabel('Career-site or job-board URLs').fill([
+    'https://boards.greenhouse.io/example',
+    'https://jobs.lever.co/example',
+    'https://example.com/careers',
+  ].join('\n'));
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+
+  await page.getByRole('link', { name: 'Build a workflow from this audit' }).click();
+  await expect(page).toHaveURL((url) => url.pathname === '/' && url.searchParams.get('signup') === '1');
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.getByText('Coverage audit complete')).toBeVisible();
+  await expect(page.getByText('2 of 3 valid career sites are on recognized ATS hosts.')).toBeVisible();
+  await expect(page.getByText('1 site still needs discovery.', { exact: false })).toBeVisible();
+
+  const source = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(source).toMatchObject({ source: 'ats-checker', campaign: 'coverage_audit_result' });
+});
+
+test('staffing BD playbook is crawlable and stays within a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/staffing-bd-playbook');
+
+  await expect(page).toHaveTitle('Staffing Business Development Playbook | BD Engine');
+  await expect(page.getByRole('heading', { name: 'A hiring-signal playbook for staffing business development' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Audit a target list free' })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://bd-engine-production.up.railway.app/staffing-bd-playbook');
+  const viewport = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.viewportWidth);
 });
 
 test('ATS checker remains usable on mobile without horizontal overflow', async ({ page }) => {
