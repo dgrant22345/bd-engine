@@ -73,7 +73,7 @@ const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_M
   : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
-const PUBLIC_ANALYTICS_EVENT_TYPES = new Set(['pageview', 'tool_used', 'demo_started', 'signup_started']);
+const PUBLIC_ANALYTICS_EVENT_TYPES = new Set(['pageview', 'tool_used', 'example_loaded', 'share_created', 'demo_started', 'signup_started']);
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
@@ -321,6 +321,7 @@ const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.xml': 'application/xml; charset=utf-8',
   '.svg': 'image/svg+xml',
@@ -2659,6 +2660,12 @@ function serveStaticOrSPA(pathname, req, res) {
   if (pathname === '/ats-checker' || pathname === '/ats-checker/') {
     return sendHtml(res, getAtsCheckerHtml(res.bdScriptNonce));
   }
+  if (pathname === '/staffing-ats-benchmark' || pathname === '/staffing-ats-benchmark/') {
+    return sendHtml(res, getStaffingAtsBenchmarkHtml(res.bdScriptNonce));
+  }
+  if (pathname === '/staffing-ats-benchmark.html') {
+    return sendRedirect(res, '/staffing-ats-benchmark', 301);
+  }
   if (pathname === '/staffing-bd-playbook' || pathname === '/staffing-bd-playbook/') {
     return sendHtml(res, getStaffingBdPlaybookHtml(res.bdScriptNonce));
   }
@@ -2686,6 +2693,7 @@ let cachedAppIndexHtml = null;
 let cachedCloudIndexHtml = null;
 let cachedJobSeekerIndexHtml = null;
 let cachedAtsCheckerHtml = null;
+let cachedStaffingAtsBenchmarkHtml = null;
 let cachedStaffingBdPlaybookHtml = null;
 
 function getCloudIndexHtml(scriptNonce, persona = 'bd') {
@@ -2721,6 +2729,43 @@ function getAtsCheckerHtml(scriptNonce) {
     cachedAtsCheckerHtml = readFileSync(join(publicDir, 'ats-checker.html'), 'utf8');
   }
   return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
+}
+
+function getStaffingAtsBenchmarkHtml(scriptNonce) {
+  if (!cachedStaffingAtsBenchmarkHtml) {
+    const report = readFileSync(join(publicDir, 'staffing-ats-benchmark.html'), 'utf8');
+    const metadata = `
+<meta name="description" content="A source-backed analysis of 704 verified large employers showing automatic-import, tracking-only, and discovery-review ATS coverage for staffing business development.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://bd-engine-production.up.railway.app/staffing-ats-benchmark">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="BD Engine Cloud">
+<meta property="og:title" content="Public ATS Coverage Benchmark | BD Engine">
+<meta property="og:description" content="What 704 verified large-employer ATS assignments imply for staffing BD coverage, source review, and target-list planning.">
+<meta property="og:url" content="https://bd-engine-production.up.railway.app/staffing-ats-benchmark">
+<meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Public ATS Coverage Benchmark | BD Engine">
+<meta name="twitter:description" content="A transparent large-employer ATS benchmark for staffing business development.">
+<meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "BD Engine public ATS coverage benchmark",
+  "description": "A source-backed analysis of 704 verified large employers showing automatic-import, tracking-only, and discovery-review ATS coverage for staffing business development.",
+  "url": "https://bd-engine-production.up.railway.app/staffing-ats-benchmark",
+  "datePublished": "2026-08-16",
+  "dateModified": "2026-08-16",
+  "author": { "@type": "Organization", "name": "BD Engine" },
+  "publisher": { "@type": "Organization", "name": "BD Engine", "logo": { "@type": "ImageObject", "url": "https://bd-engine-production.up.railway.app/bd-engine-logo.png" } },
+  "isBasedOn": "https://github.com/Kayvan-Zahiri/state-of-ats-2026",
+  "citation": "Zahiri, K. (2026). State of ATS 2026: Applicant Tracking Systems used by 738 large employers. ResumeAI."
+}
+</script>`;
+    cachedStaffingAtsBenchmarkHtml = report.replace('<title>BD Engine public ATS coverage benchmark</title>', `${metadata}\n<title>Public ATS Coverage Benchmark | BD Engine</title>`);
+  }
+  return injectScriptNonce(cachedStaffingAtsBenchmarkHtml, scriptNonce);
 }
 
 function getStaffingBdPlaybookHtml(scriptNonce) {

@@ -82,6 +82,25 @@ test('ATS checker audits a target list with an explicit denominator', async ({ p
   await expect(page.getByText(/compatibility signal, not a coverage guarantee/i)).toBeVisible();
 });
 
+test('ATS checker can demonstrate the workflow without requiring a user list', async ({ page }) => {
+  await page.goto('/ats-checker');
+  await page.getByRole('button', { name: 'Load example' }).click();
+
+  await expect(page.getByRole('heading', { name: '5 of 6 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expect(page.getByText('83%', { exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Unknown host' })).toBeVisible();
+});
+
+test('shared ATS audit links expose aggregate counts without the submitted URLs', async ({ page }) => {
+  await page.goto('/ats-checker?shared=1&valid=3&recognized=2&utm_source=shared-audit');
+
+  await expect(page.getByText('Shared aggregate result')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '2 of 3 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expect(page.getByText(/original URLs are not included/i)).toBeVisible();
+  await expect(page.locator('#audit-table-wrap')).toBeHidden();
+  await expect(page.getByRole('link', { name: 'Audit my own target list' })).toBeVisible();
+});
+
 test('ATS audit continues directly into a contextual trial form', async ({ page }) => {
   await page.goto('/ats-checker?utm_source=linkedin&utm_campaign=coverage_denominator');
   await page.getByLabel('Career-site or job-board URLs').fill([
@@ -110,6 +129,21 @@ test('staffing BD playbook is crawlable and stays within a mobile viewport', asy
   await expect(page.getByRole('heading', { name: 'A hiring-signal playbook for staffing business development' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Audit a target list free' })).toBeVisible();
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://bd-engine-production.up.railway.app/staffing-bd-playbook');
+  const viewport = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.viewportWidth);
+});
+
+test('public ATS benchmark is crawlable and stays within a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/staffing-ats-benchmark');
+
+  await expect(page).toHaveTitle('Public ATS Coverage Benchmark | BD Engine');
+  await expect(page.getByRole('heading', { name: 'BD Engine public ATS coverage benchmark' }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Executive Summary' })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://bd-engine-production.up.railway.app/staffing-ats-benchmark');
   const viewport = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,
     documentWidth: document.documentElement.scrollWidth,

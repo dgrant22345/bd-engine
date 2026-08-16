@@ -1,0 +1,884 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "BD Engine public ATS coverage benchmark",
+    "description": "What a verified large-employer ATS sample implies for staffing business development coverage.",
+    "generatedAt": "2026-08-16T16:00:00Z",
+    "cards": [
+      {
+        "id": "verified_employers",
+        "description": "Employers whose ATS was marked verified against a live careers-portal apply host.",
+        "dataset": "summary",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "metrics": [
+          {
+            "label": "Verified employers",
+            "field": "verifiedEmployerCount",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "automatic_import_share",
+        "description": "Share assigned to providers with an automatic public-role import adapter in BD Engine.",
+        "dataset": "summary",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "metrics": [
+          {
+            "label": "Automatic import share",
+            "field": "importReadyShare",
+            "format": "percent"
+          }
+        ]
+      },
+      {
+        "id": "tracking_only_share",
+        "description": "Share assigned to providers BD Engine identifies for workflow tracking but does not automatically import.",
+        "dataset": "summary",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "metrics": [
+          {
+            "label": "Tracking-only share",
+            "field": "trackingOnlyShare",
+            "format": "percent"
+          }
+        ]
+      },
+      {
+        "id": "review_share",
+        "description": "Share assigned to providers that still require discovery, another source, or manual review.",
+        "dataset": "summary",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "metrics": [
+          {
+            "label": "Discovery/review share",
+            "field": "reviewShare",
+            "format": "percent"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "handling_tiers",
+        "title": "Employers by BD Engine handling tier",
+        "subtitle": "Verified large-employer cohort; 704 employers; provider assignments refreshed July 28, 2026.",
+        "type": "bar",
+        "dataset": "handlingTiers",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "valueFormat": "number",
+        "encodings": {
+          "x": {
+            "field": "tier",
+            "type": "nominal",
+            "label": "Handling tier"
+          },
+          "y": {
+            "field": "employerCount",
+            "type": "quantitative",
+            "label": "Employers"
+          },
+          "tooltip": [
+            {
+              "field": "share",
+              "type": "quantitative",
+              "label": "Share",
+              "format": "percent"
+            }
+          ]
+        },
+        "settings": {
+          "orientation": "horizontal",
+          "sort": "descending",
+          "showValues": true
+        },
+        "palette": {
+          "kind": "single-root",
+          "name": "blue"
+        },
+        "surface": {
+          "viewMode": "both"
+        }
+      },
+      {
+        "id": "provider_distribution",
+        "title": "Largest ATS providers in the verified sample",
+        "subtitle": "Top 12 of 36 observed systems; employer count is the comparison measure.",
+        "type": "bar",
+        "dataset": "topProviders",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "valueFormat": "number",
+        "encodings": {
+          "x": {
+            "field": "provider",
+            "type": "nominal",
+            "label": "ATS provider"
+          },
+          "y": {
+            "field": "employerCount",
+            "type": "quantitative",
+            "label": "Employers"
+          },
+          "tooltip": [
+            {
+              "field": "share",
+              "type": "quantitative",
+              "label": "Verified-sample share",
+              "format": "percent"
+            },
+            {
+              "field": "handlingTier",
+              "type": "nominal",
+              "label": "BD Engine handling"
+            }
+          ]
+        },
+        "settings": {
+          "orientation": "horizontal",
+          "sort": "descending",
+          "showValues": true
+        },
+        "palette": {
+          "kind": "single-root",
+          "name": "gold"
+        },
+        "surface": {
+          "viewMode": "both"
+        }
+      },
+      {
+        "id": "industry_coverage",
+        "title": "Automatic-import share across the largest industries",
+        "subtitle": "The 12 industries with the most verified employers; rates use each industry as its own denominator.",
+        "type": "bar",
+        "dataset": "largestIndustries",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "valueFormat": "percent",
+        "encodings": {
+          "x": {
+            "field": "industry",
+            "type": "nominal",
+            "label": "Industry"
+          },
+          "y": {
+            "field": "importReadyShare",
+            "type": "quantitative",
+            "label": "Automatic-import share"
+          },
+          "tooltip": [
+            {
+              "field": "employerCount",
+              "type": "quantitative",
+              "label": "Verified employers",
+              "format": "number"
+            },
+            {
+              "field": "importReadyCount",
+              "type": "quantitative",
+              "label": "Automatic import",
+              "format": "number"
+            },
+            {
+              "field": "trackingOnlyCount",
+              "type": "quantitative",
+              "label": "Tracking only",
+              "format": "number"
+            },
+            {
+              "field": "reviewCount",
+              "type": "quantitative",
+              "label": "Discovery/review",
+              "format": "number"
+            }
+          ]
+        },
+        "settings": {
+          "orientation": "horizontal",
+          "sort": "descending",
+          "showValues": true
+        },
+        "palette": {
+          "kind": "single-root",
+          "name": "orange"
+        },
+        "surface": {
+          "viewMode": "both"
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "provider_detail",
+        "title": "Provider-by-provider coverage detail",
+        "subtitle": "All 36 systems observed among the 704 verified employers.",
+        "dataset": "providers",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "defaultSort": {
+          "field": "employerCount",
+          "direction": "desc"
+        },
+        "columns": [
+          {
+            "field": "provider",
+            "label": "ATS provider",
+            "type": "text"
+          },
+          {
+            "field": "employerCount",
+            "label": "Employers",
+            "type": "number"
+          },
+          {
+            "field": "share",
+            "label": "Share",
+            "format": "percent"
+          },
+          {
+            "field": "handlingTier",
+            "label": "BD Engine handling",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "resumeai_state_of_ats_2026",
+        "label": "ResumeAI — State of ATS 2026 dataset",
+        "path": "saas/reports/staffing-ats-benchmark.sql",
+        "href": "https://github.com/Kayvan-Zahiri/state-of-ats-2026/blob/6f667a20d3e488d9a37a127ae5be90e77e35eec9/data/companies.csv"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# BD Engine public ATS coverage benchmark"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "## Executive Summary\n\n- **Automatic import covers 57.0% of this verified large-employer sample.** BD Engine has public-role import adapters for providers assigned to 401 of 704 employers.\n- **A further 18.5% can be identified and tracked without being treated as automatically importable.** That puts visible import-or-tracking coverage at 75.4%, while 173 employers still require discovery, another source, or manual review.\n- **The market is fragmented enough that one headline coverage promise is misleading.** The verified sample contains 36 ATS systems, and industry mix materially changes the import-ready rate.\n- **For staffing teams, the operating decision is target-list specific.** Audit the actual companies on the desk, keep unresolved sources visible, and rank outreach only after role relevance and relationship context are added."
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "cardIds": [
+          "verified_employers",
+          "automatic_import_share",
+          "tracking_only_share",
+          "review_share"
+        ]
+      },
+      {
+        "id": "handling_heading",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "## Most large employers are importable or identifiable—but not interchangeable\n\nThe useful distinction is not “covered” versus “not covered.” It is whether BD Engine can automatically normalize public roles, identify the source for tracking, or must leave the account in a visible discovery/review queue."
+      },
+      {
+        "id": "handling_chart",
+        "type": "chart",
+        "chartId": "handling_tiers"
+      },
+      {
+        "id": "handling_interpretation",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "Automatic import applies to 401 employers. Tracking-only applies to 130. The remaining 173 should not disappear from a dashboard or be counted as confirmed role coverage; they need a different source strategy or manual review."
+      },
+      {
+        "id": "provider_heading",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "## Workday creates breadth; the long tail creates operational risk\n\nWorkday alone accounts for 37.9% of verified employers, while the sample still spans 36 named or proprietary systems. Supporting a few common hosts can create meaningful reach, but it cannot justify a universal market-coverage claim."
+      },
+      {
+        "id": "provider_chart",
+        "type": "chart",
+        "chartId": "provider_distribution"
+      },
+      {
+        "id": "provider_interpretation",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "For business development, fragmentation changes the cost of monitoring a target universe. A desk concentrated in Workday and Greenhouse accounts can automate more of the evidence-gathering step; a desk concentrated in SuccessFactors, Oracle, proprietary portals, or smaller systems needs more review capacity."
+      },
+      {
+        "id": "industry_heading",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "## Target industry changes the expected coverage rate\n\nThe same product capability produces different practical coverage depending on the desk. Among the largest industry cohorts in this dataset, automatic-import share ranges from 10% in Transportation to 66% in Technology."
+      },
+      {
+        "id": "industry_chart",
+        "type": "chart",
+        "chartId": "industry_coverage"
+      },
+      {
+        "id": "industry_interpretation",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "This spread is why BD Engine reports a denominator and keeps unresolved sources visible. A staffing leader should measure coverage against the actual target universe—not borrow a platform-wide average from a different industry mix."
+      },
+      {
+        "id": "provider_table_heading",
+        "type": "markdown",
+        "body": "## Exact provider detail\n\nUse the table for audit-level counts, or download the derived provider CSV for your own analysis."
+      },
+      {
+        "id": "provider_table",
+        "type": "table",
+        "tableId": "provider_detail"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "body": "## Turn the benchmark into a desk-level decision\n\n1. [Audit 25–50 target career sites](https://bd-engine-production.up.railway.app/ats-checker?utm_source=ats-benchmark&utm_medium=report&utm_campaign=benchmark_to_audit) and keep the valid-URL denominator.\n2. Separate automatic-import hosts, known tracking-only systems, and sources still needing review.\n3. Add role relevance, current hiring evidence, and warm relationship paths before prioritizing outreach.\n4. [Start a 14-day no-card staffing workflow](https://bd-engine-production.up.railway.app/?signup=1&persona=bd&utm_source=ats-benchmark&utm_medium=report&utm_campaign=benchmark_to_trial) only when the audit exposes a real operating problem.\n5. [Download the provider-level CSV](https://bd-engine-production.up.railway.app/bd-engine-ats-coverage-benchmark.csv) for planning or internal discussion."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## Questions this benchmark cannot answer for your desk\n\n- Which employers belong in your defined target universe?\n- Which current openings are relevant to the desk rather than merely available?\n- Which unresolved portals can be replaced by another trustworthy public source?\n- Where does an existing relationship make the hiring signal actionable?\n- Does the workflow produce better client conversations, not just more monitored jobs?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "sourceId": "resumeai_state_of_ats_2026",
+        "body": "## Caveats and assumptions\n\nThis is a BD Engine analysis of the MIT-licensed [ResumeAI State of ATS 2026 dataset](https://github.com/Kayvan-Zahiri/state-of-ats-2026/blob/6f667a20d3e488d9a37a127ae5be90e77e35eec9/data/companies.csv), not a claim that BD Engine independently re-verified every employer. The calculation uses only the 704 rows marked verified in the pinned July 28 source snapshot and excludes 34 unconfirmed rows. The source CSV is structurally complete and its header reports 704 verified rows from 738 total, but its repository README contains stale contradictory prose and the published rows link to ResumeAI company pages rather than preserving each raw employer apply URL. Provider assignment is point-in-time and can change. A compatible provider indicates an available ingestion path; it does not guarantee complete, relevant, or fresh jobs for a specific target list. BD Engine handling tiers reflect product capabilities as of August 16, 2026."
+      },
+      {
+        "id": "final_cta",
+        "type": "markdown",
+        "body": "## Measure your denominator\n\n[Run the free browser-based ATS coverage audit](https://bd-engine-production.up.railway.app/ats-checker?utm_source=ats-benchmark&utm_medium=report&utm_campaign=benchmark_final_cta). Your URLs stay in the browser; the shared result contains aggregate counts only."
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-16T16:00:00Z",
+    "status": "ready",
+    "datasets": {
+      "summary": [
+        {
+          "verifiedEmployerCount": 704,
+          "importReadyShare": 0.5696022727272727,
+          "trackingOnlyShare": 0.1846590909090909,
+          "reviewShare": 0.24573863636363635
+        }
+      ],
+      "handlingTiers": [
+        {
+          "tier": "Automatic import",
+          "employerCount": 401,
+          "share": 0.5696022727272727
+        },
+        {
+          "tier": "Tracking only",
+          "employerCount": 130,
+          "share": 0.1846590909090909
+        },
+        {
+          "tier": "Discovery or manual review",
+          "employerCount": 173,
+          "share": 0.24573863636363635
+        }
+      ],
+      "topProviders": [
+        {
+          "provider": "Workday",
+          "employerCount": 267,
+          "share": 0.37926136363636365,
+          "sharePercent": 37.9,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Greenhouse",
+          "employerCount": 88,
+          "share": 0.125,
+          "sharePercent": 12.5,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "SuccessFactors",
+          "employerCount": 68,
+          "share": 0.09659090909090909,
+          "sharePercent": 9.7,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Oracle Cloud HCM",
+          "employerCount": 49,
+          "share": 0.06960227272727272,
+          "sharePercent": 7,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "iCIMS",
+          "employerCount": 39,
+          "share": 0.05539772727272727,
+          "sharePercent": 5.5,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Internal ATS",
+          "employerCount": 30,
+          "share": 0.04261363636363636,
+          "sharePercent": 4.3,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Avature",
+          "employerCount": 26,
+          "share": 0.036931818181818184,
+          "sharePercent": 3.7,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Eightfold",
+          "employerCount": 24,
+          "share": 0.03409090909090909,
+          "sharePercent": 3.4,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "SmartRecruiters",
+          "employerCount": 19,
+          "share": 0.026988636363636364,
+          "sharePercent": 2.7,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Taleo",
+          "employerCount": 17,
+          "share": 0.024147727272727272,
+          "sharePercent": 2.4,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Ashby",
+          "employerCount": 15,
+          "share": 0.02130681818181818,
+          "sharePercent": 2.1,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "USAJobs",
+          "employerCount": 10,
+          "share": 0.014204545454545454,
+          "sharePercent": 1.4,
+          "handlingTier": "Discovery or manual review"
+        }
+      ],
+      "largestIndustries": [
+        {
+          "industry": "Technology",
+          "employerCount": 47,
+          "importReadyCount": 31,
+          "trackingOnlyCount": 6,
+          "reviewCount": 10,
+          "importReadyShare": 0.6595744680851063,
+          "trackingOnlyShare": 0.1276595744680851,
+          "reviewShare": 0.2127659574468085
+        },
+        {
+          "industry": "Manufacturing",
+          "employerCount": 37,
+          "importReadyCount": 14,
+          "trackingOnlyCount": 11,
+          "reviewCount": 12,
+          "importReadyShare": 0.3783783783783784,
+          "trackingOnlyShare": 0.2972972972972973,
+          "reviewShare": 0.32432432432432434
+        },
+        {
+          "industry": "Retail",
+          "employerCount": 34,
+          "importReadyCount": 20,
+          "trackingOnlyCount": 6,
+          "reviewCount": 8,
+          "importReadyShare": 0.5882352941176471,
+          "trackingOnlyShare": 0.17647058823529413,
+          "reviewShare": 0.23529411764705882
+        },
+        {
+          "industry": "Healthcare",
+          "employerCount": 30,
+          "importReadyCount": 17,
+          "trackingOnlyCount": 4,
+          "reviewCount": 9,
+          "importReadyShare": 0.5666666666666667,
+          "trackingOnlyShare": 0.13333333333333333,
+          "reviewShare": 0.3
+        },
+        {
+          "industry": "Restaurants",
+          "employerCount": 28,
+          "importReadyCount": 12,
+          "trackingOnlyCount": 5,
+          "reviewCount": 11,
+          "importReadyShare": 0.42857142857142855,
+          "trackingOnlyShare": 0.17857142857142858,
+          "reviewShare": 0.39285714285714285
+        },
+        {
+          "industry": "CPG",
+          "employerCount": 25,
+          "importReadyCount": 12,
+          "trackingOnlyCount": 10,
+          "reviewCount": 3,
+          "importReadyShare": 0.48,
+          "trackingOnlyShare": 0.4,
+          "reviewShare": 0.12
+        },
+        {
+          "industry": "Construction",
+          "employerCount": 22,
+          "importReadyCount": 7,
+          "trackingOnlyCount": 9,
+          "reviewCount": 6,
+          "importReadyShare": 0.3181818181818182,
+          "trackingOnlyShare": 0.4090909090909091,
+          "reviewShare": 0.2727272727272727
+        },
+        {
+          "industry": "Financial Services",
+          "employerCount": 21,
+          "importReadyCount": 13,
+          "trackingOnlyCount": 2,
+          "reviewCount": 6,
+          "importReadyShare": 0.6190476190476191,
+          "trackingOnlyShare": 0.09523809523809523,
+          "reviewShare": 0.2857142857142857
+        },
+        {
+          "industry": "Transportation",
+          "employerCount": 21,
+          "importReadyCount": 2,
+          "trackingOnlyCount": 10,
+          "reviewCount": 9,
+          "importReadyShare": 0.09523809523809523,
+          "trackingOnlyShare": 0.47619047619047616,
+          "reviewShare": 0.42857142857142855
+        },
+        {
+          "industry": "Automotive",
+          "employerCount": 19,
+          "importReadyCount": 6,
+          "trackingOnlyCount": 9,
+          "reviewCount": 4,
+          "importReadyShare": 0.3157894736842105,
+          "trackingOnlyShare": 0.47368421052631576,
+          "reviewShare": 0.21052631578947367
+        },
+        {
+          "industry": "Pharmaceuticals",
+          "employerCount": 18,
+          "importReadyCount": 15,
+          "trackingOnlyCount": 1,
+          "reviewCount": 2,
+          "importReadyShare": 0.8333333333333334,
+          "trackingOnlyShare": 0.05555555555555555,
+          "reviewShare": 0.1111111111111111
+        },
+        {
+          "industry": "Real Estate",
+          "employerCount": 18,
+          "importReadyCount": 12,
+          "trackingOnlyCount": 1,
+          "reviewCount": 5,
+          "importReadyShare": 0.6666666666666666,
+          "trackingOnlyShare": 0.05555555555555555,
+          "reviewShare": 0.2777777777777778
+        }
+      ],
+      "providers": [
+        {
+          "provider": "Workday",
+          "employerCount": 267,
+          "share": 0.37926136363636365,
+          "sharePercent": 37.9,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Greenhouse",
+          "employerCount": 88,
+          "share": 0.125,
+          "sharePercent": 12.5,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "SuccessFactors",
+          "employerCount": 68,
+          "share": 0.09659090909090909,
+          "sharePercent": 9.7,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Oracle Cloud HCM",
+          "employerCount": 49,
+          "share": 0.06960227272727272,
+          "sharePercent": 7,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "iCIMS",
+          "employerCount": 39,
+          "share": 0.05539772727272727,
+          "sharePercent": 5.5,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Internal ATS",
+          "employerCount": 30,
+          "share": 0.04261363636363636,
+          "sharePercent": 4.3,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Avature",
+          "employerCount": 26,
+          "share": 0.036931818181818184,
+          "sharePercent": 3.7,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Eightfold",
+          "employerCount": 24,
+          "share": 0.03409090909090909,
+          "sharePercent": 3.4,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "SmartRecruiters",
+          "employerCount": 19,
+          "share": 0.026988636363636364,
+          "sharePercent": 2.7,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Taleo",
+          "employerCount": 17,
+          "share": 0.024147727272727272,
+          "sharePercent": 2.4,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Ashby",
+          "employerCount": 15,
+          "share": 0.02130681818181818,
+          "sharePercent": 2.1,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "USAJobs",
+          "employerCount": 10,
+          "share": 0.014204545454545454,
+          "sharePercent": 1.4,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Kenexa BrassRing",
+          "employerCount": 8,
+          "share": 0.011363636363636364,
+          "sharePercent": 1.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Jobvite",
+          "employerCount": 5,
+          "share": 0.007102272727272727,
+          "sharePercent": 0.7,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Lever",
+          "employerCount": 5,
+          "share": 0.007102272727272727,
+          "sharePercent": 0.7,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "Phenom People",
+          "employerCount": 5,
+          "share": 0.007102272727272727,
+          "sharePercent": 0.7,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Cornerstone OnDemand",
+          "employerCount": 4,
+          "share": 0.005681818181818182,
+          "sharePercent": 0.6,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "BeeSite",
+          "employerCount": 3,
+          "share": 0.004261363636363636,
+          "sharePercent": 0.4,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Paradox",
+          "employerCount": 3,
+          "share": 0.004261363636363636,
+          "sharePercent": 0.4,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Oleeo",
+          "employerCount": 2,
+          "share": 0.002840909090909091,
+          "sharePercent": 0.3,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "UKG Pro",
+          "employerCount": 2,
+          "share": 0.002840909090909091,
+          "sharePercent": 0.3,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "ADP",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Tracking only"
+        },
+        {
+          "provider": "Cegid Talentsoft",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Dayforce",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Deel",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "eArcu",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "gr8people",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Gupy",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Harri",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Herp",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Lumesse TalentLink",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "PeopleFluent",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Rippling",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Automatic import"
+        },
+        {
+          "provider": "SilkRoad",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Teamwork Online",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Discovery or manual review"
+        },
+        {
+          "provider": "Workable",
+          "employerCount": 1,
+          "share": 0.0014204545454545455,
+          "sharePercent": 0.1,
+          "handlingTier": "Automatic import"
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "resumeai_state_of_ats_2026",
+      "label": "ResumeAI — State of ATS 2026 dataset",
+      "path": "saas/reports/staffing-ats-benchmark.sql",
+      "href": "https://github.com/Kayvan-Zahiri/state-of-ats-2026/blob/6f667a20d3e488d9a37a127ae5be90e77e35eec9/data/companies.csv",
+      "query": {
+        "engine": "duckdb",
+        "language": "sql",
+        "id": "bd-engine-public-ats-coverage-2026",
+        "url": "https://github.com/Kayvan-Zahiri/state-of-ats-2026/blob/6f667a20d3e488d9a37a127ae5be90e77e35eec9/data/companies.csv",
+        "executed_at": "2026-08-16T16:00:00Z",
+        "description": "Filters the pinned State of ATS 2026 CSV to verified employers, maps each provider to a BD Engine handling tier, and aggregates the summary, provider, and industry views.",
+        "sql": "-- Reproducible DuckDB analysis for the BD Engine public ATS coverage benchmark.\n-- Source snapshot: ResumeAI State of ATS 2026, commit 6f667a20d3e488d9a37a127ae5be90e77e35eec9.\n\nCREATE OR REPLACE TEMP VIEW verified_employers AS\nSELECT *\nFROM read_csv(\n  'saas/data/state-of-ats-2026-companies.csv',\n  header = true,\n  comment = '#'\n)\nWHERE verified = true;\n\nCREATE OR REPLACE TEMP VIEW classified_employers AS\nSELECT\n  *,\n  CASE\n    WHEN ats_system IN (\n      'Ashby', 'BambooHR', 'Greenhouse', 'Jobvite', 'Lever', 'Personio',\n      'Recruitee', 'Rippling', 'SmartRecruiters', 'Workable', 'Workday'\n    ) THEN 'Automatic import'\n    WHEN ats_system IN ('ADP', 'iCIMS', 'Phenom People', 'SuccessFactors', 'Taleo')\n      THEN 'Tracking only'\n    ELSE 'Discovery or manual review'\n  END AS bd_engine_handling_tier\nFROM verified_employers;\n\nCREATE OR REPLACE TEMP VIEW benchmark_summary AS\nSELECT\n  COUNT(*) AS verified_employers,\n  COUNT(DISTINCT ats_system) AS distinct_ats_systems,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Automatic import') AS automatic_import_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Tracking only') AS tracking_only_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Discovery or manual review') AS discovery_review_employers\nFROM classified_employers;\n\nCREATE OR REPLACE TEMP VIEW provider_coverage AS\nSELECT\n  ats_system AS provider,\n  COUNT(*) AS verified_employers,\n  COUNT(*)::DOUBLE / (SELECT COUNT(*) FROM classified_employers) AS verified_sample_share,\n  bd_engine_handling_tier\nFROM classified_employers\nGROUP BY ats_system, bd_engine_handling_tier\nORDER BY verified_employers DESC, provider;\n\nCREATE OR REPLACE TEMP VIEW industry_coverage AS\nSELECT\n  industry,\n  COUNT(*) AS verified_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Automatic import') AS automatic_import_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Tracking only') AS tracking_only_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Discovery or manual review') AS discovery_review_employers,\n  COUNT(*) FILTER (WHERE bd_engine_handling_tier = 'Automatic import')::DOUBLE / COUNT(*) AS automatic_import_share\nFROM classified_employers\nGROUP BY industry\nORDER BY verified_employers DESC, industry;\n\nSELECT * FROM benchmark_summary;\nSELECT * FROM provider_coverage;\nSELECT * FROM industry_coverage;\n",
+        "tables_used": [
+          "saas/data/state-of-ats-2026-companies.csv"
+        ],
+        "filters": {
+          "verified": "true",
+          "source_commit": "6f667a20d3e488d9a37a127ae5be90e77e35eec9"
+        },
+        "metric_definitions": {
+          "automatic_import_share": "Verified employers assigned to an automatic-import provider divided by all 704 verified employers.",
+          "tracking_only_share": "Verified employers assigned to a tracking-only provider divided by all 704 verified employers.",
+          "discovery_review_share": "Verified employers assigned to all remaining providers divided by all 704 verified employers."
+        }
+      }
+    }
+  ]
+}

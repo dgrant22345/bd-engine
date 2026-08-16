@@ -42,6 +42,12 @@ test('staffing BD playbook is accessible', async ({ page }) => {
   await expectNoBlockingViolations(page);
 });
 
+test('public ATS benchmark is accessible', async ({ page }) => {
+  await page.goto('/staffing-ats-benchmark');
+  await expect(page.getByRole('heading', { name: 'BD Engine public ATS coverage benchmark' }).first()).toBeVisible();
+  await expectNoBlockingViolations(page);
+});
+
 test('demo workspace has no blocking structural accessibility violations', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-demo-start]').first().click();

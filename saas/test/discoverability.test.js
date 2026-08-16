@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const checkerPath = new URL('../public/ats-checker.html', import.meta.url);
+const benchmarkPath = new URL('../public/staffing-ats-benchmark.html', import.meta.url);
 const playbookPath = new URL('../public/staffing-bd-playbook.html', import.meta.url);
 const indexNowKeyPath = new URL('../public/9252ff32fcf3a7589799d0826f50459b.txt', import.meta.url);
 const robotsPath = new URL('../public/robots.txt', import.meta.url);
@@ -60,9 +61,28 @@ test('ATS checker is a crawlable no-signup utility with explicit caveats', async
   assert.match(checker, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker">/);
   assert.match(checker, /The check runs in your browser and does not fetch the submitted site/);
   assert.match(checker, /compatibility signal, not a coverage guarantee/);
+  assert.match(checker, /Shared links and PNG cards include aggregate counts only/);
+  assert.match(checker, /staffing-ats-benchmark/);
   assert.match(checker, /staffing-bd-playbook/);
   assert.match(checker, /<script type="module" src="\/ats-checker\.js"><\/script>/);
   assert.doesNotMatch(checker, /password|credit card/i);
+});
+
+test('staffing ATS benchmark publishes a source-backed report and crawlable route metadata', async () => {
+  const [benchmark, server] = await Promise.all([
+    readFile(benchmarkPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+  ]);
+
+  assert.match(benchmark, /BD Engine public ATS coverage benchmark/);
+  assert.match(benchmark, /Executive Summary/);
+  assert.match(benchmark, /Automatic import/);
+  assert.match(benchmark, />401</);
+  assert.match(benchmark, /not a claim that BD Engine independently re-verified every employer/);
+  assert.match(benchmark, /bd-engine-ats-coverage-benchmark\.csv/);
+  assert.match(server, /getStaffingAtsBenchmarkHtml/);
+  assert.match(server, /rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/staffing-ats-benchmark"/);
+  assert.match(server, /"isBasedOn": "https:\/\/github\.com\/Kayvan-Zahiri\/state-of-ats-2026"/);
 });
 
 test('staffing BD playbook publishes focused article and FAQ discovery metadata', async () => {
@@ -86,6 +106,7 @@ test('landing page exposes the free audit and explains the pre-outreach workflow
   assert.match(landing, /From a target list to the next client conversation/);
   assert.match(landing, /BD Engine does not auto-send outreach/);
   assert.match(landing, /staffing-bd-playbook/);
+  assert.match(landing, /staffing-ats-benchmark/);
 });
 
 test('landing attribution distinguishes campaigns and records acquisition actions', async () => {
@@ -99,9 +120,10 @@ test('landing attribution distinguishes campaigns and records acquisition action
   assert.match(landing, /trackAcquisitionEvent\('signup_started'\)/);
   assert.match(landing, /trackAcquisitionEvent\('demo_started'\)/);
   assert.match(landing, /acquisition: state\.acquisition/);
-  assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(\['pageview', 'tool_used', 'demo_started', 'signup_started'\]\)/);
+  assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(\['pageview', 'tool_used', 'example_loaded', 'share_created', 'demo_started', 'signup_started'\]\)/);
   assert.match(server, /buildAcquisitionSource\(acquisition\)/);
   assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /trackCheckerEvent\('tool_used'\)/);
+  assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /trackCheckerEvent\('share_created'\)/);
   assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /signup=1&persona=bd/);
   assert.match(landing, /getInitialAuditSummary/);
   assert.match(landing, /getRequestedUnauthenticatedView/);
@@ -121,7 +143,9 @@ test('crawler files point to the canonical public origin and have explicit MIME 
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/job-search<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/staffing-bd-playbook<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/staffing-ats-benchmark<\/loc>/);
   assert.match(server, /getAtsCheckerHtml/);
+  assert.match(server, /'\.csv': 'text\/csv; charset=utf-8'/);
   assert.match(server, /'\.txt': 'text\/plain; charset=utf-8'/);
   assert.match(server, /'\.xml': 'application\/xml; charset=utf-8'/);
   assert.equal(indexNowKey.trim(), '9252ff32fcf3a7589799d0826f50459b');

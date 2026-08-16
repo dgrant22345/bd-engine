@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildCoverageAudit, buildCoverageCsv, buildShareSummary, classifyCareerUrl } from '../public/ats-checker.js';
+import {
+  buildCoverageAudit,
+  buildCoverageCsv,
+  buildShareSummary,
+  buildShareUrl,
+  classifyCareerUrl,
+  parseSharedAudit,
+} from '../public/ats-checker.js';
 
 test('ATS checker recognizes every provider advertised on the public page', () => {
   const examples = [
@@ -82,4 +89,39 @@ test('ATS coverage summary preserves the denominator and the coverage caveat', (
     buildShareSummary(audit),
     'ATS coverage audit: 2 of 3 valid public URLs (67%) use a recognized ATS host. 1 URL still needs discovery. Host recognition is a compatibility signal, not a guarantee of complete or fresh job coverage.'
   );
+});
+
+test('ATS coverage share links contain aggregate counts and no submitted URLs', () => {
+  const audit = buildCoverageAudit([
+    'https://boards.greenhouse.io/private-company-list',
+    'https://jobs.lever.co/another-private-target',
+    'https://example.com/careers',
+  ].join('\n'));
+  const shareUrl = buildShareUrl(audit, 'https://bd.example/ats-checker?utm_source=linkedin');
+  const parsed = new URL(shareUrl);
+
+  assert.equal(parsed.origin, 'https://bd.example');
+  assert.equal(parsed.pathname, '/ats-checker');
+  assert.equal(parsed.searchParams.get('valid'), '3');
+  assert.equal(parsed.searchParams.get('recognized'), '2');
+  assert.equal(parsed.searchParams.get('utm_source'), 'shared-audit');
+  assert.doesNotMatch(shareUrl, /private-company-list|another-private-target|example\.com/);
+});
+
+test('shared ATS audits are reconstructed from bounded aggregate counts', () => {
+  const shared = parseSharedAudit('?shared=1&valid=3&recognized=2');
+  assert.deepEqual(shared, {
+    shared: true,
+    results: [],
+    totalCount: 3,
+    validCount: 3,
+    recognizedCount: 2,
+    reviewCount: 1,
+    invalidCount: 0,
+    recognitionRate: 67,
+    duplicateCount: 0,
+    truncatedCount: 0,
+  });
+  assert.equal(parseSharedAudit('?shared=1&valid=51&recognized=2'), null);
+  assert.equal(parseSharedAudit('?shared=1&valid=3&recognized=4'), null);
 });
