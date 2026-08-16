@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildCoverageAudit, buildCoverageCsv, classifyCareerUrl } from '../public/ats-checker.js';
+import { buildCoverageAudit, buildCoverageCsv, buildShareSummary, classifyCareerUrl } from '../public/ats-checker.js';
 
 test('ATS checker recognizes every provider advertised on the public page', () => {
   const examples = [
@@ -69,4 +69,17 @@ test('ATS coverage CSV exports every audited row and neutralizes formulas', () =
 
   assert.match(csv, /"https:\/\/jobs\.ashbyhq\.com\/example","jobs\.ashbyhq\.com","Recognized","Ashby"/);
   assert.match(csv, /"'=not-a-url","","Invalid",""/);
+});
+
+test('ATS coverage summary preserves the denominator and the coverage caveat', () => {
+  const audit = buildCoverageAudit([
+    'https://boards.greenhouse.io/example',
+    'https://jobs.lever.co/example',
+    'https://example.com/careers',
+  ].join('\n'));
+
+  assert.equal(
+    buildShareSummary(audit),
+    'ATS coverage audit: 2 of 3 valid public URLs (67%) use a recognized ATS host. 1 URL still needs discovery. Host recognition is a compatibility signal, not a guarantee of complete or fresh job coverage.'
+  );
 });

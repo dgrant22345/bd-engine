@@ -2659,6 +2659,9 @@ function serveStaticOrSPA(pathname, req, res) {
   if (pathname === '/ats-checker' || pathname === '/ats-checker/') {
     return sendHtml(res, getAtsCheckerHtml(res.bdScriptNonce));
   }
+  if (pathname === '/staffing-bd-playbook' || pathname === '/staffing-bd-playbook/') {
+    return sendHtml(res, getStaffingBdPlaybookHtml(res.bdScriptNonce));
+  }
   if (pathname === '/job-search' || pathname === '/job-search/') {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker'));
   }
@@ -2683,6 +2686,7 @@ let cachedAppIndexHtml = null;
 let cachedCloudIndexHtml = null;
 let cachedJobSeekerIndexHtml = null;
 let cachedAtsCheckerHtml = null;
+let cachedStaffingBdPlaybookHtml = null;
 
 function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (!cachedCloudIndexHtml) {
@@ -2717,6 +2721,13 @@ function getAtsCheckerHtml(scriptNonce) {
     cachedAtsCheckerHtml = readFileSync(join(publicDir, 'ats-checker.html'), 'utf8');
   }
   return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
+}
+
+function getStaffingBdPlaybookHtml(scriptNonce) {
+  if (!cachedStaffingBdPlaybookHtml) {
+    cachedStaffingBdPlaybookHtml = readFileSync(join(publicDir, 'staffing-bd-playbook.html'), 'utf8');
+  }
+  return injectScriptNonce(cachedStaffingBdPlaybookHtml, scriptNonce);
 }
 
 function getAppIndexHtml() {

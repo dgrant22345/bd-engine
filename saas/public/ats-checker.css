@@ -425,6 +425,250 @@ footer {
   font-size: 13px;
 }
 
+/* Staffing BD playbook */
+
+.playbook-main {
+  padding-block: 64px 96px;
+}
+
+.playbook-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  gap: 48px;
+  align-items: center;
+  padding-bottom: 64px;
+  border-bottom: 1px solid #1c2940;
+}
+
+.playbook-hero h1 {
+  max-width: 780px;
+}
+
+.playbook-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.playbook-actions a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: #dce9ff;
+  font-size: 14px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.playbook-actions a:hover,
+.playbook-actions a:focus-visible {
+  border-color: var(--accent);
+  background: #142b50;
+}
+
+.playbook-actions .playbook-primary {
+  border-color: var(--accent);
+  background: var(--accent-strong);
+  color: #ffffff;
+}
+
+.playbook-scorecard {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at top right, rgba(63, 131, 248, 0.16), transparent 42%),
+    var(--surface);
+}
+
+.playbook-scorecard ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.playbook-scorecard li {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid rgba(169, 180, 200, 0.14);
+  border-radius: 7px;
+  background: rgba(8, 13, 24, 0.54);
+}
+
+.playbook-scorecard strong {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.playbook-scorecard span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.playbook-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 64px;
+  align-items: start;
+  padding-top: 64px;
+}
+
+.playbook-content {
+  min-width: 0;
+}
+
+.playbook-content > section + section {
+  margin-top: 72px;
+}
+
+.playbook-content h2 {
+  margin-bottom: 16px;
+  color: #ffffff;
+  font-size: clamp(26px, 4vw, 38px);
+  line-height: 1.15;
+}
+
+.playbook-content h3 {
+  color: #ffffff;
+  font-size: 17px;
+}
+
+.playbook-content p,
+.playbook-content li {
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.playbook-content p + p {
+  margin-top: 16px;
+}
+
+.playbook-method-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.playbook-method-grid > div {
+  min-height: 224px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.playbook-method-grid span {
+  display: inline-flex;
+  margin-bottom: 18px;
+  color: #83b4ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.playbook-method-grid h3 {
+  margin-bottom: 8px;
+}
+
+.playbook-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 24px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.playbook-table-wrap td:first-child {
+  color: #ffffff;
+}
+
+.playbook-callout {
+  margin-top: 20px;
+  padding: 18px 20px;
+  border-left: 3px solid var(--warning);
+  border-radius: 0 7px 7px 0;
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.playbook-callout strong {
+  color: #ffffff;
+}
+
+.playbook-pilot,
+.playbook-guardrails {
+  display: grid;
+  gap: 12px;
+  margin: 22px 0 0;
+  padding-left: 24px;
+}
+
+.playbook-pilot strong,
+.playbook-guardrails strong {
+  color: #ffffff;
+}
+
+.playbook-faq details {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.playbook-faq summary {
+  color: #ffffff;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.playbook-faq details p {
+  margin: 10px 0 0;
+}
+
+.playbook-final-cta {
+  padding: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at top left, rgba(52, 211, 153, 0.12), transparent 34%),
+    var(--surface);
+}
+
+.playbook-toc {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.playbook-toc strong {
+  margin-bottom: 5px;
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.playbook-toc a {
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.playbook-toc a:hover,
+.playbook-toc a:focus-visible {
+  color: #ffffff;
+}
+
 @media (max-width: 760px) {
   .site-header,
   main,
@@ -452,6 +696,51 @@ footer {
   .checker-layout {
     grid-template-columns: 1fr;
     gap: 34px;
+  }
+
+  .playbook-main {
+    padding-block: 44px 64px;
+  }
+
+  .playbook-hero,
+  .playbook-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .playbook-hero {
+    gap: 30px;
+    padding-bottom: 48px;
+  }
+
+  .playbook-layout {
+    gap: 40px;
+    padding-top: 48px;
+  }
+
+  .playbook-toc {
+    position: static;
+    order: -1;
+  }
+
+  .playbook-method-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .playbook-method-grid > div {
+    min-height: 0;
+  }
+
+  .playbook-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .playbook-actions a {
+    justify-content: center;
+  }
+
+  .playbook-final-cta {
+    padding: 26px 20px;
   }
 
   .checker-panel {

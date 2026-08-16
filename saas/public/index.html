@@ -91,6 +91,7 @@
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
       acquisition: getInitialAcquisition(),
+      auditSummary: getInitialAuditSummary(),
     };
 
     function getInitialReferralCode() {
@@ -115,6 +116,31 @@
     function getInitialSignupPersona() {
       const requestedPersona = new URLSearchParams(window.location.search).get('persona');
       return window.location.pathname === '/job-search' || requestedPersona === 'jobseeker' ? 'jobseeker' : 'bd';
+    }
+
+    function getInitialAuditSummary() {
+      try {
+        const summary = JSON.parse(sessionStorage.getItem('bd_pending_audit_summary') || 'null');
+        const age = Date.now() - Number(summary?.createdAt || 0);
+        const validCount = Number(summary?.validCount || 0);
+        const recognizedCount = Number(summary?.recognizedCount || 0);
+        const reviewCount = Number(summary?.reviewCount || 0);
+        const recognitionRate = Number(summary?.recognitionRate || 0);
+        if (!validCount || age < 0 || age > 24 * 60 * 60 * 1000) {
+          sessionStorage.removeItem('bd_pending_audit_summary');
+          return null;
+        }
+        return { validCount, recognizedCount, reviewCount, recognitionRate };
+      } catch {
+        return null;
+      }
+    }
+
+    function getRequestedUnauthenticatedView() {
+      if (state.resetToken) return 'reset';
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('signup') === '1') return 'signup';
+      return params.get('login') === '1' ? 'login' : 'landing';
     }
 
     function getInitialAcquisition() {
@@ -269,15 +295,14 @@
           } else {
             state.view = 'app';
           }
-        } else if (state.resetToken) {
-          state.view = 'reset';
         } else {
-          state.view = new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing';
+          state.view = getRequestedUnauthenticatedView();
         }
       } catch {
-        state.view = state.resetToken
-          ? 'reset'
-          : (new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing');
+        state.view = getRequestedUnauthenticatedView();
+      }
+      if (!state.user && state.view === 'signup' && new URLSearchParams(window.location.search).get('signup') === '1') {
+        trackAcquisitionEvent('signup_started').catch(() => {});
       }
       render();
     }
@@ -363,6 +388,8 @@
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
+        try { sessionStorage.removeItem('bd_pending_audit_summary'); } catch {}
+        state.auditSummary = null;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -677,6 +704,25 @@
         ['ATS', 'ATS Discovery', 'Automatically discover compatible public job boards, with manual URL entry and a review queue for sites that need help.'],
         ['TA', 'Workflow Analytics', 'Track outreach velocity, pipeline coverage, follow-up queues, and data quality so the next action stays clear.'],
       ];
+      const workflowProof = isJobSeekerLanding ? {
+        kicker: 'One focused loop',
+        title: 'From a broad search to the next useful action',
+        intro: 'Define what fits, monitor the companies that matter, then use role evidence and network context to choose where to spend today\'s effort.',
+        steps: [
+          ['Set the focus', 'Choose role families, locations, and keywords so irrelevant openings stop crowding the queue.'],
+          ['Rank the evidence', 'Compare relevant public roles, target-company activity, and possible warm contacts in one view.'],
+          ['Take the next step', 'Review a grounded introduction draft, apply, research, or follow up without automating the human decision.'],
+        ],
+      } : {
+        kicker: 'The operating loop',
+        title: 'From a target list to the next client conversation',
+        intro: 'BD Engine turns scattered account research into a repeatable workflow: define the universe, verify hiring evidence, map the warmest path, and decide the next action.',
+        steps: [
+          ['Define the universe', 'Import the accounts and LinkedIn connections you already care about, then add the public career sites worth tracking.'],
+          ['Rank current demand', 'Use transparent hiring velocity, role activity, and relationship coverage to see which accounts deserve attention now.'],
+          ['Prepare the conversation', 'Start from a context-aware draft, review it yourself, and record the next step. BD Engine does not auto-send outreach.'],
+        ],
+      };
       root.innerHTML = `
         <div class="landing">
           <nav class="landing-nav">
@@ -687,6 +733,7 @@
               <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
             </div>
             <div class="landing-nav-actions">
+              ${isJobSeekerLanding ? '' : '<a class="nav-link nav-tool-link" href="/ats-checker?utm_source=homepage&utm_medium=navigation&utm_campaign=free_ats_audit">Free ATS audit</a>'}
               <button class="nav-link" data-trust-page="trust">Trust</button>
               <button class="nav-link" data-trust-page="status">Status</button>
               <button class="nav-link" id="nav-login">Log in</button>
@@ -741,6 +788,27 @@
                 </div>
               </div>
             </div>
+          </section>
+
+          <section class="workflow-proof" id="how-it-works" aria-labelledby="workflow-proof-title">
+            <div class="workflow-proof-copy">
+              <span class="section-kicker">${workflowProof.kicker}</span>
+              <h2 id="workflow-proof-title">${workflowProof.title}</h2>
+              <p>${workflowProof.intro}</p>
+              <div class="workflow-proof-actions">
+                <a class="btn btn-ghost" href="/ats-checker?utm_source=homepage&utm_medium=workflow&utm_campaign=free_ats_audit">Audit a target list free</a>
+                ${isJobSeekerLanding
+                  ? '<button class="link-btn" data-jobseeker-signup>Start a focused search</button>'
+                  : '<a class="workflow-proof-link" href="/staffing-bd-playbook?utm_source=homepage&utm_medium=workflow&utm_campaign=staffing_bd_playbook">Read the staffing BD playbook</a>'}
+              </div>
+            </div>
+            <ol class="workflow-proof-steps">
+              ${workflowProof.steps.map(([title, description], index) => `
+                <li>
+                  <span class="workflow-step-number">${index + 1}</span>
+                  <div><strong>${title}</strong><p>${description}</p></div>
+                </li>`).join('')}
+            </ol>
           </section>
 
           <section class="features" id="features">
@@ -837,6 +905,8 @@
               <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
             </div>
             <div class="landing-footer-links">
+              <a class="link-btn" href="/ats-checker?utm_source=homepage&utm_medium=footer&utm_campaign=free_ats_audit">Free ATS audit</a>
+              <a class="link-btn" href="/staffing-bd-playbook?utm_source=homepage&utm_medium=footer&utm_campaign=staffing_bd_playbook">Staffing BD playbook</a>
               <button class="link-btn" data-trust-page="trust">Trust</button>
               <button class="link-btn" data-trust-page="privacy">Privacy</button>
               <button class="link-btn" data-trust-page="terms">Terms</button>
@@ -1123,6 +1193,10 @@
     }
 
     function renderSignup() {
+      const auditSummary = state.auditSummary;
+      const auditReviewCopy = auditSummary
+        ? `${auditSummary.reviewCount} ${auditSummary.reviewCount === 1 ? 'site still needs' : 'sites still need'} discovery.`
+        : '';
       root.innerHTML = `
         <div class="auth-page">
           <div class="auth-card">
@@ -1133,6 +1207,12 @@
               <h2>Create your account</h2>
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
+            ${auditSummary ? `
+              <div class="auth-audit-intent" role="status">
+                <span>Coverage audit complete</span>
+                <strong>${auditSummary.recognizedCount} of ${auditSummary.validCount} valid career sites are on recognized ATS hosts.</strong>
+                <p>${auditReviewCopy} Create the workspace, then add the companies you want BD Engine to monitor and prioritize.</p>
+              </div>` : ''}
             ${state.referralCode ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">

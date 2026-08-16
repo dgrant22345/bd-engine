@@ -12,6 +12,8 @@ const PROVIDERS = [
   ['Rippling', ['ats.rippling.com']],
 ];
 
+const PENDING_AUDIT_SUMMARY_KEY = 'bd_pending_audit_summary';
+
 export function classifyCareerUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return { status: 'invalid', submittedUrl: raw, title: 'Enter a public URL', tone: 'error' };
@@ -106,6 +108,43 @@ export function buildCoverageCsv(audit) {
     ]);
   }
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+}
+
+export function buildShareSummary(audit) {
+  const validCount = Number(audit?.validCount || 0);
+  const recognizedCount = Number(audit?.recognizedCount || 0);
+  const reviewCount = Number(audit?.reviewCount || 0);
+  const recognitionRate = Number(audit?.recognitionRate || 0);
+  if (!validCount) {
+    return 'ATS coverage audit: no valid public career-site URLs were available to score.';
+  }
+  const reviewLabel = reviewCount === 1 ? '1 URL still needs' : `${reviewCount} URLs still need`;
+  return `ATS coverage audit: ${recognizedCount} of ${validCount} valid public URLs (${recognitionRate}%) use a recognized ATS host. ${reviewLabel} discovery. Host recognition is a compatibility signal, not a guarantee of complete or fresh job coverage.`;
+}
+
+function storePendingAuditSummary(audit) {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    if (!audit?.validCount) {
+      sessionStorage.removeItem(PENDING_AUDIT_SUMMARY_KEY);
+      return;
+    }
+    sessionStorage.setItem(PENDING_AUDIT_SUMMARY_KEY, JSON.stringify({
+      validCount: Number(audit.validCount || 0),
+      recognizedCount: Number(audit.recognizedCount || 0),
+      reviewCount: Number(audit.reviewCount || 0),
+      recognitionRate: Number(audit.recognitionRate || 0),
+      createdAt: Date.now(),
+    }));
+  } catch {
+    // The audit remains usable when browser storage is disabled.
+  }
+}
+
+async function copyAuditSummary(audit) {
+  const summary = buildShareSummary(audit);
+  if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
+  await navigator.clipboard.writeText(summary);
 }
 
 function isPublicHostname(hostname) {
@@ -246,21 +285,34 @@ function renderResult(audit) {
   note.hidden = notes.length === 0;
   renderAuditRows(audit);
   actions.replaceChildren();
+  storePendingAuditSummary(audit);
 
   if (hasValidUrls) {
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'copy-action';
+    copyButton.textContent = 'Copy summary';
+    copyButton.addEventListener('click', async () => {
+      try {
+        await copyAuditSummary(audit);
+        copyButton.textContent = 'Summary copied';
+      } catch {
+        copyButton.textContent = 'Copy unavailable';
+      }
+    });
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
     exportButton.className = 'export-action';
     exportButton.textContent = 'Download CSV';
     exportButton.addEventListener('click', () => downloadCoverageCsv(audit));
     const staffingLink = document.createElement('a');
-    staffingLink.href = '/?utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
+    staffingLink.href = '/?signup=1&persona=bd&utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
     staffingLink.className = 'primary-workflow';
-    staffingLink.textContent = 'Prioritize target companies';
+    staffingLink.textContent = 'Build a workflow from this audit';
     const jobSearchLink = document.createElement('a');
-    jobSearchLink.href = '/job-search?utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
-    jobSearchLink.textContent = 'Find relevant roles';
-    actions.append(exportButton, staffingLink, jobSearchLink);
+    jobSearchLink.href = '/job-search?signup=1&utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
+    jobSearchLink.textContent = 'Use it for a job search';
+    actions.append(copyButton, exportButton, staffingLink, jobSearchLink);
   }
 }
 
