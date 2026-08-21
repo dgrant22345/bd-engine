@@ -3924,7 +3924,7 @@ async function renderRoute() {
 
   if (root === 'accounts') {
     activateNav('accounts');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: humanize(getPersonaUiCopy().accountPlural) }]);
+    renderBreadcrumbs(null);
     await renderAccountsView();
     if (parts[1] === 'new') focusAccountCreateForm();
     return;
@@ -3932,28 +3932,28 @@ async function renderRoute() {
 
   if (root === 'contacts') {
     activateNav('contacts');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: isJobSeekerPersona() ? 'Network' : 'Contacts' }]);
+    renderBreadcrumbs(null);
     await renderContactsView();
     return;
   }
 
   if (root === 'tasks') {
     activateNav('tasks');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Tasks' }]);
+    renderBreadcrumbs(null);
     await renderTasksView();
     return;
   }
 
   if (root === 'jobs') {
     activateNav('jobs');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: isJobSeekerPersona() ? 'Open roles' : 'Jobs' }]);
+    renderBreadcrumbs(null);
     await renderJobsView();
     return;
   }
 
   if (root === 'admin') {
     activateNav('admin');
-    renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Admin' }]);
+    renderBreadcrumbs(null);
     await renderAdminView();
     if (parts[1]) {
       const sectionId = parts[1] === 'billing' ? 'billing-subscription' : parts[1];
