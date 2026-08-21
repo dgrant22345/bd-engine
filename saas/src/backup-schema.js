@@ -8,6 +8,7 @@ export const BACKUP_TABLES = Object.freeze([
   { name: 'jobs', orderBy: 'tenant_id, id', conflict: ['id'] },
   { name: 'board_configs', orderBy: 'tenant_id, id', conflict: ['id'] },
   { name: 'activities', orderBy: 'tenant_id, id', conflict: ['id'] },
+  { name: 'commercial_outcomes', orderBy: 'tenant_id, occurred_at, id', conflict: ['id'] },
   { name: 'tasks', orderBy: 'tenant_id, id', conflict: ['id'] },
   { name: 'import_runs', orderBy: 'tenant_id, started_at, id', conflict: ['id'] },
   { name: 'import_run_items', orderBy: 'tenant_id, id', conflict: ['id'], serial: 'id' },

@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbClassifyLegacyAccounts, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
@@ -9,6 +9,7 @@ import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
+import { CommercialOutcomeValidationError, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
 
 const now = () => new Date().toISOString();
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
@@ -1700,6 +1701,7 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, true);
       const profile = getTenantProfile(tenantId);
+      const commercialOutcomes = await dbLoadAllCommercialOutcomes(tenantId);
       return {
         exportedAt: now(),
         product: 'BD Engine',
@@ -1717,6 +1719,7 @@ export function createStore() {
           configs: configsForTenant(tenantId),
           activities: activitiesForTenant(tenantId),
           tasks: tasksForTenant(tenantId),
+          commercialOutcomes,
         },
       };
     },
@@ -1725,6 +1728,9 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, true);
       const before = countTenantWorkspaceItems(tenantId);
+      const outcomeSummary = await dbGetCommercialOutcomeSummary(tenantId);
+      before.outcomeCount = outcomeSummary.total;
+      before.total += outcomeSummary.total;
       await dbSaveTenantData(tenantId, {
         accounts: [],
         contacts: [],
@@ -1735,6 +1741,7 @@ export function createStore() {
         settings: getTenantProfile(tenantId)?.settings || {},
       }, { throwOnError: true });
       await wipeTenantRelationalMirror(tenantId);
+      await dbDeleteCommercialOutcomes(tenantId);
       replaceTenantItems(accountsByTenant, 'accounts', tenantId, []);
       replaceTenantItems(contactsByTenant, 'contacts', tenantId, []);
       replaceTenantItems(jobsByTenant, 'jobs', tenantId, []);
@@ -1742,16 +1749,17 @@ export function createStore() {
       replaceTenantItems(activitiesByTenant, 'activities', tenantId, []);
       replaceTenantItems(tasksByTenant, 'tasks', tenantId, []);
       loadedTenants.set(tenantId, { core: true, contacts: true });
+      const remaining = { ...countTenantWorkspaceItems(tenantId), outcomeCount: 0 };
       await dbRecordAuditLog({
         tenantId,
         action: 'workspace.clear',
         entityType: 'tenant',
         entityId: tenantId,
         before: before,
-        after: countTenantWorkspaceItems(tenantId),
+        after: remaining,
         metadata: { privacySafe: true },
       });
-      return { ok: true, deleted: before, remaining: countTenantWorkspaceItems(tenantId) };
+      return { ok: true, deleted: before, remaining };
     },
 
     forgetClosedTenants(tenantIds = []) {
@@ -1763,6 +1771,8 @@ export function createStore() {
         removeResidentTenant(tenantId);
         tenantProfiles.delete(tenantId);
         durableRelationalWriteTenants.delete(tenantId);
+        dbDeleteCommercialOutcomes(tenantId)
+          .catch((error) => console.error('Commercial outcome cleanup error:', safeErrorSummary(error)));
         for (const [jobId, job] of backgroundJobs) {
           if (job.tenantId === tenantId) backgroundJobs.delete(jobId);
         }
@@ -2938,7 +2948,7 @@ export function createStore() {
       // logged activity/follow-up would silently vanish.
       await ensureDataLoaded(tenantId, false);
       const activity = {
-        id: `act-${Date.now()}`,
+        id: `act-${Date.now()}-${randomUUID().slice(0, 12)}`,
         tenantId,
         accountId: payload.accountId || '',
         contactId: payload.contactId || '',
@@ -2984,6 +2994,70 @@ export function createStore() {
 
       persistTenant(tenantId);
       return activity;
+    },
+
+    async createCommercialOutcome(tenantId, userId, payload = {}) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId, true);
+      const value = validateCommercialOutcomeInput(payload);
+      const tenantAccount = accountsForTenant(tenantId).find((item) => item.id === value.accountId);
+      if (!tenantAccount) {
+        throw new CommercialOutcomeValidationError('Account not found.', 404);
+      }
+      if (value.contactId) {
+        const tenantContact = contactsForTenant(tenantId).find((item) => item.id === value.contactId);
+        if (!tenantContact) {
+          throw new CommercialOutcomeValidationError('Contact not found.', 404);
+        }
+        if (tenantContact.accountId && tenantContact.accountId !== value.accountId) {
+          throw new CommercialOutcomeValidationError('Contact does not belong to the selected account.');
+        }
+      }
+
+      const timestamp = now();
+      return dbCreateCommercialOutcome({
+        id: `outcome-${randomUUID()}`,
+        tenantId,
+        createdByUserId: String(userId || '').slice(0, 120),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        ...value,
+      });
+    },
+
+    async createCommercialOutcomeFromActivity(tenantId, userId, activity, payload = {}) {
+      const stage = outcomeStageForActivity(payload);
+      if (!stage) return null;
+      await ensureDataLoaded(tenantId, true);
+      const contact = activity?.contactId
+        ? contactsForTenant(tenantId).find((item) => item.id === activity.contactId)
+        : null;
+      const accountId = activity?.accountId || contact?.accountId || '';
+      if (!accountId) return null;
+      return this.createCommercialOutcome(tenantId, userId, {
+        stage,
+        accountId,
+        contactId: activity.contactId,
+        occurredAt: activity.occurredAt,
+        valueCents: payload.valueCents,
+        currency: payload.currency,
+        lostReason: payload.lostReason,
+        notes: payload.outcomeNotes || '',
+        source: 'activity',
+        sourceActivityId: activity.id,
+      });
+    },
+
+    async findCommercialOutcomes(tenantId, query = {}) {
+      assertTenant(tenantId);
+      const normalizedQuery = validateCommercialOutcomeQuery(query, { maxPageSize: 100 });
+      return dbListCommercialOutcomes(tenantId, normalizedQuery);
+    },
+
+    async getCommercialOutcomeSummary(tenantId, query = {}) {
+      assertTenant(tenantId);
+      const normalizedQuery = validateCommercialOutcomeQuery(query, { maxPageSize: 100 });
+      return dbGetCommercialOutcomeSummary(tenantId, normalizedQuery);
     },
 
     findActivities(tenantId, query) {

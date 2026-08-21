@@ -24,6 +24,7 @@ import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
+import { productEventTypeForOutcomeStage } from './commercial-outcomes.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -1651,7 +1652,14 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 400, { error: 'Paste one company per line, or CSV with a company column.' });
     }
     if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts', increment: rows.length })) return;
-    return sendJson(res, 200, await store.importAccountsList(tenantId, payload.text));
+    const result = await store.importAccountsList(tenantId, payload.text);
+    if (result.count > 0) {
+      await recordProductMilestone({
+        eventType: 'target_created', tenantId, userId: user.id,
+        eventKey: tenantId, dimensions: { source: 'pasted_import', persona: tenant.persona, planId: tenant.plan },
+      });
+    }
+    return sendJson(res, 200, result);
   }
 
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
@@ -1797,7 +1805,31 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 200, store.getActivity(tenantId, Object.fromEntries(url.searchParams)));
     }
     if (req.method === 'POST') {
-      return sendJson(res, 201, await store.addActivity(tenantId, user.id, await readJson(req)));
+      const payload = await readJson(req);
+      const activity = await store.addActivity(tenantId, user.id, payload);
+      await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity, payload });
+      return sendJson(res, 201, activity);
+    }
+  }
+
+  if (pathname === '/api/outcomes/summary' && req.method === 'GET') {
+    const startedAt = performance.now();
+    const summary = await store.getCommercialOutcomeSummary(tenantId, Object.fromEntries(url.searchParams));
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 150) {
+      console.warn(`Slow commercial outcome summary: saas/src/db.js dbGetCommercialOutcomeSummary ${elapsedMs}ms`);
+    }
+    return sendJson(res, 200, summary);
+  }
+
+  if (pathname === '/api/outcomes') {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, await store.findCommercialOutcomes(tenantId, Object.fromEntries(url.searchParams)));
+    }
+    if (req.method === 'POST') {
+      const outcome = await store.createCommercialOutcome(tenantId, user.id, await readJson(req));
+      await recordCommercialOutcomeMilestone(outcome, tenant, user);
+      return sendJson(res, 201, outcome);
     }
   }
 
@@ -1985,11 +2017,13 @@ self.addEventListener('activate', (event) => {
   const logMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/log-outreach$/);
   if (logMatch && req.method === 'POST') {
     const payload = await readJson(req);
-    const result = await store.addActivity(tenantId, user.id, {
+    const activityPayload = {
       ...payload,
       contactId: logMatch[1],
-    });
+    };
+    const result = await store.addActivity(tenantId, user.id, activityPayload);
     if (!result) return sendJson(res, 404, { error: 'Contact not found' });
+    await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity: result, payload: activityPayload });
     return sendJson(res, 201, result);
   }
 
@@ -2023,6 +2057,31 @@ async function recordProductMilestone(event) {
   } catch (error) {
     console.error('Product milestone recording failed:', safeErrorSummary(error));
     return { recorded: false, reason: error.message };
+  }
+}
+
+async function recordCommercialOutcomeMilestone(outcome, tenant, user) {
+  const eventType = productEventTypeForOutcomeStage(outcome?.stage);
+  if (!eventType) return { recorded: false, reason: 'unsupported outcome stage' };
+  return recordProductMilestone({
+    eventType,
+    tenantId: outcome.tenantId,
+    userId: user.id,
+    eventKey: outcome.tenantId,
+    dimensions: { persona: tenant.persona, planId: tenant.plan, source: outcome.source },
+  });
+}
+
+async function bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity, payload }) {
+  try {
+    const outcome = await store.createCommercialOutcomeFromActivity(tenantId, user.id, activity, payload);
+    if (outcome) await recordCommercialOutcomeMilestone(outcome, tenant, user);
+    return outcome;
+  } catch (error) {
+    // Activity logging is an established workflow. Preserve its response even
+    // if derived ROI tracking fails, while surfacing the bridge failure to ops.
+    console.error('Commercial outcome activity bridge failed:', safeErrorSummary(error));
+    return null;
   }
 }
 

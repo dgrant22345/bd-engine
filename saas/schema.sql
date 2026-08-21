@@ -124,6 +124,37 @@ create table activities (
   created_at timestamptz not null default now()
 );
 
+create table commercial_outcomes (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  account_id text not null,
+  contact_id text not null default '',
+  stage text not null check (stage in (
+    'outreach_logged', 'replied', 'positive_reply', 'meeting_booked',
+    'opportunity_created', 'won', 'lost'
+  )),
+  value_cents bigint check (value_cents is null or value_cents >= 0),
+  currency text not null default 'USD',
+  lost_reason text not null default '',
+  notes text not null default '',
+  source text not null default 'manual',
+  source_activity_id text not null default '',
+  occurred_at timestamptz not null,
+  created_by_user_id text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index commercial_outcomes_tenant_occurred_idx
+  on commercial_outcomes (tenant_id, occurred_at desc, id desc);
+create index commercial_outcomes_tenant_stage_idx
+  on commercial_outcomes (tenant_id, stage, occurred_at desc, id desc);
+create index commercial_outcomes_tenant_account_idx
+  on commercial_outcomes (tenant_id, account_id, occurred_at desc, id desc);
+create unique index commercial_outcomes_tenant_activity_uidx
+  on commercial_outcomes (tenant_id, source_activity_id)
+  where source_activity_id <> '';
+
 create table followups (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,

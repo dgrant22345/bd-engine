@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "da89e3b9135853ee9f9b41dee20a9b303388ee741a58095661b596d29550ac8c",
+  "sourceSha256": "5cddbac9f90ba4a2d13ac08e50c9cead419265525b904b07e85376941a5d132b",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -41,6 +41,10 @@
     {
       "id": "20260718_board_config_account_index",
       "description": "Index account-linked job board lookups"
+    },
+    {
+      "id": "20260821_commercial_outcomes",
+      "description": "Add tenant-scoped commercial outcome and ROI tracking"
     }
   ],
   "tables": [
@@ -51,6 +55,7 @@
     "audit_log",
     "background_jobs",
     "board_configs",
+    "commercial_outcomes",
     "contacts",
     "email_verification_tokens",
     "import_run_items",
@@ -95,6 +100,10 @@
     "board_configs_tenant_identity_idx",
     "board_configs_tenant_status_idx",
     "board_configs_tenant_updated_idx",
+    "commercial_outcomes_tenant_account_idx",
+    "commercial_outcomes_tenant_activity_uidx",
+    "commercial_outcomes_tenant_occurred_idx",
+    "commercial_outcomes_tenant_stage_idx",
     "contacts_tenant_account_priority_idx",
     "contacts_tenant_email_idx",
     "contacts_tenant_identity_idx",

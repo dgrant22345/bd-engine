@@ -12,6 +12,7 @@
 
 import pg from 'pg';
 import { safeErrorSummary } from './operational-logging.js';
+import { summarizeCommercialOutcomes } from './commercial-outcomes.js';
 
 const { Pool } = pg;
 
@@ -19,6 +20,7 @@ let pool = null;
 let dbReady = false;
 const memoryStripeWebhookEvents = new Map();
 const memorySupportTickets = new Map();
+const memoryCommercialOutcomes = new Map();
 let memorySupportMessageId = 0;
 
 // ── Connection ──────────────────────────────────────────────────────────────
@@ -384,6 +386,37 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
         created_at TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''
       );
+
+      CREATE TABLE IF NOT EXISTS commercial_outcomes (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL,
+        contact_id TEXT NOT NULL DEFAULT '',
+        stage TEXT NOT NULL
+          CHECK (stage IN ('outreach_logged', 'replied', 'positive_reply', 'meeting_booked', 'opportunity_created', 'won', 'lost')),
+        value_cents BIGINT
+          CHECK (value_cents IS NULL OR (value_cents >= 0 AND value_cents <= 9000000000000)),
+        currency TEXT NOT NULL DEFAULT 'USD'
+          CHECK (currency ~ '^[A-Z]{3}$'),
+        lost_reason TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'manual'
+          CHECK (source IN ('manual', 'activity', 'import', 'integration')),
+        source_activity_id TEXT NOT NULL DEFAULT '',
+        occurred_at TEXT NOT NULL,
+        created_by_user_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_occurred_idx
+        ON commercial_outcomes (tenant_id, occurred_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_stage_idx
+        ON commercial_outcomes (tenant_id, stage, occurred_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_account_idx
+        ON commercial_outcomes (tenant_id, account_id, occurred_at DESC, id DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS commercial_outcomes_tenant_activity_uidx
+        ON commercial_outcomes (tenant_id, source_activity_id)
+        WHERE source_activity_id <> '';
 
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -784,6 +817,41 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
         CREATE INDEX IF NOT EXISTS board_configs_tenant_company_idx
           ON board_configs (tenant_id, normalized_company_name, updated_at DESC, id)
           WHERE normalized_company_name <> '';
+      `);
+    });
+
+    await runSchemaMigration('20260821_commercial_outcomes', 'Add tenant-scoped commercial outcome and ROI tracking', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS commercial_outcomes (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          account_id TEXT NOT NULL,
+          contact_id TEXT NOT NULL DEFAULT '',
+          stage TEXT NOT NULL
+            CHECK (stage IN ('outreach_logged', 'replied', 'positive_reply', 'meeting_booked', 'opportunity_created', 'won', 'lost')),
+          value_cents BIGINT
+            CHECK (value_cents IS NULL OR (value_cents >= 0 AND value_cents <= 9000000000000)),
+          currency TEXT NOT NULL DEFAULT 'USD'
+            CHECK (currency ~ '^[A-Z]{3}$'),
+          lost_reason TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          source TEXT NOT NULL DEFAULT 'manual'
+            CHECK (source IN ('manual', 'activity', 'import', 'integration')),
+          source_activity_id TEXT NOT NULL DEFAULT '',
+          occurred_at TEXT NOT NULL,
+          created_by_user_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_occurred_idx
+          ON commercial_outcomes (tenant_id, occurred_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_stage_idx
+          ON commercial_outcomes (tenant_id, stage, occurred_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS commercial_outcomes_tenant_account_idx
+          ON commercial_outcomes (tenant_id, account_id, occurred_at DESC, id DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS commercial_outcomes_tenant_activity_uidx
+          ON commercial_outcomes (tenant_id, source_activity_id)
+          WHERE source_activity_id <> '';
       `);
     });
 
@@ -1324,6 +1392,224 @@ export async function dbRecordAuditLog(entry = {}) {
     console.error('DB: Failed to record audit log:', safeErrorSummary(err));
     return { recorded: false, reason: err.message };
   }
+}
+
+function mapCommercialOutcome(row = {}) {
+  return {
+    id: row.id || '',
+    tenantId: row.tenant_id ?? row.tenantId ?? '',
+    accountId: row.account_id ?? row.accountId ?? '',
+    contactId: row.contact_id ?? row.contactId ?? '',
+    stage: row.stage || '',
+    valueCents: row.value_cents === null || row.value_cents === undefined
+      ? (row.valueCents ?? null)
+      : Number(row.value_cents),
+    currency: row.currency || 'USD',
+    lostReason: row.lost_reason ?? row.lostReason ?? '',
+    notes: row.notes || '',
+    source: row.source || 'manual',
+    sourceActivityId: row.source_activity_id ?? row.sourceActivityId ?? '',
+    occurredAt: row.occurred_at ?? row.occurredAt ?? '',
+    createdByUserId: row.created_by_user_id ?? row.createdByUserId ?? '',
+    createdAt: row.created_at ?? row.createdAt ?? '',
+    updatedAt: row.updated_at ?? row.updatedAt ?? '',
+  };
+}
+
+function memoryOutcomesForTenant(tenantId) {
+  if (!memoryCommercialOutcomes.has(tenantId)) memoryCommercialOutcomes.set(tenantId, []);
+  return memoryCommercialOutcomes.get(tenantId);
+}
+
+function filterCommercialOutcomes(items, query = {}) {
+  return items.filter((item) => (!query.stage || item.stage === query.stage)
+    && (!query.accountId || item.accountId === query.accountId)
+    && (!query.contactId || item.contactId === query.contactId)
+    && (!query.from || item.occurredAt >= query.from)
+    && (!query.to || item.occurredAt <= query.to));
+}
+
+function commercialOutcomeWhere(tenantId, query = {}) {
+  const params = [tenantId];
+  const where = ['tenant_id = $1'];
+  for (const [field, column] of [
+    ['stage', 'stage'],
+    ['accountId', 'account_id'],
+    ['contactId', 'contact_id'],
+  ]) {
+    if (!query[field]) continue;
+    params.push(query[field]);
+    where.push(`${column} = $${params.length}`);
+  }
+  if (query.from) {
+    params.push(query.from);
+    where.push(`occurred_at >= $${params.length}`);
+  }
+  if (query.to) {
+    params.push(query.to);
+    where.push(`occurred_at <= $${params.length}`);
+  }
+  return { params, where: where.join(' AND ') };
+}
+
+export async function dbCreateCommercialOutcome(outcome = {}) {
+  const normalized = mapCommercialOutcome(outcome);
+  if (!normalized.id || !normalized.tenantId) throw new Error('Commercial outcome identity is required.');
+
+  if (!dbReady || !pool) {
+    const items = memoryOutcomesForTenant(normalized.tenantId);
+    if (normalized.sourceActivityId) {
+      const existing = items.find((item) => item.sourceActivityId === normalized.sourceActivityId);
+      if (existing) return { ...existing };
+    }
+    items.unshift(normalized);
+    return { ...normalized };
+  }
+
+  const result = await pool.query(`
+    INSERT INTO commercial_outcomes (
+      id, tenant_id, account_id, contact_id, stage, value_cents, currency,
+      lost_reason, notes, source, source_activity_id, occurred_at,
+      created_by_user_id, created_at, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    ON CONFLICT DO NOTHING
+    RETURNING *
+  `, [
+    normalized.id, normalized.tenantId, normalized.accountId, normalized.contactId,
+    normalized.stage, normalized.valueCents, normalized.currency, normalized.lostReason,
+    normalized.notes, normalized.source, normalized.sourceActivityId, normalized.occurredAt,
+    normalized.createdByUserId, normalized.createdAt, normalized.updatedAt,
+  ]);
+  if (result.rows[0]) return mapCommercialOutcome(result.rows[0]);
+  if (normalized.sourceActivityId) {
+    const existing = await pool.query(
+      'SELECT * FROM commercial_outcomes WHERE tenant_id = $1 AND source_activity_id = $2',
+      [normalized.tenantId, normalized.sourceActivityId]
+    );
+    if (existing.rows[0]) return mapCommercialOutcome(existing.rows[0]);
+  }
+  throw new Error('Commercial outcome could not be recorded.');
+}
+
+export async function dbListCommercialOutcomes(tenantId, query = {}) {
+  const page = Math.max(1, Math.floor(Number(query.page) || 1));
+  const pageSize = Math.max(1, Math.min(10000, Math.floor(Number(query.pageSize) || 25)));
+  if (!dbReady || !pool) {
+    const filtered = filterCommercialOutcomes(memoryOutcomesForTenant(tenantId), query)
+      .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)) || String(b.id).localeCompare(String(a.id)));
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize).map((item) => ({ ...item })), page, pageSize, total: filtered.length };
+  }
+
+  const { params, where } = commercialOutcomeWhere(tenantId, query);
+  const offset = (page - 1) * pageSize;
+  const [itemsResult, countResult] = await Promise.all([
+    pool.query(
+      `SELECT * FROM commercial_outcomes WHERE ${where}
+       ORDER BY occurred_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, pageSize, offset]
+    ),
+    pool.query(`SELECT COUNT(*)::int AS count FROM commercial_outcomes WHERE ${where}`, params),
+  ]);
+  return {
+    items: itemsResult.rows.map(mapCommercialOutcome),
+    page,
+    pageSize,
+    total: Number(countResult.rows[0]?.count || 0),
+  };
+}
+
+export async function dbLoadAllCommercialOutcomes(tenantId) {
+  if (!dbReady || !pool) {
+    return memoryOutcomesForTenant(tenantId).map((item) => ({ ...item }));
+  }
+  const result = await pool.query(
+    'SELECT * FROM commercial_outcomes WHERE tenant_id = $1 ORDER BY occurred_at DESC, id DESC',
+    [tenantId]
+  );
+  return result.rows.map(mapCommercialOutcome);
+}
+
+function commercialOutcomeRate(numerator, denominator) {
+  if (!denominator) return null;
+  return Math.round(Math.min(1, Number(numerator || 0) / Number(denominator)) * 10000) / 10000;
+}
+
+export async function dbGetCommercialOutcomeSummary(tenantId, query = {}) {
+  if (!dbReady || !pool) {
+    return summarizeCommercialOutcomes(filterCommercialOutcomes(memoryOutcomesForTenant(tenantId), query));
+  }
+
+  const { params, where } = commercialOutcomeWhere(tenantId, query);
+  const [countsResult, valuesResult] = await Promise.all([
+    pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(DISTINCT account_id)::int AS unique_accounts,
+        MIN(occurred_at) AS first_occurred_at,
+        MAX(occurred_at) AS last_occurred_at,
+        COUNT(*) FILTER (WHERE stage = 'outreach_logged')::int AS outreach_logged,
+        COUNT(*) FILTER (WHERE stage = 'replied')::int AS replied,
+        COUNT(*) FILTER (WHERE stage = 'positive_reply')::int AS positive_reply,
+        COUNT(*) FILTER (WHERE stage = 'meeting_booked')::int AS meeting_booked,
+        COUNT(*) FILTER (WHERE stage = 'opportunity_created')::int AS opportunity_created,
+        COUNT(*) FILTER (WHERE stage = 'won')::int AS won,
+        COUNT(*) FILTER (WHERE stage = 'lost')::int AS lost
+      FROM commercial_outcomes WHERE ${where}
+    `, params),
+    pool.query(`
+      SELECT currency,
+        COALESCE(SUM(value_cents) FILTER (WHERE stage = 'opportunity_created'), 0)::text AS opportunity_created_cents,
+        COALESCE(SUM(value_cents) FILTER (WHERE stage = 'won'), 0)::text AS won_cents,
+        COALESCE(SUM(value_cents) FILTER (WHERE stage = 'lost'), 0)::text AS lost_cents
+      FROM commercial_outcomes
+      WHERE ${where} AND value_cents IS NOT NULL
+      GROUP BY currency ORDER BY currency
+    `, params),
+  ]);
+  const row = countsResult.rows[0] || {};
+  const byStage = {
+    outreach_logged: Number(row.outreach_logged || 0),
+    replied: Number(row.replied || 0),
+    positive_reply: Number(row.positive_reply || 0),
+    meeting_booked: Number(row.meeting_booked || 0),
+    opportunity_created: Number(row.opportunity_created || 0),
+    won: Number(row.won || 0),
+    lost: Number(row.lost || 0),
+  };
+  const responseCount = byStage.replied + byStage.positive_reply;
+  return {
+    total: Number(row.total || 0),
+    uniqueAccounts: Number(row.unique_accounts || 0),
+    byStage,
+    valuesByCurrency: Object.fromEntries(valuesResult.rows.map((valueRow) => [
+      valueRow.currency,
+      {
+        opportunityCreatedCents: Number(valueRow.opportunity_created_cents || 0),
+        wonCents: Number(valueRow.won_cents || 0),
+        lostCents: Number(valueRow.lost_cents || 0),
+      },
+    ])),
+    conversion: {
+      outreachToReplyRate: commercialOutcomeRate(responseCount, byStage.outreach_logged),
+      replyToPositiveRate: commercialOutcomeRate(byStage.positive_reply, responseCount),
+      positiveReplyToMeetingRate: commercialOutcomeRate(byStage.meeting_booked, byStage.positive_reply),
+      meetingToOpportunityRate: commercialOutcomeRate(byStage.opportunity_created, byStage.meeting_booked),
+      opportunityToWinRate: commercialOutcomeRate(byStage.won, byStage.opportunity_created),
+    },
+    firstOccurredAt: row.first_occurred_at || null,
+    lastOccurredAt: row.last_occurred_at || null,
+  };
+}
+
+export async function dbDeleteCommercialOutcomes(tenantId) {
+  if (!dbReady || !pool) {
+    const deleted = memoryOutcomesForTenant(tenantId).length;
+    memoryCommercialOutcomes.delete(tenantId);
+    return { deleted };
+  }
+  const result = await pool.query('DELETE FROM commercial_outcomes WHERE tenant_id = $1', [tenantId]);
+  return { deleted: result.rowCount || 0 };
 }
 
 function mapSupportTicket(row = {}) {
