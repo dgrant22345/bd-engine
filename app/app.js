@@ -3257,7 +3257,8 @@ function renderSavedFilters() {
 }
 
 function renderActiveFilterStrip(query, labels = accountFilterLabels) {
-  const entries = normalizedFilterEntries(query);
+  const entries = normalizedFilterEntries(query)
+    .filter(([key, value]) => String(defaultQueries.accounts[key] ?? '') !== value);
   if (!entries.length) {
     return `<div class="active-filter-strip active-filter-strip--empty"><span>All ${isJobSeekerPersona() ? 'companies' : 'accounts'} visible</span></div>`;
   }
@@ -3851,10 +3852,6 @@ async function renderBillingRequiredView(error = {}) {
       </div>
     </section>
   `;
-}
-
-function countAppliedFilters(query) {
-  return Object.entries(query || {}).filter(([key, value]) => key !== 'page' && key !== 'pageSize' && value !== '' && value !== null && value !== undefined).length;
 }
 
 function setViewTitle(title) {
@@ -5047,7 +5044,6 @@ async function renderAccountsView() {
     const score = getTargetScore(a);
     if (appState.previousScores[a.id] === undefined) appState.previousScores[a.id] = score;
   });
-  const activeFilterCount = countAppliedFilters(appState.accountQuery);
   const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
   const industryOptions = filters.industries || [];
   const personaCopy = getPersonaUiCopy();
@@ -5072,11 +5068,9 @@ async function renderAccountsView() {
           <h3>Ranked target ${escapeHtml(personaCopy.accountPlural)}</h3>
           <p class="subtitle">${jobSeeker ? 'Focus on employers with the strongest mix of live roles, fit, warm contacts, and timely next steps.' : 'Focus the day on companies with the strongest combination of hiring motion, relationship access, and follow-up urgency.'}</p>
         </div>
-        <div class="kpi-ribbon headline-metrics">
+        <div class="kpi-ribbon headline-metrics headline-metrics--compact">
           ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('Filters', formatNumber(activeFilterCount))}
           ${renderMetricTile('Hiring on page', formatNumber(hiringRows))}
-          ${renderMetricTile('Page size', formatNumber(result.pageSize))}
         </div>
       </div>
     </section>
@@ -5084,12 +5078,10 @@ async function renderAccountsView() {
     ${legacyUnclassified
       ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>`
       : trackedCompanies
-        ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Keep this shortlist aligned with your focus.</strong><span>Preview a fresh ranking after changing target roles, industries, or work style. Weak company identities are flagged before anything changes.</span><button class="secondary-button" type="button" data-action="rebalance-targets">Review and rebalance</button></div>`
+        ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Keep this shortlist aligned.</strong><span>Refresh the ranking when your target roles, industries, or work style change.</span><button class="secondary-button" type="button" data-action="rebalance-targets">Rebalance</button></div>`
         : ''}
 
-    ${renderAccountPresetStrip()}
-
-    <section class="detail-grid detail-grid--workspace">
+    <section class="detail-grid detail-grid--workspace detail-grid--accounts">
       <div class="table-card">
         <div class="panel-header">
           <div>
@@ -5097,29 +5089,32 @@ async function renderAccountsView() {
             <p class="muted small">${jobSeeker ? 'Use filters to find the companies where a role, a warm contact, or a timely follow-up gives you a credible next move.' : 'This is the working list. Use filters to narrow it to the accounts you can act on right now.'}</p>
           </div>
           <div class="panel-header-actions">
-            <div class="view-toggle">
-              <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view">&#9776; Table</button>
-              <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view">&#9638; Board</button>
-            </div>
-            ${renderExportButton('accounts')}
-            <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
             <span class="table-meta">${formatNumber(result.total)} ${escapeHtml(portfolioLabel)}</span>
+            <details class="queue-tools">
+              <summary aria-label="Account queue options">Queue options</summary>
+              <div class="queue-tools__menu">
+                <div class="view-toggle" aria-label="Queue view">
+                  <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view">&#9776; Table</button>
+                  <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view">&#9638; Board</button>
+                </div>
+                ${renderExportButton('accounts')}
+                <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
+              </div>
+            </details>
           </div>
         </div>
-        <form id="accounts-filter-form" class="filter-grid filter-grid--dense">
+        ${renderAccountPresetStrip()}
+        <form id="accounts-filter-form" class="filter-grid filter-grid--dense account-filter-grid">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
           ${renderField('Portfolio', `<select name="portfolio"><option value="tracked" ${selected(appState.accountQuery.portfolio, 'tracked')}>Tracked targets</option><option value="network" ${selected(appState.accountQuery.portfolio, 'network')}>Network only</option><option value="all" ${selected(appState.accountQuery.portfolio, 'all')}>All companies</option></select>`)}
           ${renderField('Hiring', `<select name="hiring"><option value="">All</option><option value="true" ${selected(appState.accountQuery.hiring, 'true')}>Active hiring</option></select>`)}
-          ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
-          <div class="field field--action">
-            <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
+          <div class="field field--action account-filter-actions">
             <button class="primary-button" type="submit">Apply</button>
-            <button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset</button>
-            <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
+            <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
           </div>
-          ${renderSavedFilters()}
           <div class="filter-advanced-fields${appState.showAdvancedFilters ? '' : ' hidden'}" id="advanced-filter-fields">
+          ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
           ${renderField('Owner', renderOwnerSelect('owner', appState.accountQuery.owner, true))}
@@ -5129,6 +5124,11 @@ async function renderAccountsView() {
           ${renderField('Min contacts', `<input name="minContacts" type="number" min="0" value="${escapeAttr(appState.accountQuery.minContacts)}">`)}
           ${renderField('Min target score', `<input name="minTargetScore" type="number" min="0" max="100" value="${escapeAttr(appState.accountQuery.minTargetScore)}">`)}
           ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option>${renderOutreachStageOptions(appState.accountQuery.outreachStatus, true)}</select>`)}
+          <div class="field field--action advanced-filter-actions">
+            <button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset filters</button>
+            <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
+          </div>
+          ${renderSavedFilters()}
           </div>
         </form>
         ${renderActiveFilterStrip(appState.accountQuery)}
@@ -5140,14 +5140,12 @@ async function renderAccountsView() {
         ${!appState.kanbanMode ? renderPagination('accounts', result.page, result.pageSize, result.total) : ''}
       </div>
 
-      <div class="panel-stack">
-        <div class="form-card" data-route-focus="account-create">
-          <div class="panel-header">
-            <div>
-              <h3>Add target account</h3>
-              <p class="muted small">Create a company record without leaving the ranked queue.</p>
-            </div>
-          </div>
+      <aside class="panel-stack account-side-tools" aria-label="Account creation tools">
+        <details class="form-card workspace-disclosure" data-route-focus="account-create">
+          <summary>
+            <span class="workspace-disclosure__icon" aria-hidden="true">+</span>
+            <span><strong>Add target account</strong><small>Create one company record.</small></span>
+          </summary>
           <form id="account-create-form" class="detail-form">
             ${renderField('Company', '<input name="company" required placeholder="Stripe">')}
             ${renderField('Domain', '<input name="domain" placeholder="stripe.com">')}
@@ -5161,21 +5159,19 @@ async function renderAccountsView() {
             <div class="field field--wide"><label>Notes</label><textarea name="notes" rows="4" placeholder="Why this account matters, what team is hiring, who might introduce you"></textarea></div>
             <div><button class="primary-button" type="submit">Add account</button></div>
           </form>
-        </div>
+        </details>
 
-        <div class="form-card">
-          <div class="panel-header">
-            <div>
-              <h3>Bulk import target list</h3>
-              <p class="muted small">Paste one company per line, or paste CSV with headers like company, domain, careers_url, priority, owner, notes, status.</p>
-            </div>
-          </div>
+        <details class="form-card workspace-disclosure">
+          <summary>
+            <span class="workspace-disclosure__icon" aria-hidden="true">&#8593;</span>
+            <span><strong>Import target list</strong><small>Paste companies or CSV.</small></span>
+          </summary>
           <form id="account-import-form" class="detail-form">
             <div class="field field--wide"><label>Paste list</label><textarea name="text" rows="11" placeholder="Stripe&#10;Databricks&#10;Samsara&#10;&#10;or CSV headers: company,domain,careers_url,priority,owner"></textarea></div>
             <div><button class="secondary-button" type="submit">Import accounts</button></div>
           </form>
-        </div>
-      </div>
+        </details>
+      </aside>
     </section>
   `;
   // Record score history for sparklines
@@ -5634,7 +5630,9 @@ function focusGuidedControl(control, container) {
 
 function focusAccountCreateForm() {
   const control = document.querySelector('#account-create-form input[name="company"]');
-  focusGuidedControl(control, control?.closest('[data-route-focus]'));
+  const container = control?.closest('[data-route-focus]');
+  if (container?.tagName === 'DETAILS') container.open = true;
+  focusGuidedControl(control, container);
 }
 
 function openAdminSection(sectionId, focusKey = '') {
@@ -6147,22 +6145,19 @@ function renderAccountsTable(items) {
       <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
-    <div class="table-scroll"><table class="table"><thead><tr><th><input type="checkbox" id="bulk-select-all"></th><th>Company</th><th>Health</th><th>Target score</th><th>Signal mix</th><th>Owner / next step</th><th>Network</th><th>Status</th><th>ATS</th><th>Actions</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table accounts-table"><thead><tr><th><input type="checkbox" id="bulk-select-all" aria-label="Select all accounts"></th><th>Company</th><th>Target score</th><th>Hiring</th><th>Owner / next step</th><th>Status</th><th>ATS</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
-          <td><input type="checkbox" class="bulk-checkbox" value="${item.id}"></td>
-          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
-          <td>${renderHealthRing(computeHealthScore(item))}</td>
+          <td><input type="checkbox" class="bulk-checkbox" value="${item.id}" aria-label="Select ${escapeAttr(item.displayName)}"></td>
+          <td><a class="row-link" href="#/accounts/${item.id}" data-action="open-account" data-id="${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
           <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div></td>
-          <td data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div></td>
-          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.engagementScore || 0)} engagement</div></td>
+          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div>${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}</td>
+          <td data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div><details class="row-detail-menu"><summary>Log activity</summary><button class="micro-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Open note field</button></details></td>
           <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
           <td>${renderAccountResolutionSummary(item)}</td>
-          <td><div class="button-row"><button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button><button class="ghost-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Log</button></div></td>
         </tr>
         <tr id="quick-log-${item.id}" class="quick-log-row hidden">
-          <td colspan="10">
+          <td colspan="7">
             <form class="quick-log-form" data-account-id="${item.id}">
               <input name="quickNote" placeholder="Quick note..." class="compact-input">
               <select name="outreachStatus" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
@@ -8448,12 +8443,15 @@ function renderAccountResolutionSummary(item = {}) {
   const hasPrimaryConfig = Boolean(item.primaryConfigId);
   const signalSource = item.canonicalDomain || item.domain || item.careersUrl || 'No domain or careers URL yet';
   const actionButtons = `
-    <div class="micro-button-row">
-      <button class="micro-button" data-action="account-quick-enrich" data-id="${item.id}">Quick enrich</button>
-      ${needsDeepResolve(item) ? `<button class="micro-button micro-button--primary" data-action="account-resolve-now" data-id="${item.id}">Resolve now</button>` : ''}
-      ${needsDeepResolve(item) ? `<button class="micro-button" data-action="account-deep-verify" data-id="${item.id}">Deep verify</button>` : ''}
-      ${hasPrimaryConfig && !needsDeepResolve(item) ? `<button class="micro-button" data-action="rerun-enrichment-resolution" data-id="${item.id}">Rerun ATS</button>` : ''}
-    </div>
+    <details class="row-detail-menu">
+      <summary>ATS actions</summary>
+      <div class="micro-button-row">
+        <button class="micro-button" data-action="account-quick-enrich" data-id="${item.id}">Quick enrich</button>
+        ${needsDeepResolve(item) ? `<button class="micro-button micro-button--primary" data-action="account-resolve-now" data-id="${item.id}">Resolve now</button>` : ''}
+        ${needsDeepResolve(item) ? `<button class="micro-button" data-action="account-deep-verify" data-id="${item.id}">Deep verify</button>` : ''}
+        ${hasPrimaryConfig && !needsDeepResolve(item) ? `<button class="micro-button" data-action="rerun-enrichment-resolution" data-id="${item.id}">Rerun ATS</button>` : ''}
+      </div>
+    </details>
   `;
 
   return `
