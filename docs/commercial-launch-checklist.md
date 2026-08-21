@@ -98,6 +98,23 @@ and durable evidence link or identifier. Never paste secrets or customer rows.
 
 Evidence for this section: `________________`
 
+## Commercial truth and offer
+
+- [ ] Public positioning names the buyer the current product serves and does not
+  imply multi-seat collaboration while the paid plan is limited to one login.
+- [ ] Every customer-visible dashboard label is derived from tenant records. No
+  fixed example count or proxy queue is described as live, stale, overdue, or
+  ranked without the underlying evidence.
+- [ ] Referral copy names the actual credit recipient, amount, and qualifying
+  event. A live test confirms the credit lands on that Stripe customer only once.
+- [ ] Signup presents the reviewed Terms and Privacy notice before account
+  creation, and the accepted document versions and timestamp are recoverable.
+- [x] Privacy-safe product analytics accepts outreach, reply, meeting,
+  opportunity, and client win/loss milestones while discarding arbitrary
+  customer-content dimensions. Evidence: `product-analytics` required unit test.
+
+Evidence for this section: `________________`
+
 ## Deploy and observe
 
 - [ ] Maintenance risk and rollback owner were announced before deployment.
