@@ -313,7 +313,8 @@ function applyTheme(mode) {
   }
   document.documentElement.setAttribute('data-theme', effective);
   document.documentElement.style.colorScheme = effective;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', effective === 'dark' ? '#0c1416' : '#f5f7f6');
+  const themeBackground = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#101116' : '#f6f7f9'));
   if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';
   if (themeLabel) themeLabel.textContent = effective === 'dark' ? 'Light' : 'Dark';
 }

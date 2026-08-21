@@ -8703,3 +8703,9 @@ body {
     min-height: 36px;
   }
 }
+
+/* Keep paired Admin accordions independently sized instead of stretching a
+   collapsed panel to match a much taller expanded sibling. */
+.admin-grid > .two-column {
+  align-items: start;
+}

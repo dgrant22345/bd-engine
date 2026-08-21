@@ -219,6 +219,7 @@ await check('shared app is mounted under /app', async () => {
   assert(response.ok, `/app/ returned ${response.status}`);
   const html = await response.text();
   assert(html.includes('/app/styles.css'), 'app html did not rewrite stylesheet path');
+  assert(html.includes('/app/palette.css'), 'app html did not rewrite palette stylesheet path');
   assert(html.includes('/app/app.js'), 'app html did not rewrite app script path');
   assert(!html.includes('serviceWorker.register'), 'app html should not register a service worker in SaaS shell');
 });

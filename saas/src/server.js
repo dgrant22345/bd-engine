@@ -2734,6 +2734,7 @@ function getAppIndexHtml() {
   const html = readFileSync(appIndex, 'utf8');
   cachedAppIndexHtml = html
     .replace(/href="\/styles\.css/g, 'href="/app/styles.css')
+    .replace(/href="\/palette\.css/g, 'href="/app/palette.css')
     .replace(/href="\/manifest\.json/g, 'href="/app/manifest.json')
     .replace(/href="\/icons\//g, 'href="/app/icons/')
     .replace(/href="\/app\.js/g, 'href="/app/app.js')
