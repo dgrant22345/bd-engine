@@ -7,6 +7,7 @@ function blockingViolations(results) {
     impact: violation.impact,
     help: violation.help,
     targets: violation.nodes.map((node) => node.target.join(' ')),
+    failures: violation.nodes.map((node) => node.failureSummary || ''),
   }));
 }
 
@@ -42,6 +43,66 @@ test('demo workspace has no blocking structural accessibility violations', async
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
   const app = page.frameLocator('iframe.cloud-app-frame');
   await expect(app.locator('#app')).toBeVisible({ timeout: 15000 });
+  await expectNoBlockingViolations(page);
+});
+
+test('dark workspace surfaces retain accessible contrast', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  for (let attempt = 0; attempt < 3 && await app.locator('html').getAttribute('data-theme') !== 'dark'; attempt += 1) {
+    await app.locator('summary[aria-label="Workspace options"]').click();
+    await app.locator('#theme-toggle').click();
+  }
+  await expect(app.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expectNoBlockingViolations(page);
+
+  await app.getByRole('link', { name: 'Admin', exact: true }).click();
+  const runtimeHeader = app.locator('[data-collapse-id="runtime-status"]');
+  if (await runtimeHeader.getAttribute('aria-expanded') === 'false') await runtimeHeader.click();
+  await expect(app.locator('.status-matrix--premium .status-item').first()).toBeVisible();
+  await expectNoBlockingViolations(page);
+});
+
+test('workspace keyboard controls expose state and contain focus', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  const app = page.frameLocator('iframe.cloud-app-frame');
+
+  await app.getByRole('link', { name: 'Accounts', exact: true }).click();
+  const filterToggle = app.locator('#toggle-advanced-filters');
+  await filterToggle.locator('.filter-toggle-label').click();
+  await expect(filterToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(app.locator('#advanced-filter-fields')).not.toHaveAttribute('hidden', '');
+  await expect(app.locator('#advanced-filter-fields')).not.toHaveAttribute('inert', '');
+
+  const editOwner = app.getByRole('button', { name: /edit owner for/i }).first();
+  await editOwner.focus();
+  await editOwner.press('Space');
+  const ownerEditor = app.getByRole('textbox', { name: /edit owner/i });
+  await expect(ownerEditor).toBeVisible();
+  await ownerEditor.press('Escape');
+  await expect(editOwner).toBeFocused();
+
+  const invoker = app.locator('#global-search-input');
+  await invoker.focus();
+  await invoker.press('Control+k');
+  const palette = app.getByRole('dialog', { name: 'Command palette' });
+  const commandInput = app.getByRole('combobox', { name: 'Search commands' });
+  await expect(palette).toBeVisible();
+  await expect(app.locator('.shell')).toHaveAttribute('inert', '');
+  await commandInput.press('ArrowDown');
+  const activeOptionId = await commandInput.getAttribute('aria-activedescendant');
+  expect(activeOptionId).toBeTruthy();
+  await expect(app.locator(`#${activeOptionId}`)).toHaveAttribute('aria-selected', 'true');
+  await commandInput.press('Tab');
+  await expect(commandInput).toBeFocused();
+  await expectNoBlockingViolations(page);
+  await commandInput.press('Escape');
+  await expect(palette).toHaveCount(0);
+  await expect(invoker).toBeFocused();
   await expectNoBlockingViolations(page);
 });
 

@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#10211f">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
-  <link rel="stylesheet" href="/styles.css?v=20260821-visual-design-5">
+  <link rel="stylesheet" href="/styles.css?v=20260821-workflow-ux-6">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -55,13 +55,13 @@
         <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation"><span aria-hidden="true">&#9776;</span></button>
         <div class="view-heading">
           <p class="eyebrow">Commercial revenue operating system</p>
-          <h2 id="view-title">Dashboard</h2>
+          <h2 id="view-title" tabindex="-1">Dashboard</h2>
         </div>
         <div class="topbar-tools">
           <label class="search-shell" for="global-search-input">
             <span class="visually-hidden">Search companies, contacts, and jobs</span>
             <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span>
-            <input id="global-search-input" type="search" placeholder="Search companies, contacts, jobs" autocomplete="off" aria-controls="search-results">
+            <input id="global-search-input" type="text" inputmode="search" placeholder="Search companies, contacts, jobs" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
             <kbd class="kbd">Ctrl K</kbd>
           </label>
           <details class="topbar-overflow">
@@ -82,17 +82,17 @@
 
       <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb"></nav>
       <div id="app-alert" class="app-alert hidden" role="status" aria-live="polite"></div>
-      <div id="search-results" class="search-results hidden" role="region" aria-label="Search results" aria-live="polite" aria-busy="false"></div>
+      <div id="search-results" class="search-results hidden" role="listbox" aria-label="Search results" aria-live="polite" aria-busy="false"></div>
       <div id="app" class="view-root"></div>
     </main>
   </div>
 
   <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" aria-hidden="true"></div>
-  <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
-  <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-relevant="additions"></div>
+  <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden" aria-hidden="true"></div>
+  <div id="toast-container" class="toast-container"></div>
 
-  <script src="/local-api.js?v=20260821-visual-design-5"></script>
-  <script src="/app.js?v=20260821-visual-design-5"></script>
+  <script src="/local-api.js?v=20260821-workflow-ux-6"></script>
+  <script src="/app.js?v=20260821-workflow-ux-6"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});

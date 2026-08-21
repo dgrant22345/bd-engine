@@ -94,13 +94,16 @@ const appState = {
   showAdvancedFilters: false,
   outreachModalOpen: false,
   pendingOutreachContact: null,
+  outreachModalTrigger: null,
   statusPillsExpanded: false,
   previousScores: {},
   theme: localStorage.getItem('bd_theme') || 'system',
   cmdPaletteOpen: false,
+  cmdPaletteTrigger: null,
   lastKeyTime: 0,
   lastKey: '',
   mobileNavOpen: false,
+  mobileNavTrigger: null,
   // Phase 5: Elite features
   columnPrefs: readJsonSetting('bd_col_prefs', {}),
   kanbanMode: localStorage.getItem('bd_kanban') === 'true',
@@ -309,6 +312,8 @@ function applyTheme(mode) {
     effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   document.documentElement.setAttribute('data-theme', effective);
+  document.documentElement.style.colorScheme = effective;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', effective === 'dark' ? '#0c1416' : '#f5f7f6');
   if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';
   if (themeLabel) themeLabel.textContent = effective === 'dark' ? 'Light' : 'Dark';
 }
@@ -337,7 +342,8 @@ function showToast(message, type = 'info', duration = 4000) {
   const id = ++toastId;
   const el = document.createElement('div');
   el.className = `toast toast--${type}`;
-  el.setAttribute('role', 'alert');
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.setAttribute('aria-atomic', 'true');
   el.innerHTML = `
     <span class="toast-icon">${icons[type] || icons.info}</span>
     <span class="toast-msg">${escapeHtml(message)}</span>
@@ -360,7 +366,8 @@ function dismissToast(el) {
 function showUndoToast(message, undoFn, duration = 6000) {
   const el = document.createElement('div');
   el.className = 'toast toast--info toast--undo';
-  el.setAttribute('role', 'alert');
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-atomic', 'true');
   el.innerHTML = `
     <span class="toast-icon">&#8617;</span>
     <span class="toast-msg">${escapeHtml(message)}</span>
@@ -494,27 +501,38 @@ async function writeClipboardText(text) {
 
 /* ── Mobile navigation ── */
 function openMobileNav() {
+  if (!appState.mobileNavOpen && document.activeElement instanceof HTMLElement) {
+    appState.mobileNavTrigger = document.activeElement;
+  }
   appState.mobileNavOpen = true;
   document.querySelector('.sidebar')?.classList.add('mobile-open');
   mobileNavBackdrop?.classList.add('open');
   mobileNavBackdrop?.setAttribute('aria-hidden', 'false');
   hamburgerBtn?.setAttribute('aria-expanded', 'true');
   hamburgerBtn?.setAttribute('aria-label', 'Close navigation');
+  window.requestAnimationFrame(() => document.querySelector('.sidebar .nav a')?.focus());
 }
 
-function closeMobileNav() {
+function closeMobileNav({ restoreFocus = true } = {}) {
   appState.mobileNavOpen = false;
   document.querySelector('.sidebar')?.classList.remove('mobile-open');
   mobileNavBackdrop?.classList.remove('open');
   mobileNavBackdrop?.setAttribute('aria-hidden', 'true');
   hamburgerBtn?.setAttribute('aria-expanded', 'false');
   hamburgerBtn?.setAttribute('aria-label', 'Open navigation');
+  if (restoreFocus && appState.mobileNavTrigger instanceof HTMLElement && appState.mobileNavTrigger.isConnected) {
+    appState.mobileNavTrigger.focus();
+  }
+  appState.mobileNavTrigger = null;
 }
 
-if (hamburgerBtn) hamburgerBtn.addEventListener('click', openMobileNav);
+if (hamburgerBtn) hamburgerBtn.addEventListener('click', () => {
+  if (appState.mobileNavOpen) closeMobileNav();
+  else openMobileNav();
+});
 if (mobileNavBackdrop) mobileNavBackdrop.addEventListener('click', closeMobileNav);
 document.querySelectorAll('.nav a').forEach(a => {
-  a.addEventListener('click', () => closeMobileNav());
+  a.addEventListener('click', () => closeMobileNav({ restoreFocus: false }));
 });
 
 /* ── Command palette ── */
@@ -546,14 +564,23 @@ let cmdPaletteIndex = 0;
 let cmdFiltered = [...cmdActions];
 
 function openCmdPalette() {
+  if (!appState.cmdPaletteOpen && document.activeElement instanceof HTMLElement) {
+    appState.cmdPaletteTrigger = document.activeElement;
+  }
   appState.cmdPaletteOpen = true;
   cmdPaletteIndex = 0;
   cmdFiltered = [...cmdActions];
   cmdPaletteBackdrop.classList.remove('hidden');
+  cmdPaletteBackdrop.setAttribute('aria-hidden', 'false');
+  const workspaceShell = document.querySelector('.shell');
+  const skipLink = document.querySelector('.skip-link');
+  if (workspaceShell) workspaceShell.inert = true;
+  if (skipLink) skipLink.inert = true;
   cmdPaletteBackdrop.innerHTML = `
     <div class="cmd-palette" role="dialog" aria-modal="true" aria-label="Command palette">
-      <input class="cmd-palette-input" id="cmd-input" type="text" placeholder="Type a command..." autocomplete="off" />
-      <div class="cmd-palette-list" id="cmd-list"></div>
+      <input class="cmd-palette-input" id="cmd-input" type="text" placeholder="Type a command..." autocomplete="off" role="combobox" aria-label="Search commands" aria-autocomplete="list" aria-controls="cmd-list" aria-expanded="true" />
+      <div class="cmd-palette-list" id="cmd-list" role="listbox" aria-label="Commands"></div>
+      <div class="cmd-palette-empty hidden" id="cmd-empty" role="status" aria-live="polite"></div>
     </div>
   `;
   renderCmdList();
@@ -576,23 +603,43 @@ function openCmdPalette() {
 function closeCmdPalette() {
   appState.cmdPaletteOpen = false;
   cmdPaletteBackdrop.classList.add('hidden');
+  cmdPaletteBackdrop.setAttribute('aria-hidden', 'true');
   cmdPaletteBackdrop.innerHTML = '';
+  const workspaceShell = document.querySelector('.shell');
+  const skipLink = document.querySelector('.skip-link');
+  if (workspaceShell) workspaceShell.inert = false;
+  if (skipLink) skipLink.inert = false;
+  if (appState.cmdPaletteTrigger instanceof HTMLElement && appState.cmdPaletteTrigger.isConnected) {
+    appState.cmdPaletteTrigger.focus();
+  }
+  appState.cmdPaletteTrigger = null;
 }
 
 function renderCmdList() {
   const list = document.getElementById('cmd-list');
+  const input = document.getElementById('cmd-input');
+  const empty = document.getElementById('cmd-empty');
   if (!list) return;
   if (!cmdFiltered.length) {
-    list.innerHTML = '<div class="cmd-palette-empty">No matching commands</div>';
+    list.innerHTML = '';
+    input?.removeAttribute('aria-activedescendant');
+    if (empty) {
+      empty.textContent = 'No matching commands';
+      empty.classList.remove('hidden');
+    }
     return;
   }
+  empty?.classList.add('hidden');
+  if (empty) empty.textContent = '';
   list.innerHTML = cmdFiltered.map((item, i) => `
-    <div class="cmd-palette-item ${i === cmdPaletteIndex ? 'active' : ''}" data-cmd-idx="${i}">
-      <span class="cmd-icon">${item.icon}</span>
+    <div class="cmd-palette-item ${i === cmdPaletteIndex ? 'active' : ''}" id="cmd-option-${escapeAttr(item.id)}" role="option" aria-selected="${String(i === cmdPaletteIndex)}" data-cmd-idx="${i}">
+      <span class="cmd-icon" aria-hidden="true">${item.icon}</span>
       <span>${escapeHtml(item.label)}</span>
       ${item.key ? `<span class="cmd-key">${escapeHtml(item.key)}</span>` : ''}
     </div>
   `).join('');
+  const activeOption = list.querySelector('[role="option"][aria-selected="true"]');
+  if (input && activeOption?.id) input.setAttribute('aria-activedescendant', activeOption.id);
   list.querySelectorAll('.cmd-palette-item').forEach(el => {
     el.addEventListener('click', () => {
       const idx = Number(el.dataset.cmdIdx);
@@ -605,6 +652,10 @@ function renderCmdList() {
     });
   });
 }
+
+cmdPaletteBackdrop?.addEventListener('click', (event) => {
+  if (event.target === cmdPaletteBackdrop) closeCmdPalette();
+});
 
 /* ── Breadcrumbs ── */
 function renderBreadcrumbs(crumbs) {
@@ -786,11 +837,14 @@ function renderKanbanBoard(items) {
                 <div class="kanban-card-score">${formatNumber(getTargetScore(item))} pts ${renderSparkline(item.id, 48, 16)}</div>
                 <div class="kanban-card-meta">${escapeHtml(item.owner || 'Unassigned')} · ${formatNumber(item.hiringVelocity || 0)} velocity</div>
                 ${item.nextAction ? `<div class="kanban-card-action small muted">${escapeHtml(item.nextAction)}</div>` : ''}
-                <div class="kanban-card-pills">
-                  ${renderStatusPill(item.priority || 'medium', 'warm')}
-                  ${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}
-                </div>
-              </div>
+                 <div class="kanban-card-pills">
+                   ${renderStatusPill(item.priority || 'medium', 'warm')}
+                   ${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}
+                 </div>
+                 <label class="kanban-stage-control"><span>Move to stage</span><select data-kanban-stage aria-label="Move ${escapeAttr(item.displayName)} to stage">
+                   ${columns.map((stage) => `<option value="${escapeAttr(stage.key)}" ${selected(col.key, stage.key)}>${escapeHtml(stage.label)}</option>`).join('')}
+                 </select></label>
+               </div>
             `).join('')}
           </div>
         </div>
@@ -799,10 +853,74 @@ function renderKanbanBoard(items) {
   `;
 }
 
+function updateKanbanCounts(board) {
+  board?.querySelectorAll('.kanban-column').forEach((column) => {
+    const body = column.querySelector('.kanban-column-body');
+    const count = column.querySelector('.kanban-column-count');
+    if (body && count) count.textContent = body.children.length;
+  });
+}
+
+async function moveKanbanCard(card, newStatus) {
+  const board = card?.closest('#kanban-board');
+  const oldStatus = card?.dataset.status || '';
+  const stageSelect = card?.querySelector('[data-kanban-stage]');
+  if (!board || !card || !newStatus || newStatus === oldStatus) return;
+  if (card.dataset.moving === 'true') {
+    if (stageSelect) stageSelect.value = oldStatus;
+    return;
+  }
+  const destination = board.querySelector(`.kanban-column-body[data-status="${CSS.escape(newStatus)}"]`);
+  const previousColumn = card.parentElement;
+  if (!destination) {
+    if (stageSelect) stageSelect.value = oldStatus;
+    return;
+  }
+
+  const previousDraggable = card.getAttribute('draggable');
+  card.dataset.moving = 'true';
+  card.setAttribute('aria-busy', 'true');
+  card.setAttribute('draggable', 'false');
+  if (stageSelect) stageSelect.disabled = true;
+
+  destination.appendChild(card);
+  card.dataset.status = newStatus;
+  if (stageSelect) stageSelect.value = newStatus;
+  updateKanbanCounts(board);
+
+  try {
+    await api(`/api/accounts/${card.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+    invalidateAppData();
+    trackStageChange(card.dataset.id, newStatus);
+    showUndoToast(`Moved to ${humanize(newStatus)}`, async () => {
+      await api(`/api/accounts/${card.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: oldStatus }) });
+      invalidateAppData();
+      await renderAccountsView();
+    });
+  } catch (err) {
+    previousColumn?.appendChild(card);
+    card.dataset.status = oldStatus;
+    if (stageSelect) stageSelect.value = oldStatus;
+    updateKanbanCounts(board);
+    showToast('Failed to update status: ' + (err.message || err), 'error');
+  } finally {
+    delete card.dataset.moving;
+    card.removeAttribute('aria-busy');
+    if (previousDraggable === null) card.removeAttribute('draggable');
+    else card.setAttribute('draggable', previousDraggable);
+    if (stageSelect) stageSelect.disabled = false;
+  }
+}
+
 function wireKanbanDragDrop() {
   const board = document.getElementById('kanban-board');
   if (!board) return;
   let dragEl = null;
+  board.addEventListener('change', async (event) => {
+    const select = event.target.closest('[data-kanban-stage]');
+    if (!select) return;
+    await moveKanbanCard(select.closest('.kanban-card'), select.value);
+  });
   board.addEventListener('dragstart', (e) => {
     dragEl = e.target.closest('.kanban-card');
     if (dragEl) { dragEl.classList.add('kanban-card--dragging'); e.dataTransfer.effectAllowed = 'move'; }
@@ -829,30 +947,7 @@ function wireKanbanDragDrop() {
     const col = e.target.closest('.kanban-column-body');
     if (!col) return;
     const newStatus = col.dataset.status;
-    const accountId = dragEl.dataset.id;
-    const oldStatus = dragEl.dataset.status;
-    if (newStatus === oldStatus) return;
-    col.appendChild(dragEl);
-    dragEl.dataset.status = newStatus;
-    // Update counts
-    document.querySelectorAll('.kanban-column').forEach(c => {
-      const body = c.querySelector('.kanban-column-body');
-      const count = c.querySelector('.kanban-column-count');
-      if (body && count) count.textContent = body.children.length;
-    });
-    // Persist
-    try {
-      await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
-      invalidateAppData();
-      trackStageChange(accountId, newStatus);
-      showUndoToast(`Moved to ${humanize(newStatus)}`, async () => {
-        await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ status: oldStatus }) });
-        invalidateAppData();
-        await renderAccountsView();
-      });
-    } catch (err) {
-      showToast('Failed to update status: ' + (err.message || err), 'error');
-    }
+    await moveKanbanCard(dragEl, newStatus);
   });
 }
 
@@ -903,35 +998,58 @@ function wireColumnCustomizer(viewKey, allCols, rerenderFn) {
 
 /* ── Inline editing ── */
 function wireInlineEditing() {
-  document.querySelectorAll('[data-inline-edit]').forEach(cell => {
-    cell.addEventListener('dblclick', () => {
-      if (cell.querySelector('input, select')) return;
-      const field = cell.dataset.inlineEdit;
-      const accountId = cell.dataset.accountId;
-      const currentVal = cell.dataset.currentValue || cell.textContent.trim();
-      const original = cell.innerHTML;
-      cell.innerHTML = `<input class="inline-edit-input" value="${escapeAttr(currentVal)}" data-field="${field}" data-account-id="${accountId}" autofocus>`;
-      const input = cell.querySelector('input');
+  document.querySelectorAll('[data-inline-edit]').forEach(trigger => {
+    const beginEdit = () => {
+      if (!trigger.isConnected) return;
+      const field = trigger.dataset.inlineEdit;
+      const accountId = trigger.dataset.accountId;
+      const currentVal = trigger.dataset.currentValue ?? '';
+      const input = document.createElement('input');
+      input.className = 'inline-edit-input';
+      input.value = currentVal;
+      input.dataset.field = field;
+      input.dataset.accountId = accountId;
+      input.setAttribute('aria-label', `Edit ${humanize(field || 'value')}`);
+      trigger.replaceWith(input);
       input.focus();
       input.select();
+      let settled = false;
+      const restoreTrigger = () => {
+        if (input.isConnected) input.replaceWith(trigger);
+        trigger.focus();
+      };
       const save = async () => {
+        if (settled) return;
+        settled = true;
         const newVal = input.value.trim();
-        if (newVal === currentVal) { cell.innerHTML = original; return; }
-        cell.innerHTML = `<span class="inline-edit-saving">Saving...</span>`;
+        if (newVal === currentVal) { restoreTrigger(); return; }
+        input.disabled = true;
+        input.setAttribute('aria-busy', 'true');
         try {
           await api(`/api/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ [field]: newVal }) });
           invalidateAppData();
-          cell.textContent = newVal;
-          cell.dataset.currentValue = newVal;
+          const valueNode = trigger.querySelector('[data-inline-value]');
+          if (valueNode) valueNode.textContent = newVal || 'Unassigned';
+          trigger.dataset.currentValue = newVal;
+          restoreTrigger();
           showToast(`${humanize(field)} updated.`, 'success');
         } catch(err) {
-          cell.innerHTML = original;
+          restoreTrigger();
           showToast('Save failed: ' + (err.message || err), 'error');
         }
       };
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { cell.innerHTML = original; } });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          settled = true;
+          restoreTrigger();
+        }
+      });
       input.addEventListener('blur', save);
-    });
+    };
+    trigger.addEventListener('click', beginEdit);
   });
 }
 
@@ -2042,20 +2160,36 @@ async function init() {
 }
 
 function bindEvents() {
-  window.addEventListener('hashchange', () => {
+  window.addEventListener('hashchange', async () => {
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
-    renderRoute().catch((error) => {
+    try {
+      await renderRoute();
+      if (!appState.outreachModalOpen) viewTitle?.focus({ preventScroll: true });
+    } catch (error) {
       if (isBillingRequiredError(error)) {
         renderBillingRequiredView(error);
         return;
       }
       window.bdLocalApi.handleError(error, appAlert);
-    });
+    }
   });
   document.addEventListener('keydown', (e) => {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
+
+    const taskTab = e.target.closest?.('.tasks-tabs [role="tab"]');
+    if (taskTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault();
+      const tabs = Array.from(taskTab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'));
+      const currentIndex = tabs.indexOf(taskTab);
+      const nextIndex = e.key === 'Home' ? 0
+        : e.key === 'End' ? tabs.length - 1
+          : (currentIndex + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[nextIndex]?.focus();
+      tabs[nextIndex]?.click();
+      return;
+    }
 
     // Escape: close modals/palette/mobile nav
     if (e.key === 'Escape') {
@@ -2076,8 +2210,13 @@ function bindEvents() {
       return;
     }
 
-    // Focus trap for modal
+    // Keep keyboard focus inside active modal surfaces.
     if (e.key === 'Tab') {
+      if (appState.cmdPaletteOpen) {
+        e.preventDefault();
+        document.getElementById('cmd-input')?.focus();
+        return;
+      }
       const backdrop = document.getElementById('outreach-modal-backdrop');
       if (!backdrop || backdrop.classList.contains('hidden')) return;
       const panel = backdrop.querySelector('.modal-panel');
@@ -2119,6 +2258,8 @@ function bindEvents() {
       if (current) current.classList.remove('kb-focus');
       idx = e.key === 'j' ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
       rows[idx].classList.add('kb-focus');
+      rows[idx].setAttribute('tabindex', '-1');
+      rows[idx].focus({ preventScroll: true });
       rows[idx].scrollIntoView({ block: 'nearest' });
       rows[idx].style.outline = '2px solid var(--accent)';
       rows[idx].style.outlineOffset = '-2px';
@@ -2157,6 +2298,42 @@ function bindEvents() {
     appState.searchTimer = setTimeout(() => runSearch(value), 220);
   });
 
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' && !searchResults.classList.contains('hidden')) {
+      const firstResult = searchResults.querySelector('.search-item');
+      if (firstResult) {
+        event.preventDefault();
+        firstResult.focus();
+      }
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideSearchResults({ keepContent: true });
+      searchInput.focus();
+    }
+  });
+
+  searchResults.addEventListener('keydown', (event) => {
+    const items = Array.from(searchResults.querySelectorAll('.search-item'));
+    const index = items.indexOf(document.activeElement);
+    if (['ArrowDown', 'ArrowUp'].includes(event.key) && items.length) {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(Math.max(0, index) + delta + items.length) % items.length]?.focus();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideSearchResults({ keepContent: true });
+      searchInput.focus();
+    }
+  });
+  searchResults.addEventListener('focusin', (event) => {
+    const item = event.target.closest('.search-item');
+    if (item?.id) searchInput.setAttribute('aria-activedescendant', item.id);
+  });
+
   document.addEventListener('click', async (event) => {
     // Open outreach modal
     if (event.target.closest('#open-outreach-modal')) {
@@ -2165,11 +2342,19 @@ function bindEvents() {
       return;
     }
     // Advanced filter toggle
-    if (event.target.id === 'toggle-advanced-filters') {
+    const advancedFilterToggle = event.target.closest('#toggle-advanced-filters');
+    if (advancedFilterToggle) {
       appState.showAdvancedFilters = !appState.showAdvancedFilters;
       const fields = document.getElementById('advanced-filter-fields');
-      if (fields) fields.classList.toggle('hidden', !appState.showAdvancedFilters);
-      event.target.textContent = appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters';
+      if (fields) {
+        fields.classList.toggle('hidden', !appState.showAdvancedFilters);
+        fields.toggleAttribute('hidden', !appState.showAdvancedFilters);
+        fields.toggleAttribute('inert', !appState.showAdvancedFilters);
+        fields.setAttribute('aria-hidden', String(!appState.showAdvancedFilters));
+      }
+      advancedFilterToggle.setAttribute('aria-expanded', String(appState.showAdvancedFilters));
+      const toggleLabel = advancedFilterToggle.querySelector('.filter-toggle-label');
+      if (toggleLabel) toggleLabel.textContent = appState.showAdvancedFilters ? 'Fewer filters' : advancedFilterToggle.dataset.collapsedLabel || 'More filters';
       return;
     }
     // Outreach modal close
@@ -2297,6 +2482,7 @@ function bindEvents() {
     }
     if (actionName === 'load-saved-filter') {
       applySavedFilter(action.dataset.name);
+      appState.showAdvancedFilters = true;
       await renderAccountsView();
       return;
     }
@@ -2365,6 +2551,9 @@ function bindEvents() {
         accountId: action.dataset.accountId || appState.accountDetail?.account?.id || '',
         contactId: action.dataset.contactId || '',
         contactName: action.dataset.contactName || '',
+        template: action.dataset.template || '',
+        jobId: action.dataset.jobId || '',
+        autoGenerate: action.dataset.autoGenerate === 'true',
       });
       return;
     }
@@ -2566,11 +2755,21 @@ function bindEvents() {
       appState.taskQuery.status = action.dataset.status;
       appState.taskQuery.page = 1;
       await renderTasksView();
+      document.getElementById(`tasks-tab-${CSS.escape(appState.taskQuery.status)}`)?.focus();
+      return;
+    }
+
+    if (actionName === 'open-task-create') {
+      const disclosure = document.querySelector('.task-create-disclosure');
+      if (disclosure) {
+        disclosure.open = true;
+        window.requestAnimationFrame(() => disclosure.querySelector('input[name="summary"]')?.focus());
+      }
       return;
     }
 
     if (actionName === 'complete-task') {
-      await completeTask(action.dataset.id);
+      await completeTask(action.dataset.id, action);
       return;
     }
 
@@ -2880,14 +3079,27 @@ function bindEvents() {
       return;
     }
 
-    if (form.id === 'contact-inline-form') {
+    if (form.classList.contains('contact-inline-form')) {
       const payload = getFormValues(form);
-      await api(`/api/contacts/${form.dataset.contactId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
-      invalidateAppData();
-      await renderContactsView();
+      const submitButton = form.querySelector('[type="submit"]');
+      const originalLabel = submitButton?.textContent || 'Save';
+      if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Saving...'; }
+      try {
+        await api(`/api/contacts/${form.dataset.contactId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        invalidateAppData();
+        const row = form.closest('tr');
+        const statusCell = row?.querySelector('[data-label="Status"]');
+        if (statusCell) statusCell.innerHTML = renderStatusPill(payload.outreachStatus || 'not_started', 'neutral');
+        form.closest('details')?.removeAttribute('open');
+        showToast('Contact updated.', 'success');
+      } catch (error) {
+        showToast(`Could not update contact: ${error.message || error}`, 'error');
+      } finally {
+        if (submitButton) { submitButton.disabled = false; submitButton.textContent = originalLabel; }
+      }
       return;
     }
 
@@ -3577,22 +3789,28 @@ function renderPersonaActionCard(item = {}, options = {}) {
     : '';
   const accountId = item.accountId || appState.accountDetail?.account?.id || '';
   const openAccountButton = accountId
-    ? `<button class="ghost-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">Open</button>`
+    ? `<button class="ghost-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">${escapeHtml(item.cta || 'Open account')}</button>`
     : '';
   const safeHref = safeExternalHref(item.href);
   const externalButton = safeHref
     ? `<a class="ghost-button ghost-button--xs" href="${escapeAttr(safeHref)}" target="_blank" rel="noreferrer">${escapeHtml(item.cta || 'Open link')}</a>`
     : '';
+  const prefersExternalAction = item.type === 'application' && Boolean(externalButton);
   const templateButton = detail && item.template && accountId
-    ? `<button class="primary-button ghost-button--xs" type="button" data-action="generate-outreach-template" data-id="${escapeAttr(accountId)}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}">${escapeHtml(item.cta || 'Draft note')}</button>`
+    ? `<button class="${primary ? 'primary-button' : 'ghost-button'} ghost-button--xs" type="button" data-action="generate-outreach-template" data-id="${escapeAttr(accountId)}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}">${escapeHtml(item.cta || 'Draft note')}</button>`
     : '';
-  const dashboardCta = !detail && primary && item.template && accountId
-    ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">${escapeHtml(item.cta || 'Open')}</button>`
-    : '';
-  const actions = (detail
-    ? [templateButton, externalButton, openAccountButton]
-    : [dashboardCta]
-  ).filter(Boolean).join('');
+  const dashboardCta = !detail && prefersExternalAction
+    ? externalButton
+    : !detail && item.template && accountId
+    ? `<button class="${primary ? 'primary-button' : 'ghost-button'} ghost-button--xs" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(accountId)}" data-contact-id="${escapeAttr(item.contactId || '')}" data-contact-name="${escapeAttr(item.contactName || '')}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}" data-auto-generate="true">${escapeHtml(item.cta || 'Draft note')}</button>`
+    : !detail && externalButton
+      ? externalButton
+      : !detail && openAccountButton
+        ? openAccountButton
+        : '';
+  const actions = detail
+    ? (prefersExternalAction ? externalButton : (templateButton || externalButton || openAccountButton))
+    : dashboardCta;
 
   return `
     <article class="persona-action-card persona-action-card--${escapeAttr(tone)}">
@@ -3610,6 +3828,12 @@ function renderPersonaActionCard(item = {}, options = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function scrollIntoViewRespectingMotion(element, options = {}) {
+  if (!element) return;
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  element.scrollIntoView({ ...options, behavior: reduceMotion ? 'auto' : (options.behavior || 'smooth') });
 }
 
 async function withButtonState(selector, busyLabel, fn) {
@@ -3768,7 +3992,7 @@ function renderLoadingState(title, subtitle) {
   setViewTitle(title);
   const isFirstSetup = appState.setupStatus?.requiresSetup || appState.setupBusy;
   appRoot.innerHTML = `
-    <section class="hero-card loading-shell">
+    <section class="hero-card loading-shell" role="status" aria-live="polite" aria-busy="true">
       <div class="loading-copy">
         <p class="eyebrow">Operating view</p>
         <h3>${escapeHtml(title)}</h3>
@@ -3777,21 +4001,21 @@ function renderLoadingState(title, subtitle) {
         ${isFirstSetup ? `
           <div class="setup-warning-box">
             <div class="small"><strong>First-time setup in progress.</strong> This may take up to 2-3 minutes while we process your LinkedIn network and build your hiring radar.</div>
-            <div class="progress-container">
+            <div class="progress-container" role="progressbar" aria-label="Workspace setup progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="15">
               <div class="progress-bar-fill" id="setup-progress-bar" style="width: 15%"></div>
             </div>
             <div class="progress-label small muted" id="setup-progress-text">Initializing workspace...</div>
           </div>
         ` : ''}
       </div>
-      <div class="loading-grid">
+      <div class="loading-grid" aria-hidden="true">
         <span class="skeleton skeleton-pill"></span>
         <span class="skeleton skeleton-pill"></span>
         <span class="skeleton skeleton-pill"></span>
         <span class="skeleton skeleton-pill"></span>
       </div>
     </section>
-    <section class="metrics-grid">
+    <section class="metrics-grid" aria-hidden="true">
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
       <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
@@ -3811,6 +4035,7 @@ function renderLoadingState(title, subtitle) {
       }
       progress = Math.min(95, progress + Math.random() * 2);
       bar.style.width = `${progress}%`;
+      bar.parentElement?.setAttribute('aria-valuenow', String(Math.round(progress)));
       if (progress > 80) text.textContent = 'Finalizing hiring signals...';
       else if (progress > 60) text.textContent = 'Resolving company ATS boards...';
       else if (progress > 40) text.textContent = 'Analyzing job activity...';
@@ -3871,6 +4096,7 @@ async function renderBillingRequiredView(error = {}) {
 
 function setViewTitle(title) {
   viewTitle.textContent = title;
+  document.title = `${title} | BD Engine`;
 }
 
 function activateNav(routeKey) {
@@ -3888,7 +4114,7 @@ async function renderRoute() {
   const root = parts[0] || 'dashboard';
   appState.activeView = root;
   clearRuntimePoll();
-  closeMobileNav();
+  closeMobileNav({ restoreFocus: false });
 
   if (!appState.setupStatus) {
     await loadSetupStatus(false);
@@ -5071,6 +5297,9 @@ async function renderAccountsView() {
     : appState.accountQuery.portfolio === 'all'
       ? 'companies'
       : 'tracked ' + personaCopy.accountPlural;
+  const advancedFilterCount = ['priority', 'ats', 'status', 'owner', 'geography', 'industry', 'recencyDays', 'minContacts', 'minTargetScore', 'outreachStatus']
+    .filter((key) => Boolean(appState.accountQuery[key])).length;
+  const collapsedFilterLabel = `More filters${advancedFilterCount ? ` (${advancedFilterCount})` : ''}`;
   const industryField = industryOptions.length
     ? `<select name="industry"><option value="">All industries</option>${industryOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.industry, value)}>${escapeHtml(value)}</option>`).join('')}</select>`
     : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
@@ -5109,8 +5338,8 @@ async function renderAccountsView() {
               <summary aria-label="Account queue options">Queue options</summary>
               <div class="queue-tools__menu">
                 <div class="view-toggle" aria-label="Queue view">
-                  <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view">&#9776; Table</button>
-                  <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view">&#9638; Board</button>
+                  <button class="view-toggle-btn ${!appState.kanbanMode ? 'active' : ''}" id="view-mode-table" aria-label="Table view" aria-pressed="${String(!appState.kanbanMode)}">&#9776; Table</button>
+                  <button class="view-toggle-btn ${appState.kanbanMode ? 'active' : ''}" id="view-mode-kanban" aria-label="Kanban view" aria-pressed="${String(appState.kanbanMode)}">&#9638; Board</button>
                 </div>
                 ${renderExportButton('accounts')}
                 <button class="ghost-button ${appState.pwaInstallPrompt ? '' : 'hidden'}" id="pwa-install-btn" aria-label="Install app">&#10515; Install</button>
@@ -5119,6 +5348,7 @@ async function renderAccountsView() {
           </div>
         </div>
         ${renderAccountPresetStrip()}
+        ${renderSavedFilters()}
         <form id="accounts-filter-form" class="filter-grid filter-grid--dense account-filter-grid">
           ${renderField('Search', '<input name="q" placeholder="Company, owner, note, domain" value="' + escapeAttr(appState.accountQuery.q) + '">')}
           ${renderField('Portfolio', `<select name="portfolio"><option value="tracked" ${selected(appState.accountQuery.portfolio, 'tracked')}>Tracked targets</option><option value="network" ${selected(appState.accountQuery.portfolio, 'network')}>Network only</option><option value="all" ${selected(appState.accountQuery.portfolio, 'all')}>All companies</option></select>`)}
@@ -5126,9 +5356,9 @@ async function renderAccountsView() {
           ${renderField('Sort by', renderAccountSortSelect(appState.accountQuery.sortBy))}
           <div class="field field--action account-filter-actions">
             <button class="primary-button" type="submit">Apply</button>
-            <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters">${appState.showAdvancedFilters ? '\u25B2 Fewer filters' : '\u25BC More filters'}</button>
+            <button class="filter-toggle-btn" type="button" id="toggle-advanced-filters" aria-expanded="${String(appState.showAdvancedFilters)}" aria-controls="advanced-filter-fields" data-collapsed-label="${escapeAttr(collapsedFilterLabel)}"><span class="filter-toggle-label">${appState.showAdvancedFilters ? 'Fewer filters' : escapeHtml(collapsedFilterLabel)}</span><span aria-hidden="true">${appState.showAdvancedFilters ? '\u25B2' : '\u25BC'}</span></button>
           </div>
-          <div class="filter-advanced-fields${appState.showAdvancedFilters ? '' : ' hidden'}" id="advanced-filter-fields">
+          <div class="filter-advanced-fields${appState.showAdvancedFilters ? '' : ' hidden'}" id="advanced-filter-fields" aria-hidden="${String(!appState.showAdvancedFilters)}"${appState.showAdvancedFilters ? '' : ' hidden inert'}>
           ${renderField('Priority', renderPrioritySelect('priority', appState.accountQuery.priority, true))}
           ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${filters.atsTypes.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.accountQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
           ${renderField('Status', renderAccountStatusSelect('status', appState.accountQuery.status, true))}
@@ -5143,7 +5373,6 @@ async function renderAccountsView() {
             <button class="ghost-button" type="button" data-action="reset-filters" data-view="accounts">Reset filters</button>
             <button class="ghost-button" type="button" data-action="save-current-filter" aria-label="Save current filter">Save filter</button>
           </div>
-          ${renderSavedFilters()}
           </div>
         </form>
         ${renderActiveFilterStrip(appState.accountQuery)}
@@ -5280,7 +5509,7 @@ async function renderAccountDetail(accountId) {
           ${renderStatusPill(detail.account.enrichmentConfidence || 'unresolved', toneForEnrichmentConfidence(detail.account.enrichmentConfidence || 'unresolved'))}
           ${detail.account.staleFlag ? renderStatusPill(detail.account.staleFlag, 'danger') : ''}
           ${(detail.account.atsTypes || []).map((item) => renderStatusPill(item, 'neutral')).join('')}
-        ` : `<span class="status-pills-overflow">+${3 + (detail.account.staleFlag ? 1 : 0) + (detail.account.atsTypes || []).length} more</span>`}
+        ` : `<button class="status-pills-overflow" type="button" aria-label="Show additional account statuses">+${3 + (detail.account.staleFlag ? 1 : 0) + (detail.account.atsTypes || []).length} more</button>`}
       </div>
     </section>
 
@@ -5290,14 +5519,14 @@ async function renderAccountDetail(accountId) {
         <div class="detail-card">
           <div class="panel-header"><div><h3>Next moves</h3><p class="muted small">Quick actions for this account.</p></div></div>
           <div class="next-action-bar">
-            <div class="next-action-display">
+            <div class="next-action-display" id="next-action-summary" tabindex="-1">
               <strong>Next:</strong> <span>${escapeHtml(detail.account.nextAction || 'No next action set')}</span>
               ${detail.account.nextActionAt ? '<span class="small muted" style="margin-left:8px">' + formatDate(detail.account.nextActionAt) + '</span>' : ''}
             </div>
           </div>
           <form id="next-action-form" class="compact-activity-form" data-account-id="${detail.account.id}">
-            <input name="nextAction" placeholder="Set the next move..." class="compact-input" value="${escapeAttr(detail.account.nextAction || '')}">
-            <input name="nextActionAt" type="date" class="compact-input" value="${formatDateInput(detail.account.nextActionAt)}">
+            <input name="nextAction" aria-label="Next action" placeholder="Set the next move..." class="compact-input" value="${escapeAttr(detail.account.nextAction || '')}">
+            <input name="nextActionAt" aria-label="Next action date" type="date" class="compact-input" value="${formatDateInput(detail.account.nextActionAt)}">
             <button class="secondary-button compact-btn" type="submit">Save next action</button>
           </form>
           <div class="button-row" style="margin-top:10px">
@@ -5307,10 +5536,10 @@ async function renderAccountDetail(accountId) {
       </div>
 
     <!-- Outreach composer modal -->
-    <div id="outreach-modal-backdrop" class="modal-backdrop${appState.outreachModalOpen ? '' : ' hidden'}" role="dialog" aria-modal="true" aria-label="Outreach composer">
-      <div class="modal-panel">
+    <div id="outreach-modal-backdrop" class="modal-backdrop${appState.outreachModalOpen ? '' : ' hidden'}">
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="outreach-composer-title">
         <div class="panel-header">
-          <div><h3>Outreach composer</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div>
+          <div><h3 id="outreach-composer-title">Outreach composer</h3><p class="muted small">Generate a message, pick a contact, and take action.</p></div>
           <button class="modal-close" type="button" aria-label="Close modal">&times;</button>
         </div>
         <div class="outreach-controls outreach-controls--stacked">
@@ -5367,10 +5596,10 @@ async function renderAccountDetail(accountId) {
           <form id="activity-form" class="compact-activity-form">
             <input type="hidden" name="accountId" value="${detail.account.id}">
             <input type="hidden" name="normalizedCompanyName" value="${escapeAttr(detail.account.normalizedName)}">
-            <input name="summary" placeholder="Quick note..." class="compact-input">
-            <select name="type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
-            <select name="pipelineStage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
-            <select name="followUpDays" class="compact-select">
+            <input name="summary" aria-label="Activity note" placeholder="Quick note..." class="compact-input">
+            <select name="type" aria-label="Activity type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
+            <select name="pipelineStage" aria-label="Pipeline stage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
+            <select name="followUpDays" aria-label="Follow-up reminder" class="compact-select">
               <option value="">No reminder</option>
               <option value="3">Follow up in 3 days</option>
               <option value="7">Follow up in 1 week</option>
@@ -5502,8 +5731,8 @@ async function renderAccountDetail(accountId) {
       </div>
     </section>
   `;
-  applyPendingOutreachContact(detail.account.id);
   syncOutreachComposerState();
+  await applyPendingOutreachContact(detail.account.id);
   wireAccountNotes(accountId);
 }
 async function renderContactsView() {
@@ -5578,7 +5807,7 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Set a search focus in Tools to rank jobs by fit, then filter by company, platform, and recency.'}</p></div>${renderExportOptions('jobs', 'Job options')}</div>
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>${renderExportOptions('jobs', 'Job options')}</div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
@@ -5604,11 +5833,11 @@ async function renderJobsView() {
 function renderCollapsibleStart(sectionId, title, subtitle) {
   const collapsed = appState.adminCollapsed[sectionId];
   return `<div class="form-card admin-section" id="admin-section-${escapeAttr(sectionId)}">
-    <div class="collapsible-header${collapsed ? ' collapsed' : ''}" data-collapse-id="${escapeAttr(sectionId)}">
+    <div class="collapsible-header${collapsed ? ' collapsed' : ''}" data-collapse-id="${escapeAttr(sectionId)}" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="admin-section-body-${escapeAttr(sectionId)}">
       <div class="panel-header" style="margin:0;flex:1"><div><h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="muted small">${subtitle}</p>` : ''}</div></div>
       <span class="chevron">\u25BC</span>
     </div>
-    <div class="collapsible-body${collapsed ? ' collapsed' : ''}">`;
+    <div class="collapsible-body${collapsed ? ' collapsed' : ''}" id="admin-section-body-${escapeAttr(sectionId)}" aria-hidden="${collapsed ? 'true' : 'false'}"${collapsed ? ' hidden inert' : ''}>`;
 }
 
 function renderCollapsibleEnd() {
@@ -5625,15 +5854,17 @@ function setCollapsibleState(header, isCollapsed) {
   header.classList.toggle('collapsed', isCollapsed);
   body?.classList.toggle('collapsed', isCollapsed);
   header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+  if (body) {
+    body.hidden = isCollapsed;
+    body.inert = isCollapsed;
+    body.setAttribute('aria-hidden', isCollapsed ? 'true' : 'false');
+  }
   appState.adminCollapsed[id] = isCollapsed;
   persistAdminCollapsed();
 }
 
 function wireCollapsibleSections() {
   document.querySelectorAll('.collapsible-header[data-collapse-id]').forEach((header) => {
-    header.setAttribute('role', 'button');
-    header.setAttribute('tabindex', '0');
-    header.setAttribute('aria-expanded', header.classList.contains('collapsed') ? 'false' : 'true');
     const toggleCollapse = () => {
       setCollapsibleState(header, !header.classList.contains('collapsed'));
     };
@@ -5647,7 +5878,7 @@ function wireCollapsibleSections() {
 function focusGuidedControl(control, container) {
   if (!container) return;
   window.requestAnimationFrame(() => {
-    container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollIntoViewRespectingMotion(container, { behavior: 'smooth', block: 'center' });
     if (control) {
       control.focus({ preventScroll: true });
       container.classList.add('is-guided-focus');
@@ -5726,7 +5957,6 @@ function renderAcquisitionFunnel(analytics = {}) {
 async function renderAdminView() {
   renderLoadingState('Admin', 'Loading pipeline controls...');
   setViewTitle(isJobSeekerPersona() ? 'Tools' : 'Admin');
-  appState.adminCollapsed['pipeline-ops'] = false;
   const batchQuery = {};
   const cq = appState.configQuery;
   if (cq.page) batchQuery.configPage = cq.page;
@@ -5906,6 +6136,7 @@ async function renderAdminView() {
               </div>
               <div class="inline-field-stack">
                 <input type="hidden" id="connections-csv-path" value="${escapeAttr(stateBootstrap.defaults.connectionsCsvPath || '')}">
+                <label class="field-label" for="connections-csv-file">LinkedIn Connections CSV</label>
                 <input type="file" id="connections-csv-file" accept=".csv">
                 <div class="button-row">
                   <button class="secondary-button" type="button" data-action="dry-run-connections-csv">Preview CSV</button>
@@ -6172,7 +6403,7 @@ function renderAccountsTable(items) {
           <td data-label="Company"><a class="row-link" href="#/accounts/${item.id}" data-action="open-account" data-id="${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
           <td data-label="Target score">${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td data-label="Hiring">${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div>${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}</td>
-          <td data-label="Owner / next step" data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div><details class="row-detail-menu"><summary>Log activity</summary><button class="micro-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Open note field</button></details></td>
+          <td data-label="Owner / next step"><button class="inline-edit-trigger" type="button" data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" aria-label="Edit owner for ${escapeAttr(item.displayName)}"><span data-inline-value>${escapeHtml(item.owner || 'Unassigned')}</span></button><div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div><details class="row-detail-menu"><summary>Log activity</summary><button class="micro-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Open note field</button></details></td>
           <td data-label="Status">${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
           <td data-label="ATS">${renderAccountResolutionSummary(item)}</td>
         </tr>
@@ -6204,7 +6435,7 @@ function renderContactsTable(items) {
             </div>
             <details class="contact-edit-details">
               <summary>Edit details</summary>
-              <form id="contact-inline-form" data-contact-id="${item.id}" class="detail-form contact-inline-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
+              <form id="contact-inline-form-${escapeAttr(item.id)}" data-contact-id="${item.id}" class="detail-form contact-inline-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
             </details>
           </td>
         </tr>`).join('')}
@@ -6216,7 +6447,7 @@ function renderJobsTable(items, compact) {
     <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td data-label="Role">${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
+          <td data-label="Role">${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>${item.accountId ? `<button class="inline-action-link job-outreach-link" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-template="${isJobSeekerPersona() ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true">Use as outreach trigger</button>` : ''}`}</td>
           <td data-label="Company">${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
           <td data-label="Fit">${renderJobRelevance(item)}</td>
           <td data-label="Location">${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
@@ -6228,7 +6459,7 @@ function renderJobsTable(items, compact) {
 
 function renderJobRelevance(item) {
   if (item.relevanceScore === null || item.relevanceScore === undefined) {
-    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">Set a search focus</div>`;
+    return renderStatusPill('Not scored', 'neutral');
   }
   const band = item.relevanceBand || 'low';
   const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
@@ -6952,7 +7183,7 @@ function renderEmptyState({ icon = 'i', title = 'Nothing to show yet', copy = ''
 }
 
 function renderStatusPill(value, tone) {
-  return `<span class="status-pill ${tone}" role="status" aria-label="${escapeAttr(humanize(value))}">${escapeHtml(humanize(value))}</span>`;
+  return `<span class="status-pill ${tone}" aria-label="${escapeAttr(humanize(value))}">${escapeHtml(humanize(value))}</span>`;
 }
 
 function renderInlineBadge(value) {
@@ -7132,7 +7363,7 @@ async function watchPipelineProgress(jobId) {
         showToast('Revenue pipeline failed: ' + job.message, 'error');
       }
       setTimeout(() => container.classList.add('hidden'), 5000);
-      renderAdminView(); // Refresh data
+      if (getRouteRoot() === 'admin') await renderAdminView();
       break;
     }
     await new Promise(r => setTimeout(r, 1000));
@@ -7327,7 +7558,6 @@ async function runLaunchWorkflow(buttonEl) {
       appAlert
     );
     invalidateAppData();
-    await renderAdminView();
   } catch (error) {
     const message = `Launch workflow failed: ${error.message || error}`;
     showToast(message, 'error', 9000);
@@ -7569,7 +7799,7 @@ async function generateSmartOutreachLegacy(accountId, buttonEl) {
       const gmailSubject = encodeURIComponent('Quick intro — ' + (appState.accountDetail?.account?.displayName || ''));
       // Scroll the outreach card into view
       const card = document.getElementById('outreach-prompt-card');
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollIntoViewRespectingMotion(card, { behavior: 'smooth', block: 'center' });
     }
     showToast('Outreach message generated!', 'success');
   } catch (err) {
@@ -7689,36 +7919,52 @@ function clearGeneratedOutreachDraft(message = '') {
 }
 
 function setOutreachModalOpen(isOpen) {
+  const shouldOpen = Boolean(isOpen);
+  if (shouldOpen && !appState.outreachModalOpen && document.activeElement instanceof HTMLElement) {
+    appState.outreachModalTrigger = document.activeElement;
+  }
   appState.outreachModalOpen = Boolean(isOpen);
   const backdrop = document.getElementById('outreach-modal-backdrop');
   if (backdrop) {
     backdrop.classList.toggle('hidden', !appState.outreachModalOpen);
+    backdrop.setAttribute('aria-hidden', String(!appState.outreachModalOpen));
     if (appState.outreachModalOpen) {
       window.requestAnimationFrame(() => {
         backdrop.querySelector('#outreach-contact-select, button, a, input, select, textarea')?.focus();
       });
+    } else if (appState.outreachModalTrigger instanceof HTMLElement && appState.outreachModalTrigger.isConnected) {
+      appState.outreachModalTrigger.focus();
     }
   }
+  if (!appState.outreachModalOpen) appState.outreachModalTrigger = null;
 }
 
-function applyPendingOutreachContact(accountId) {
+async function applyPendingOutreachContact(accountId) {
   const pending = appState.pendingOutreachContact;
   if (!pending || String(pending.accountId || '') !== String(accountId || '')) return;
   selectOutreachContact({ contactId: pending.contactId, contactName: pending.contactName });
+  const templateSelect = document.getElementById('outreach-template-select');
+  if (templateSelect && pending.template) templateSelect.value = pending.template;
+  const jobSelect = document.getElementById('outreach-job-select');
+  if (jobSelect && pending.jobId) jobSelect.value = pending.jobId;
   setOutreachModalOpen(true);
+  syncOutreachComposerState();
   appState.pendingOutreachContact = null;
+  if (pending.autoGenerate) {
+    const button = document.getElementById('generate-outreach-button');
+    if (button) await generateSmartOutreach(accountId, button);
+  }
 }
 
-function openOutreachForContact({ accountId = '', contactId = '', contactName = '' } = {}) {
+function openOutreachForContact({ accountId = '', contactId = '', contactName = '', template = '', jobId = '', autoGenerate = false } = {}) {
   if (!accountId) {
     showToast('This contact is not attached to an account yet.', 'warning');
     return;
   }
 
-  appState.pendingOutreachContact = { accountId, contactId, contactName };
-  appState.outreachModalOpen = true;
+  appState.pendingOutreachContact = { accountId, contactId, contactName, template, jobId, autoGenerate };
   if (appState.accountDetail?.account?.id === accountId && getRouteRoot() === 'accounts') {
-    applyPendingOutreachContact(accountId);
+    void applyPendingOutreachContact(accountId);
     return;
   }
   location.hash = `#/accounts/${accountId}`;
@@ -7836,7 +8082,9 @@ async function logGeneratedOutreach(buttonEl) {
     logActivity('outreach_logged', { accountId: account.id, summary });
     invalidateAppData();
     showToast(`Outreach logged. Follow-up set for ${formatDate(followUpAt)}.`, 'success', 7000);
+    setOutreachModalOpen(false);
     await renderAccountDetail(account.id);
+    window.requestAnimationFrame(() => document.getElementById('next-action-summary')?.focus());
   } catch (error) {
     showToast(`Could not log outreach: ${error.message || error}`, 'error', 7000);
   } finally {
@@ -8296,7 +8544,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
       body.className = 'outreach-generated';
       body.innerHTML = renderGeneratedOutreach(outreach);
       const card = document.getElementById('outreach-prompt-card');
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollIntoViewRespectingMotion(card, { behavior: 'smooth', block: 'center' });
     }
     window.bdLocalApi.setAlert(includeVariants
       ? `${outreach.templateLabel} plus ${outreach.variants?.length || 0} alternate angles generated.`
@@ -8334,12 +8582,14 @@ async function archiveAccount(accountId) {
 async function runSearch(value) {
   searchResults.classList.remove('hidden');
   searchResults.setAttribute('aria-busy', 'true');
+  searchInput?.setAttribute('aria-expanded', 'true');
+  searchResults.innerHTML = '<div class="search-loading" role="status">Searching...</div>';
   try {
     const results = await api(`/api/search${buildQuery({ q: value })}`);
     if (searchInput?.value.trim() !== value) {
-      searchResults.setAttribute('aria-busy', 'false');
       return;
     }
+
     const total = (results.accounts?.length || 0) + (results.contacts?.length || 0) + (results.jobs?.length || 0);
     searchResults.classList.remove('hidden');
     searchResults.setAttribute('aria-busy', 'false');
@@ -8358,12 +8608,15 @@ async function runSearch(value) {
 function hideSearchResults({ keepContent = false } = {}) {
   searchResults.classList.add('hidden');
   searchResults.setAttribute('aria-busy', 'false');
+  searchInput?.setAttribute('aria-expanded', 'false');
+  searchInput?.removeAttribute('aria-activedescendant');
   if (!keepContent) searchResults.innerHTML = '';
 }
 
 function renderSearchGroup(label, items, hrefBuilder, titleBuilder, metaBuilder) {
   if (!items || !items.length) return '';
-  return `<section class="search-group" aria-label="${escapeAttr(label)}"><p class="eyebrow">${escapeHtml(label)}</p>${items.map((item) => `<a class="search-item" href="${escapeAttr(hrefBuilder(item))}"><strong>${titleBuilder(item)}</strong><span class="small muted">${metaBuilder(item)}</span></a>`).join('')}</section>`;
+  const groupId = `search-group-${String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  return `<div class="search-group" role="group" aria-labelledby="${escapeAttr(groupId)}"><p class="eyebrow" id="${escapeAttr(groupId)}">${escapeHtml(label)}</p>${items.map((item, index) => `<a class="search-item" id="${escapeAttr(groupId)}-option-${index}" role="option" tabindex="-1" href="${escapeAttr(hrefBuilder(item))}"><strong>${titleBuilder(item)}</strong><span class="small muted">${metaBuilder(item)}</span></a>`).join('')}</div>`;
 }
 
 function toneForNetwork(value) {
@@ -8501,6 +8754,11 @@ function pluralize(count, singular, plural = `${singular}s`) {
 
 function formatDate(value) {
   if (!value) return '—';
+  const raw = String(value);
+  const calendarKey = raw.match(/^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.000)?Z)?$/)?.[1];
+  if (calendarKey) {
+    return new Date(`${calendarKey}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -8633,9 +8891,13 @@ async function renderTasksView() {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
     setViewTitle('Tasks & Reminders');
 
-    const overdue = tasks.items.filter(t => new Date(t.dueDate) < new Date() && t.status === 'pending');
-    const today = tasks.items.filter(t => isToday(t.dueDate) && t.status === 'pending');
-    const upcoming = tasks.items.filter(t => new Date(t.dueDate) > new Date() && !isToday(t.dueDate) && t.status === 'pending');
+    const todayKey = toLocalDateInputValue(new Date());
+    const overdue = tasks.items.filter(t => {
+      const dueKey = calendarDateKey(t.dueDate);
+      return t.status === 'pending' && dueKey && dueKey < todayKey;
+    });
+    const today = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) === todayKey);
+    const upcoming = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) > todayKey);
     const completed = tasks.items.filter(t => t.status === 'completed');
 
     appRoot.innerHTML = `
@@ -8646,9 +8908,9 @@ async function renderTasksView() {
             <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : 'Completed work'}</h3>
             <p class="muted small">Keep the next commitment visible; create another only when you need it.</p>
           </div>
-          <div class="tasks-tabs">
-            <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" data-action="filter-tasks" data-status="pending">Pending</button>
-            <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" data-action="filter-tasks" data-status="completed">Completed</button>
+          <div class="tasks-tabs" role="tablist" aria-label="Task status">
+            <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" id="tasks-tab-pending" role="tab" aria-selected="${String(appState.taskQuery.status === 'pending')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'pending' ? '0' : '-1'}" data-action="filter-tasks" data-status="pending">Pending</button>
+            <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" id="tasks-tab-completed" role="tab" aria-selected="${String(appState.taskQuery.status === 'completed')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'completed' ? '0' : '-1'}" data-action="filter-tasks" data-status="completed">Completed</button>
           </div>
         </div>
 
@@ -8670,12 +8932,12 @@ async function renderTasksView() {
           </form>
         </details>
 
-        <div class="tasks-content">
+        <div class="tasks-content" id="tasks-panel" role="tabpanel" aria-labelledby="tasks-tab-${escapeAttr(appState.taskQuery.status)}">
           ${appState.taskQuery.status === 'pending' ? `
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.' }) : ''}
+            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
             ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
@@ -8691,8 +8953,8 @@ async function renderTasksView() {
 function renderTaskSection(title, tasks, tone) {
   if (!tasks.length) return '';
   return `
-    <div class="task-section">
-      <h4 class="task-section-title task-section-title--${tone}">${title} (${tasks.length})</h4>
+    <div class="task-section" data-task-section="${escapeAttr(title)}">
+      <h4 class="task-section-title task-section-title--${tone}" data-section-title="${escapeAttr(title)}">${title} (${tasks.length})</h4>
       <div class="task-list">
         ${tasks.map(renderTaskItem).join('')}
       </div>
@@ -8703,11 +8965,11 @@ function renderTaskSection(title, tasks, tone) {
 function renderTaskItem(task) {
   const summary = task.summary || task.title || 'Follow-up task';
   return `
-    <article class="task-item">
+    <article class="task-item" data-task-id="${escapeAttr(task.id)}">
       <div class="task-item-main">
         <div class="task-item-info">
           <strong>${escapeHtml(summary)}</strong>
-          <div class="small muted">Due ${formatDate(task.dueDate)}</div>
+          <div class="small muted">Due ${formatCalendarDate(task.dueDate)}</div>
         </div>
         <div class="task-item-actions">
           ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
@@ -8718,21 +8980,53 @@ function renderTaskItem(task) {
   `;
 }
 
-async function completeTask(taskId) {
+async function completeTask(taskId, buttonEl) {
+  const button = buttonEl || document.querySelector(`[data-action="complete-task"][data-id="${CSS.escape(taskId)}"]`);
+  const originalLabel = button?.textContent || 'Mark Done';
+  if (button) { button.disabled = true; button.textContent = 'Completing...'; }
   try {
     await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
-    showToast('Task completed!', 'success');
     invalidateAppData();
-    await renderTasksView();
+    const taskItem = button?.closest('.task-item') || document.querySelector(`.task-item[data-task-id="${CSS.escape(taskId)}"]`);
+    if (appState.taskQuery.status === 'pending' && taskItem) {
+      const section = taskItem.closest('.task-section');
+      taskItem.classList.add('task-item--leaving');
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+      taskItem.remove();
+      const remaining = section?.querySelectorAll('.task-item').length || 0;
+      if (!remaining) {
+        section?.remove();
+      } else {
+        const heading = section.querySelector('[data-section-title]');
+        if (heading) heading.textContent = `${heading.dataset.sectionTitle} (${remaining})`;
+      }
+      const content = document.querySelector('.tasks-content');
+      if (content && !content.querySelector('.task-item')) {
+        content.innerHTML = renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' });
+      }
+    } else {
+      await renderTasksView();
+    }
+    showToast('Task completed.', 'success');
   } catch (error) {
     showToast('Failed to complete task: ' + error.message, 'error');
+    if (button) { button.disabled = false; button.textContent = originalLabel; }
   }
 }
 
-function isToday(dateStr) {
-  const d = new Date(dateStr);
-  const now = new Date();
-  return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+function calendarDateKey(value) {
+  const raw = String(value || '');
+  const dateOnly = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (dateOnly) return dateOnly;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : toLocalDateInputValue(date);
+}
+
+function formatCalendarDate(value) {
+  const key = calendarDateKey(value);
+  if (!key) return formatDate(value);
+  const date = new Date(`${key}T12:00:00`);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function toLocalDateInputValue(date) {

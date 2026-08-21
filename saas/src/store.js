@@ -314,6 +314,8 @@ function buildPersonaActionPlan(persona, accountItem = {}, context = {}) {
       cta: item.cta || 'Open',
       template: item.template || '',
       jobId: item.jobId || '',
+      contactId: item.contactId || '',
+      contactName: item.contactName || '',
       href: item.href || '',
       metricLabel: item.metricLabel || '',
       metricValue: item.metricValue ?? '',
@@ -354,6 +356,8 @@ function buildPersonaActionPlan(persona, accountItem = {}, context = {}) {
       cta: 'Draft referral ask',
       template: 'job_referral',
       jobId: newestJob?.id || '',
+      contactId: topContact.id || '',
+      contactName: topContact.fullName || '',
       metricLabel: 'Contact score',
       metricValue: topContact.priorityScore || accountItem.relationshipStrengthScore || 0,
     } : {
@@ -411,6 +415,8 @@ function buildPersonaActionPlan(persona, accountItem = {}, context = {}) {
     cta: 'Draft sales note',
     template: topContact.isTalentLeader ? 'talent_partner' : 'cold',
     jobId: newestJob?.id || '',
+    contactId: topContact.id || '',
+    contactName: topContact.fullName || '',
     metricLabel: 'Contact score',
     metricValue: topContact.priorityScore || accountItem.relationshipStrengthScore || 0,
   } : {

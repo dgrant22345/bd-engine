@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260821-visual-design-5';
+const ASSET_VERSION = '20260821-workflow-ux-6';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

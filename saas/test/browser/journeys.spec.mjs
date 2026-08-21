@@ -199,6 +199,9 @@ test('job seeker journey keeps company, network, role, and outreach language', a
   } catch {
     // The tour may already be dismissed for this browser profile.
   }
+  const openRole = app.getByRole('link', { name: 'Open role', exact: true }).first();
+  await expect(openRole).toBeVisible({ timeout: 10000 });
+  await expect(openRole).toHaveAttribute('href', /^https?:\/\//);
   await gotoAppRoute(page, '#/accounts');
   await expect(app.locator('body')).toContainText('Ranked target companies', { timeout: 10000 });
   await expect(app.locator('body')).toContainText('Company shortlist');
@@ -340,8 +343,21 @@ test('task journey: whitespace task is rejected visibly, valid task succeeds', a
   await expect(app.locator('.toast')).toHaveCount(0, { timeout: 10000 });
   // Valid summary → task appears in the list.
   await form.locator('input[name="summary"]').fill('Follow up with journey account');
+  const todayKey = await form.evaluate(() => {
+    const today = new Date();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${today.getFullYear()}-${month}-${day}`;
+  });
+  await form.locator('input[name="dueDate"]').fill(todayKey);
   await form.locator('button[type="submit"]').click();
   await expect(app.locator('.tasks-content')).toContainText('Follow up with journey account', { timeout: 10000 });
+  const createdTask = app.locator('.task-item', { hasText: 'Follow up with journey account' });
+  await expect(createdTask).toHaveCount(1);
+  await expect(createdTask.locator('xpath=ancestor::div[contains(@class,"task-section")]').locator('.task-section-title')).toContainText('Today');
+  await createdTask.getByRole('button', { name: 'Mark Done' }).click();
+  await expect(app.locator('.loading-shell')).toHaveCount(0);
+  await expect(createdTask).toHaveCount(0, { timeout: 5000 });
 });
 
 test('filter journey: contacts filter narrows results without errors', async ({ page }) => {
@@ -390,6 +406,16 @@ test('message journey: outreach modal generates grounded content in the demo', a
   await expect(app.locator('#outreach-mailto-link')).toHaveAttribute('href', /A%20focused%20hiring%20question/);
 });
 
+test('dashboard recommendation opens a generated outreach draft directly', async ({ page }) => {
+  const app = await startDemo(page);
+  const draftAction = app.getByRole('button', { name: 'Draft sales note' }).first();
+  await expect(draftAction).toBeVisible({ timeout: 15000 });
+  await draftAction.click();
+  await expect(app.locator('#outreach-modal-backdrop')).toBeVisible({ timeout: 15000 });
+  await expect(app.locator('#outreach-modal-backdrop')).toContainText(/subject|copy/i, { timeout: 15000 });
+  await expect(app.locator('#outreach-modal-backdrop')).toContainText(/grounding check/i);
+});
+
 test('mobile message journey: account detail and composer stay actionable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await startDemo(page);
@@ -402,6 +428,9 @@ test('mobile message journey: account detail and composer stay actionable', asyn
   await expect(app.locator('#outreach-modal-backdrop')).toBeVisible();
   const overflow = await app.locator('#outreach-modal-backdrop').evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+  await app.locator('body').press('Escape');
+  await expect(app.locator('#outreach-modal-backdrop')).toBeHidden();
+  await expect(compose).toBeFocused();
 });
 
 test('import journey: setup preview selects tracked targets and preserves network companies', async ({ page }) => {
