@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260506-active-job-count-1';
+const ASSET_VERSION = '20260821-workspace-ux-1';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

@@ -25,9 +25,9 @@ const test = base.extend({
 });
 
 let signupCounter = 0;
-async function signup(page, { persona = 'bd' } = {}) {
+async function signup(page, { persona = 'bd', email: requestedEmail = '' } = {}) {
   signupCounter += 1;
-  const email = `journey-${Date.now()}-${signupCounter}@example.com`;
+  const email = requestedEmail || `journey-${Date.now()}-${signupCounter}@example.com`;
   await page.goto('/');
   await page.click('#nav-signup');
   if (persona !== 'bd') await page.selectOption('#signup-persona', persona);
@@ -96,6 +96,7 @@ async function gotoAppRoute(page, route) {
 test('demo journey: read-only demo opens and dashboard renders', async ({ page }) => {
   const app = await startDemo(page);
   await expect(app.locator('body')).toContainText(/dashboard|pipeline|account/i, { timeout: 15000 });
+  await expect(app.locator('[data-first-value-checklist]')).toHaveCount(0);
   await expect(app.locator('[data-dash-section="workflow"]')).toBeVisible();
   await expect(app.locator('[data-dash-section="queue"]')).toBeVisible();
   await expect(app.locator('[data-dash-section="metrics"]')).toBeHidden();
@@ -223,6 +224,38 @@ test('setup journey: wizard completes through to the dashboard', async ({ page }
   await expect(app.locator('body')).toContainText(/dashboard|account|signal|readiness/i, { timeout: 15000 });
 });
 
+test('first-value checklist routes an empty workspace to the exact setup control', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/dashboard');
+
+  const checklist = app.locator('[data-first-value-checklist]');
+  await expect(checklist).toBeVisible({ timeout: 15000 });
+  await expect(checklist).toContainText('0 of 4 complete');
+  await expect(checklist.getByRole('link', { name: 'Add account' })).toHaveAttribute('href', '#/accounts/new');
+  await expect(checklist.getByRole('link', { name: 'Import contacts' })).toHaveAttribute('href', '#/admin/pipeline-ops/contacts');
+  await expect(checklist.getByRole('link', { name: 'Find board' })).toHaveAttribute('href', '#/admin/pipeline-ops/discovery');
+  await expect(checklist.getByRole('link', { name: 'Import jobs' })).toHaveAttribute('href', '#/admin/pipeline-ops/jobs');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await checklist.scrollIntoViewIfNeeded();
+  const mobileWidth = await checklist.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth + 1);
+
+  await checklist.getByRole('link', { name: 'Add account' }).click();
+  await expect(app.locator('#account-create-form input[name="company"]')).toBeFocused({ timeout: 15000 });
+
+  await gotoAppRoute(page, '#/dashboard');
+  await app.locator('[data-first-value-checklist]').getByRole('link', { name: 'Import contacts' }).click();
+  const refreshSection = app.locator('#admin-section-pipeline-ops');
+  await expect(refreshSection).toBeVisible({ timeout: 15000 });
+  await expect(refreshSection.locator('[data-collapse-id="pipeline-ops"]')).toHaveAttribute('aria-expanded', 'true');
+  await expect(refreshSection.locator('#connections-csv-file')).toBeFocused();
+});
+
 test('admin journey: import health and automatic refresh timing are visible', async ({ page }) => {
   const { app } = await signup(page);
   await completeSetup(page, app);
@@ -240,6 +273,46 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await expect(copyDiagnostics).toBeVisible();
   await copyDiagnostics.click();
   await expect(app.locator('.toast', { hasText: /diagnostic summary copied/i })).toBeVisible({ timeout: 5000 });
+});
+
+test('analytics admin journey: campaign and activation milestones are visible', async ({ page, browserName }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: undefined });
+  });
+  const waitForAnalyticsEvent = (eventType) => page.waitForResponse((response) => {
+    if (!response.url().includes('/api/analytics/visit')) return false;
+    try {
+      return JSON.parse(response.request().postData() || '{}').eventType === eventType;
+    } catch {
+      return false;
+    }
+  });
+  await page.goto('/ats-checker?utm_source=linkedin&utm_campaign=analytics_journey');
+  await Promise.all([
+    waitForAnalyticsEvent('ats_sample_used'),
+    page.getByRole('button', { name: 'Try sample list' }).click(),
+  ]);
+  await page.getByLabel('Career-site or job-board URLs').fill('https://boards.greenhouse.io/manual-example');
+  await Promise.all([
+    waitForAnalyticsEvent('ats_audit_completed'),
+    page.getByRole('button', { name: 'Audit coverage' }).click(),
+  ]);
+
+  const adminEmail = `analytics-admin-${browserName}@example.com`;
+  const { app } = await signup(page, { email: adminEmail });
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/admin');
+
+  const analyticsSection = app.locator('#admin-section-site-analytics');
+  await expect(analyticsSection).toBeVisible({ timeout: 15000 });
+  await expect(analyticsSection).toContainText('Acquisition and activation');
+  const funnel = analyticsSection.locator('[aria-label="Acquisition and activation funnel"]');
+  await expect(funnel).toBeVisible();
+  await expect(funnel.locator('[data-analytics-event="ats_sample_used"]')).toContainText(/[1-9][\d,]* events?/);
+  await expect(funnel.locator('[data-analytics-event="ats_audit_completed"]')).toContainText(/[1-9][\d,]* events?/);
+  await expect(funnel.locator('[data-analytics-event="signup_completed"]')).toContainText(/[1-9][\d,]* workspaces?/);
+  await expect(funnel.locator('[data-analytics-event="setup_completed"]')).toContainText(/[1-9][\d,]* workspaces?/);
+  await expect(analyticsSection).toContainText('not a person-level cohort report');
 });
 
 test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {

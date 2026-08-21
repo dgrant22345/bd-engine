@@ -44,10 +44,10 @@ test('job-seeker campaign route renders dedicated copy and avoids the staffing d
 
   assert.match(landing, /state\.signupPersona === 'jobseeker'/);
   assert.match(landing, /window\.location\.pathname === '\/job-search'/);
-  assert.match(landing, /A focused job search/);
+  assert.match(landing, /Know which employers are worth your next move/);
   assert.match(landing, /role, location, and keyword focus/);
   assert.match(landing, /mismatchedJobSeekerDemo/);
-  assert.match(landing, /data-jobseeker-details/);
+  assert.match(landing, />Audit career sites</);
   assert.doesNotMatch(landing, /isJobSeekerLanding\s*\?[^:]+data-demo-start/);
   assert.match(server, /getCloudIndexHtml\(res\.bdScriptNonce, 'jobseeker'\)/);
   assert.match(server, /bd-engine-production\.up\.railway\.app\/job-search/);
@@ -58,6 +58,7 @@ test('ATS checker is a crawlable no-signup utility with explicit caveats', async
 
   assert.match(checker, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker">/);
   assert.match(checker, /The check runs in your browser and does not fetch the submitted site/);
+  assert.match(checker, /Try sample list/);
   assert.match(checker, /compatibility signal, not a coverage guarantee/);
   assert.match(checker, /<script type="module" src="\/ats-checker\.js"><\/script>/);
   assert.doesNotMatch(checker, /password|credit card/i);
@@ -74,9 +75,13 @@ test('landing attribution distinguishes campaigns and records acquisition action
   assert.match(landing, /trackAcquisitionEvent\('signup_started'\)/);
   assert.match(landing, /trackAcquisitionEvent\('demo_started'\)/);
   assert.match(landing, /acquisition: state\.acquisition/);
-  assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(\['pageview', 'tool_used', 'demo_started', 'signup_started'\]\)/);
+  assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(/);
+  assert.match(server, /'ats_sample_used'/);
+  assert.match(server, /'ats_audit_completed'/);
   assert.match(server, /buildAcquisitionSource\(acquisition\)/);
-  assert.match(await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8'), /trackCheckerEvent\('tool_used'\)/);
+  const checkerScript = await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8');
+  assert.match(checkerScript, /sampleSubmissionPending \? 'ats_sample_used' : 'ats_audit_completed'/);
+  assert.match(checkerScript, /sampleSubmissionPending = false/);
 });
 
 test('crawler files point to the canonical public origin and have explicit MIME types', async () => {

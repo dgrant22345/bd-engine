@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f1728">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
-  <link rel="stylesheet" href="/styles.css?v=20260506-active-job-count-1">
+  <link rel="stylesheet" href="/styles.css?v=20260821-workspace-ux-1">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -19,17 +19,22 @@
   <div class="shell">
     <aside class="sidebar" id="workspace-navigation" aria-label="Workspace navigation">
       <div class="brand-card">
-        <p class="eyebrow">Commercial BD platform</p>
-        <h1>BD Engine</h1>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">BD</span>
+          <div>
+            <p class="eyebrow">Commercial BD platform</p>
+            <h1>BD Engine</h1>
+          </div>
+        </div>
         <p class="brand-copy">Commercial BD intelligence, live hiring coverage, and ATS import orchestration in one place.</p>
       </div>
       <nav class="nav" aria-label="Primary">
-        <a href="#/dashboard" data-route="dashboard"><span class="nav-label">Dashboard</span><span class="nav-shortcut">G D</span></a>
-        <a href="#/accounts" data-route="accounts"><span class="nav-label">Accounts</span><span class="nav-shortcut">G A</span></a>
-        <a href="#/jobs" data-route="jobs"><span class="nav-label">Jobs</span><span class="nav-shortcut">G J</span></a>
-        <a href="#/contacts" data-route="contacts"><span class="nav-label">Contacts</span><span class="nav-shortcut">G C</span></a>
-        <a href="#/tasks" data-route="tasks"><span class="nav-label">Tasks</span><span class="nav-shortcut">G T</span></a>
-        <a href="#/admin" data-route="admin"><span class="nav-label">Admin</span><span class="nav-shortcut">G X</span></a>
+        <a href="#/dashboard" data-route="dashboard"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg></span><span class="nav-label">Dashboard</span><span class="nav-shortcut">G D</span></a>
+        <a href="#/accounts" data-route="accounts"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20V8l8-4 8 4v12M8 20v-7h8v7M3 20h18"/></svg></span><span class="nav-label">Accounts</span><span class="nav-shortcut">G A</span></a>
+        <a href="#/jobs" data-route="jobs"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 7V5h6v2M4 8h16v11H4zM4 12h16M10 12v2h4v-2"/></svg></span><span class="nav-label">Jobs</span><span class="nav-shortcut">G J</span></a>
+        <a href="#/contacts" data-route="contacts"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM17 11a3 3 0 0 0 0-6M18 14a4 4 0 0 1 3 4v2"/></svg></span><span class="nav-label">Contacts</span><span class="nav-shortcut">G C</span></a>
+        <a href="#/tasks" data-route="tasks"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 5h11M9 12h11M9 19h11M4 5l1 1 2-2M4 12l1 1 2-2M4 19l1 1 2-2"/></svg></span><span class="nav-label">Tasks</span><span class="nav-shortcut">G T</span></a>
+        <a href="#/admin" data-route="admin"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1v.1H9.5V21a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4h-.1V9.5h.1A1.7 1.7 0 0 0 4 8.4a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.46 3.6l.06.06A1.7 1.7 0 0 0 8.4 4a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1v-.1h4.1v.1A1.7 1.7 0 0 0 15 4a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8.4a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1 .4h.1v4.1H21a1.7 1.7 0 0 0-1.6 1.1Z"/></svg></span><span class="nav-label">Admin</span><span class="nav-shortcut">G X</span></a>
       </nav>
       <div class="sidebar-footnote">
         <span class="dot"></span>
@@ -47,21 +52,23 @@
 
     <main class="main" id="app-main" tabindex="-1">
       <header class="topbar">
-        <div>
+        <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation"><span aria-hidden="true">&#9776;</span></button>
+        <div class="view-heading">
           <p class="eyebrow">Commercial revenue operating system</p>
           <h2 id="view-title">Dashboard</h2>
         </div>
         <div class="topbar-tools">
-          <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation">&#9776;</button>
           <label class="search-shell" for="global-search-input">
-            <span>Search companies, contacts, jobs <kbd class="kbd">Ctrl+K</kbd></span>
-            <input id="global-search-input" type="search" placeholder="Type a company, person, or role" autocomplete="off" aria-controls="search-results">
+            <span class="visually-hidden">Search companies, contacts, and jobs</span>
+            <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span>
+            <input id="global-search-input" type="search" placeholder="Search companies, contacts, jobs" autocomplete="off" aria-controls="search-results">
+            <kbd class="kbd">Ctrl K</kbd>
           </label>
           <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
             <span class="theme-toggle-icon" id="theme-icon">&#9789;</span>
             <span id="theme-label">Dark</span>
           </button>
-          <button class="ghost-button" id="refresh-bootstrap">Refresh data</button>
+          <button class="ghost-button refresh-button" id="refresh-bootstrap" aria-label="Refresh workspace data"><span class="refresh-icon" aria-hidden="true">&#8635;</span><span class="refresh-label">Refresh data</span></button>
         </div>
       </header>
 
@@ -76,8 +83,8 @@
   <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
   <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-relevant="additions"></div>
 
-  <script src="/local-api.js?v=20260506-active-job-count-1"></script>
-  <script src="/app.js?v=20260506-active-job-count-1"></script>
+  <script src="/local-api.js?v=20260821-workspace-ux-1"></script>
+  <script src="/app.js?v=20260821-workspace-ux-1"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});

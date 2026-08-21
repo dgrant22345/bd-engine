@@ -1,38 +1,61 @@
 import { test, expect } from '@playwright/test';
 
+async function collectAnalyticsEvents(page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: undefined });
+  });
+  const trackedEvents = [];
+  page.on('request', (request) => {
+    if (!request.url().includes('/api/analytics/visit')) return;
+    const eventType = request.postDataJSON()?.eventType;
+    if (eventType) trackedEvents.push(eventType);
+  });
+  return trackedEvents;
+}
+
 test('job-seeker campaign link replaces a mismatched staffing demo session', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Try live demo' }).click();
+  await page.getByRole('button', { name: 'Explore live demo' }).click();
   await expect(page.getByText('Read-only demo workspace')).toBeVisible();
 
   await page.goto('/?persona=jobseeker&utm_source=campaign');
 
-  await expect(page.getByRole('heading', { name: /A focused job search/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
   await expect(page.getByText(/role, location, and keyword focus/)).toBeVisible();
   await expect(page.locator('#hero-signup')).toHaveText('Start job search');
-  await expect(page.getByRole('button', { name: 'See how it works' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Try live demo' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Audit career sites' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Explore live demo' })).toHaveCount(0);
   await expect(page.getByText('Read-only demo workspace')).toHaveCount(0);
 });
 
-test('job-seeker landing stays within a mobile viewport', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/?persona=jobseeker&utm_source=campaign');
+for (const viewport of [
+  { name: 'mobile', width: 375, height: 812 },
+  { name: 'tablet', width: 768, height: 1024 },
+  { name: 'desktop', width: 1280, height: 800 },
+  { name: 'wide desktop', width: 1440, height: 900 },
+]) {
+  test(`job-seeker landing stays within the ${viewport.name} viewport`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/?persona=jobseeker&utm_source=campaign');
 
-  await expect(page.getByRole('heading', { name: /A focused job search/ })).toBeVisible();
-  await expect(page.locator('#hero-signup')).toBeVisible();
-  const viewport = await page.evaluate(() => ({
-    viewportWidth: window.innerWidth,
-    documentWidth: document.documentElement.scrollWidth,
-  }));
-  expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.viewportWidth);
-});
+    await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
+    await expect(page.locator('#hero-signup')).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Choose a BD Engine workflow' })).toBeVisible();
+    const layout = await page.evaluate(() => ({
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      mainCount: document.querySelectorAll('main').length,
+    }));
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(layout.mainCount).toBe(1);
+  });
+}
 
 test('clean job-search route publishes focused metadata and campaign attribution', async ({ page }) => {
   await page.goto('/job-search?utm_source=linkedin&utm_campaign=role_focus');
 
   await expect(page).toHaveTitle('BD Engine for Job Seekers | Focus Relevant Roles');
-  await expect(page.getByRole('heading', { name: /A focused job search/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://bd-engine-production.up.railway.app/job-search');
 
   const source = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
@@ -53,6 +76,7 @@ test('coverage-denominator campaign routes to the ATS audit and preserves attrib
 });
 
 test('ATS checker audits a target list with an explicit denominator', async ({ page }) => {
+  const trackedEvents = await collectAnalyticsEvents(page);
   await page.goto('/ats-checker');
   const input = page.getByLabel('Career-site or job-board URLs');
 
@@ -72,6 +96,19 @@ test('ATS checker audits a target list with an explicit denominator', async ({ p
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('bd-engine-ats-coverage-audit.csv');
   await expect(page.getByText(/compatibility signal, not a coverage guarantee/i)).toBeVisible();
+  await expect.poll(() => trackedEvents).toContain('ats_audit_completed');
+  expect(trackedEvents).not.toContain('ats_sample_used');
+});
+
+test('ATS checker offers a useful sample path without signup', async ({ page }) => {
+  const trackedEvents = await collectAnalyticsEvents(page);
+  await page.goto('/ats-checker');
+  await page.getByRole('button', { name: 'Try sample list' }).click();
+
+  await expect(page.locator('#checker-result')).toBeFocused();
+  await expect(page.getByText('67%', { exact: true })).toBeVisible();
+  await expect.poll(() => trackedEvents).toContain('ats_sample_used');
+  expect(trackedEvents).not.toContain('ats_audit_completed');
 });
 
 test('ATS checker remains usable on mobile without horizontal overflow', async ({ page }) => {
@@ -92,4 +129,26 @@ test('ATS checker remains usable on mobile without horizontal overflow', async (
     documentWidth: document.documentElement.scrollWidth,
   }));
   expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.viewportWidth);
+});
+
+test('live demo keeps the priority account readable on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Explore live demo' }).click();
+
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.getByText('Daily operating view', { exact: true })).toBeVisible();
+  const layout = await app.locator('.hero-card--dashboard').evaluate((card) => {
+    const copy = card.querySelector('.hero-copy').getBoundingClientRect();
+    const metrics = card.querySelector('.headline-metrics').getBoundingClientRect();
+    return {
+      copyBottom: copy.bottom,
+      metricsTop: metrics.top,
+      documentWidth: card.ownerDocument.documentElement.scrollWidth,
+      viewportWidth: card.ownerDocument.defaultView.innerWidth,
+    };
+  });
+
+  expect(layout.metricsTop).toBeGreaterThanOrEqual(layout.copyBottom);
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
 });

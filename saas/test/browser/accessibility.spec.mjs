@@ -56,4 +56,7 @@ test('account entry and workspace avoid horizontal overflow at phone width', asy
   await expect(frame).toBeVisible({ timeout: 15000 });
   const appFrame = page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes('/app/'));
   await expect.poll(async () => appFrame?.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  await expect.poll(async () => appFrame?.locator('.topbar').evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBeLessThanOrEqual(120);
+  await expect(appFrame.locator('.nav a[aria-current="page"]')).toHaveAttribute('data-route', 'dashboard');
+  await expect(appFrame.locator('#global-search-input')).toBeVisible();
 });

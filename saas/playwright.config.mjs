@@ -32,6 +32,11 @@ export default defineConfig({
       // stays intact — only the harness raises the ceiling.
       BD_SIGNUP_MAX: '1000',
       BD_LOGIN_MAX: '1000',
+      BD_ANALYTICS_ADMIN_EMAILS: [
+        'analytics-admin-chromium@example.com',
+        'analytics-admin-firefox@example.com',
+        'analytics-admin-webkit@example.com',
+      ].join(','),
     },
   },
 });

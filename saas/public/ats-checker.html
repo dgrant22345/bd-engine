@@ -16,7 +16,7 @@
   <meta name="twitter:title" content="Free Bulk ATS Coverage Checker | BD Engine">
   <meta name="twitter:description" content="Audit a target list against the public ATS hosts recognized by BD Engine.">
   <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
-  <meta name="theme-color" content="#080d18">
+  <meta name="theme-color" content="#f4f7f8">
   <title>Free Bulk ATS Coverage Checker | BD Engine</title>
   <link rel="stylesheet" href="/ats-checker.css">
   <script type="application/ld+json">
@@ -37,6 +37,7 @@
   </script>
 </head>
 <body>
+  <a class="skip-link" href="#checker-main">Skip to audit</a>
   <header class="site-header">
     <a class="brand" href="/" aria-label="BD Engine home">
       <img src="/bd-engine-logo.png" alt="" width="34" height="34">
@@ -48,11 +49,16 @@
     </nav>
   </header>
 
-  <main>
+  <main id="checker-main">
     <section class="checker-intro" aria-labelledby="checker-title">
       <p class="eyebrow">Free public utility</p>
       <h1 id="checker-title">Audit ATS coverage for a target list</h1>
       <p class="lede">Paste one or many public career-site URLs to see the recognized-host rate for your list. The check runs in your browser and does not fetch the submitted site.</p>
+      <ul class="utility-promises" aria-label="Audit details">
+        <li>No signup</li>
+        <li>No site requests</li>
+        <li>CSV export</li>
+      </ul>
     </section>
 
     <div class="checker-layout">
@@ -61,12 +67,15 @@
           <label for="career-urls">Career-site or job-board URLs</label>
           <div class="input-row">
             <textarea id="career-urls" name="careerUrls" rows="7" spellcheck="false" placeholder="https://boards.greenhouse.io/example&#10;https://jobs.lever.co/example&#10;https://example.com/careers" required aria-describedby="url-help"></textarea>
-            <button type="submit">Audit coverage</button>
+            <div class="checker-actions">
+              <button type="submit">Audit coverage</button>
+              <button class="sample-button" id="example-audit" type="button">Try sample list</button>
+            </div>
           </div>
           <p id="url-help" class="field-help">Enter one public URL per line, up to 50. Duplicate lines are removed. Do not enter login links or private systems.</p>
         </form>
 
-        <div id="checker-result" class="checker-result" role="status" aria-live="polite" hidden>
+        <div id="checker-result" class="checker-result" role="region" aria-labelledby="result-title" aria-live="polite" tabindex="-1" hidden>
           <p id="result-status" class="result-status"></p>
           <h2 id="result-title"></h2>
           <p id="result-message"></p>

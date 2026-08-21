@@ -3,24 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="BD Engine helps staffing teams and job seekers prioritize target companies, public hiring signals, relevant roles, warm contacts, and next actions.">
+  <meta name="description" content="BD Engine ranks target companies using public hiring activity and your relationship context, then turns the strongest signal into a clear next action.">
   <meta name="application-name" content="BD Engine Cloud">
   <meta name="directree-verify" content="directree-verify=c17596082a68264ad1241c610b4725d2">
-  <meta name="theme-color" content="#0a0e1a">
+  <meta name="theme-color" content="#f4f7f8">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <link rel="canonical" href="https://bd-engine-production.up.railway.app/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="BD Engine Cloud">
-  <meta property="og:title" content="BD Engine Cloud | Focused hiring-signal workflows">
-  <meta property="og:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action for staffing business development or an active job search.">
+  <meta property="og:title" content="BD Engine | Know which account is worth your next move">
+  <meta property="og:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action.">
   <meta property="og:url" content="https://bd-engine-production.up.railway.app/">
   <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
   <meta property="og:image:alt" content="BD Engine logo">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="BD Engine Cloud | Focused hiring-signal workflows">
-  <meta name="twitter:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action.">
+  <meta name="twitter:title" content="BD Engine | Know which account is worth your next move">
+  <meta name="twitter:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action.">
   <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
-  <title>BD Engine Cloud | Focused Hiring-Signal Workflows</title>
+  <title>BD Engine | Ranked Hiring Signals and Next Actions</title>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -30,7 +30,7 @@
     "operatingSystem": "Web",
     "url": "https://bd-engine-production.up.railway.app/",
     "image": "https://bd-engine-production.up.railway.app/bd-engine-logo.png",
-    "description": "A focused workflow for prioritizing target companies, public hiring signals, relevant roles, warm contacts, and next actions.",
+    "description": "A focused workflow that ranks target companies using public hiring signals and user-supplied relationship context, then recommends a clear next action.",
     "offers": [
       {
         "@type": "Offer",
@@ -616,172 +616,158 @@
 
     // ── Landing page ──────────────────────────────────────────────────────
     function renderLanding() {
+      const landingStartedAt = performance.now();
       const isJobSeekerLanding = state.signupPersona === 'jobseeker';
       const landingCopy = isJobSeekerLanding ? {
-        badge: 'Live roles + warm network context',
-        title: 'A focused job search<br><span class="hero-gradient">around the roles that fit</span>',
-        subtitle: 'Track target companies and compatible public career sites, then rank open roles using your role, location, and keyword focus. Add your network to see where a warm path may already exist.',
+        badge: 'A focused job-search workspace',
+        title: 'Know which employers are worth your next move.',
+        subtitle: 'Rank target companies and public roles by your role, location, and keyword focus. Add your network to see where a useful path may already exist.',
         primaryCta: 'Start job search',
-        switchPrompt: 'Building a staffing pipeline? Start in Business Development mode.',
-        note: 'No credit card required · 14-day trial includes 25 companies, 100 network contacts, and 50 ATS boards',
-        sectionTitle: 'Keep the search relevant, explainable, and ready for action',
+        sectionTitle: 'From a broad search to one useful next action',
+        sectionIntro: 'BD Engine keeps the market, your network, and your follow-up work in one explainable daily view.',
         footer: 'Built for focused staffing business development and job searches.',
         referralTitle: 'Share a focused search, earn billing credit.',
         referralBody: 'Every workspace gets a referral link. Share BD Engine with another job seeker, recruiter, or founder and earn credit when they become a paid customer.',
-        stats: [
-          ['42', 'Target companies'],
-          ['18', 'Relevant open roles'],
-          ['7', 'Warm contacts'],
+        previewLabel: 'Best next move',
+        previewReason: 'Three relevant roles and a mapped talent contact make this the clearest company to work next.',
+        previewScore: '91',
+        previewStats: [['3', 'Relevant roles'], ['1', 'Network path'], ['2d', 'Freshest role']],
+        nextAction: 'Review the controls role, then prepare a warm introduction through Priya.',
+        workflowSteps: [
+          ['Set your focus', 'Choose target roles, locations, and keywords so every result has a clear reason to appear.'],
+          ['Check the market', 'Connect target employers to compatible public career sites and current roles.'],
+          ['Work the best path', 'Bring the strongest role, company context, and network contact into one next-action queue.'],
         ],
-        signalTitle: 'Role Match',
-        signalText: '<strong>Northstar Robotics</strong> posted 3 roles aligned with your search focus',
-        signalScore: 'Relevance: strong',
-        draftTitle: 'Introduction Draft',
-        draftTo: 'To: Priya Shah, Director of Talent',
-        draftPreview: 'Hi Priya, I am exploring operations roles and noticed Northstar is growing...',
       } : {
-        badge: 'Live network + hiring signals',
-        title: 'Business development<br><span class="hero-gradient">for recruiting &amp; staffing</span>',
-        subtitle: 'Turn your LinkedIn network into a ranked list of companies hiring right now - where you already know someone. Built for recruiters and staffing teams to win clients faster.',
+        badge: 'A hiring-signal workspace for staffing teams',
+        title: 'Know which staffing accounts are worth your next call.',
+        subtitle: 'Rank target companies using current public hiring activity and the relationships you import, then turn the strongest signal into a clear next action.',
         primaryCta: 'Start free trial',
-        switchPrompt: 'Looking for your next role? Start in Job Search mode.',
-        note: 'No credit card required · 14-day trial includes 25 accounts, 100 contacts, and 50 ATS boards',
-        sectionTitle: 'Everything you need to find and win the right accounts',
+        sectionTitle: 'From a target list to one useful next action',
+        sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
         footer: 'Built for staffing and recruiting teams.',
         referralTitle: 'Share BD Engine, earn billing credit.',
         referralBody: 'Every workspace gets a referral link. Invite another founder, recruiter, or sales team and earn credit when they become a paid customer.',
-        stats: [
-          ['47', 'Active accounts'],
-          ['186', 'Open roles tracked'],
-          ['23', 'Follow-ups due'],
+        previewLabel: 'Best account today',
+        previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
+        previewScore: '91',
+        previewStats: [['2', 'Active roles'], ['84', 'Hiring velocity'], ['1', 'Warm contact']],
+        nextAction: 'Follow up with Priya Shah using the two active controls roles as timely context.',
+        workflowSteps: [
+          ['Bring your target universe', 'Import companies and the contacts you already have instead of starting with another opaque database.'],
+          ['Resolve hiring demand', 'Connect accounts to compatible public ATS boards and send uncertain sites to a review queue.'],
+          ['Work the ranked list', 'See the score explanation, strongest contact, and recommended next move before you reach out.'],
         ],
-        signalTitle: 'Hiring Signal',
-        signalText: '<strong>Northstar Robotics</strong> posted 6 new roles in the last 7 days',
-        signalScore: 'Target score: 91',
-        draftTitle: 'Outreach Draft',
-        draftTo: 'To: Priya Shah, Director of Talent',
-        draftPreview: 'Hi Priya, I noticed Northstar is hiring across controls and embedded...',
       };
-      const featureCards = isJobSeekerLanding ? [
-        ['SF', 'Search Focus', 'Set target role families, locations, and keywords so the workspace ranks the opportunities that fit your search.'],
-        ['RR', 'Relevant Roles', 'Monitor supported public career sites and prioritize open roles using transparent relevance signals.'],
-        ['NI', 'Network Intelligence', 'Import your LinkedIn connections and map relationship coverage across target companies to find possible warm paths.'],
-        ['CS', 'Compatible Career Sites', 'Track public boards across supported ATS providers, with manual URL entry and a review queue when a site needs help.'],
-        ['ID', 'Introduction Drafts', 'Create a starting draft using the role, company, and relationship context, then review it before sending.'],
-        ['DA', 'Daily Action Plan', 'Keep the strongest companies, relevant roles, data gaps, and next actions in one focused queue.'],
-      ] : [
-        ['PI', 'Pipeline Intelligence', 'See your entire pipeline at a glance. Target scores, hiring velocity, and relationship coverage are automatically ranked for focused weekly execution.'],
-        ['HS', 'Hiring Signals', 'Track public job activity across Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, and compatible career pages.'],
-        ['SO', 'Smart Outreach', 'Generate personalized email and LinkedIn drafts based on live hiring data, relationship context, and the account\'s current priorities.'],
-        ['NI', 'Network Intelligence', 'Import your LinkedIn connections and map relationship coverage across every target account to easily find warm referrals.'],
-        ['ATS', 'ATS Discovery', 'Automatically discover compatible public job boards, with manual URL entry and a review queue for sites that need help.'],
-        ['TA', 'Workflow Analytics', 'Track outreach velocity, pipeline coverage, follow-up queues, and data quality so the next action stays clear.'],
-      ];
       root.innerHTML = `
         <div class="landing">
+          <a class="skip-link" href="#main-content">Skip to main content</a>
           <nav class="landing-nav">
-            <div class="landing-nav-brand">
-              <div class="brand-icon">
-                <svg width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
+            <div class="landing-nav-inner">
+              <a class="landing-nav-brand" href="/" aria-label="BD Engine home">
+                <img src="/bd-engine-logo.png" width="30" height="30" alt="">
+                <span class="brand-text">BD Engine</span>
+              </a>
+              <div class="landing-nav-actions">
+                <a class="nav-link nav-link--utility" href="/ats-checker?utm_source=homepage&amp;utm_medium=navigation&amp;utm_campaign=coverage_audit">Free ATS audit</a>
+                <button class="nav-link nav-link--trust" data-trust-page="trust">Trust</button>
+                <button class="nav-link" id="nav-login">Log in</button>
+                <button class="btn btn-primary" id="nav-signup">${landingCopy.primaryCta}</button>
               </div>
-              <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
-            </div>
-            <div class="landing-nav-actions">
-              <button class="nav-link" data-trust-page="trust">Trust</button>
-              <button class="nav-link" data-trust-page="status">Status</button>
-              <button class="nav-link" id="nav-login">Log in</button>
-              <button class="btn btn-primary btn-glow" id="nav-signup">${landingCopy.primaryCta}</button>
             </div>
           </nav>
           ${state.accountClosedMessage ? `<div class="cloud-account-notice landing-account-notice" role="status"><span>${escapeHtml(state.accountClosedMessage)}</span><button class="cloud-notice-close" type="button" data-dismiss-account-closed aria-label="Dismiss message">Close</button></div>` : ''}
 
-          <section class="hero">
-            <div class="hero-content">
-              <div class="hero-badge">${landingCopy.badge}</div>
-              <h1 class="hero-title">${landingCopy.title}</h1>
-              <p class="hero-subtitle">${landingCopy.subtitle}</p>
-              <div class="hero-cta">
-                <button class="btn btn-primary btn-lg btn-glow" id="hero-signup">${landingCopy.primaryCta}</button>
-                ${isJobSeekerLanding
-                  ? '<button class="btn btn-ghost btn-lg" data-jobseeker-details>See how it works</button>'
-                  : `<button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Try live demo'}</button>`}
+          <main id="main-content">
+            <section class="hero" aria-labelledby="landing-title">
+              <div class="hero-content">
+                <nav class="persona-switch" aria-label="Choose a BD Engine workflow">
+                  <a href="/" class="persona-option ${isJobSeekerLanding ? '' : 'is-active'}" ${isJobSeekerLanding ? '' : 'aria-current="page"'}>Staffing teams</a>
+                  <a href="/job-search" class="persona-option ${isJobSeekerLanding ? 'is-active' : ''}" ${isJobSeekerLanding ? 'aria-current="page"' : ''}>Job seekers</a>
+                </nav>
+                <p class="hero-badge">${landingCopy.badge}</p>
+                <h1 class="hero-title" id="landing-title">${landingCopy.title}</h1>
+                <p class="hero-subtitle">${landingCopy.subtitle}</p>
+                <div class="hero-cta">
+                  ${isJobSeekerLanding
+                    ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
+                       <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage">Audit career sites</a>`
+                    : `<button class="btn btn-primary btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>
+                       <button class="btn btn-ghost btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>`}
+                </div>
+                <p class="hero-note">No credit card required &middot; 14-day trial &middot; cancel anytime</p>
+                ${isJobSeekerLanding ? '' : '<a class="hero-utility-link" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit">Or audit up to 50 career sites free</a>'}
               </div>
-              <button class="link-btn hero-persona-link" ${isJobSeekerLanding ? 'data-bd-signup' : 'data-jobseeker-signup'}>${landingCopy.switchPrompt}</button>
-              <p class="hero-note">${landingCopy.note}</p>
-            </div>
-            <div class="hero-visual">
-              <div class="hero-card hero-card-1">
-                <div class="hero-card-header">
-                  <span class="hero-card-dot green"></span>
+              <div class="product-preview" aria-label="Sample ranked daily action">
+                <div class="product-preview-header">
                   <span>Sample workspace</span>
+                  <span class="preview-status">Synthetic data</span>
                 </div>
-                <div class="hero-card-body">
-                  ${landingCopy.stats.map(([value, label]) => `<div class="hero-stat"><span class="hero-stat-value">${value}</span><span class="hero-stat-label">${label}</span></div>`).join('')}
+                <div class="preview-focus">
+                  <div class="preview-focus-header">
+                    <div>
+                      <span class="preview-label">${landingCopy.previewLabel}</span>
+                      <h2>Northstar Robotics</h2>
+                    </div>
+                    <div class="preview-score" aria-label="Target score ${landingCopy.previewScore} out of 100">
+                      <strong>${landingCopy.previewScore}</strong>
+                      <span>/ 100</span>
+                    </div>
+                  </div>
+                  <p>${landingCopy.previewReason}</p>
+                  <dl class="preview-stats">
+                    ${landingCopy.previewStats.map(([value, label]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
+                  </dl>
                 </div>
+                <div class="preview-next-action">
+                  <span class="preview-step">Next action</span>
+                  <p>${landingCopy.nextAction}</p>
+                </div>
+                <ol class="preview-queue" aria-label="Ranked account queue">
+                  <li><span>2</span><div><strong>Vertex Health Systems</strong><small>${isJobSeekerLanding ? '1 relevant role' : '84 target score'}</small></div></li>
+                  <li><span>3</span><div><strong>Luma Climate</strong><small>${isJobSeekerLanding ? 'Remote role match' : '72 target score'}</small></div></li>
+                </ol>
               </div>
-              <div class="hero-card hero-card-2">
-                <div class="hero-card-header">
-                  <span class="hero-card-dot blue"></span>
-                  <span>${landingCopy.signalTitle}</span>
-                </div>
-                <div class="hero-card-body">
-                  <p class="hero-signal-text">${landingCopy.signalText}</p>
-                  <div class="hero-signal-bar"><div class="hero-signal-fill" style="width:84%"></div></div>
-                  <p class="hero-signal-score">${landingCopy.signalScore}</p>
-                </div>
-              </div>
-              <div class="hero-card hero-card-3">
-                <div class="hero-card-header">
-                  <span class="hero-card-dot purple"></span>
-                  <span>${landingCopy.draftTitle}</span>
-                </div>
-                <div class="hero-card-body">
-                  <p class="hero-draft-to">${landingCopy.draftTo}</p>
-                  <p class="hero-draft-preview">${landingCopy.draftPreview}</p>
-                </div>
-              </div>
-            </div>
-          </section>
+            </section>
 
-          <section class="features" id="features">
-            <h2 class="section-title">${landingCopy.sectionTitle}</h2>
-            <div class="features-grid">
-              ${featureCards.map(([icon, title, description]) => `
-                <div class="feature-card">
-                  <div class="feature-icon" aria-hidden="true">${icon}</div>
-                  <h3>${title}</h3>
-                  <p>${description}</p>
-                </div>`).join('')}
-            </div>
-          </section>
+            <section class="features" id="features" aria-labelledby="workflow-title">
+              <div class="section-heading">
+                <span class="section-kicker">How it works</span>
+                <h2 class="section-title" id="workflow-title">${landingCopy.sectionTitle}</h2>
+                <p class="section-intro">${landingCopy.sectionIntro}</p>
+              </div>
+              <ol class="workflow-grid">
+                ${landingCopy.workflowSteps.map(([title, description], index) => `
+                  <li class="workflow-step">
+                    <span class="workflow-step-number">0${index + 1}</span>
+                    <h3>${title}</h3>
+                    <p>${description}</p>
+                  </li>`).join('')}
+              </ol>
+            </section>
 
-          <section class="referral-program" id="referrals">
-            <div class="referral-copy">
-              <span class="section-kicker">Referral program</span>
-              <h2>${landingCopy.referralTitle}</h2>
-              <p>${landingCopy.referralBody}</p>
-            </div>
-            <div class="referral-flow" aria-label="Referral program steps">
-              <div class="referral-step">
-                <span class="referral-step-number">1</span>
-                <strong>Share your link</strong>
-                <p>Use the referral link in Billing after you create a workspace.</p>
+            <section class="coverage-proof" id="coverage" aria-labelledby="coverage-title">
+              <div class="coverage-copy">
+                <span class="section-kicker">Coverage, with a denominator</span>
+                <h2 id="coverage-title">Check the target list before you trust the signal.</h2>
+                <p>The free browser audit checks up to 50 public career-site URLs against ATS hosts BD Engine recognizes. It reports the valid-URL denominator, flags sites that still need discovery, and exports the result as CSV.</p>
+                <p class="coverage-caveat">Recognized hosts include Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and Rippling. Host recognition is not a guarantee of role count, freshness, or complete employer coverage.</p>
+                <a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit">Run the free ATS audit</a>
               </div>
-              <div class="referral-step">
-                <span class="referral-step-number">2</span>
-                <strong>They upgrade</strong>
-                <p>The referral is tracked through signup and subscription.</p>
-              </div>
-              <div class="referral-step">
-                <span class="referral-step-number">3</span>
-                <strong>You get credit</strong>
-                <p>Credits are applied toward future BD Engine billing.</p>
-              </div>
-            </div>
-          </section>
+              <dl class="coverage-facts">
+                <div><dt>Target-list size</dt><dd>Up to 50 URLs</dd></div>
+                <div><dt>Result</dt><dd>Explicit valid-URL rate</dd></div>
+                <div><dt>Data handling</dt><dd>Runs in your browser</dd></div>
+                <div><dt>Output</dt><dd>CSV export included</dd></div>
+              </dl>
+            </section>
 
-          <section class="pricing" id="pricing">
-            <h2 class="section-title">Simple, transparent pricing</h2>
+            <section class="pricing" id="pricing" aria-labelledby="pricing-title">
+              <div class="section-heading">
+                <span class="section-kicker">Pricing</span>
+                <h2 class="section-title" id="pricing-title">Try the workflow before choosing a plan</h2>
+                <p class="section-intro">Every trial starts without a credit card and includes enough room to test the daily-action workflow with your own data.</p>
+              </div>
             <div class="pricing-grid">
               <div class="pricing-card">
                 <div class="pricing-badge">Free trial</div>
@@ -830,11 +816,25 @@
                 <button class="btn btn-primary btn-block" data-jobseeker-signup>Start job search</button>
               </div>
             </div>
-          </section>
+            </section>
+
+            <section class="referral-program" id="referrals" aria-labelledby="referral-title">
+              <div class="referral-copy">
+                <span class="section-kicker">Referral program</span>
+                <h2 id="referral-title">${landingCopy.referralTitle}</h2>
+                <p>${landingCopy.referralBody}</p>
+              </div>
+              <ol class="referral-flow" aria-label="Referral program steps">
+                <li class="referral-step"><span class="referral-step-number">1</span><strong>Share your link</strong><p>Use the referral link in Billing after you create a workspace.</p></li>
+                <li class="referral-step"><span class="referral-step-number">2</span><strong>They upgrade</strong><p>The referral is tracked through signup and subscription.</p></li>
+                <li class="referral-step"><span class="referral-step-number">3</span><strong>You get credit</strong><p>Credits are applied toward future BD Engine billing.</p></li>
+              </ol>
+            </section>
+          </main>
 
           <footer class="landing-footer">
             <div class="landing-footer-brand">
-              <span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span>
+              <span class="brand-text">BD Engine</span>
             </div>
             <div class="landing-footer-links">
               <button class="link-btn" data-trust-page="trust">Trust</button>
@@ -852,12 +852,11 @@
       root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
       root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
       root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker')));
-      root.querySelectorAll('[data-bd-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd')));
-      root.querySelector('[data-jobseeker-details]')?.addEventListener('click', () => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' }));
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup()));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
       root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
+      console.info(`BD Engine landing render: ${Math.round(performance.now() - landingStartedAt)}ms (${isJobSeekerLanding ? 'job seeker' : 'staffing'} workflow)`);
     }
 
     function getTrustContent(kind) {

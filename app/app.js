@@ -3403,6 +3403,93 @@ function renderWorkspaceReadinessPanel(readiness = {}) {
   `;
 }
 
+function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCopy()) {
+  const readinessMetrics = dashboard.readiness?.metrics || {};
+  const summary = dashboard.summary || {};
+  const jobSeeker = personaCopy.persona === 'jobseeker';
+  const steps = [
+    {
+      id: 'target',
+      title: jobSeeker ? 'Add a target company' : 'Add a target account',
+      description: jobSeeker
+        ? 'Choose a real company you would apply to so BD Engine has a useful ranking candidate.'
+        : 'Choose a real account you want to reach so BD Engine has a useful ranking candidate.',
+      value: Number(readinessMetrics.accountCount ?? summary.accountCount ?? 0),
+      valueLabel: jobSeeker ? 'target company' : 'target account',
+      cta: jobSeeker ? 'Add company' : 'Add account',
+      href: '#/accounts/new',
+    },
+    {
+      id: 'contact',
+      title: 'Map a warm contact',
+      description: 'Import the Connections.csv file you choose. BD Engine does not log into or automate LinkedIn.',
+      value: Number(readinessMetrics.contactCount || 0),
+      valueLabel: jobSeeker ? 'network contact' : 'contact',
+      cta: 'Import contacts',
+      href: '#/admin/pipeline-ops/contacts',
+    },
+    {
+      id: 'board',
+      title: 'Find a job board',
+      description: 'Resolve one supported public careers board before trying to refresh live roles.',
+      value: Number(readinessMetrics.resolvedBoardCount ?? summary.discoveredBoardCount ?? 0),
+      valueLabel: 'resolved board',
+      cta: 'Find board',
+      href: '#/admin/pipeline-ops/discovery',
+    },
+    {
+      id: 'role',
+      title: jobSeeker ? 'Import a live role' : 'Import a live hiring signal',
+      description: jobSeeker
+        ? 'Pull a current role so recommendations use fresh demand alongside your network.'
+        : 'Pull a current role so account recommendations use fresh hiring demand.',
+      value: Number(readinessMetrics.activeJobCount ?? summary.activeJobCount ?? 0),
+      valueLabel: 'active role',
+      cta: jobSeeker ? 'Import roles' : 'Import jobs',
+      href: '#/admin/pipeline-ops/jobs',
+    },
+  ].map((step) => ({ ...step, complete: step.value > 0 }));
+  const completeCount = steps.filter((step) => step.complete).length;
+  if (completeCount === steps.length) return '';
+  const progress = Math.round((completeCount / steps.length) * 100);
+  const summaryCopy = jobSeeker
+    ? 'Complete these four steps so BD Engine can rank a company using live roles and your existing network.'
+    : 'Complete these four steps so BD Engine can rank an account using live hiring signals and relationship context.';
+
+  return `
+    <section class="detail-card activation-path" data-first-value-checklist aria-labelledby="first-value-title">
+      <div class="activation-path__header">
+        <div>
+          <p class="eyebrow">First value</p>
+          <h3 id="first-value-title">Get to your first ranked recommendation</h3>
+          <p class="muted small">${escapeHtml(summaryCopy)}</p>
+        </div>
+        <div class="activation-path__progress" aria-label="${completeCount} of ${steps.length} complete">
+          <strong>${completeCount} of ${steps.length} complete</strong>
+          <div class="activation-path__progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+            <span style="width:${progress}%"></span>
+          </div>
+        </div>
+      </div>
+      <ol class="activation-path__steps">
+        ${steps.map((step, index) => `
+          <li class="activation-step ${step.complete ? 'is-complete' : ''}" data-first-value-step="${escapeAttr(step.id)}" aria-label="${escapeAttr(`${step.title}: ${step.complete ? 'complete' : 'not complete'}`)}">
+            <span class="activation-step__number" aria-hidden="true">${step.complete ? '&#10003;' : index + 1}</span>
+            <div class="activation-step__copy">
+              <div class="activation-step__title-row">
+                <strong>${escapeHtml(step.title)}</strong>
+                <span class="activation-step__state">${step.complete ? 'Complete' : escapeHtml(pluralize(step.value, step.valueLabel))}</span>
+              </div>
+              <p>${escapeHtml(step.description)}</p>
+            </div>
+            ${step.complete ? '' : `<a class="secondary-button activation-step__cta" href="${escapeAttr(step.href)}">${escapeHtml(step.cta)}</a>`}
+          </li>
+        `).join('')}
+      </ol>
+    </section>
+  `;
+}
+
 function getPersonaUiCopy(persona = appState.persona) {
   const normalized = normalizeAppPersona(persona);
   if (normalized === 'jobseeker') {
@@ -3765,7 +3852,10 @@ function setViewTitle(title) {
 
 function activateNav(routeKey) {
   document.querySelectorAll('.nav a').forEach((anchor) => {
-    anchor.classList.toggle('active', anchor.dataset.route === routeKey);
+    const isActive = anchor.dataset.route === routeKey;
+    anchor.classList.toggle('active', isActive);
+    if (isActive) anchor.setAttribute('aria-current', 'page');
+    else anchor.removeAttribute('aria-current');
   });
 }
 
@@ -3797,7 +3887,7 @@ async function renderRoute() {
     return;
   }
 
-  if (root === 'accounts' && parts[1]) {
+  if (root === 'accounts' && parts[1] && parts[1] !== 'new') {
     const personaCopy = getPersonaUiCopy();
     activateNav('accounts');
     renderBreadcrumbs([
@@ -3813,6 +3903,7 @@ async function renderRoute() {
     activateNav('accounts');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: humanize(getPersonaUiCopy().accountPlural) }]);
     await renderAccountsView();
+    if (parts[1] === 'new') focusAccountCreateForm();
     return;
   }
 
@@ -3841,8 +3932,9 @@ async function renderRoute() {
     activateNav('admin');
     renderBreadcrumbs([{ label: 'Dashboard', href: '#/dashboard' }, { label: 'Admin' }]);
     await renderAdminView();
-    if (parts[1] === 'billing') {
-      openAdminSection('billing-subscription');
+    if (parts[1]) {
+      const sectionId = parts[1] === 'billing' ? 'billing-subscription' : parts[1];
+      openAdminSection(sectionId, parts[2] || '');
     }
     scheduleRuntimePoll();
     return;
@@ -4655,6 +4747,8 @@ async function renderDashboardView(options = {}) {
 
     </section>`)}
 
+    ${renderFirstValueChecklist(dashboard, personaCopy)}
+
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('action-plan', renderPersonaActionPlan(dashboard.actionPlan))}
@@ -5034,7 +5128,7 @@ async function renderAccountsView() {
       </div>
 
       <div class="panel-stack">
-        <div class="form-card">
+        <div class="form-card" data-route-focus="account-create">
           <div class="panel-header">
             <div>
               <h3>Add target account</h3>
@@ -5513,15 +5607,81 @@ function wireCollapsibleSections() {
   });
 }
 
-function openAdminSection(sectionId) {
+function focusGuidedControl(control, container) {
+  if (!container) return;
+  window.requestAnimationFrame(() => {
+    container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (control) {
+      control.focus({ preventScroll: true });
+      container.classList.add('is-guided-focus');
+      window.setTimeout(() => container.classList.remove('is-guided-focus'), 1800);
+    }
+  });
+}
+
+function focusAccountCreateForm() {
+  const control = document.querySelector('#account-create-form input[name="company"]');
+  focusGuidedControl(control, control?.closest('[data-route-focus]'));
+}
+
+function openAdminSection(sectionId, focusKey = '') {
   const section = document.getElementById(`admin-section-${sectionId}`);
   const header = section?.querySelector('.collapsible-header[data-collapse-id]');
   if (header) {
     setCollapsibleState(header, false);
-    window.requestAnimationFrame(() => {
-      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    const focusSelectors = {
+      contacts: '#connections-csv-file',
+      discovery: '[data-action="run-discovery"]',
+      jobs: '[data-action="run-live-import"]',
+    };
+    const focusControl = focusSelectors[focusKey] ? section.querySelector(focusSelectors[focusKey]) : null;
+    focusGuidedControl(focusControl, focusControl?.closest('[data-admin-focus]') || section);
   }
+}
+
+const ACQUISITION_FUNNEL_STAGES = [
+  { eventType: 'ats_sample_used', label: 'Sample audits', description: 'Checker sample explored', tone: 'neutral', unit: 'event' },
+  { eventType: 'ats_audit_completed', label: 'Manual audits', description: 'User-submitted target lists', tone: 'accent', unit: 'event' },
+  { eventType: 'demo_started', label: 'Demo starts', description: 'Read-only workspace opened', tone: 'accent', unit: 'event' },
+  { eventType: 'signup_started', label: 'Signup opens', description: 'Signup form opened', tone: 'warning', unit: 'event' },
+  { eventType: 'signup_completed', label: 'Trials created', description: 'New trial workspaces', tone: 'success', unit: 'workspace' },
+  { eventType: 'setup_completed', label: 'Setup complete', description: 'Activated workspaces', tone: 'success', unit: 'workspace' },
+  { eventType: 'target_created', label: 'First targets', description: 'Workspaces creating a target', tone: 'success', unit: 'workspace' },
+  { eventType: 'useful_jobs_found', label: 'Useful roles found', description: 'Workspaces finding live roles', tone: 'success', unit: 'workspace' },
+];
+
+function renderAcquisitionFunnel(analytics = {}) {
+  const rows = Array.isArray(analytics.funnel) ? analytics.funnel : [];
+  const byEvent = new Map(rows.map((row) => [row.eventType, row]));
+  const lookbackDays = Math.max(1, Number(analytics.lookbackDays || 30));
+  const cards = ACQUISITION_FUNNEL_STAGES.map((stage) => {
+    const row = byEvent.get(stage.eventType) || {};
+    const value = stage.unit === 'workspace'
+      ? Number(row.workspaces || 0)
+      : Number(row.events || 0);
+    const unit = value === 1 ? stage.unit : `${stage.unit}s`;
+    return `
+      <article class="story-card story-card--${stage.tone}" data-analytics-event="${stage.eventType}">
+        <span class="story-card__label">${escapeHtml(stage.label)}</span>
+        <strong>${formatNumber(value)} ${escapeHtml(unit)}</strong>
+        <p>${escapeHtml(stage.description)}</p>
+      </article>
+    `;
+  }).join('');
+
+  return `
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Acquisition and activation</p>
+        <h4>${formatNumber(lookbackDays)}-day funnel</h4>
+        <p class="small muted">See where campaign interest becomes a usable workspace.</p>
+      </div>
+    </div>
+    <div class="story-strip" aria-label="Acquisition and activation funnel">
+      ${cards}
+    </div>
+    <p class="small muted">Public actions are event counts; account and activation milestones are unique workspaces. Use this as directional evidence, not a person-level cohort report.</p>
+  `;
 }
 
 async function renderAdminView() {
@@ -5624,12 +5784,13 @@ async function renderAdminView() {
     ? (paymentAttentionRequired ? 'Update payment method' : 'Manage plan')
     : (stripeReady ? 'Choose a plan' : 'Plan changes unavailable');
   const siteAnalyticsSection = canViewSiteAnalytics ? `
-        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party visitor counts for the public site and app.')}
+        ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party traffic and product milestones for campaign decisions.')}
           <div class="metrics-grid metrics-grid--compact">
             ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
             ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
             ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
           </div>
+          ${renderAcquisitionFunnel(analytics)}
           <div class="inline-split">
             <div>
               <p class="eyebrow">Top sources</p>
@@ -5685,7 +5846,7 @@ async function renderAdminView() {
       <div class="two-column">
         ${renderCollapsibleStart('pipeline-ops', 'Refresh actions', 'Choose a full refresh or update one part of the workspace.')}
           <div class="actions-grid">
-            <div class="action-card">
+            <div class="action-card" data-admin-focus="discovery">
               <p class="eyebrow">Next most used</p>
               <h4>Find job boards</h4>
               <p class="small muted">Use this when you only need to find or recheck company job boards.</p>
@@ -5698,13 +5859,13 @@ async function renderAdminView() {
                 </div>
               </div>
             </div>
-            <div class="action-card">
+            <div class="action-card" data-admin-focus="jobs">
               <p class="eyebrow">Frequent refresh</p>
               <h4>Refresh live jobs</h4>
               <p class="small muted">Fetches jobs from active job boards and updates tracked roles.</p>
               <button class="secondary-button" data-action="run-live-import">Import latest jobs</button>
             </div>
-            <div class="action-card">
+            <div class="action-card" data-admin-focus="contacts">
               <p class="eyebrow">Setup and reseed</p>
               <h4>Import LinkedIn contacts</h4>
               <p class="small muted">Preview the file first, then import contacts and companies.</p>
@@ -5799,8 +5960,8 @@ async function renderAdminView() {
         ${renderCollapsibleEnd()}
       </div>
 
+      ${siteAnalyticsSection}
       <div class="two-column">
-        ${siteAnalyticsSection}
         ${renderCollapsibleStart('runtime-status', 'App status', 'See whether background work is idle, queued, or running.')}
           <div id="runtime-status-panel"></div>
           <div class="action-card diagnostics-card">

@@ -262,6 +262,8 @@ function renderResult(audit) {
     jobSearchLink.textContent = 'Find relevant roles';
     actions.append(exportButton, staffingLink, jobSearchLink);
   }
+
+  requestAnimationFrame(() => container.focus({ preventScroll: true }));
 }
 
 function getVisitorId() {
@@ -305,11 +307,25 @@ function trackCheckerEvent(eventType = 'pageview') {
 }
 
 if (typeof document !== 'undefined') {
-  document.getElementById('ats-checker-form')?.addEventListener('submit', (event) => {
+  const checkerForm = document.getElementById('ats-checker-form');
+  let sampleSubmissionPending = false;
+  checkerForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     const input = document.getElementById('career-urls');
     renderResult(buildCoverageAudit(input?.value));
-    trackCheckerEvent('tool_used');
+    trackCheckerEvent(sampleSubmissionPending ? 'ats_sample_used' : 'ats_audit_completed');
+    sampleSubmissionPending = false;
+  });
+  document.getElementById('example-audit')?.addEventListener('click', () => {
+    const input = document.getElementById('career-urls');
+    if (!input || !checkerForm) return;
+    input.value = [
+      'https://boards.greenhouse.io/example',
+      'https://jobs.lever.co/example',
+      'https://example.com/careers',
+    ].join('\n');
+    sampleSubmissionPending = true;
+    checkerForm.requestSubmit();
   });
   trackCheckerEvent();
 }

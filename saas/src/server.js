@@ -73,7 +73,14 @@ const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_M
   : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
-const PUBLIC_ANALYTICS_EVENT_TYPES = new Set(['pageview', 'tool_used', 'demo_started', 'signup_started']);
+const PUBLIC_ANALYTICS_EVENT_TYPES = new Set([
+  'pageview',
+  'tool_used',
+  'demo_started',
+  'signup_started',
+  'ats_sample_used',
+  'ats_audit_completed',
+]);
 const PUBLIC_DEMO_SLUG = 'bd-engine-demo';
 const PUBLIC_DEMO_EMAIL = 'demo@bdengine.local';
 const PUBLIC_DEMO_USER_NAME = 'BD Engine Demo';
@@ -2691,23 +2698,23 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (persona === 'jobseeker' && !cachedJobSeekerIndexHtml) {
     cachedJobSeekerIndexHtml = cachedCloudIndexHtml
       .replace(
-        'BD Engine helps staffing teams and job seekers prioritize target companies, public hiring signals, relevant roles, warm contacts, and next actions.',
-        'BD Engine helps job seekers prioritize target companies, relevant public roles, warm contacts, and the next action for a focused search.'
+        'BD Engine ranks target companies using public hiring activity and your relationship context, then turns the strongest signal into a clear next action.',
+        'BD Engine helps job seekers rank target companies and relevant public roles by role, location, keywords, and user-supplied network context.'
       )
       .replace('rel="canonical" href="https://bd-engine-production.up.railway.app/"', 'rel="canonical" href="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('property="og:title" content="BD Engine Cloud | Focused hiring-signal workflows"', 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace('property="og:title" content="BD Engine | Know which account is worth your next move"', 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
       .replace(
-        'property="og:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action for staffing business development or an active job search."',
+        'property="og:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
         'property="og:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('property="og:url" content="https://bd-engine-production.up.railway.app/"', 'property="og:url" content="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('name="twitter:title" content="BD Engine Cloud | Focused hiring-signal workflows"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace('name="twitter:title" content="BD Engine | Know which account is worth your next move"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
       .replace(
-        'name="twitter:description" content="Prioritize target companies, relevant public roles, warm contacts, and the next action."',
+        'name="twitter:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
         'name="twitter:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('"url": "https://bd-engine-production.up.railway.app/"', '"url": "https://bd-engine-production.up.railway.app/job-search"')
-      .replace('<title>BD Engine Cloud | Focused Hiring-Signal Workflows</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
+      .replace('<title>BD Engine | Ranked Hiring Signals and Next Actions</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
   }
   return injectScriptNonce(persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml, scriptNonce);
 }
