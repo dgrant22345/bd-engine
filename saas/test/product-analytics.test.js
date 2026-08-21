@@ -47,3 +47,35 @@ test('core value milestones are accepted and idempotent per workspace', () => {
   assert.equal(board.eventType, 'board_resolved');
   assert.equal(jobs.eventType, 'useful_jobs_found');
 });
+
+test('commercial outcome milestones cover the funnel without customer content', () => {
+  const outcomeTypes = [
+    'outreach_logged',
+    'reply_received',
+    'positive_reply_received',
+    'meeting_booked',
+    'opportunity_created',
+    'client_won',
+    'client_lost',
+  ];
+  const events = outcomeTypes.map((eventType) => buildProductEvent({
+    eventType,
+    tenantId: 'tenant-private',
+    userId: 'user-private',
+    eventKey: 'tenant-private',
+    dimensions: {
+      source: 'outcome_log',
+      contactEmail: 'buyer@example.com',
+      notes: 'Customer-confidential deal detail',
+    },
+  }));
+
+  assert.deepEqual(events.map((event) => event.eventType), outcomeTypes);
+  assert.equal(new Set(events.map((event) => event.eventKey)).size, outcomeTypes.length);
+  for (const event of events) {
+    assert.deepEqual(event.metadata, { source: 'outcome_log' });
+    assert.doesNotMatch(JSON.stringify(event.metadata), /buyer@example\.com|Customer-confidential/);
+    assert.doesNotMatch(event.visitorId, /tenant-private|user-private/);
+    assert.doesNotMatch(event.eventKey, /tenant-private|user-private/);
+  }
+});
