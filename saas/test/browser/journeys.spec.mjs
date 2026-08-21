@@ -97,10 +97,16 @@ test('demo journey: read-only demo opens and dashboard renders', async ({ page }
   const app = await startDemo(page);
   await expect(app.locator('body')).toContainText(/dashboard|pipeline|account/i, { timeout: 15000 });
   await expect(app.locator('[data-first-value-checklist]')).toHaveCount(0);
-  await expect(app.locator('[data-dash-section="workflow"]')).toBeVisible();
+  await expect(app.locator('[data-dash-section="workflow"]')).toBeHidden();
   await expect(app.locator('[data-dash-section="queue"]')).toBeVisible();
   await expect(app.locator('[data-dash-section="metrics"]')).toBeHidden();
-  await expect(app.locator('#dash-customize-toggle')).toContainText('Choose dashboard sections');
+  await expect(app.locator('#dash-customize-toggle')).toHaveAttribute('aria-label', 'Dashboard options');
+  await app.locator('#dash-customize-toggle').click();
+  await app.locator('[data-section-id="workflow"]').check();
+  await expect(app.locator('[data-dash-section="workflow"]')).toBeVisible();
+  await app.locator('#dash-customize-toggle').click();
+  await app.locator('summary[aria-label="Workspace options"]').click();
+  await expect(app.locator('#refresh-bootstrap')).toBeVisible();
   await expect(app.locator('body')).not.toContainText('has no mapped contacts');
   await expect(app.locator('body')).not.toContainText('unknown via n/a');
   await gotoAppRoute(page, '#/admin');

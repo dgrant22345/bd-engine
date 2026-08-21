@@ -176,10 +176,12 @@ test('LinkedIn CSV import explains the product boundary before upload', async ()
 
 test('dashboard customization matches every rendered core section', async () => {
   const app = await readFile(appPath, 'utf8');
-  assert.match(app, /id: 'workflow', label: 'Getting started'/);
+  assert.match(app, /id: 'workflow', label: 'Quick working lanes'/);
   assert.match(app, /id: 'readiness', label: 'Workspace readiness'/);
   assert.doesNotMatch(app, /id: 'trust', label: 'Trust strip'/);
   assert.match(app, /const defaultDashboardCollapsed/);
+  assert.match(app, /workflow: true/);
+  assert.match(app, /'jobs-activity': true/);
 });
 
 test('support diagnostics are copyable and explicitly exclude customer content', async () => {

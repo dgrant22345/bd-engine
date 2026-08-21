@@ -35,6 +35,8 @@ function readJsonSetting(key, fallback) {
 
 const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
 const defaultDashboardCollapsed = {
+  workflow: true,
+  'jobs-activity': true,
   readiness: true,
   metrics: true,
   playbook: true,
@@ -320,6 +322,9 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 });
 
 if (themeToggle) themeToggle.addEventListener('click', cycleTheme);
+document.querySelector('.topbar-overflow-menu')?.addEventListener('click', (event) => {
+  if (event.target.closest('button')) event.currentTarget.closest('details')?.removeAttribute('open');
+});
 
 /* ── Toast notification system ── */
 let toastId = 0;
@@ -1635,7 +1640,7 @@ function wireBulkKeyboard() {
 function getDashboardSections() {
   return [
     { id: 'hero', label: 'Daily summary', required: true },
-    { id: 'workflow', label: 'Getting started' },
+    { id: 'workflow', label: 'Quick working lanes' },
     { id: 'action-plan', label: 'Recommended next actions' },
     { id: 'readiness', label: 'Workspace readiness' },
     { id: 'alerts-bar', label: 'Important alerts' },
@@ -1660,24 +1665,34 @@ function renderDashboardCustomizer() {
   const sections = getDashboardSections();
   const collapsed = appState.dashboardCollapsed;
   return `
-    <div class="dash-customizer">
-      <button class="ghost-button ghost-button--xs" id="dash-customize-toggle">Choose dashboard sections</button>
-      <div class="dash-customizer-dropdown hidden" id="dash-customizer-dropdown">
-        <p class="small muted" style="margin-bottom:8px">Show/hide dashboard sections:</p>
+    <details class="dash-customizer">
+      <summary id="dash-customize-toggle" aria-label="Dashboard options" title="Dashboard options">
+        <svg class="dash-options-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>
+        <span class="visually-hidden">View options</span>
+      </summary>
+      <div class="dash-customizer-dropdown" id="dash-customizer-dropdown">
+        <div class="dash-options-heading">
+          <strong>Dashboard sections</strong>
+          <span>Keep the daily view focused.</span>
+        </div>
         ${sections.map(s => `
           <label class="dash-customizer-item">
             <input type="checkbox" ${s.required ? 'checked disabled' : (collapsed[s.id] ? '' : 'checked')} data-section-id="${s.id}">
             ${escapeHtml(s.label)}
           </label>`).join('')}
+        <div class="dash-options-footer">
+          <button class="menu-action menu-action--compact" type="button" data-action="export-pdf">
+            <span class="menu-action-icon" aria-hidden="true">&#8595;</span>
+            <span><strong>Save as PDF</strong><small>Open the print dialog</small></span>
+          </button>
+        </div>
       </div>
-    </div>`;
+    </details>`;
 }
 
 function wireDashboardCustomizer() {
-  const toggle = document.getElementById('dash-customize-toggle');
   const dropdown = document.getElementById('dash-customizer-dropdown');
-  if (!toggle || !dropdown) return;
-  toggle.addEventListener('click', () => dropdown.classList.toggle('hidden'));
+  if (!dropdown) return;
   dropdown.addEventListener('change', (e) => {
     const cb = e.target.closest('[data-section-id]');
     if (!cb) return;
@@ -3275,44 +3290,36 @@ function renderAccountPresetStrip() {
   `;
 }
 
-function renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }) {
+function renderDashboardWorkflowStrip({ dashboard, extended, resolutionPressure }) {
   const freshJobs = dashboard.summary?.newJobsLast24h || 0;
   const followUps = (extended.overdueFollowUps?.length || 0) + (extended.staleAccounts?.length || 0);
   const boardsFound = dashboard.summary?.discoveredBoardCount || 0;
   return `
-    <section class="workflow-strip" aria-label="Daily BD workflow">
-      <article class="workflow-card workflow-card--primary">
-        <span class="workflow-card__step">1</span>
-        <div class="workflow-card__copy">
-          <strong>${topCompany ? escapeHtml(topCompany.displayName) : 'Find the lead account'}</strong>
-          <span>${topCompany ? `${formatNumber(getTargetScore(topCompany))}/100 target score` : 'No top account yet'}</span>
-        </div>
-        ${topCompany ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${topCompany.id}">Open</button>` : '<a class="primary-button ghost-button--xs" href="#/admin">Seed</a>'}
-      </article>
-      <article class="workflow-card">
-        <span class="workflow-card__step">2</span>
+    <section class="workflow-strip" aria-label="Quick working lanes">
+      <button class="workflow-card workflow-card--action" type="button" data-action="apply-account-preset" data-preset="fresh-roles" data-navigate="accounts">
+        <span class="workflow-card__step" aria-hidden="true">01</span>
         <div class="workflow-card__copy">
           <strong>Recent role triggers</strong>
           <span>${pluralize(freshJobs, 'job')} in 24h</span>
         </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="fresh-roles" data-navigate="accounts">Open lane</button>
-      </article>
-      <article class="workflow-card">
-        <span class="workflow-card__step">3</span>
+        <span class="workflow-card__arrow" aria-hidden="true">&#8594;</span>
+      </button>
+      <button class="workflow-card workflow-card--action" type="button" data-action="apply-account-preset" data-preset="follow-up" data-navigate="accounts">
+        <span class="workflow-card__step" aria-hidden="true">02</span>
         <div class="workflow-card__copy">
           <strong>Follow-up lane</strong>
           <span>${formatNumber(followUps)} accounts need attention</span>
         </div>
-        <button class="ghost-button ghost-button--xs" type="button" data-action="apply-account-preset" data-preset="follow-up" data-navigate="accounts">Open lane</button>
-      </article>
-      <article class="workflow-card">
-        <span class="workflow-card__step">4</span>
+        <span class="workflow-card__arrow" aria-hidden="true">&#8594;</span>
+      </button>
+      <a class="workflow-card workflow-card--action" href="#/admin">
+        <span class="workflow-card__step" aria-hidden="true">03</span>
         <div class="workflow-card__copy">
           <strong>Coverage backlog</strong>
           <span>${formatNumber(resolutionPressure)} identity gaps</span>
         </div>
-        <a class="ghost-button ghost-button--xs" href="#/admin">${boardsFound ? 'Review' : 'Discover'}</a>
-      </article>
+        <span class="workflow-card__arrow" aria-hidden="true">${boardsFound ? '&#8594;' : '+'}</span>
+      </a>
     </section>
   `;
 }
@@ -3540,13 +3547,14 @@ function renderPersonaActionPlan(plan = {}, options = {}) {
         </div>
         ${plan.primaryCompany ? renderStatusPill(plan.primaryCompany, 'accent') : ''}
       </div>
-      ${items.length ? `<div class="persona-action-grid">${items.map((item) => renderPersonaActionCard(item, { detail })).join('')}</div>` : renderEmptyState({ icon: 'Next', title: 'No recommended actions yet', copy: copy.actionEmpty, compact: true })}
+      ${items.length ? `<div class="persona-action-grid">${items.map((item, index) => renderPersonaActionCard(item, { detail, primary: index === 0 })).join('')}</div>` : renderEmptyState({ icon: 'Next', title: 'No recommended actions yet', copy: copy.actionEmpty, compact: true })}
     </section>
   `;
 }
 
 function renderPersonaActionCard(item = {}, options = {}) {
   const detail = Boolean(options.detail);
+  const primary = Boolean(options.primary);
   const tone = item.tone || 'neutral';
   const metric = item.metricLabel
     ? `<div class="persona-action-metric"><span>${escapeHtml(item.metricLabel)}</span><strong>${escapeHtml(String(item.metricValue ?? ''))}</strong></div>`
@@ -3562,10 +3570,13 @@ function renderPersonaActionCard(item = {}, options = {}) {
   const templateButton = detail && item.template && accountId
     ? `<button class="primary-button ghost-button--xs" type="button" data-action="generate-outreach-template" data-id="${escapeAttr(accountId)}" data-template="${escapeAttr(item.template)}" data-job-id="${escapeAttr(item.jobId || '')}">${escapeHtml(item.cta || 'Draft note')}</button>`
     : '';
-  const dashboardCta = !detail && item.template && accountId
+  const dashboardCta = !detail && primary && item.template && accountId
     ? `<button class="primary-button ghost-button--xs" type="button" data-action="open-account" data-id="${escapeAttr(accountId)}">${escapeHtml(item.cta || 'Open')}</button>`
     : '';
-  const actions = [templateButton, externalButton, dashboardCta || openAccountButton].filter(Boolean).join('');
+  const actions = (detail
+    ? [templateButton, externalButton, openAccountButton]
+    : [dashboardCta]
+  ).filter(Boolean).join('');
 
   return `
     <article class="persona-action-card persona-action-card--${escapeAttr(tone)}">
@@ -4717,8 +4728,8 @@ async function renderDashboardView(options = {}) {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
-    <div class="dash-toolbar">${renderDashboardCustomizer()}<button class="ghost-button ghost-button--xs" data-action="export-pdf">Export PDF</button></div>
     ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
+      ${renderDashboardCustomizer()}
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Daily operating view</p>
@@ -4726,8 +4737,10 @@ async function renderDashboardView(options = {}) {
           <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
           <div class="button-row">
             ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">${escapeHtml(personaCopy.bestAccountCta)}</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
-            <a class="ghost-button" href="#/jobs">${escapeHtml(personaCopy.reviewJobsCta)}</a>
-            <a class="ghost-button" href="#/accounts">${escapeHtml(personaCopy.openAccountsCta)}</a>
+            <span class="hero-secondary-links">
+              <a href="#/jobs">${escapeHtml(personaCopy.reviewJobsCta)} <span aria-hidden="true">&#8594;</span></a>
+              <a href="#/accounts">${escapeHtml(personaCopy.openAccountsCta)} <span aria-hidden="true">&#8594;</span></a>
+            </span>
           </div>
           <div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}

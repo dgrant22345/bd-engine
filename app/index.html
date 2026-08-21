@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f1728">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Commercial Revenue Intelligence</title>
-  <link rel="stylesheet" href="/styles.css?v=20260821-workspace-ux-1">
+  <link rel="stylesheet" href="/styles.css?v=20260821-workspace-ux-2">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -64,11 +64,19 @@
             <input id="global-search-input" type="search" placeholder="Search companies, contacts, jobs" autocomplete="off" aria-controls="search-results">
             <kbd class="kbd">Ctrl K</kbd>
           </label>
-          <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
-            <span class="theme-toggle-icon" id="theme-icon">&#9789;</span>
-            <span id="theme-label">Dark</span>
-          </button>
-          <button class="ghost-button refresh-button" id="refresh-bootstrap" aria-label="Refresh workspace data"><span class="refresh-icon" aria-hidden="true">&#8635;</span><span class="refresh-label">Refresh data</span></button>
+          <details class="topbar-overflow">
+            <summary aria-label="Workspace options" title="Workspace options"><span aria-hidden="true">&#8226;&#8226;&#8226;</span></summary>
+            <div class="topbar-overflow-menu">
+              <button class="menu-action" id="theme-toggle" type="button">
+                <span class="theme-toggle-icon menu-action-icon" id="theme-icon" aria-hidden="true">&#9789;</span>
+                <span><strong id="theme-label">Dark</strong><small>Change appearance</small></span>
+              </button>
+              <button class="menu-action" id="refresh-bootstrap" type="button">
+                <span class="refresh-icon menu-action-icon" aria-hidden="true">&#8635;</span>
+                <span><strong>Refresh data</strong><small>Reload workspace data</small></span>
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -83,8 +91,8 @@
   <div id="cmd-palette-backdrop" class="cmd-palette-backdrop hidden"></div>
   <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-relevant="additions"></div>
 
-  <script src="/local-api.js?v=20260821-workspace-ux-1"></script>
-  <script src="/app.js?v=20260821-workspace-ux-1"></script>
+  <script src="/local-api.js?v=20260821-workspace-ux-2"></script>
+  <script src="/app.js?v=20260821-workspace-ux-2"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
