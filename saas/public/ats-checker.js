@@ -12,6 +12,54 @@ const PROVIDERS = [
   ['Rippling', ['ats.rippling.com']],
 ];
 
+export const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
+
+export function buildAuditOnboardingIntent(audit, persona = 'bd') {
+  const normalizedPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+  const results = Array.isArray(audit?.results) ? audit.results : [];
+  const careerUrls = results
+    .filter((result) => result?.status === 'recognized' || result?.status === 'review')
+    .map((result) => String(result.submittedUrl || '').trim())
+    .filter(Boolean)
+    .slice(0, 50);
+
+  return {
+    version: 1,
+    source: 'ats-checker',
+    persona: normalizedPersona,
+    intent: 'monitor-audited-career-sites',
+    planIntent: normalizedPersona === 'jobseeker' ? 'jobseeker' : 'trial',
+    careerUrls,
+    audit: {
+      totalCount: Number(audit?.totalCount || 0),
+      validCount: Number(audit?.validCount || 0),
+      recognizedCount: Number(audit?.recognizedCount || 0),
+      reviewCount: Number(audit?.reviewCount || 0),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function buildWorkflowSignupHref(persona = 'bd') {
+  const normalizedPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+  const params = new URLSearchParams({
+    signup: '1',
+    persona: normalizedPersona,
+    intent: 'monitor-audited-career-sites',
+    plan: normalizedPersona === 'jobseeker' ? 'jobseeker' : 'trial',
+    utm_source: 'ats-checker',
+    utm_medium: 'tool',
+    utm_campaign: 'coverage_audit_result',
+  });
+  return `${normalizedPersona === 'jobseeker' ? '/job-search' : '/'}?${params.toString()}`;
+}
+
+function persistAuditOnboardingIntent(audit, persona = 'bd') {
+  const intent = buildAuditOnboardingIntent(audit, persona);
+  try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch {}
+  return intent;
+}
+
 export function classifyCareerUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return { status: 'invalid', submittedUrl: raw, title: 'Enter a public URL', tone: 'error' };
@@ -248,18 +296,24 @@ function renderResult(audit) {
   actions.replaceChildren();
 
   if (hasValidUrls) {
+    // Keep the URL list out of the query string so a 50-site audit cannot create
+    // an oversized navigation URL. The destination overlays persona/plan from
+    // the link onto this same-origin, versioned handoff payload.
+    persistAuditOnboardingIntent(audit);
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
     exportButton.className = 'export-action';
     exportButton.textContent = 'Download CSV';
     exportButton.addEventListener('click', () => downloadCoverageCsv(audit));
     const staffingLink = document.createElement('a');
-    staffingLink.href = '/?utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
+    staffingLink.href = buildWorkflowSignupHref('bd');
     staffingLink.className = 'primary-workflow';
-    staffingLink.textContent = 'Prioritize target companies';
+    staffingLink.textContent = 'Monitor these companies';
+    staffingLink.addEventListener('click', () => persistAuditOnboardingIntent(audit, 'bd'));
     const jobSearchLink = document.createElement('a');
-    jobSearchLink.href = '/job-search?utm_source=ats-checker&utm_medium=tool&utm_campaign=coverage_audit_result';
+    jobSearchLink.href = buildWorkflowSignupHref('jobseeker');
     jobSearchLink.textContent = 'Find relevant roles';
+    jobSearchLink.addEventListener('click', () => persistAuditOnboardingIntent(audit, 'jobseeker'));
     actions.append(exportButton, staffingLink, jobSearchLink);
   }
 

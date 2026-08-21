@@ -100,6 +100,67 @@ test('ATS checker audits a target list with an explicit denominator', async ({ p
   expect(trackedEvents).not.toContain('ats_sample_used');
 });
 
+test('ATS audit hands the audited list and workflow intent into signup', async ({ page }) => {
+  await page.goto('/ats-checker');
+  await page.getByLabel('Career-site or job-board URLs').fill([
+    'https://boards.greenhouse.io/handoff-example',
+    'https://handoff.example.com/careers',
+    'http://localhost:8787',
+  ].join('\n'));
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+
+  const savedAudit = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  expect(savedAudit).toMatchObject({
+    version: 1,
+    source: 'ats-checker',
+    persona: 'bd',
+    intent: 'monitor-audited-career-sites',
+    planIntent: 'trial',
+    careerUrls: [
+      'https://boards.greenhouse.io/handoff-example',
+      'https://handoff.example.com/careers',
+    ],
+  });
+
+  await page.getByRole('link', { name: 'Monitor these companies' }).click();
+  await expect(page).toHaveURL((url) => (
+    url.searchParams.get('signup') === '1'
+    && url.searchParams.get('persona') === 'bd'
+    && url.searchParams.get('intent') === 'monitor-audited-career-sites'
+    && url.searchParams.get('plan') === 'trial'
+  ));
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.locator('[role="status"]', { hasText: 'Your audit is ready.' })).toContainText('2 career sites');
+  await expect(page.locator('#signup-persona')).toHaveValue('bd');
+
+  const signupIntent = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  expect(signupIntent).toMatchObject({
+    source: 'ats-checker',
+    persona: 'bd',
+    intent: 'monitor-audited-career-sites',
+    planIntent: 'trial',
+  });
+  expect(signupIntent.careerUrls).toHaveLength(2);
+});
+
+test('pricing selection persists the intended paid plan through signup', async ({ page }) => {
+  await page.goto('/');
+  const salesPlan = page.locator('.pricing-card', { hasText: 'Sales Professional' });
+  await salesPlan.getByRole('button', { name: 'Get started' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.locator('[role="status"]', { hasText: 'Sales Professional selected.' })).toBeVisible();
+  const planIntent = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  expect(planIntent).toMatchObject({
+    version: 1,
+    source: 'pricing',
+    persona: 'bd',
+    intent: 'start-trial',
+    planIntent: 'sales',
+    careerUrls: [],
+  });
+});
+
 test('ATS checker offers a useful sample path without signup', async ({ page }) => {
   const trackedEvents = await collectAnalyticsEvents(page);
   await page.goto('/ats-checker');

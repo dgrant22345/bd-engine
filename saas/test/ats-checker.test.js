@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildCoverageAudit, buildCoverageCsv, classifyCareerUrl } from '../public/ats-checker.js';
+import {
+  ONBOARDING_INTENT_STORAGE_KEY,
+  buildAuditOnboardingIntent,
+  buildCoverageAudit,
+  buildCoverageCsv,
+  buildWorkflowSignupHref,
+  classifyCareerUrl,
+} from '../public/ats-checker.js';
 
 test('ATS checker recognizes every provider advertised on the public page', () => {
   const examples = [
@@ -69,4 +76,46 @@ test('ATS coverage CSV exports every audited row and neutralizes formulas', () =
 
   assert.match(csv, /"https:\/\/jobs\.ashbyhq\.com\/example","jobs\.ashbyhq\.com","Recognized","Ashby"/);
   assert.match(csv, /"'=not-a-url","","Invalid",""/);
+});
+
+test('ATS audit builds a bounded onboarding handoff from valid public URLs', () => {
+  const audit = buildCoverageAudit([
+    'https://boards.greenhouse.io/example',
+    'https://example.com/careers',
+    'http://localhost:8787',
+  ].join('\n'));
+  const intent = buildAuditOnboardingIntent(audit, 'bd');
+
+  assert.equal(ONBOARDING_INTENT_STORAGE_KEY, 'bd_onboarding_intent');
+  assert.equal(intent.version, 1);
+  assert.equal(intent.source, 'ats-checker');
+  assert.equal(intent.persona, 'bd');
+  assert.equal(intent.intent, 'monitor-audited-career-sites');
+  assert.equal(intent.planIntent, 'trial');
+  assert.deepEqual(intent.careerUrls, [
+    'https://boards.greenhouse.io/example',
+    'https://example.com/careers',
+  ]);
+  assert.deepEqual(intent.audit, {
+    totalCount: 3,
+    validCount: 2,
+    recognizedCount: 1,
+    reviewCount: 1,
+  });
+  assert.ok(Number.isFinite(Date.parse(intent.updatedAt)));
+});
+
+test('ATS workflow links carry signup, persona, monitoring, and plan intent', () => {
+  const staffingUrl = new URL(buildWorkflowSignupHref('bd'), 'https://bd-engine.example');
+  assert.equal(staffingUrl.pathname, '/');
+  assert.equal(staffingUrl.searchParams.get('signup'), '1');
+  assert.equal(staffingUrl.searchParams.get('persona'), 'bd');
+  assert.equal(staffingUrl.searchParams.get('intent'), 'monitor-audited-career-sites');
+  assert.equal(staffingUrl.searchParams.get('plan'), 'trial');
+
+  const jobSearchUrl = new URL(buildWorkflowSignupHref('jobseeker'), 'https://bd-engine.example');
+  assert.equal(jobSearchUrl.pathname, '/job-search');
+  assert.equal(jobSearchUrl.searchParams.get('signup'), '1');
+  assert.equal(jobSearchUrl.searchParams.get('persona'), 'jobseeker');
+  assert.equal(jobSearchUrl.searchParams.get('plan'), 'jobseeker');
 });

@@ -65,6 +65,8 @@
   <script>
   (() => {
     const root = document.getElementById('cloud-root');
+    const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
+    const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
     // ── State ─────────────────────────────────────────────────────────────
     let state = {
@@ -90,6 +92,7 @@
       canManageWorkspace: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
+      onboardingIntent: getInitialOnboardingIntent(),
       acquisition: getInitialAcquisition(),
     };
 
@@ -115,6 +118,103 @@
     function getInitialSignupPersona() {
       const requestedPersona = new URLSearchParams(window.location.search).get('persona');
       return window.location.pathname === '/job-search' || requestedPersona === 'jobseeker' ? 'jobseeker' : 'bd';
+    }
+
+    function normalizeOnboardingPersona(value) {
+      return value === 'jobseeker' ? 'jobseeker' : 'bd';
+    }
+
+    function normalizeOnboardingPlan(value) {
+      return ['trial', 'sales', 'jobseeker'].includes(value) ? value : '';
+    }
+
+    function normalizeOnboardingIntent(value) {
+      return ['monitor-audited-career-sites', 'start-trial'].includes(value) ? value : '';
+    }
+
+    function sanitizeOnboardingCareerUrls(values) {
+      if (!Array.isArray(values)) return [];
+      const unique = new Set();
+      for (const value of values) {
+        try {
+          const parsed = new URL(String(value || '').trim());
+          if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue;
+          unique.add(parsed.href);
+        } catch {}
+        if (unique.size >= 50) break;
+      }
+      return [...unique];
+    }
+
+    function getInitialOnboardingIntent() {
+      const params = new URLSearchParams(window.location.search);
+      let stored = null;
+      try { stored = JSON.parse(localStorage.getItem(ONBOARDING_INTENT_STORAGE_KEY) || 'null'); } catch {}
+      const updatedAt = Date.parse(stored?.updatedAt || '');
+      const isFresh = stored?.version === 1
+        && Number.isFinite(updatedAt)
+        && Date.now() - updatedAt <= ONBOARDING_INTENT_MAX_AGE_MS;
+      if (!isFresh && stored) {
+        try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+        stored = null;
+      }
+
+      const queryIntent = normalizeOnboardingIntent(params.get('intent'));
+      const queryPlan = normalizeOnboardingPlan(params.get('plan'));
+      const hasExplicitHandoff = params.get('signup') === '1' || Boolean(queryIntent || queryPlan);
+      if (!stored && !hasExplicitHandoff) return null;
+
+      const persona = normalizeOnboardingPersona(params.get('persona') || stored?.persona);
+      const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
+      const intent = queryIntent
+        || normalizeOnboardingIntent(stored?.intent)
+        || (careerUrls.length ? 'monitor-audited-career-sites' : 'start-trial');
+      const planIntent = queryPlan
+        || normalizeOnboardingPlan(stored?.planIntent)
+        || (persona === 'jobseeker' ? 'jobseeker' : 'trial');
+      const next = {
+        version: 1,
+        source: stored?.source === 'ats-checker' ? 'ats-checker' : 'pricing',
+        persona,
+        intent,
+        planIntent,
+        careerUrls,
+        audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
+        updatedAt: hasExplicitHandoff ? new Date().toISOString() : stored?.updatedAt || new Date().toISOString(),
+      };
+      try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    }
+
+    function persistOnboardingIntent(patch = {}) {
+      const current = state.onboardingIntent || {};
+      const persona = normalizeOnboardingPersona(patch.persona || current.persona || state.signupPersona);
+      const careerUrls = sanitizeOnboardingCareerUrls(
+        Object.prototype.hasOwnProperty.call(patch, 'careerUrls') ? patch.careerUrls : current.careerUrls,
+      );
+      const requestedPlan = normalizeOnboardingPlan(patch.planIntent);
+      let planIntent = requestedPlan || normalizeOnboardingPlan(current.planIntent);
+      if (!planIntent || (persona === 'jobseeker' && planIntent !== 'jobseeker')) {
+        planIntent = persona === 'jobseeker' ? 'jobseeker' : 'trial';
+      } else if (persona === 'bd' && planIntent === 'jobseeker') {
+        planIntent = 'trial';
+      }
+      const retainsAuditSource = careerUrls.length > 0 && current.source === 'ats-checker';
+      const next = {
+        version: 1,
+        source: retainsAuditSource ? 'ats-checker' : (patch.source === 'ats-checker' ? 'ats-checker' : 'pricing'),
+        persona,
+        intent: normalizeOnboardingIntent(patch.intent)
+          || normalizeOnboardingIntent(current.intent)
+          || (careerUrls.length ? 'monitor-audited-career-sites' : 'start-trial'),
+        planIntent,
+        careerUrls,
+        audit: patch.audit || current.audit,
+        updatedAt: new Date().toISOString(),
+      };
+      state.onboardingIntent = next;
+      try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+      return next;
     }
 
     function getInitialAcquisition() {
@@ -272,12 +372,22 @@
         } else if (state.resetToken) {
           state.view = 'reset';
         } else {
-          state.view = new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing';
+          const params = new URLSearchParams(window.location.search);
+          state.view = params.get('login') === '1'
+            ? 'login'
+            : params.get('signup') === '1'
+              ? 'signup'
+              : 'landing';
         }
       } catch {
+        const params = new URLSearchParams(window.location.search);
         state.view = state.resetToken
           ? 'reset'
-          : (new URLSearchParams(window.location.search).get('login') === '1' ? 'login' : 'landing');
+          : params.get('login') === '1'
+            ? 'login'
+            : params.get('signup') === '1'
+              ? 'signup'
+              : 'landing';
       }
       render();
     }
@@ -324,8 +434,17 @@
       }
     }
 
-    function openSignup(persona = state.signupPersona) {
+    function openSignup(persona = state.signupPersona, planIntent = '') {
       state.signupPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+      const normalizedPlan = normalizeOnboardingPlan(planIntent);
+      if (normalizedPlan || state.onboardingIntent) {
+        persistOnboardingIntent({
+          source: state.onboardingIntent?.source || 'pricing',
+          persona: state.signupPersona,
+          intent: state.onboardingIntent?.careerUrls?.length ? 'monitor-audited-career-sites' : 'start-trial',
+          planIntent: normalizedPlan,
+        });
+      }
       trackAcquisitionEvent('signup_started').catch(() => {});
       state.view = 'signup';
       render();
@@ -782,7 +901,7 @@
                   <li>3 CSV imports</li>
                 </ul>
                 <p class="pricing-upgrade">Upgrade when your readiness score shows enough live data to run the workflow every week.</p>
-                <button class="btn btn-primary btn-block" data-signup>Start free trial</button>
+                <button class="btn btn-primary btn-block" data-signup data-plan-intent="trial">Start free trial</button>
               </div>
               <div class="pricing-card ${isJobSeekerLanding ? '' : 'pricing-card--popular'}">
                 <div class="pricing-badge ${isJobSeekerLanding ? '' : 'popular'}">${isJobSeekerLanding ? 'For staffing teams' : 'Complete workflow'}</div>
@@ -798,7 +917,7 @@
                   <li>Workspace sync across your devices</li>
                 </ul>
                 <p class="pricing-upgrade">Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account across devices. Personal display preferences stay on each device.</p>
-                <button class="btn btn-primary btn-block btn-glow" data-signup>Get started</button>
+                <button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Get started</button>
               </div>
               <div class="pricing-card ${isJobSeekerLanding ? 'pricing-card--popular' : ''}" ${isJobSeekerLanding ? 'style="order:-1"' : ''}>
                 <div class="pricing-badge ${isJobSeekerLanding ? 'popular' : ''}">${isJobSeekerLanding ? 'Recommended' : 'For job seekers'}</div>
@@ -813,7 +932,7 @@
                   <li>50 CSV imports</li>
                 </ul>
                 <p class="pricing-upgrade">Use your own network and live hiring signals to decide where to focus each day.</p>
-                <button class="btn btn-primary btn-block" data-jobseeker-signup>Start job search</button>
+                <button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start job search</button>
               </div>
             </div>
             </section>
@@ -851,9 +970,9 @@
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
       root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
       root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
-      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker')));
+      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker', btn.dataset.planIntent || '')));
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
-      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup()));
+      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd', btn.dataset.planIntent || '')));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
       root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
       console.info(`BD Engine landing render: ${Math.round(performance.now() - landingStartedAt)}ms (${isJobSeekerLanding ? 'job seeker' : 'staffing'} workflow)`);
@@ -1122,6 +1241,16 @@
     }
 
     function renderSignup() {
+      const onboardingUrlCount = state.onboardingIntent?.careerUrls?.length || 0;
+      const selectedPlanLabel = {
+        sales: 'Sales Professional',
+        jobseeker: 'Job Seeker',
+      }[state.onboardingIntent?.planIntent] || '';
+      const onboardingSummary = onboardingUrlCount
+        ? `<div class="auth-error" role="status" style="background: rgba(79, 70, 229, .08); border-color: rgba(79, 70, 229, .26); color: #3730a3;"><strong>Your audit is ready.</strong> ${onboardingUrlCount} ${onboardingUrlCount === 1 ? 'career site' : 'career sites'} will be ready to add during setup.</div>`
+        : selectedPlanLabel
+          ? `<div class="auth-error" role="status" style="background: rgba(79, 70, 229, .08); border-color: rgba(79, 70, 229, .26); color: #3730a3;"><strong>${selectedPlanLabel} selected.</strong> Your no-card trial starts first; you can confirm billing later.</div>`
+          : '';
       root.innerHTML = `
         <div class="auth-page">
           <div class="auth-card">
@@ -1132,6 +1261,7 @@
               <h2>Create your account</h2>
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
+            ${onboardingSummary}
             ${state.referralCode ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
@@ -1177,6 +1307,16 @@
         state.signupPersona = personaSelect?.value === 'jobseeker' ? 'jobseeker' : 'bd';
         if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name' : 'Workspace name';
         if (workspaceInput) workspaceInput.placeholder = state.signupPersona === 'jobseeker' ? 'My Job Search' : 'My Company';
+        if (state.onboardingIntent) {
+          persistOnboardingIntent({
+            persona: state.signupPersona,
+            planIntent: state.signupPersona === 'jobseeker'
+              ? 'jobseeker'
+              : state.onboardingIntent.planIntent === 'jobseeker'
+                ? 'trial'
+                : state.onboardingIntent.planIntent,
+          });
+        }
       };
       personaSelect?.addEventListener('change', applySignupPersona);
       applySignupPersona();
