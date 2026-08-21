@@ -4555,6 +4555,236 @@ a {
   }
 }
 
+/* Shared list hierarchy: keep the working set visible and reveal secondary controls. */
+.list-view-options > summary {
+  min-width: 104px;
+  text-align: center;
+}
+
+.list-filter-grid {
+  align-items: end;
+}
+
+.list-filter-grid--jobs {
+  grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(150px, 0.8fr)) auto;
+}
+
+.list-filter-grid--contacts {
+  grid-template-columns: minmax(240px, 1.5fr) minmax(180px, 0.9fr) auto;
+}
+
+.list-filter-actions {
+  justify-content: flex-start;
+  padding-inline: 0;
+  background: transparent;
+}
+
+.filter-disclosure {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+}
+
+.filter-disclosure > summary {
+  width: fit-content;
+  padding: 10px 2px 2px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.filter-disclosure[open] > summary {
+  color: var(--accent);
+}
+
+.filter-disclosure__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.jobs-table th:first-child {
+  min-width: 210px;
+}
+
+.contacts-table th:first-child {
+  min-width: 210px;
+}
+
+.tasks-view {
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.tasks-header {
+  padding-bottom: 14px;
+}
+
+.task-create-disclosure {
+  width: min(760px, 100%);
+}
+
+.task-create-disclosure > .task-create-form {
+  padding: 14px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-muted);
+}
+
+.task-section {
+  margin-bottom: 22px;
+}
+
+.task-item:hover {
+  transform: none;
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-section .collapsible-header {
+  min-height: 52px;
+}
+
+.admin-section .collapsible-header.collapsed {
+  padding-block: 2px;
+}
+
+.admin-section .collapsible-header.collapsed .panel-header p {
+  max-width: 72ch;
+}
+
+@media (max-width: 920px) {
+  .list-filter-grid--jobs,
+  .list-filter-grid--contacts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .list-filter-grid--jobs,
+  .list-filter-grid--contacts {
+    grid-template-columns: 1fr;
+  }
+
+  .list-filter-actions {
+    padding: 0;
+  }
+
+  .filter-disclosure__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tasks-view {
+    padding: 14px;
+  }
+
+  .tasks-header {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .tasks-tabs {
+    width: 100%;
+  }
+
+  .tasks-tabs .tab-btn {
+    flex: 1;
+  }
+
+  .responsive-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .responsive-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .responsive-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .responsive-table tbody > tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+
+  .responsive-table tbody > tr > td {
+    display: block;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: transparent !important;
+    overflow-wrap: anywhere;
+  }
+
+  .responsive-table tbody > tr > td::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  .responsive-table tbody > tr > td[data-label="Company"],
+  .responsive-table tbody > tr > td[data-label="Contact"],
+  .responsive-table tbody > tr > td[data-label="Role"],
+  .responsive-table tbody > tr > td[data-label="Owner / next step"],
+  .responsive-table tbody > tr > td[data-label="Review reason"],
+  .responsive-table tbody > tr > td:not([data-label]) {
+    grid-column: 1 / -1;
+  }
+
+  .responsive-table tbody > tr > td:last-child,
+  .responsive-table tbody > tr > td:nth-last-child(2):nth-child(odd) {
+    border-bottom: 0;
+  }
+
+  .responsive-table .quick-log-row,
+  .responsive-table .enrichment-edit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .responsive-table .quick-log-row > td,
+  .responsive-table .enrichment-edit-row > td {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 480px) {
+  .responsive-table tbody > tr {
+    grid-template-columns: 1fr;
+  }
+
+  .responsive-table tbody > tr > td {
+    grid-column: 1 / -1;
+  }
+}
+
 .persona-action-plan { margin-bottom: 20px; }
 .persona-action-plan--detail { margin-bottom: 14px; }
 .persona-action-grid {
@@ -7591,5 +7821,26 @@ textarea:focus-visible {
     top: 112px;
     right: 12px;
     left: 12px;
+  }
+}
+
+/* Final responsive list corrections must follow the compact-density overrides above. */
+.filter-grid .list-filter-actions {
+  justify-content: flex-start;
+}
+
+@media (max-width: 760px) {
+  .table.responsive-table {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .accounts-table tbody > tr > td:first-child {
+    width: auto;
+    grid-column: 1 / -1;
+  }
+
+  .responsive-table tbody > tr > td[data-label=""]::before {
+    display: none;
   }
 }

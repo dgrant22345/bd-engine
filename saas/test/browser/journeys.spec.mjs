@@ -267,6 +267,7 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await completeSetup(page, app);
   await gotoAppRoute(page, '#/admin');
 
+  await app.locator('[data-collapse-id="runtime-status"]').click();
   const health = app.locator('.ingestion-health');
   await expect(health).toBeVisible({ timeout: 15000 });
   await expect(health).toContainText('Last successful refresh');
@@ -274,7 +275,6 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await expect(health).toContainText(/Due now|[A-Z][a-z]{2} \d{1,2}/);
   await expect(app.locator('.coverage-health')).toContainText('Ready sources');
   await expect(app.locator('.coverage-health')).toContainText('Highest-priority coverage fixes');
-  await app.locator('[data-collapse-id="runtime-status"]').click();
   const copyDiagnostics = app.locator('[data-action="copy-diagnostics"]');
   await expect(copyDiagnostics).toBeVisible();
   await copyDiagnostics.click();
@@ -312,6 +312,7 @@ test('analytics admin journey: campaign and activation milestones are visible', 
   const analyticsSection = app.locator('#admin-section-site-analytics');
   await expect(analyticsSection).toBeVisible({ timeout: 15000 });
   await expect(analyticsSection).toContainText('Acquisition and activation');
+  await analyticsSection.locator('[data-collapse-id="site-analytics"]').click();
   const funnel = analyticsSection.locator('[aria-label="Acquisition and activation funnel"]');
   await expect(funnel).toBeVisible();
   await expect(funnel.locator('[data-analytics-event="ats_sample_used"]')).toContainText(/[1-9][\d,]* events?/);
@@ -325,6 +326,7 @@ test('task journey: whitespace task is rejected visibly, valid task succeeds', a
   const { app } = await signup(page);
   await completeSetup(page, app);
   await gotoAppRoute(page, '#/tasks');
+  await app.locator('.task-create-disclosure > summary').click();
   const form = app.locator('#task-create-form');
   await expect(form).toBeVisible({ timeout: 15000 });
   // Whitespace summary passes native required and must show the app's warning

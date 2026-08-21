@@ -1,16 +1,20 @@
 const defaultAdminCollapsed = {
+  'pipeline-ops': false,
+  'search-focus': true,
+  'background-jobs': true,
+  'billing-subscription': true,
+  'coverage-health': true,
+  'ats-config-records': true,
+  'review-queues': true,
+  'site-analytics': true,
+  'runtime-status': true,
   'enrichment-coverage': true,
   'enrichment-queue': true,
   'resolver-coverage': true,
-  'runtime-status': true,
-  'background-jobs': true,
-  'pipeline-ops': false,
-  'search-focus': false,
+  'ats-config-form': true,
   'scoring-settings': true,
   'automation-rules': true,
   'alert-thresholds': true,
-  'ats-config-form': true,
-  'ats-config-records': true,
 };
 
 const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
@@ -3325,6 +3329,17 @@ function renderDashboardWorkflowStrip({ dashboard, extended, resolutionPressure 
   `;
 }
 
+function renderExportOptions(view, label = 'View options') {
+  return `
+    <details class="queue-tools list-view-options">
+      <summary aria-label="${escapeAttr(label)}">${escapeHtml(label)}</summary>
+      <div class="queue-tools__menu">
+        ${renderExportButton(view)}
+      </div>
+    </details>
+  `;
+}
+
 function readinessTone(status, score = 0) {
   if (status === 'paid_ready' || score >= 80) return 'success';
   if (status === 'trial_ready' || score >= 55) return 'accent';
@@ -5496,6 +5511,8 @@ async function renderContactsView() {
   setViewTitle(isJobSeekerPersona() ? 'Network' : 'Contacts');
   const result = await api(`/api/contacts${buildQuery(appState.contactQuery)}`);
   const jobSeeker = isJobSeekerPersona();
+  const readyContacts = result.items.filter((item) => ['ready_to_contact', 'replied', 'opportunity'].includes(item.outreachStatus)).length;
+  const contactAdvancedOpen = Boolean(appState.contactQuery.minScore);
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -5505,21 +5522,26 @@ async function renderContactsView() {
           <h3>${jobSeeker ? 'Warm contact paths' : 'Prioritized contacts'}</h3>
           <p class="subtitle">${jobSeeker ? 'Your network ranked by company overlap and role relevance so you can ask the right person for context, direction, or a referral.' : 'Your network ranked by relevance, title strength, and company overlap so you can route outreach through the best people first.'}</p>
         </div>
-        <div class="kpi-ribbon headline-metrics">
+        <div class="kpi-ribbon headline-metrics headline-metrics--compact">
           ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('Page', formatNumber(result.page))}
-          ${renderMetricTile('Page size', formatNumber(result.pageSize))}
+          ${renderMetricTile('Ready now', formatNumber(readyContacts))}
         </div>
       </div>
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>${renderExportButton('contacts')}</div>
-      <form id="contacts-filter-form" class="filter-grid filter-grid--compact">
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>${renderExportOptions('contacts', 'Contact options')}</div>
+      <form id="contacts-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--contacts">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
-        ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
-        <div class="field field--action"><label>${jobSeeker ? 'Filter network' : 'Filter contacts'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset</button></div>
+        <div class="field field--action list-filter-actions"><button class="primary-button" type="submit">Apply</button></div>
+        <details class="filter-disclosure"${contactAdvancedOpen ? ' open' : ''}>
+          <summary>More filters${contactAdvancedOpen ? ' · 1 active' : ''}</summary>
+          <div class="filter-disclosure__grid">
+            ${renderField('Min score', `<input name="minScore" type="number" min="0" value="${escapeAttr(appState.contactQuery.minScore)}">`)}
+            <div class="field field--action"><button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset filters</button></div>
+          </div>
+        </details>
       </form>
       ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts match these filters', copy: 'Reset filters or import your LinkedIn Connections.csv to see mapped contacts.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset filters</button><a class="secondary-button" href="#/admin">Import contacts</a>' })}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
@@ -5538,6 +5560,7 @@ async function renderJobsView() {
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
+  const jobAdvancedCount = ['ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -5547,25 +5570,30 @@ async function renderJobsView() {
           <h3>${jobSeeker ? 'Open roles at target companies' : 'Imported job activity'}</h3>
           <p class="subtitle">${jobSeeker ? 'Current roles from supported careers boards, deduped and ready to compare against your target list and network.' : 'Normalized open roles from supported ATS boards, deduped and ready to use as outreach context.'}</p>
         </div>
-        <div class="kpi-ribbon headline-metrics">
+        <div class="kpi-ribbon headline-metrics headline-metrics--compact">
           ${renderMetricTile('Results', formatNumber(result.total))}
           ${renderMetricTile('Recent postings', formatNumber(result.items.filter((item) => item.isNew).length))}
-          ${renderMetricTile('Page size', formatNumber(result.pageSize))}
         </div>
       </div>
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Set a search focus in Tools to rank jobs by fit, then filter by company, platform, and recency.'}</p></div>${renderExportButton('jobs')}</div>
-      <form id="jobs-filter-form" class="filter-grid filter-grid--compact">
+      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Set a search focus in Tools to rank jobs by fit, then filter by company, platform, and recency.'}</p></div>${renderExportOptions('jobs', 'Job options')}</div>
+      <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
-        ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
-        ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
         ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
-        ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
-        ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option><option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
-        <div class="field field--action"><label>${jobSeeker ? 'Filter roles' : 'Filter jobs'}</label><button class="primary-button" type="submit">Apply filters</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset</button></div>
+        <div class="field field--action list-filter-actions"><button class="primary-button" type="submit">Apply</button></div>
+        <details class="filter-disclosure"${jobAdvancedCount ? ' open' : ''}>
+          <summary>More filters${jobAdvancedCount ? ` · ${formatNumber(jobAdvancedCount)} active` : ''}</summary>
+          <div class="filter-disclosure__grid">
+            ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
+            ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
+            ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
+            ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option><option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
+            <div class="field field--action"><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button></div>
+          </div>
+        </details>
       </form>
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
@@ -5738,11 +5766,6 @@ async function renderAdminView() {
   const unresolvedQueue = batch.unresolvedQueue;
   const mediumQueue = batch.mediumQueue;
   const enrichmentQueue = batch.enrichmentQueue;
-  const rolloutRemainingCount = Number(targetScoreRollout.remainingCount || 0);
-  const rolloutActive = Boolean(targetScoreRollout.hasActiveJob);
-  const lastRun = stateBootstrap.settings?.lastPipelineRun || 0;
-  const lastRunTime = lastRun ? new Date(lastRun).toLocaleString() : 'Never';
-  const isStale = !lastRun || (Date.now() - lastRun > 24 * 60 * 60 * 1000);
   const summary = resolverReport.summary || {};
   const enrichmentSummary = enrichmentReport.summary || {};
   const operationalCompanyCount = summary.operationalTotalCompanies ?? summary.totalCompanies ?? 0;
@@ -5825,10 +5848,7 @@ async function renderAdminView() {
           <div class="hero-signal-strip">
             ${renderSignalChip('Tracked coverage', `${formatNumber(operationalCoveragePercent)}%`, 'success')}
             ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
-            ${renderSignalChip('Jobs running', formatNumber(runtime.runningJobs || 0), 'accent')}
-            ${renderSignalChip('Jobs queued', formatNumber(runtime.queuedJobs || 0), 'neutral')}
-            ${renderSignalChip('Last run', lastRunTime, isStale ? 'warning' : 'success')}
-            ${renderSignalChip('Score backlog', rolloutActive ? 'Worker active' : formatNumber(rolloutRemainingCount), rolloutActive ? 'accent' : (rolloutRemainingCount > 0 ? 'warning' : 'success'))}
+            ${renderSignalChip('Background work', formatNumber((runtime.runningJobs || 0) + (runtime.queuedJobs || 0)), (runtime.runningJobs || runtime.queuedJobs) ? 'accent' : 'neutral')}
           </div>
         </div>
         <div class="action-card action-card--featured">
@@ -6118,15 +6138,15 @@ async function exportJobsCsv() {
 
 function renderTodayQueueTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>Target score</th><th>Hiring velocity</th><th>Engagement</th><th>Network</th><th>Next move</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>Company</th><th>Target score</th><th>Hiring velocity</th><th>Engagement</th><th>Network</th><th>Next move</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
-          <td>${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d</div></td>
-          <td>${formatNumber(item.engagementScore || 0)}<div class="small muted">${formatNumber(item.jobsLast90Days || 0)} jobs / 90d</div></td>
-          <td>${renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength))}<div class="small muted">${formatNumber(item.companyGrowthSignalScore || 0)} growth</div></td>
-          <td>${escapeHtml(item.nextAction || item.recommendedAction || '')}</td>
+          <td data-label="Company"><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
+          <td data-label="Target score">${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td data-label="Hiring velocity">${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d</div></td>
+          <td data-label="Engagement">${formatNumber(item.engagementScore || 0)}<div class="small muted">${formatNumber(item.jobsLast90Days || 0)} jobs / 90d</div></td>
+          <td data-label="Network">${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : '<span class="muted">—</span>'}<div class="small muted">${formatNumber(item.companyGrowthSignalScore || 0)} growth</div></td>
+          <td data-label="Next move">${escapeHtml(item.nextAction || item.recommendedAction || '')}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -6145,16 +6165,16 @@ function renderAccountsTable(items) {
       <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
-    <div class="table-scroll"><table class="table accounts-table"><thead><tr><th><input type="checkbox" id="bulk-select-all" aria-label="Select all accounts"></th><th>Company</th><th>Target score</th><th>Hiring</th><th>Owner / next step</th><th>Status</th><th>ATS</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table accounts-table responsive-table"><thead><tr><th><input type="checkbox" id="bulk-select-all" aria-label="Select all accounts"></th><th>Company</th><th>Target score</th><th>Hiring</th><th>Owner / next step</th><th>Status</th><th>ATS</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr class="${item.staleFlag === 'STALE' ? 'row--stale' : ''}">
-          <td><input type="checkbox" class="bulk-checkbox" value="${item.id}" aria-label="Select ${escapeAttr(item.displayName)}"></td>
-          <td><a class="row-link" href="#/accounts/${item.id}" data-action="open-account" data-id="${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
-          <td>${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td>${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div>${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}</td>
-          <td data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div><details class="row-detail-menu"><summary>Log activity</summary><button class="micro-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Open note field</button></details></td>
-          <td>${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
-          <td>${renderAccountResolutionSummary(item)}</td>
+          <td data-label=""><input type="checkbox" class="bulk-checkbox" value="${item.id}" aria-label="Select ${escapeAttr(item.displayName)}"></td>
+          <td data-label="Company"><a class="row-link" href="#/accounts/${item.id}" data-action="open-account" data-id="${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div></td>
+          <td data-label="Target score">${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td data-label="Hiring">${formatNumber(item.hiringVelocity || 0)} velocity<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div>${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}</td>
+          <td data-label="Owner / next step" data-inline-edit="owner" data-account-id="${item.id}" data-current-value="${escapeAttr(item.owner || '')}" title="Double-click to edit">${escapeHtml(item.owner || 'Unassigned')}<div class="small muted">${escapeHtml(item.nextAction || 'No next action set')}</div><details class="row-detail-menu"><summary>Log activity</summary><button class="micro-button" data-action="quick-log-inline" data-id="${item.id}" data-name="${escapeAttr(item.displayName)}">Open note field</button></details></td>
+          <td data-label="Status">${renderStatusPill(item.status || 'new', 'neutral')}<div class="small muted">${escapeHtml(humanize(item.outreachStatus || 'not_started'))}</div></td>
+          <td data-label="ATS">${renderAccountResolutionSummary(item)}</td>
         </tr>
         <tr id="quick-log-${item.id}" class="quick-log-row hidden">
           <td colspan="7">
@@ -6171,16 +6191,14 @@ function renderAccountsTable(items) {
 
 function renderContactsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Company</th><th>Title</th><th>Score</th><th>Connected</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table contacts-table"><thead><tr><th>Contact</th><th>Company</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${safeExternalHref(item.linkedinUrl) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.linkedinUrl))}" target="_blank" rel="noreferrer">LinkedIn</a>` : 'No URL'}</div></td>
-          <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
-          <td>${escapeHtml(item.title || '')}</td>
-          <td>${formatNumber(item.priorityScore)}</td>
-          <td>${formatDate(item.connectedOn)}</td>
-          <td>${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}</td>
-          <td>
+          <td data-label="Contact"><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${escapeHtml(item.title || '')}</div><div class="small muted">Connected ${formatDate(item.connectedOn)}${safeExternalHref(item.linkedinUrl) ? ` · <a class="row-link" href="${escapeAttr(safeExternalHref(item.linkedinUrl))}" target="_blank" rel="noreferrer">LinkedIn</a>` : ''}</div></td>
+          <td data-label="Company">${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+          <td data-label="Score">${formatNumber(item.priorityScore)}</td>
+          <td data-label="Status">${renderStatusPill(item.outreachStatus || 'not_started', 'neutral')}</td>
+          <td data-label="Action">
             <div class="button-row button-row--wrap">
               <button class="ghost-button ghost-button--xs" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId || '')}" data-contact-id="${escapeAttr(item.id || '')}" data-contact-name="${escapeAttr(item.fullName || '')}" ${item.accountId ? '' : 'disabled'}>Outreach</button>
             </div>
@@ -6195,17 +6213,15 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td>${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
-          <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
-          <td>${renderJobRelevance(item)}</td>
-          <td>${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
-          <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
-          <td>${formatDate(item.postedAt)}</td>
-          <td>${formatDate(item.retrievedAt || item.importedAt)}<div class="small muted">${escapeHtml(item.jobId || '')}</div></td>
-          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">Recent posting</div>' : ''}</td>
+          <td data-label="Role">${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
+          <td data-label="Company">${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+          <td data-label="Fit">${renderJobRelevance(item)}</td>
+          <td data-label="Location">${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
+          <td data-label="Source">${renderStatusPill(item.atsType || 'unknown', 'neutral')} ${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}</td>
+          <td data-label="Timing">${formatDate(item.postedAt)}<div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -6296,7 +6312,7 @@ function renderEnrichmentQueuePanel(result) {
     return renderEmptyState({ icon: 'Search', title: 'No companies match this review queue', copy: 'Reset filters or use Top 100/250 to focus the queue.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="enrichment">Reset filters</button>', compact: true });
   }
   return `
-    <div class="table-scroll"><table class="table">
+    <div class="table-scroll"><table class="table responsive-table admin-review-table">
       <thead><tr>
         <th>Company</th>
         <th>Target score</th>
@@ -6309,13 +6325,13 @@ function renderEnrichmentQueuePanel(result) {
       <tbody>
         ${result.items.map((item) => `
           <tr>
-            <td><strong>${escapeHtml(item.displayName || '')}</strong><div class="small muted">${escapeHtml(item.canonicalDomain || item.domain || 'No domain')} · ${escapeHtml(item.careersUrl || 'No careers URL')}</div></td>
-            <td>${formatNumber(item.targetScore || 0)}</td>
-            <td>${formatNumber(item.connectionCount || 0)}</td>
-            <td>${formatNumber(item.openRoleCount || 0)}</td>
-            <td>${renderStatusPill(item.enrichmentConfidence || 'unresolved', item.enrichmentConfidence === 'high' ? 'success' : (item.enrichmentConfidence === 'medium' ? 'warning' : 'neutral'))}</td>
-            <td>${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}${renderEnrichmentSignalPills(item, { compact: true })}<div class="small muted">${safeJoin(item.aliases)}</div></td>
-            <td><div class="button-row button-row--wrap"><button class="ghost-button ghost-button--xs" data-action="account-quick-enrich" data-id="${item.id}">Quick check</button><button class="secondary-button ghost-button--xs" data-action="account-resolve-now" data-id="${item.id}">Resolve</button><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></div></td>
+            <td data-label="Company"><strong>${escapeHtml(item.displayName || '')}</strong><div class="small muted">${escapeHtml(item.canonicalDomain || item.domain || 'No domain')} · ${escapeHtml(item.careersUrl || 'No careers URL')}</div></td>
+            <td data-label="Target score">${formatNumber(item.targetScore || 0)}</td>
+            <td data-label="Connections">${formatNumber(item.connectionCount || 0)}</td>
+            <td data-label="Open roles">${formatNumber(item.openRoleCount || 0)}</td>
+            <td data-label="Confidence">${renderStatusPill(item.enrichmentConfidence || 'unresolved', item.enrichmentConfidence === 'high' ? 'success' : (item.enrichmentConfidence === 'medium' ? 'warning' : 'neutral'))}</td>
+            <td data-label="Review reason">${escapeHtml(item.reviewReason || getTargetScoreExplanation(item) || item.enrichmentFailureReason || '')}${renderEnrichmentSignalPills(item, { compact: true })}<div class="small muted">${safeJoin(item.aliases)}</div></td>
+            <td data-label="Actions"><details class="row-detail-menu"><summary>Review actions</summary><div class="micro-button-row"><button class="ghost-button ghost-button--xs" data-action="account-quick-enrich" data-id="${item.id}">Quick check</button><button class="secondary-button ghost-button--xs" data-action="account-resolve-now" data-id="${item.id}">Resolve</button><button class="ghost-button ghost-button--xs" data-action="expand-enrichment-row" data-id="${item.id}">Edit</button></div></details></td>
           </tr>
           <tr class="enrichment-edit-row hidden" id="enrichment-edit-${item.id}">
             <td colspan="7">
@@ -6365,17 +6381,14 @@ function applyEnrichmentFilters() {
 
 function renderConfigsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Company</th><th>ATS</th><th>Confidence</th><th>Discovery</th><th>Evidence</th><th>Status</th><th>Last checked</th><th>Actions</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table config-table"><thead><tr><th>Company</th><th>Board match</th><th>Discovery</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td><strong>${escapeHtml(item.companyName || '')}</strong><div class="small muted">${escapeHtml(item.domain || item.careersUrl || '')}</div></td>
-          <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}<div class="small muted">${escapeHtml(item.boardId || item.resolvedBoardUrl || '')}</div></td>
-          <td>${renderStatusPill(item.confidenceBand || 'unresolved', item.confidenceBand === 'high' ? 'success' : (item.confidenceBand === 'medium' ? 'warning' : 'neutral'))}<div class="small muted">${formatNumber(item.confidenceScore || 0)} / 100</div></td>
-          <td>${renderStatusPill(item.discoveryStatus || 'manual', 'neutral')}<div class="small muted">${escapeHtml(item.discoveryMethod || '')}</div></td>
-          <td>${escapeHtml(item.evidenceSummary || item.failureReason || item.notes || '')}<div class="small muted">${escapeHtml(asArray(item.matchedSignatures).join(', '))}</div></td>
-          <td>${renderStatusPill(item.active ? 'active' : 'inactive', item.active ? 'success' : 'neutral')}<div class="small muted">${escapeHtml(item.reviewStatus || 'pending')}</div></td>
-          <td>${formatDate(item.lastCheckedAt || item.lastResolutionAttemptAt)}<div class="small muted">${escapeHtml(item.lastImportStatus || '')}</div></td>
-          <td><div class="button-row button-row--wrap"><button class="ghost-button" data-action="edit-config" data-id="${item.id}">Edit</button><button class="ghost-button" data-action="retry-config-resolution" data-id="${item.id}">Retry</button>${item.atsType ? `<button class="ghost-button" data-action="config-review" data-id="${item.id}" data-decision="promote">Promote</button>` : ''}</div></td>
+          <td data-label="Company"><strong>${escapeHtml(item.companyName || '')}</strong><div class="small muted">${escapeHtml(item.domain || item.careersUrl || '')}</div></td>
+          <td data-label="Board match">${renderStatusPill(item.atsType || 'unknown', 'neutral')} ${renderStatusPill(item.confidenceBand || 'unresolved', item.confidenceBand === 'high' ? 'success' : (item.confidenceBand === 'medium' ? 'warning' : 'neutral'))}<div class="small muted">${escapeHtml(item.boardId || item.resolvedBoardUrl || '')} · ${formatNumber(item.confidenceScore || 0)} / 100</div></td>
+          <td data-label="Discovery">${renderStatusPill(item.discoveryStatus || 'manual', 'neutral')}<div class="small muted">${escapeHtml(item.discoveryMethod || '')}</div><div class="small muted">${escapeHtml(item.evidenceSummary || item.failureReason || item.notes || '')}</div></td>
+          <td data-label="Status">${renderStatusPill(item.active ? 'active' : 'inactive', item.active ? 'success' : 'neutral')}<div class="small muted">${escapeHtml(item.reviewStatus || 'pending')} · ${formatDate(item.lastCheckedAt || item.lastResolutionAttemptAt)}</div></td>
+          <td data-label="Actions"><details class="row-detail-menu"><summary>Manage board</summary><div class="micro-button-row"><button class="ghost-button" data-action="edit-config" data-id="${item.id}">Edit</button><button class="ghost-button" data-action="retry-config-resolution" data-id="${item.id}">Retry</button>${item.atsType ? `<button class="ghost-button" data-action="config-review" data-id="${item.id}" data-decision="promote">Promote</button>` : ''}</div></details></td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -6386,20 +6399,20 @@ function renderAccountJobsTable(items) {
 
 function renderAccountContactsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>
-      ${items.map((item) => `<tr><td>${escapeHtml(item.fullName || '')}</td><td>${escapeHtml(item.title || '')}</td><td>${formatNumber(item.priorityScore)}</td><td>${formatDate(item.connectedOn)}</td></tr>`).join('')}
+    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>
+      ${items.map((item) => `<tr><td data-label="Contact">${escapeHtml(item.fullName || '')}</td><td data-label="Title">${escapeHtml(item.title || '')}</td><td data-label="Score">${formatNumber(item.priorityScore)}</td><td data-label="Connected">${formatDate(item.connectedOn)}</td></tr>`).join('')}
     </tbody></table></div>`;
 }
 
 function renderAccountConfigsTable(items) {
   return `
-    <div class="table-scroll"><table class="table"><thead><tr><th>ATS</th><th>Board</th><th>Discovery</th><th>Import</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>ATS</th><th>Board</th><th>Discovery</th><th>Import</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
-          <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
-          <td>${escapeHtml(item.boardId || item.careersUrl || '')}</td>
-          <td>${renderStatusPill(item.discoveryStatus || 'unknown', 'neutral')}<div class="small muted">${escapeHtml(item.discoveryMethod || '')}</div></td>
-          <td>${formatDate(item.lastImportAt)}<div class="small muted">${escapeHtml(item.lastImportStatus || 'not run')}</div></td>
+          <td data-label="ATS">${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
+          <td data-label="Board">${escapeHtml(item.boardId || item.careersUrl || '')}</td>
+          <td data-label="Discovery">${renderStatusPill(item.discoveryStatus || 'unknown', 'neutral')}<div class="small muted">${escapeHtml(item.discoveryMethod || '')}</div></td>
+          <td data-label="Import">${formatDate(item.lastImportAt)}<div class="small muted">${escapeHtml(item.lastImportStatus || 'not run')}</div></td>
         </tr>
       `).join('')}
     </tbody></table></div>`;
@@ -8627,31 +8640,42 @@ async function renderTasksView() {
 
     appRoot.innerHTML = `
       <section class="tasks-view">
-        <div class="tasks-header">
+        <div class="panel-header tasks-header">
+          <div>
+            <p class="eyebrow">Follow-up queue</p>
+            <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : 'Completed work'}</h3>
+            <p class="muted small">Keep the next commitment visible; create another only when you need it.</p>
+          </div>
           <div class="tasks-tabs">
             <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" data-action="filter-tasks" data-status="pending">Pending</button>
             <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" data-action="filter-tasks" data-status="completed">Completed</button>
           </div>
         </div>
 
-        <form id="task-create-form" class="task-create-form">
-          <label>
-            <span>What needs to happen?</span>
-            <input name="summary" maxlength="240" required placeholder="Follow up with the hiring manager">
-          </label>
-          <label>
-            <span>Due date</span>
-            <input name="dueDate" type="date" value="${toLocalDateInputValue(new Date(Date.now() + 86400000))}" required>
-          </label>
-          <button type="submit" class="primary-button">Add task</button>
-        </form>
+        <details class="form-card workspace-disclosure task-create-disclosure">
+          <summary>
+            <span class="workspace-disclosure__icon" aria-hidden="true">+</span>
+            <span><strong>New task</strong><small>Add a dated follow-up or reminder.</small></span>
+          </summary>
+          <form id="task-create-form" class="task-create-form">
+            <label>
+              <span>What needs to happen?</span>
+              <input name="summary" maxlength="240" required placeholder="Follow up with the hiring manager">
+            </label>
+            <label>
+              <span>Due date</span>
+              <input name="dueDate" type="date" value="${toLocalDateInputValue(new Date(Date.now() + 86400000))}" required>
+            </label>
+            <button type="submit" class="primary-button">Add task</button>
+          </form>
+        </details>
 
         <div class="tasks-content">
           ${appState.taskQuery.status === 'pending' ? `
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Add a task above or create a follow-up from an account page.' }) : ''}
+            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
             ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}

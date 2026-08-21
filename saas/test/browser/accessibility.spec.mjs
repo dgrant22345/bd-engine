@@ -60,3 +60,25 @@ test('account entry and workspace avoid horizontal overflow at phone width', asy
   await expect(appFrame.locator('.nav a[aria-current="page"]')).toHaveAttribute('data-route', 'dashboard');
   await expect(appFrame.locator('#global-search-input')).toBeVisible();
 });
+
+test('primary workspace routes stay within phone, tablet, and desktop viewports', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  const frame = page.locator('iframe.cloud-app-frame');
+  await expect(frame).toBeVisible({ timeout: 15000 });
+  const appFrame = page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes('/app/'));
+  const routes = ['dashboard', 'accounts', 'jobs', 'contacts', 'tasks', 'admin'];
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 768, height: 900 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const route of routes) {
+      await appFrame.evaluate((nextRoute) => { location.hash = `#/${nextRoute}`; }, route);
+      await expect(appFrame.locator('.nav a[aria-current="page"]')).toHaveAttribute('data-route', route);
+      expect(await appFrame.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `${route} overflowed at ${viewport.width}px`).toBe(true);
+    }
+  }
+});
