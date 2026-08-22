@@ -2778,6 +2778,13 @@ export function createStore() {
       }
       const queryStartedAt = performance.now();
       let items = filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']);
+      if (query.geography) {
+        if (query.geography === 'gta') {
+          items = items.filter((item) => isGtaLocation(item.location));
+        } else {
+          items = items.filter((item) => accountMatchesGeography(item, query.geography));
+        }
+      }
       if (query.ats) {
         const ats = normalizeAtsType(query.ats);
         items = items.filter((item) => normalizeAtsType(item.atsType || item.source) === ats);

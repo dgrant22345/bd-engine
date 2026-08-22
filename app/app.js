@@ -122,7 +122,7 @@ const appState = {
   activeView: 'dashboard',
   accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
+  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
@@ -6586,7 +6586,7 @@ async function renderJobsView() {
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
-  const jobAdvancedCount = ['ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
+  const jobAdvancedCount = ['geography', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -6613,6 +6613,7 @@ async function renderJobsView() {
         <details class="filter-disclosure"${jobAdvancedCount ? ' open' : ''}>
           <summary>More filters${jobAdvancedCount ? ` · ${formatNumber(jobAdvancedCount)} active` : ''}</summary>
           <div class="filter-disclosure__grid">
+            ${renderField('Geography', `<select name="geography"><option value="">All locations</option><option value="gta" ${selected(appState.jobQuery.geography, 'gta')}>Greater Toronto Area (GTA / ON)</option><option value="canada" ${selected(appState.jobQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.jobQuery.geography, 'canada_us')}>Include US</option><option value="us" ${selected(appState.jobQuery.geography, 'us')}>US only</option></select>`)}
             ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
             ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
             ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
