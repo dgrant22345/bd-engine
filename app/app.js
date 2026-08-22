@@ -9244,7 +9244,7 @@ function renderGeneratedOutreach(outreach) {
         <article class="outreach-piece outreach-piece--primary">
           <div class="outreach-piece-header">
             <strong>Primary email</strong>
-            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="ghost-button micro-button" data-action="select-outreach-subject" data-index="${index}" type="button">Use: ${escapeHtml(option)}</button>`).join('')}</div>` : ''}
+            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="outreach-subject-chip ${option === outreach.subjectLine ? 'active' : ''}" data-action="select-outreach-subject" data-index="${index}" type="button">✨ ${escapeHtml(option)}</button>`).join('')}</div>` : ''}
           </div>
           <label class="outreach-edit-label" for="outreach-subject-input">Subject</label>
           <input id="outreach-subject-input" class="outreach-editable outreach-editable--subject" data-outreach-field="subjectLine" value="${escapeAttr(outreach.subjectLine)}">

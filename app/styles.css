@@ -2414,8 +2414,46 @@ a {
   box-shadow: var(--shadow-xs);
 }
 
+.outreach-subject-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.outreach-subject-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.outreach-subject-chip:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+}
+
+.outreach-subject-chip.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
 .outreach-piece--primary {
   grid-column: span 2;
+  border-color: rgba(37, 99, 235, 0.22);
+  box-shadow: 0 8px 24px -4px rgba(37, 99, 235, 0.08);
 }
 
 .outreach-piece--variant {
