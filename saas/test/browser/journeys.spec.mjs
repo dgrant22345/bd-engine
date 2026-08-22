@@ -6,8 +6,8 @@
  * unhandled rejection — the executable version of "every button responds".
  *
  * Notes on app structure encoded here:
- * - A fresh signup is gated inside the first-run setup wizard (profile → team →
- *   import → launch); other routes render setup until it completes.
+ * - A fresh signup is gated inside the first-run setup wizard (workspace →
+ *   watchlist → optional contacts → launch); other routes render setup until it completes.
  * - Inputs use native `required`, so empty submits are blocked by the browser.
  *   Whitespace values pass native validation and exercise the app's own
  *   trim-validation toasts.
@@ -35,17 +35,20 @@ async function signup(page, { persona = 'bd', email: requestedEmail = '' } = {})
   await page.fill('#signup-email', email);
   await page.fill('#signup-password', 'journey-password-1');
   await page.fill('#signup-workspace', 'Journey Workspace');
+  await page.check('#signup-legal-consent');
   await page.click('#signup-form button[type="submit"]');
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
   return { email, app: page.frameLocator('iframe.cloud-app-frame') };
 }
 
-// Walk the first-run wizard to a completed workspace: profile → team →
-// skip import (completes setup) → open dashboard when offered.
+// Walk the first-run wizard to a completed workspace: workspace → skip
+// watchlist → skip optional contacts → open dashboard when offered.
 async function fillProfileForm(profile) {
   await profile.locator('#setup-workspace-name').fill('Journey Workspace');
-  await profile.locator('#setup-user-name').fill('Journey Tester');
-  await profile.locator('#setup-user-email').fill('journey-setup@example.com');
+  const name = profile.locator('#setup-user-name');
+  const email = profile.locator('#setup-user-email');
+  if (await name.isVisible()) await name.fill('Journey Tester');
+  if (await email.isVisible()) await email.fill('journey-setup@example.com');
 }
 
 async function completeSetup(page, app) {
@@ -53,9 +56,9 @@ async function completeSetup(page, app) {
   await expect(profile).toBeVisible({ timeout: 15000 });
   await fillProfileForm(profile);
   await profile.locator('button[type="submit"]').click();
-  const team = app.locator('#setup-team-form');
-  await expect(team).toBeVisible({ timeout: 10000 });
-  await team.locator('button[type="submit"]').click();
+  const skipTargets = app.locator('[data-action="setup-skip-targets"]');
+  await expect(skipTargets).toBeVisible({ timeout: 10000 });
+  await skipTargets.click();
   const skip = app.locator('[data-action="setup-skip-import"]');
   await expect(skip).toBeVisible({ timeout: 10000 });
   await skip.click();
@@ -83,7 +86,9 @@ async function startDemo(page) {
   await page.goto('/');
   await page.locator('[data-demo-start]').first().click();
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
-  return page.frameLocator('iframe.cloud-app-frame');
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.getByText('Daily operating view', { exact: true })).toBeVisible({ timeout: 15000 });
+  return app;
 }
 
 async function gotoAppRoute(page, route) {
@@ -129,7 +134,7 @@ test('sample setup journey: loaded data updates readiness before launch', async 
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await profile.locator('button[type="submit"]').click();
-  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   await app.locator('[data-action="setup-load-sample"]').click();
   await expect(app.locator('[data-action="setup-open-dashboard"]')).toBeVisible({ timeout: 15000 });
   await expect.poll(async () => Number(await app.locator('.setup-value-score strong').textContent())).toBeGreaterThan(0);
@@ -184,7 +189,7 @@ test('job seeker journey keeps company, network, role, and outreach language', a
   await expect(app.locator('body')).toContainText('Job search setup', { timeout: 15000 });
   await fillProfileForm(app.locator('#setup-profile-form'));
   await app.locator('#setup-profile-form button[type="submit"]').click();
-  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   await app.locator('[data-action="setup-load-sample"]').click();
   await expect(app.locator('.setup-summary-grid')).toContainText('Companies', { timeout: 15000 });
   await expect(app.locator('.setup-summary-grid')).toContainText('Network contacts');
@@ -233,6 +238,46 @@ test('setup journey: wizard completes through to the dashboard', async ({ page }
   await expect(app.locator('body')).toContainText(/dashboard|account|signal|readiness/i, { timeout: 15000 });
 });
 
+test('commercial loop: quick-start watchlist becomes a measurable account outcome', async ({ page }) => {
+  const { app } = await signup(page);
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await fillProfileForm(profile);
+  await profile.locator('button[type="submit"]').click();
+
+  const targetForm = app.locator('#setup-target-form');
+  await expect(targetForm).toBeVisible({ timeout: 10000 });
+  await targetForm.locator('#setup-target-sites').fill('https://jobs.lever.co/acme-staffing-test');
+  await targetForm.locator('button[type="submit"]').click();
+  await app.locator('[data-action="setup-skip-import"]').click({ timeout: 10000 });
+  await expect(app.locator('.setup-summary-grid')).toContainText('Accounts added', { timeout: 15000 });
+  await expect(app.locator('.setup-summary-grid')).toContainText('1');
+  await app.locator('[data-action="setup-open-dashboard"]').click();
+
+  const endTour = app.locator('[data-action="end-tour"]');
+  const tourAppeared = await endTour.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false);
+  if (tourAppeared) {
+    await endTour.click();
+  }
+
+  await gotoAppRoute(page, '#/accounts');
+  await expect(app.locator('table tbody')).toContainText('Acme Staffing Test', { timeout: 15000 });
+  await app.locator('[data-action="open-account"]').first().click();
+  const activityForm = app.locator('#activity-form');
+  await expect(activityForm).toBeVisible({ timeout: 10000 });
+  await activityForm.locator('select[name="pipelineStage"]').selectOption('opportunity');
+  await activityForm.locator('input[name="value"]').fill('5000');
+  await activityForm.locator('input[name="summary"]').fill('Qualified staffing opportunity created');
+  await activityForm.locator('button[type="submit"]').click();
+  await expect(app.locator('.account-outcomes')).toContainText('Opportunity created', { timeout: 10000 });
+  await expect(app.locator('.account-outcomes')).toContainText('$5,000');
+
+  await gotoAppRoute(page, '#/dashboard');
+  await expect(app.locator('.commercial-outcomes-panel')).toContainText('Opportunities', { timeout: 15000 });
+  await expect(app.locator('.commercial-outcomes-panel')).toContainText('$5,000');
+  await expect(app.locator('.commercial-outcomes-panel')).toContainText('1');
+});
+
 test('first-value checklist routes an empty workspace to the exact setup control', async ({ page }) => {
   const { app } = await signup(page);
   await completeSetup(page, app);
@@ -242,9 +287,9 @@ test('first-value checklist routes an empty workspace to the exact setup control
   await expect(checklist).toBeVisible({ timeout: 15000 });
   await expect(checklist).toContainText('0 of 4 complete');
   await expect(checklist.getByRole('link', { name: 'Add account' })).toHaveAttribute('href', '#/accounts/new');
-  await expect(checklist.getByRole('link', { name: 'Import contacts' })).toHaveAttribute('href', '#/admin/pipeline-ops/contacts');
   await expect(checklist.getByRole('link', { name: 'Find board' })).toHaveAttribute('href', '#/admin/pipeline-ops/discovery');
   await expect(checklist.getByRole('link', { name: 'Import jobs' })).toHaveAttribute('href', '#/admin/pipeline-ops/jobs');
+  await expect(checklist.getByRole('link', { name: 'Open account queue' })).toHaveAttribute('href', '#/accounts');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await checklist.scrollIntoViewIfNeeded();
@@ -258,11 +303,11 @@ test('first-value checklist routes an empty workspace to the exact setup control
   await expect(app.locator('#account-create-form input[name="company"]')).toBeFocused({ timeout: 15000 });
 
   await gotoAppRoute(page, '#/dashboard');
-  await app.locator('[data-first-value-checklist]').getByRole('link', { name: 'Import contacts' }).click();
+  await app.locator('[data-first-value-checklist]').getByRole('link', { name: 'Find board' }).click();
   const refreshSection = app.locator('#admin-section-pipeline-ops');
   await expect(refreshSection).toBeVisible({ timeout: 15000 });
   await expect(refreshSection.locator('[data-collapse-id="pipeline-ops"]')).toHaveAttribute('aria-expanded', 'true');
-  await expect(refreshSection.locator('#connections-csv-file')).toBeFocused();
+  await expect(refreshSection.locator('[data-action="run-discovery"]')).toBeFocused();
 });
 
 test('admin journey: import health and automatic refresh timing are visible', async ({ page }) => {
@@ -435,12 +480,12 @@ test('mobile message journey: account detail and composer stay actionable', asyn
 
 test('import journey: setup preview selects tracked targets and preserves network companies', async ({ page }) => {
   const { app } = await signup(page);
-  // Advance to the import step: profile → team → import.
+  // Advance to the optional contacts step: workspace → skip watchlist → contacts.
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await fillProfileForm(profile);
   await profile.locator('button[type="submit"]').click();
-  await app.locator('#setup-team-form button[type="submit"]').click({ timeout: 10000 });
+  await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   const fileInput = app.locator('#setup-csv-file');
   await expect(app.locator('[data-action="setup-browse-csv"]')).toBeVisible({ timeout: 10000 });
   const csv = [
