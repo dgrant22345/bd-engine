@@ -3768,6 +3768,16 @@ function Convert-BdSqliteContactRowToSummary {
 function Convert-BdSqliteJobRowToSummary {
     param($Row)
 
+    $raw = if ($Row.raw_payload) { ConvertFrom-JsonSafe $Row.raw_payload } else { $null }
+    $workStyle = [string](if ($raw -and $raw.workStyle) { $raw.workStyle } else {
+        $text = ([string]$Row.location + ' ' + [string]$Row.title + ' ' + [string]$Row.department + ' ' + [string]$Row.employment_type).ToLowerInvariant()
+        if ($text -match '\bhybrid\b') { 'hybrid' }
+        elseif ($text -match '\b(remote|work from home|distributed|anywhere|telecommute|virtual)\b') { 'remote' }
+        elseif ($text -match '\b(on site|onsite|in office|office based|in-person)\b') { 'onsite' }
+        else { 'unknown' }
+    })
+    $connectionCount = [int](if ($null -ne $Row.connection_count) { $Row.connection_count } elseif ($raw -and $raw.connectionCount) { $raw.connectionCount } else { 0 })
+
     return [ordered]@{
         id = [string]$Row.id
         accountId = [string]$Row.account_id
@@ -3788,6 +3798,18 @@ function Convert-BdSqliteJobRowToSummary {
         active = ConvertFrom-BdSqliteIntBool $Row.active
         isGta = ConvertFrom-BdSqliteIntBool $Row.is_gta
         isNew = ConvertFrom-BdSqliteIntBool $Row.is_new
+        connectionCount = $connectionCount
+        seniorContactCount = [int](if ($raw -and $raw.seniorContactCount) { $raw.seniorContactCount } else { 0 })
+        talentContactCount = [int](if ($raw -and $raw.talentContactCount) { $raw.talentContactCount } else { 0 })
+        topContactName = [string](if ($raw -and $raw.topContactName) { $raw.topContactName } else { '' })
+        contacts = @(if ($raw -and $raw.contacts) { @($raw.contacts) } else { @() })
+        workStyle = $workStyle
+        isRemote = [bool]($workStyle -eq 'remote')
+        isLocal = [bool](ConvertFrom-BdSqliteIntBool $Row.is_gta)
+        hasConnections = [bool]($connectionCount -gt 0)
+        relevanceScore = if ($raw -and $raw.relevanceScore -ne $null) { $raw.relevanceScore } else { $null }
+        relevanceBand = [string](if ($raw -and $raw.relevanceBand) { $raw.relevanceBand } else { 'unscored' })
+        relevanceReasons = @(if ($raw -and $raw.relevanceReasons) { @($raw.relevanceReasons) } else { @() })
     }
 }
 
@@ -4196,6 +4218,10 @@ function Find-BdSqliteJobs {
         $activeQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'active')
         $isNewQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'isNew')
         $recencyDaysQuery = Get-BdSqliteQueryValue -Query $Query -Name 'recencyDays'
+        $geographyQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'geography')
+        $workStyleQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'workStyle')
+        $hasContactsQuery = [string](if ($Query['hasContacts']) { $Query['hasContacts'] } elseif ($Query['hasConnections']) { $Query['hasConnections'] } else { $Query['networkOnly'] })
+        $minConnectionsQuery = Get-BdSqliteQueryValue -Query $Query -Name 'minConnections'
         $sortByQuery = [string](Get-BdSqliteQueryValue -Query $Query -Name 'sortBy')
         $pageQuery = Get-BdSqliteQueryValue -Query $Query -Name 'page'
         $pageSizeQuery = Get-BdSqliteQueryValue -Query $Query -Name 'pageSize'
@@ -4225,7 +4251,60 @@ function Find-BdSqliteJobs {
             $parameters.postedCutoff = (Get-Date).AddDays(-1 * (ConvertTo-BdSqliteNumber $recencyDaysQuery)).ToString('o')
         }
 
+        if ($geographyQuery) {
+            $geo = Normalize-BdSqliteText $geographyQuery
+            if ($geo -eq 'gta') {
+                [void]$whereClauses.Add('is_gta = 1')
+            } elseif ($geo -eq 'remote') {
+                [void]$whereClauses.Add('(location LIKE @remoteLoc OR title LIKE @remoteLoc)')
+                $parameters.remoteLoc = '%remote%'
+            } elseif ($geo -eq 'local_remote') {
+                [void]$whereClauses.Add('(is_gta = 1 OR location LIKE @remoteLoc OR title LIKE @remoteLoc OR location LIKE @caLoc)')
+                $parameters.remoteLoc = '%remote%'
+                $parameters.caLoc = '%canada%'
+            } elseif ($geo -eq 'canada') {
+                [void]$whereClauses.Add('(location LIKE @caLoc OR is_gta = 1)')
+                $parameters.caLoc = '%canada%'
+            } elseif ($geo -eq 'us') {
+                [void]$whereClauses.Add('(location LIKE @usLoc1 OR location LIKE @usLoc2)')
+                $parameters.usLoc1 = '%united states%'
+                $parameters.usLoc2 = '%usa%'
+            }
+        }
+
+        if ($workStyleQuery) {
+            $ws = Normalize-BdSqliteText $workStyleQuery
+            if ($ws -eq 'remote') {
+                [void]$whereClauses.Add('(location LIKE @remoteWs OR title LIKE @remoteWs)')
+                $parameters.remoteWs = '%remote%'
+            } elseif ($ws -eq 'hybrid') {
+                [void]$whereClauses.Add('location LIKE @hybridWs')
+                $parameters.hybridWs = '%hybrid%'
+            } elseif ($ws -eq 'onsite') {
+                [void]$whereClauses.Add('(location LIKE @onsiteWs1 OR location LIKE @onsiteWs2)')
+                $parameters.onsiteWs1 = '%onsite%'
+                $parameters.onsiteWs2 = '%on site%'
+            } elseif ($ws -eq 'local_remote') {
+                [void]$whereClauses.Add('(is_gta = 1 OR location LIKE @remoteWs OR title LIKE @remoteWs OR location LIKE @caWs)')
+                $parameters.remoteWs = '%remote%'
+                $parameters.caWs = '%canada%'
+            }
+        }
+
+        if ($hasContactsQuery -ne '' -and (Test-Truthy $hasContactsQuery)) {
+            [void]$whereClauses.Add('COALESCE(connection_count, 0) > 0')
+        }
+
+        if ($minConnectionsQuery) {
+            $minC = [int](ConvertTo-BdSqliteNumber $minConnectionsQuery)
+            if ($minC -gt 0) {
+                [void]$whereClauses.Add('COALESCE(connection_count, 0) >= @minConn')
+                $parameters.minConn = $minC
+            }
+        }
+
         $orderBy = switch ($sortByQuery) {
+            'connections' { 'COALESCE(connection_count, 0) DESC, posted_at DESC, company_name ASC' }
             'retrieved' { 'COALESCE(retrieved_at, imported_at) DESC, posted_at DESC, company_name ASC' }
             default { 'posted_at DESC, company_name ASC, title ASC' }
         }

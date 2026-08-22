@@ -122,7 +122,7 @@ const appState = {
   activeView: 'dashboard',
   accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', sortBy: '' },
+  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
@@ -207,6 +207,14 @@ const appState = {
       : onboardingIntent?.careerUrls || []).join('\n'),
   },
   taskQuery: { page: 1, pageSize: 50, status: 'pending' },
+  modalCsvFile: null,
+  modalCsvFileName: '',
+  modalCsvParsedStats: null,
+  modalImportBusy: false,
+  modalImportMessage: '',
+  modalImportResult: null,
+  networkModalOpen: false,
+  linkedinGuideModalOpen: false,
 };
 
 const sharedWorkspaceStorageKeys = {
@@ -323,11 +331,13 @@ const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
+const networkImportModalBackdrop = document.getElementById('network-import-modal-backdrop');
+const linkedinGuideModalBackdrop = document.getElementById('linkedin-guide-modal-backdrop');
 
 const defaultQueries = {
   accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
+  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
   configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
 };
@@ -2377,6 +2387,8 @@ function bindEvents() {
     if (e.key === 'Escape') {
       if (appState.cmdPaletteOpen) { closeCmdPalette(); return; }
       if (appState.mobileNavOpen) { closeMobileNav(); return; }
+      if (appState.networkModalOpen) { closeNetworkImportModal(); return; }
+      if (appState.linkedinGuideModalOpen) { closeLinkedInGuideModal(); return; }
       const backdrop = document.getElementById('outreach-modal-backdrop');
       if (backdrop && !backdrop.classList.contains('hidden')) {
         setOutreachModalOpen(false);
@@ -2399,21 +2411,24 @@ function bindEvents() {
         document.getElementById('cmd-input')?.focus();
         return;
       }
-      const backdrop = document.getElementById('outreach-modal-backdrop');
-      if (!backdrop || backdrop.classList.contains('hidden')) return;
-      const panel = backdrop.querySelector('.modal-panel');
-      if (!panel) return;
-      const focusable = panel.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      return;
+      const activeBackdrop = document.querySelector('.modal-backdrop:not(.hidden)');
+      if (activeBackdrop) {
+        const dialog = activeBackdrop.querySelector('.modal-dialog') || activeBackdrop.querySelector('[role="dialog"]');
+        if (dialog) {
+          const focusable = [...dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+            .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+          if (focusable.length) {
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); return; }
+            if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); return; }
+          }
+        }
+      }
     }
 
     // Skip shortcuts when typing in an input
-    if (isInput || appState.cmdPaletteOpen) return;
+    if (isInput || appState.cmdPaletteOpen || appState.networkModalOpen || appState.linkedinGuideModalOpen) return;
 
     // "/" to focus search
     if (e.key === '/') { e.preventDefault(); searchInput?.focus(); return; }
@@ -2457,6 +2472,34 @@ function bindEvents() {
       }
     }
   });
+
+  // Global Drag and Drop support for CSV files
+  window.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      document.body.classList.add('global-dragover');
+    }
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
+      document.body.classList.remove('global-dragover');
+    }
+  });
+
+  window.addEventListener('drop', (e) => {
+    document.body.classList.remove('global-dragover');
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.name.endsWith('.csv') || file.type.includes('csv') || file.name.toLowerCase().includes('connections')) {
+        e.preventDefault();
+        openNetworkImportModal(file);
+      }
+    }
+  });
+
   refreshBootstrapButton.addEventListener('click', async () => {
     refreshBootstrapButton.disabled = true;
     refreshBootstrapButton.textContent = 'Refreshing...';
@@ -2699,6 +2742,38 @@ function bindEvents() {
     }
     if (actionName === 'apply-account-preset') {
       await applyAccountPreset(action.dataset.preset, { navigate: action.dataset.navigate === 'accounts' });
+      return;
+    }
+    if (actionName === 'apply-job-preset') {
+      await applyJobPreset(action.dataset.preset);
+      return;
+    }
+    if (actionName === 'open-network-import-modal') {
+      openNetworkImportModal();
+      return;
+    }
+    if (actionName === 'close-network-import-modal') {
+      closeNetworkImportModal();
+      return;
+    }
+    if (actionName === 'open-linkedin-guide') {
+      openLinkedInGuideModal();
+      return;
+    }
+    if (actionName === 'close-linkedin-guide') {
+      closeLinkedInGuideModal();
+      return;
+    }
+    if (actionName === 'quick-load-sample-workspace') {
+      await quickLoadSampleWorkspace();
+      return;
+    }
+    if (actionName === 'network-modal-browse-csv') {
+      document.getElementById('network-modal-csv-input')?.click();
+      return;
+    }
+    if (actionName === 'network-modal-run-import') {
+      await runNetworkModalImport();
       return;
     }
     if (actionName === 'open-admin-section') {
@@ -3757,6 +3832,55 @@ async function applyAccountPreset(presetId, options = {}) {
     return;
   }
   await renderAccountsView();
+}
+
+async function applyJobPreset(presetId) {
+  if (presetId === 'all') {
+    appState.jobQuery = {
+      ...defaultQueries.jobs,
+      pageSize: appState.jobQuery.pageSize || defaultQueries.jobs.pageSize,
+      sortBy: '',
+      page: 1,
+    };
+    showToast('Showing all jobs.', 'info');
+  } else if (presetId === 'local_remote') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      workStyle: 'local_remote',
+      page: 1,
+    };
+    showToast('Filtered to Local or Remote jobs.', 'info');
+  } else if (presetId === 'network') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      hasContacts: 'true',
+      page: 1,
+    };
+    showToast('Filtered to jobs at companies with contacts in your network.', 'info');
+  } else if (presetId === 'most_connected') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      sortBy: 'connections',
+      page: 1,
+    };
+    showToast('Sorted by most connections in network.', 'info');
+  } else if (presetId === 'best_fit') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      sortBy: 'relevance',
+      minRelevance: '45',
+      page: 1,
+    };
+    showToast('Filtered to best fit roles.', 'info');
+  } else if (presetId === 'recent') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      recencyDays: '7',
+      page: 1,
+    };
+    showToast('Filtered to past 7 days.', 'info');
+  }
+  await renderJobsView();
 }
 
 function renderSavedFilters() {
@@ -5652,6 +5776,524 @@ async function watchSetupImportJob(jobId) {
   }
 }
 
+async function quickLoadSampleWorkspace() {
+  showToast('Loading rich sample network with 500+ contacts & jobs...', 'info');
+  try {
+    const bootstrap = appState.bootstrap || (await loadBootstrap(false));
+    const result = await api('/api/setup/sample-data', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceName: bootstrap.workspace?.name || 'BD Engine Sample',
+        userName: bootstrap.user?.name || 'Demo User',
+        userEmail: bootstrap.user?.email || 'demo@bdengine.local',
+        persona: appState.persona || 'jobseeker',
+      }),
+    });
+    invalidateAppData();
+    await loadBootstrap(true);
+    showToast('✨ Sample network loaded with 500+ contacts and matched jobs!', 'success');
+    if (appState.networkModalOpen) closeNetworkImportModal();
+    await renderRoute();
+  } catch (error) {
+    showToast(`Failed to load sample: ${error.message || error}`, 'error');
+  }
+}
+
+function openNetworkImportModal(file = null) {
+  if (!networkImportModalBackdrop) return;
+  appState.networkModalOpen = true;
+  appState.modalImportResult = null;
+  appState.modalImportBusy = false;
+  if (file) {
+    handleNetworkModalFile(file);
+  } else {
+    renderNetworkImportModal();
+  }
+  networkImportModalBackdrop.classList.remove('hidden');
+  networkImportModalBackdrop.setAttribute('aria-hidden', 'false');
+  wireNetworkModalDropzone();
+}
+
+function closeNetworkImportModal() {
+  if (!networkImportModalBackdrop) return;
+  appState.networkModalOpen = false;
+  appState.modalCsvFile = null;
+  appState.modalCsvFileName = '';
+  appState.modalCsvParsedStats = null;
+  appState.modalImportBusy = false;
+  appState.modalImportMessage = '';
+  appState.modalImportResult = null;
+  networkImportModalBackdrop.classList.add('hidden');
+  networkImportModalBackdrop.setAttribute('aria-hidden', 'true');
+  networkImportModalBackdrop.innerHTML = '';
+}
+
+function openLinkedInGuideModal() {
+  if (!linkedinGuideModalBackdrop) return;
+  appState.linkedinGuideModalOpen = true;
+  renderLinkedInGuideModal();
+  linkedinGuideModalBackdrop.classList.remove('hidden');
+  linkedinGuideModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeLinkedInGuideModal() {
+  if (!linkedinGuideModalBackdrop) return;
+  appState.linkedinGuideModalOpen = false;
+  linkedinGuideModalBackdrop.classList.add('hidden');
+  linkedinGuideModalBackdrop.setAttribute('aria-hidden', 'true');
+  linkedinGuideModalBackdrop.innerHTML = '';
+}
+
+function parseCsvPreviewLocal(text) {
+  if (!text || typeof text !== 'string') return null;
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+
+  let headerIndex = -1;
+  let headers = [];
+  for (let i = 0; i < Math.min(lines.length, 6); i++) {
+    const rawCols = splitCsvLine(lines[i]).map((c) => c.trim().toLowerCase());
+    if (rawCols.includes('first name') || rawCols.includes('company') || rawCols.includes('position') || rawCols.includes('url')) {
+      headerIndex = i;
+      headers = rawCols;
+      break;
+    }
+  }
+  if (headerIndex === -1) {
+    headerIndex = 0;
+    headers = splitCsvLine(lines[0]).map((c) => c.trim().toLowerCase());
+  }
+
+  const companyIdx = headers.indexOf('company');
+  const positionIdx = headers.indexOf('position');
+  const firstNameIdx = headers.indexOf('first name');
+  const lastNameIdx = headers.indexOf('last name');
+
+  const companyMap = new Map();
+  let totalContacts = 0;
+  let seniorCount = 0;
+  let talentCount = 0;
+  const sampleContacts = [];
+
+  const seniorKeywords = /\b(vp|vice president|director|head|chief|cto|cpo|ceo|coo|cfo|cro|founder|co-founder|lead|principal|partner)\b/i;
+  const talentKeywords = /\b(recruiter|talent|recruiting|hiring|people|human resources|hr|staffing)\b/i;
+
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const company = (cols[companyIdx] || '').trim();
+    const position = (cols[positionIdx] || '').trim();
+    const firstName = (cols[firstNameIdx] || '').trim();
+    const lastName = (cols[lastNameIdx] || '').trim();
+    const fullName = `${firstName} ${lastName}`.trim() || `Contact ${totalContacts + 1}`;
+
+    if (!firstName && !company && !position) continue;
+    totalContacts++;
+
+    if (position && seniorKeywords.test(position)) seniorCount++;
+    if (position && talentKeywords.test(position)) talentCount++;
+
+    if (company) {
+      const cleanCompany = company.replace(/[",]/g, '').trim();
+      const count = companyMap.get(cleanCompany) || 0;
+      companyMap.set(cleanCompany, count + 1);
+    }
+
+    if (sampleContacts.length < 5 && fullName) {
+      sampleContacts.push({ fullName, company: company || 'Company unspecified', position: position || 'Role unspecified' });
+    }
+  }
+
+  const sortedCompanies = Array.from(companyMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+
+  return {
+    totalContacts,
+    uniqueCompanies: companyMap.size,
+    seniorCount,
+    talentCount,
+    topCompanies: sortedCompanies.slice(0, 6),
+    sampleContacts,
+  };
+}
+
+function splitCsvLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function handleNetworkModalFile(file) {
+  if (!file) return;
+  appState.modalCsvFile = file;
+  appState.modalCsvFileName = file.name || 'Connections.csv';
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target?.result;
+    appState.modalCsvParsedStats = parseCsvPreviewLocal(text);
+    renderNetworkImportModal();
+    wireNetworkModalDropzone();
+  };
+  reader.readAsText(file);
+}
+
+function wireNetworkModalDropzone() {
+  const dropzone = document.getElementById('network-modal-dropzone');
+  const input = document.getElementById('network-modal-csv-input');
+  if (!dropzone || !input) return;
+
+  input.onchange = () => {
+    if (input.files && input.files[0]) {
+      handleNetworkModalFile(input.files[0]);
+    }
+  };
+
+  dropzone.ondragover = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.add('is-dragover');
+  };
+
+  dropzone.ondragleave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.remove('is-dragover');
+  };
+
+  dropzone.ondrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.remove('is-dragover');
+    if (e.dataTransfer?.files?.[0]) {
+      handleNetworkModalFile(e.dataTransfer.files[0]);
+    }
+  };
+}
+
+function renderNetworkModalPreview() {
+  const stats = appState.modalCsvParsedStats;
+  if (!stats) return '';
+
+  if (appState.modalImportResult) {
+    return `
+      <div class="network-import-success-card">
+        <div class="success-icon-banner">🎉</div>
+        <h4>Network Successfully Imported & Matched!</h4>
+        <p class="muted small">${formatNumber(stats.totalContacts)} contacts processed across ${formatNumber(stats.uniqueCompanies)} companies.</p>
+        <div class="network-success-metrics">
+          <div class="success-metric-box">
+            <strong>${formatNumber(stats.totalContacts)}</strong>
+            <span>Contacts Mapped</span>
+          </div>
+          <div class="success-metric-box">
+            <strong>${formatNumber(stats.uniqueCompanies)}</strong>
+            <span>Companies Added</span>
+          </div>
+          <div class="success-metric-box">
+            <strong>${formatNumber(stats.seniorCount)}</strong>
+            <span>Leadership Contacts</span>
+          </div>
+        </div>
+        <div class="network-success-actions">
+          <a class="primary-button" href="#/jobs?hasContacts=true&workStyle=local_remote" data-action="close-network-import-modal">View Matched Jobs & Warm Paths →</a>
+          <a class="secondary-button" href="#/contacts" data-action="close-network-import-modal">Explore Network Contacts →</a>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="network-preview-panel">
+      <div class="network-preview-summary-grid">
+        <div class="preview-metric-tile">
+          <strong>${formatNumber(stats.totalContacts)}</strong>
+          <span>Connections Found</span>
+        </div>
+        <div class="preview-metric-tile">
+          <strong>${formatNumber(stats.uniqueCompanies)}</strong>
+          <span>Target Companies</span>
+        </div>
+        <div class="preview-metric-tile">
+          <strong>${formatNumber(stats.seniorCount)}</strong>
+          <span>VP / Directors / Heads</span>
+        </div>
+        <div class="preview-metric-tile">
+          <strong>${formatNumber(stats.talentCount)}</strong>
+          <span>Talent & Recruiters</span>
+        </div>
+      </div>
+
+      ${stats.topCompanies && stats.topCompanies.length ? `
+        <div class="network-preview-companies">
+          <span class="preview-subheading">Top Represented Companies in Your Network:</span>
+          <div class="preview-company-chips">
+            ${stats.topCompanies.map((c) => `
+              <span class="preview-company-chip">
+                <span class="company-chip-name">${escapeHtml(c.name)}</span>
+                <span class="company-chip-badge">⚡ ${formatNumber(c.count)}</span>
+              </span>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderNetworkImportModal() {
+  if (!networkImportModalBackdrop) return;
+  const hasFile = Boolean(appState.modalCsvFile);
+  const isDone = Boolean(appState.modalImportResult);
+
+  networkImportModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--lg network-import-dialog" role="dialog" aria-modal="true" aria-labelledby="network-import-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">⚡</span>
+          <div>
+            <h3 id="network-import-title">Import LinkedIn Connections</h3>
+            <p class="muted small">Match people you know to companies with active job openings & warm paths.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-network-import-modal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body network-import-body">
+        <div class="data-use-notice data-use-notice--compact" role="note">
+          <span class="notice-icon" aria-hidden="true">🛡️</span>
+          <span><strong>Privacy & Security:</strong> BD Engine never accesses your LinkedIn account credentials. It only reads the exported <code>Connections.csv</code> file you choose on your device.</span>
+        </div>
+
+        ${!isDone ? `
+          <input id="network-modal-csv-input" class="hidden" type="file" accept=".csv,text/csv" />
+          <div id="network-modal-dropzone" class="setup-drop-zone network-modal-dropzone ${hasFile ? 'is-populated' : ''}" tabindex="0" role="button" aria-label="Drop Connections.csv file here">
+            <div class="dropzone-icon" aria-hidden="true">📁</div>
+            <strong>${hasFile ? escapeHtml(appState.modalCsvFileName || 'Connections.csv') : 'Drag & Drop Connections.csv Here'}</strong>
+            <span class="muted small">${hasFile ? 'File parsed and ready to import.' : 'or browse from your computer'}</span>
+            <button class="secondary-button" type="button" data-action="network-modal-browse-csv">${hasFile ? 'Change File' : 'Browse File'}</button>
+          </div>
+        ` : ''}
+
+        ${renderNetworkModalPreview()}
+
+        ${appState.modalImportBusy ? `
+          <div class="modal-progress-strip">
+            <div class="spinner-inline" aria-hidden="true"></div>
+            <span>${escapeHtml(appState.modalImportMessage || 'Importing connections and matching companies...')}</span>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">📥 How to get Connections.csv</button>
+          <button class="ghost-button ghost-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button>
+        </div>
+        <div class="modal-footer-right">
+          <button class="ghost-button" type="button" data-action="close-network-import-modal">${isDone ? 'Close' : 'Cancel'}</button>
+          ${hasFile && !isDone ? `
+            <button class="primary-button" type="button" data-action="network-modal-run-import" ${appState.modalImportBusy ? 'disabled' : ''}>
+              ${appState.modalImportBusy ? 'Importing...' : 'Import & Match Network'}
+            </button>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLinkedInGuideModal() {
+  if (!linkedinGuideModalBackdrop) return;
+  linkedinGuideModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--md linkedin-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="linkedin-guide-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">📥</span>
+          <div>
+            <h3 id="linkedin-guide-title">How to Export LinkedIn Connections</h3>
+            <p class="muted small">Download your connections CSV in under 30 seconds directly from LinkedIn.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-linkedin-guide" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <ol class="guide-steps-list">
+          <li class="guide-step-item">
+            <span class="guide-step-num">1</span>
+            <div>
+              <strong>Open LinkedIn Data Privacy Settings</strong>
+              <p class="muted small">Go to your LinkedIn profile menu, click <strong>Settings & Privacy</strong> &rarr; <strong>Data Privacy</strong>.</p>
+            </div>
+          </li>
+          <li class="guide-step-item">
+            <span class="guide-step-num">2</span>
+            <div>
+              <strong>Request Data Archive</strong>
+              <p class="muted small">Click <strong>Get a copy of your data</strong>, select <strong>Connections</strong>, and click <strong>Request archive</strong>.</p>
+            </div>
+          </li>
+          <li class="guide-step-item">
+            <span class="guide-step-num">3</span>
+            <div>
+              <strong>Check Your Email</strong>
+              <p class="muted small">LinkedIn will email you a download link (usually in 2-5 minutes). Unzip the downloaded file.</p>
+            </div>
+          </li>
+          <li class="guide-step-item">
+            <span class="guide-step-num">4</span>
+            <div>
+              <strong>Upload Connections.csv here</strong>
+              <p class="muted small">Drop the <code>Connections.csv</code> file into BD Engine to automatically map all jobs and companies.</p>
+            </div>
+          </li>
+        </ol>
+
+        <div class="guide-direct-link-card">
+          <div>
+            <strong>Ready to export now?</strong>
+            <p class="muted small">Open LinkedIn's export page in a new tab.</p>
+          </div>
+          <a class="primary-button primary-button--sm" href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank" rel="noopener noreferrer">
+            Open LinkedIn Privacy Page &nearr;
+          </a>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="ghost-button" type="button" data-action="close-linkedin-guide">Close</button>
+        <button class="primary-button" type="button" data-action="open-network-import-modal">I Have My CSV Ready &rarr;</button>
+      </div>
+    </div>
+  `;
+}
+
+async function runNetworkModalImport() {
+  if (!appState.modalCsvFile) {
+    showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
+    return;
+  }
+  appState.modalImportBusy = true;
+  appState.modalImportMessage = 'Importing contacts, matching companies, and tracking boards...';
+  renderNetworkImportModal();
+
+  try {
+    const file = appState.modalCsvFile;
+    const run = await postConnectionsCsvFile(file, {
+      dryRun: false,
+      useEmptyState: false,
+      fileName: appState.modalCsvFileName || file.name || 'Connections.csv',
+    });
+
+    appState.modalImportResult = run;
+    invalidateAppData();
+    await loadBootstrap(true);
+    showToast('⚡ Network successfully imported and matched!', 'success');
+  } catch (error) {
+    showToast(`Import failed: ${error.message || error}`, 'error', 8000);
+  } finally {
+    appState.modalImportBusy = false;
+    appState.modalImportMessage = '';
+    renderNetworkImportModal();
+  }
+}
+
+function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy = getPersonaUiCopy()) {
+  const contactCount = Number(dashboard.summary?.contactCount || 0);
+  const activeJobCount = getDashboardActiveJobCount(dashboard.summary);
+  const networkLeaders = Array.isArray(dashboard.networkLeaders) ? dashboard.networkLeaders : [];
+  const hasContacts = contactCount > 0;
+
+  return `
+    <section class="detail-card network-radar-card" aria-label="LinkedIn Network Matching Radar">
+      <div class="network-radar-header">
+        <div class="network-radar-title-lockup">
+          <div class="network-radar-badge"><span class="pill-dot"></span>⚡ Network Match Radar</div>
+          <h3>${hasContacts ? `${formatNumber(contactCount)} Connections Matched Across Your Target Companies` : 'Turn LinkedIn Connections into Warm Job Opportunities'}</h3>
+          <p class="muted small">${hasContacts
+            ? 'Companies where you have 1st-degree contacts are prioritized with direct warm paths to open roles.'
+            : 'Upload your LinkedIn Connections.csv or try the demo network to see who you know at actively hiring companies.'}</p>
+        </div>
+        <div class="network-radar-actions">
+          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal">
+            <span class="btn-icon">⚡</span> <span>${hasContacts ? 'Update Connections CSV' : 'Upload Connections.csv'}</span>
+          </button>
+          ${!hasContacts ? `<button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button>` : ''}
+          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">📥 Export Guide</button>
+        </div>
+      </div>
+
+      <div class="network-radar-grid">
+        <div class="network-radar-step-card">
+          <div class="radar-step-icon">📁</div>
+          <div class="radar-step-content">
+            <strong>1. Import Connections</strong>
+            <span class="muted small">Export <code>Connections.csv</code> in 30s from LinkedIn settings. No login required.</span>
+          </div>
+          <span class="radar-step-status ${hasContacts ? 'status-pill status-pill--success' : 'status-pill status-pill--neutral'}">
+            ${hasContacts ? `✓ ${formatNumber(contactCount)} contacts` : 'Ready to import'}
+          </span>
+        </div>
+
+        <div class="network-radar-step-card">
+          <div class="radar-step-icon">🏢</div>
+          <div class="radar-step-content">
+            <strong>2. Auto-Match Companies</strong>
+            <span class="muted small">Discovers 50+ ATS platforms (Greenhouse, Lever, Ashby, Workday).</span>
+          </div>
+          <span class="radar-step-status ${networkLeaders.length ? 'status-pill status-pill--success' : 'status-pill status-pill--neutral'}">
+            ${networkLeaders.length ? `✓ ${formatNumber(networkLeaders.length)} companies` : 'Auto-resolving'}
+          </span>
+        </div>
+
+        <div class="network-radar-step-card">
+          <div class="radar-step-icon">🎯</div>
+          <div class="radar-step-content">
+            <strong>3. Warm Job Openings</strong>
+            <span class="muted small">Filter Local GTA & Remote roles with 1-click tailored intro notes.</span>
+          </div>
+          <a class="radar-step-link secondary-button secondary-button--xs" href="#/jobs?hasContacts=true&workStyle=local_remote">
+            View Matched Roles →
+          </a>
+        </div>
+      </div>
+
+      ${hasContacts && networkLeaders.length ? `
+        <div class="network-leaders-strip">
+          <span class="network-leaders-label">Top Connected Companies:</span>
+          <div class="network-leaders-chips">
+            ${networkLeaders.slice(0, 6).map((item) => `
+              <a class="network-leader-chip" href="#/accounts/${item.id}">
+                <span class="network-leader-name">${escapeHtml(item.displayName)}</span>
+                <span class="network-leader-count">⚡ ${formatNumber(item.connectionCount || 0)}</span>
+                ${item.openRoleCount ? `<span class="network-leader-jobs">🎯 ${formatNumber(item.openRoleCount)} roles</span>` : ''}
+              </a>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </section>
+  `;
+}
+
 function getDashboardActiveJobCount(summary = {}) {
   return Number(summary.activeJobCount ?? summary.jobCount ?? 0);
 }
@@ -5769,6 +6411,8 @@ async function renderDashboardView(options = {}) {
     ${renderDeferredTargetNotice()}
 
     ${renderFirstValueChecklist(dashboard, personaCopy)}
+
+    ${dashSection('network-radar', renderDashboardNetworkRadar(dashboard, extended, personaCopy))}
 
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
@@ -6557,7 +7201,14 @@ async function renderContactsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>${renderExportOptions('contacts', 'Contact options')}</div>
+      <div class="panel-header">
+        <div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>
+        <div class="panel-actions">
+          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal"><span class="btn-icon">⚡</span><span>Import LinkedIn CSV</span></button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Sample Network</button>
+          ${renderExportOptions('contacts', 'Contact options')}
+        </div>
+      </div>
       <form id="contacts-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--contacts">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.contactQuery.q)}" placeholder="Name, company, title">`)}
         ${renderField('Outreach', `<select name="outreachStatus"><option value="">Any stage</option><option value="not_started" ${selected(appState.contactQuery.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(appState.contactQuery.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(appState.contactQuery.outreachStatus, 'ready_to_contact')}>Ready to contact</option><option value="contacted" ${selected(appState.contactQuery.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(appState.contactQuery.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(appState.contactQuery.outreachStatus, 'opportunity')}>Opportunity</option></select>`)}
@@ -6570,7 +7221,7 @@ async function renderContactsView() {
           </div>
         </details>
       </form>
-      ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts match these filters', copy: 'Reset filters or import your LinkedIn Connections.csv to see mapped contacts.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="contacts">Reset filters</button><a class="secondary-button" href="#/admin">Import contacts</a>' })}
+      ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts in workspace yet', copy: 'Upload your LinkedIn Connections.csv to discover warm paths, or load a sample network to explore immediately.', action: '<button class="primary-button" type="button" data-action="open-network-import-modal">⚡ Import LinkedIn CSV</button><button class="secondary-button" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button><button class="ghost-button" type="button" data-action="open-linkedin-guide">📥 Export Guide</button>' })}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -6587,7 +7238,7 @@ async function renderJobsView() {
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
-  const jobAdvancedCount = ['geography', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
+  const jobAdvancedCount = ['geography', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--compact">
@@ -6605,16 +7256,34 @@ async function renderJobsView() {
     </section>
 
     <section class="table-card">
-      <div class="panel-header"><div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>${renderExportOptions('jobs', 'Job options')}</div>
+      <div class="panel-header">
+        <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>
+        <div class="panel-actions">
+          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal"><span class="btn-icon">⚡</span><span>Import Network</span></button>
+          ${renderExportOptions('jobs', 'Job options')}
+        </div>
+      </div>
+      <div class="job-preset-strip" role="group" aria-label="Job quick filters">
+        <span class="job-preset-label">Quick filters:</span>
+        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.recencyDays && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${appState.jobQuery.workStyle === 'local_remote' || appState.jobQuery.geography === 'local_remote' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="local_remote">🏡 Local or Remote</button>
+        <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
+        <button class="job-preset-chip${appState.jobQuery.sortBy === 'connections' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="most_connected">⚡ Most Connected</button>
+        <button class="job-preset-chip${appState.jobQuery.minRelevance === '45' || appState.jobQuery.sortBy === 'relevance' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="best_fit">🌟 Best Fit</button>
+        <button class="job-preset-chip${appState.jobQuery.recencyDays === '7' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="recent">⏱️ Past 7 Days</button>
+      </div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
-        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
-        ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
-        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
+        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location, contact">`)}
+        ${renderField('Network', `<select name="hasContacts"><option value="">All companies</option><option value="true" ${selected(appState.jobQuery.hasContacts, 'true')}>In my network (has contacts)</option></select>`)}
+        ${renderField('Work style', `<select name="workStyle"><option value="">All work styles</option><option value="local_remote" ${selected(appState.jobQuery.workStyle, 'local_remote')}>Local or Remote (Preferred)</option><option value="remote" ${selected(appState.jobQuery.workStyle, 'remote')}>Remote only</option><option value="hybrid" ${selected(appState.jobQuery.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(appState.jobQuery.workStyle, 'onsite')}>On-site only</option></select>`)}
+        ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="connections" ${selected(appState.jobQuery.sortBy, 'connections')}>Most connections in network</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
         <div class="field field--action list-filter-actions"><button class="primary-button" type="submit">Apply</button></div>
         <details class="filter-disclosure"${jobAdvancedCount ? ' open' : ''}>
           <summary>More filters${jobAdvancedCount ? ` · ${formatNumber(jobAdvancedCount)} active` : ''}</summary>
           <div class="filter-disclosure__grid">
-            ${renderField('Geography', `<select name="geography"><option value="">All locations</option><option value="gta" ${selected(appState.jobQuery.geography, 'gta')}>Greater Toronto Area (GTA / ON)</option><option value="canada" ${selected(appState.jobQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.jobQuery.geography, 'canada_us')}>Include US</option><option value="us" ${selected(appState.jobQuery.geography, 'us')}>US only</option></select>`)}
+            ${renderField('Active', `<select name="active"><option value="">All</option><option value="true" ${selected(appState.jobQuery.active, 'true')}>Active only</option><option value="false" ${selected(appState.jobQuery.active, 'false')}>Inactive only</option></select>`)}
+            ${renderField('Geography', `<select name="geography"><option value="">All locations</option><option value="local_remote" ${selected(appState.jobQuery.geography, 'local_remote')}>Local or Remote</option><option value="gta" ${selected(appState.jobQuery.geography, 'gta')}>Greater Toronto Area (GTA / ON)</option><option value="canada" ${selected(appState.jobQuery.geography, 'canada')}>Canada only</option><option value="canada_us" ${selected(appState.jobQuery.geography, 'canada_us')}>Include US</option><option value="us" ${selected(appState.jobQuery.geography, 'us')}>US only</option><option value="remote" ${selected(appState.jobQuery.geography, 'remote')}>Remote only</option></select>`)}
+            ${renderField('Min connections', `<select name="minConnections"><option value="">Any</option><option value="1" ${selected(appState.jobQuery.minConnections, '1')}>1+ connections</option><option value="2" ${selected(appState.jobQuery.minConnections, '2')}>2+ connections</option><option value="3" ${selected(appState.jobQuery.minConnections, '3')}>3+ connections</option></select>`)}
             ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
             ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
             ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
@@ -6623,7 +7292,7 @@ async function renderJobsView() {
           </div>
         </details>
       </form>
-      ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters or run live import to refresh open roles.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button><a class="secondary-button" href="#/admin">Refresh jobs</a>' })}
+      ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters, import LinkedIn connections to match open roles, or try the sample network.', action: '<button class="primary-button" type="button" data-action="open-network-import-modal">⚡ Import Connections</button><button class="secondary-button" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -7285,16 +7954,59 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
-      ${items.map((item) => `
-        <tr>
-          <td data-label="Role">${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>${item.accountId ? `<button class="inline-action-link job-outreach-link" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-template="${isJobSeekerPersona() ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true">Use as outreach trigger</button>` : ''}`}</td>
-          <td data-label="Company">${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Network / Contacts</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
+      ${items.map((item) => {
+        const hasConn = Number(item.connectionCount || 0) > 0;
+        const contacts = Array.isArray(item.contacts) ? item.contacts : [];
+        const isJobSeeker = isJobSeekerPersona();
+        return `
+        <tr class="${hasConn ? 'job-row--connected' : ''}">
+          <td data-label="Role">
+            ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
+            ${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>${item.accountId ? `<button class="inline-action-link job-outreach-link" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-template="${isJobSeeker ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true">Use as outreach trigger</button>` : ''}`}
+          </td>
+          <td data-label="Company">
+            ${item.accountId ? `<a class="row-link company-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : `<span class="company-name">${escapeHtml(item.companyName || '')}</span>`}
+          </td>
+          <td data-label="Network / Contacts">
+            ${hasConn ? `
+              <div class="job-network-cell">
+                <span class="status-pill status-pill--success"><span class="pill-dot"></span>⚡ ${formatNumber(item.connectionCount)} in network</span>
+                ${contacts.length ? `
+                  <div class="job-contacts-list">
+                    ${contacts.map((c) => `
+                      <div class="job-contact-chip">
+                        <span class="job-contact-name">${escapeHtml(c.fullName)}</span>
+                        ${c.title ? `<span class="job-contact-title"> · ${escapeHtml(c.title)}</span>` : ''}
+                        ${item.accountId ? `<button class="inline-action-link job-contact-outreach-btn" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-contact-id="${escapeAttr(c.id || '')}" data-contact-name="${escapeAttr(c.fullName)}" data-contact-title="${escapeAttr(c.title || '')}" data-template="${isJobSeeker ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true" title="Reach out to ${escapeAttr(c.fullName)}">Warm path →</button>` : ''}
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : (item.topContactName ? `<div class="small muted">${escapeHtml(item.topContactName)}</div>` : '')}
+              </div>
+            ` : `
+              <div class="job-network-cell job-network-cell--empty">
+                <span class="status-pill status-pill--neutral">No contacts</span>
+                ${item.accountId ? `<div class="small muted"><a class="inline-action-link" href="#/accounts/${item.accountId}">View company</a></div>` : ''}
+              </div>
+            `}
+          </td>
           <td data-label="Fit">${renderJobRelevance(item)}</td>
-          <td data-label="Location">${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
+          <td data-label="Location">
+            <div class="job-location-cell">
+              <span class="job-location-text">${escapeHtml(item.location || 'Location unspecified')}</span>
+              <div class="job-workstyle-pills">
+                ${item.isRemote || item.workStyle === 'remote' ? `<span class="status-pill status-pill--accent" title="Remote work eligible">Remote</span>` : ''}
+                ${item.workStyle === 'hybrid' ? `<span class="status-pill status-pill--info" title="Hybrid work">Hybrid</span>` : ''}
+                ${item.workStyle === 'onsite' ? `<span class="status-pill status-pill--neutral" title="On-site work">On-site</span>` : ''}
+                ${item.isGta || item.isLocal ? `<span class="status-pill status-pill--success" title="Local GTA priority">Local</span>` : ''}
+              </div>
+            </div>
+          </td>
           <td data-label="Source">${renderStatusPill(item.atsType || 'unknown', 'neutral')} ${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}</td>
           <td data-label="Timing">${formatDate(item.postedAt)}<div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></td>
-        </tr>`).join('')}
+        </tr>`;
+      }).join('')}
     </tbody></table></div>`;
 }
 

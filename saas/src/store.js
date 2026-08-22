@@ -2777,13 +2777,87 @@ export function createStore() {
         }
       }
       const queryStartedAt = performance.now();
-      let items = filterText(jobsForTenant(tenantId), query.q, ['title', 'companyName', 'location', 'source']);
+      const tenantAccounts = accountsForTenant(tenantId);
+      const accountByIdMap = new Map(tenantAccounts.map((acc) => [acc.id, acc]));
+      const accountByNameMap = new Map(tenantAccounts.map((acc) => [normalizeKey(acc.displayName), acc]));
+      const tenantContacts = contactsForTenant(tenantId);
+      const contactsByAccountId = new Map();
+      for (const contactItem of tenantContacts) {
+        if (!contactItem.accountId) continue;
+        let list = contactsByAccountId.get(contactItem.accountId);
+        if (!list) {
+          list = [];
+          contactsByAccountId.set(contactItem.accountId, list);
+        }
+        list.push(contactItem);
+      }
+
+      const enrichJob = (jobItem) => {
+        const acc = (jobItem.accountId && accountByIdMap.get(jobItem.accountId))
+          || (jobItem.companyName && accountByNameMap.get(normalizeKey(jobItem.companyName)))
+          || null;
+        const accContacts = (acc && contactsByAccountId.get(acc.id)) || [];
+        const connectionCount = Number(acc?.connectionCount ?? accContacts.length ?? 0);
+        const workStyle = classifyWorkStyle(jobItem);
+        const topContacts = accContacts.slice(0, 3).map((c) => ({
+          id: c.id,
+          fullName: c.fullName,
+          title: c.title || c.position || '',
+          seniority: c.seniority || '',
+          priorityScore: c.priorityScore || 0,
+          linkedinUrl: c.linkedinUrl || '',
+          outreachStatus: c.outreachStatus || 'not_started',
+        }));
+        return {
+          ...jobItem,
+          accountId: acc?.id || jobItem.accountId || '',
+          companyName: jobItem.companyName || acc?.displayName || '',
+          connectionCount,
+          seniorContactCount: acc?.seniorContactCount || 0,
+          talentContactCount: acc?.talentContactCount || 0,
+          topContactName: acc?.topContactName || topContacts[0]?.fullName || '',
+          contacts: topContacts,
+          workStyle,
+          isRemote: workStyle === 'remote',
+          isLocal: isGtaLocation(jobItem.location) || accountMatchesGeography(jobItem, 'gta'),
+          hasConnections: connectionCount > 0,
+        };
+      };
+
+      let rawItems = jobsForTenant(tenantId);
+      let items = filterText(rawItems, query.q, ['title', 'companyName', 'location', 'source']);
+      items = items.map(enrichJob);
+
       if (query.geography) {
-        if (query.geography === 'gta') {
+        const geo = normalizeKey(query.geography);
+        if (geo === 'gta') {
           items = items.filter((item) => isGtaLocation(item.location));
+        } else if (geo === 'remote') {
+          items = items.filter((item) => item.isRemote || item.workStyle === 'remote');
+        } else if (geo === 'local_remote') {
+          items = items.filter((item) => item.isRemote || item.isLocal || isGtaLocation(item.location) || accountMatchesGeography(item, 'canada'));
         } else {
           items = items.filter((item) => accountMatchesGeography(item, query.geography));
         }
+      }
+      if (query.workStyle) {
+        const ws = normalizeKey(query.workStyle);
+        if (ws === 'remote') {
+          items = items.filter((item) => item.isRemote || item.workStyle === 'remote');
+        } else if (ws === 'hybrid') {
+          items = items.filter((item) => item.workStyle === 'hybrid');
+        } else if (ws === 'onsite') {
+          items = items.filter((item) => item.workStyle === 'onsite');
+        } else if (ws === 'local_remote') {
+          items = items.filter((item) => item.isRemote || item.isLocal || isGtaLocation(item.location) || accountMatchesGeography(item, 'canada'));
+        }
+      }
+      if (query.hasContacts === 'true' || query.hasContacts === true || query.hasConnections === 'true' || query.hasConnections === true || query.networkOnly === 'true' || query.networkOnly === true) {
+        items = items.filter((item) => item.connectionCount > 0);
+      }
+      const minConnections = Number(query.minConnections || 0);
+      if (minConnections > 0) {
+        items = items.filter((item) => item.connectionCount >= minConnections);
       }
       if (query.ats) {
         const ats = normalizeAtsType(query.ats);
@@ -2807,7 +2881,11 @@ export function createStore() {
       if (minRelevance > 0) {
         items = items.filter((item) => Number(item.relevanceScore ?? -1) >= minRelevance);
       }
-      if (query.sortBy === 'relevance') {
+      if (query.sortBy === 'connections') {
+        items.sort((a, b) => (b.connectionCount || 0) - (a.connectionCount || 0)
+          || (Number(b.relevanceScore ?? -1) - Number(a.relevanceScore ?? -1))
+          || String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')));
+      } else if (query.sortBy === 'relevance') {
         items.sort((a, b) => Number(b.relevanceScore ?? -1) - Number(a.relevanceScore ?? -1)
           || String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')));
       } else if (query.sortBy === 'retrieved') {

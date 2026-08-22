@@ -1,4 +1,4 @@
-﻿Set-StrictMode -Version Latest
+Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'BdEngine.State.psm1') -DisableNameChecking
 
 $script:DashboardCache = $null
@@ -3733,6 +3733,8 @@ function Select-JobSummary {
         $Job
     )
 
+    $connectionCount = [int](Get-ObjectValue -Object $Job -Name 'connectionCount' -Default 0)
+    $workStyle = [string](Get-ObjectValue -Object $Job -Name 'workStyle' -Default '')
     return [ordered]@{
         id = [string]$Job.id
         accountId = [string]$Job.accountId
@@ -3754,6 +3756,18 @@ function Select-JobSummary {
         active = [bool](Test-Truthy $Job.active)
         isGta = [bool](Test-Truthy $Job.isGta)
         isNew = [bool](Test-Truthy $Job.isNew)
+        connectionCount = $connectionCount
+        seniorContactCount = [int](Get-ObjectValue -Object $Job -Name 'seniorContactCount' -Default 0)
+        talentContactCount = [int](Get-ObjectValue -Object $Job -Name 'talentContactCount' -Default 0)
+        topContactName = [string](Get-ObjectValue -Object $Job -Name 'topContactName' -Default '')
+        contacts = @(Get-ObjectValue -Object $Job -Name 'contacts' -Default @())
+        workStyle = $workStyle
+        isRemote = [bool](Test-Truthy (Get-ObjectValue -Object $Job -Name 'isRemote' -Default ($workStyle -eq 'remote')))
+        isLocal = [bool](Test-Truthy (Get-ObjectValue -Object $Job -Name 'isLocal' -Default ($Job.isGta)))
+        hasConnections = [bool]($connectionCount -gt 0)
+        relevanceScore = Get-ObjectValue -Object $Job -Name 'relevanceScore' -Default $null
+        relevanceBand = [string](Get-ObjectValue -Object $Job -Name 'relevanceBand' -Default 'unscored')
+        relevanceReasons = @(Get-ObjectValue -Object $Job -Name 'relevanceReasons' -Default @())
     }
 }
 
@@ -5355,6 +5369,23 @@ function Find-Contacts {
     return $result
 }
 
+function Get-JobClassifiedWorkStyle {
+    param($Job)
+    $text = ([string]$Job.location + ' ' + [string]$Job.title + ' ' + [string]$Job.department + ' ' + [string]$Job.employmentType).ToLowerInvariant()
+    if ($text -match '\bhybrid\b') { return 'hybrid' }
+    if ($text -match '\b(remote|work from home|distributed|anywhere|telecommute|virtual)\b') { return 'remote' }
+    if ($text -match '\b(on site|onsite|in office|office based|in-person)\b') { return 'onsite' }
+    return 'unknown'
+}
+
+function Test-JobIsGta {
+    param($Job)
+    if ([bool](Test-Truthy $Job.isGta)) { return $true }
+    $loc = [string]$Job.location
+    if (-not $loc) { return $false }
+    return [bool]($loc -match '(?i)\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|kitchener|waterloo|hamilton)\b' -or ($loc -match '(?i)\b(canada|ontario)\b' -and $loc -notmatch '(?i)\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec|bc|ab|qc)\b'))
+}
+
 function Find-Jobs {
     param(
         [Parameter(Mandatory = $true)]
@@ -5362,13 +5393,86 @@ function Find-Jobs {
         [hashtable]$Query
     )
 
-    $items = @($State.jobs)
+    $companyById = @{}
+    $companyByName = @{}
+    foreach ($c in @($State.companies)) {
+        if ($c.id) { $companyById[[string]$c.id] = $c }
+        $norm = Normalize-TextKey $c.displayName
+        if ($norm) { $companyByName[$norm] = $c }
+    }
+    $contactsByAccountId = @{}
+    foreach ($cnt in @($State.contacts)) {
+        if ($cnt.accountId) {
+            $accId = [string]$cnt.accountId
+            if (-not $contactsByAccountId.ContainsKey($accId)) {
+                $contactsByAccountId[$accId] = New-Object System.Collections.ArrayList
+            }
+            [void]$contactsByAccountId[$accId].Add($cnt)
+        }
+    }
+
+    $enrichedJobs = @(@($State.jobs) | ForEach-Object {
+        $jobItem = $_
+        $acc = if ($jobItem.accountId -and $companyById.ContainsKey([string]$jobItem.accountId)) {
+            $companyById[[string]$jobItem.accountId]
+        } elseif ($jobItem.companyName -and $companyByName.ContainsKey((Normalize-TextKey $jobItem.companyName))) {
+            $companyByName[(Normalize-TextKey $jobItem.companyName)]
+        } else {
+            $null
+        }
+        $accContacts = if ($acc -and $contactsByAccountId.ContainsKey([string]$acc.id)) {
+            @($contactsByAccountId[[string]$acc.id])
+        } elseif ($jobItem.accountId -and $contactsByAccountId.ContainsKey([string]$jobItem.accountId)) {
+            @($contactsByAccountId[[string]$jobItem.accountId])
+        } else {
+            @()
+        }
+        $connectionCount = if ($acc -and $null -ne $acc.connectionCount) { [int]$acc.connectionCount } else { $accContacts.Count }
+        $workStyle = Get-JobClassifiedWorkStyle -Job $jobItem
+        $isGta = Test-JobIsGta -Job $jobItem
+        $topContacts = @($accContacts | Select-Object -First 3 | ForEach-Object {
+            [ordered]@{
+                id = [string]$_.id
+                fullName = [string]$_.fullName
+                title = [string](if ($_.title) { $_.title } else { $_.position })
+                seniority = [string]$_.seniority
+                priorityScore = [int](Convert-ToNumber $_.priorityScore)
+                linkedinUrl = [string]$_.linkedinUrl
+                outreachStatus = [string](if ($_.outreachStatus) { $_.outreachStatus } else { 'not_started' })
+            }
+        })
+
+        $clone = [ordered]@{}
+        if ($jobItem -is [System.Collections.IDictionary]) {
+            foreach ($k in $jobItem.Keys) { $clone[$k] = $jobItem[$k] }
+        } else {
+            foreach ($p in $jobItem.PSObject.Properties) { $clone[$p.Name] = $p.Value }
+        }
+        $clone['accountId'] = if ($acc) { [string]$acc.id } else { [string]$jobItem.accountId }
+        $clone['companyName'] = if ($jobItem.companyName) { [string]$jobItem.companyName } elseif ($acc) { [string]$acc.displayName } else { '' }
+        $clone['connectionCount'] = $connectionCount
+        $clone['seniorContactCount'] = if ($acc) { [int]$acc.seniorContactCount } else { 0 }
+        $clone['talentContactCount'] = if ($acc) { [int]$acc.talentContactCount } else { 0 }
+        $clone['topContactName'] = if ($acc -and $acc.topContactName) { [string]$acc.topContactName } elseif ($topContacts.Count -gt 0) { [string]$topContacts[0].fullName } else { '' }
+        $clone['contacts'] = $topContacts
+        $clone['workStyle'] = $workStyle
+        $clone['isRemote'] = [bool]($workStyle -eq 'remote')
+        $clone['isLocal'] = $isGta
+        $clone['hasConnections'] = [bool]($connectionCount -gt 0)
+        $clone
+    })
+
+    $items = @($enrichedJobs)
     $searchQuery = [string]$Query['q']
     $atsQuery = [string]$Query['ats']
     $companyQuery = [string]$Query['company']
     $activeQuery = [string]$Query['active']
     $isNewQuery = [string]$Query['isNew']
     $recencyDaysQuery = [string]$Query['recencyDays']
+    $geographyQuery = [string]$Query['geography']
+    $workStyleQuery = [string]$Query['workStyle']
+    $hasContactsQuery = [string](if ($Query['hasContacts']) { $Query['hasContacts'] } elseif ($Query['hasConnections']) { $Query['hasConnections'] } else { $Query['networkOnly'] })
+    $minConnectionsQuery = [string]$Query['minConnections']
     $sortByQuery = [string]$Query['sortBy']
 
     if ($searchQuery) {
@@ -5406,7 +5510,63 @@ function Find-Jobs {
         })
     }
 
+    if ($geographyQuery) {
+        $geo = Normalize-TextKey $geographyQuery
+        if ($geo -eq 'gta') {
+            $items = @($items | Where-Object { $_.isLocal })
+        } elseif ($geo -eq 'remote') {
+            $items = @($items | Where-Object { $_.isRemote })
+        } elseif ($geo -eq 'local_remote') {
+            $items = @($items | Where-Object { $_.isRemote -or $_.isLocal -or ([string]$_.location -match '(?i)\b(canada|ontario|toronto|gta)\b') })
+        } elseif ($geo -eq 'canada') {
+            $items = @($items | Where-Object { [string]$_.location -match '(?i)\b(canada|ontario|quebec|alberta|bc|toronto|vancouver|montreal|calgary|ottawa)\b' })
+        } elseif ($geo -eq 'us') {
+            $items = @($items | Where-Object { [string]$_.location -match '(?i)\b(united states|usa|u\.s\.|california|new york|texas|washington|massachusetts|florida|illinois|ga|co|ca|ny|tx|wa|ma)\b' })
+        }
+    }
+
+    if ($workStyleQuery) {
+        $ws = Normalize-TextKey $workStyleQuery
+        if ($ws -eq 'remote') {
+            $items = @($items | Where-Object { $_.isRemote })
+        } elseif ($ws -eq 'hybrid') {
+            $items = @($items | Where-Object { $_.workStyle -eq 'hybrid' })
+        } elseif ($ws -eq 'onsite') {
+            $items = @($items | Where-Object { $_.workStyle -eq 'onsite' })
+        } elseif ($ws -eq 'local_remote') {
+            $items = @($items | Where-Object { $_.isRemote -or $_.isLocal -or ([string]$_.location -match '(?i)\b(canada|ontario|toronto|gta)\b') })
+        }
+    }
+
+    if ($hasContactsQuery -and (Test-Truthy $hasContactsQuery)) {
+        $items = @($items | Where-Object { [int]$_.connectionCount -gt 0 })
+    }
+
+    if ($minConnectionsQuery -and [int](Convert-ToNumber $minConnectionsQuery) -gt 0) {
+        $minC = [int](Convert-ToNumber $minConnectionsQuery)
+        $items = @($items | Where-Object { [int]$_.connectionCount -ge $minC })
+    }
+
     $sorted = switch ($sortByQuery) {
+        'connections' {
+            @(
+                $items | Sort-Object @(
+                    @{ Expression = { [int]$_.connectionCount }; Descending = $true },
+                    @{ Expression = { [double](Convert-ToNumber $_.relevanceScore) }; Descending = $true },
+                    @{ Expression = { Get-DateSortValue $_.postedAt }; Descending = $true },
+                    @{ Expression = { [string]$_.companyName }; Descending = $false }
+                )
+            )
+        }
+        'relevance' {
+            @(
+                $items | Sort-Object @(
+                    @{ Expression = { [double](Convert-ToNumber $_.relevanceScore) }; Descending = $true },
+                    @{ Expression = { Get-DateSortValue $_.postedAt }; Descending = $true },
+                    @{ Expression = { [string]$_.companyName }; Descending = $false }
+                )
+            )
+        }
         'retrieved' {
             @(
                 $items | Sort-Object @(

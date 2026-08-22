@@ -46,3 +46,4 @@ desktop.ini
 # Playwright artifacts
 saas/test-results/
 saas/playwright-report/
+artifacts/

@@ -290,6 +290,18 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
         j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
         j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
       )`);
+    } else if (query.geography === 'remote') {
+      clauses.push(`(j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%')`);
+    } else if (query.geography === 'local_remote') {
+      clauses.push(`(
+        j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%' OR
+        j.location ILIKE '%toronto%' OR j.location ILIKE '%gta%' OR j.location ILIKE '%mississauga%' OR
+        j.location ILIKE '%brampton%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%vaughan%' OR
+        j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
+        j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
+        j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
+        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
+      )`);
     } else if (query.geography === 'canada') {
       clauses.push(`(
         j.location ILIKE '%canada%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%quebec%' OR
@@ -309,6 +321,32 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
         j.location ILIKE '%, IL%' OR j.location ILIKE '%, GA%' OR j.location ILIKE '%, CO%'
       )`);
     }
+  }
+  if (query.workStyle) {
+    if (query.workStyle === 'remote') {
+      clauses.push(`(j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%')`);
+    } else if (query.workStyle === 'hybrid') {
+      clauses.push(`(j.location ILIKE '%hybrid%' OR j.raw->>'location' ILIKE '%hybrid%')`);
+    } else if (query.workStyle === 'onsite') {
+      clauses.push(`(j.location ILIKE '%onsite%' OR j.location ILIKE '%on site%' OR j.location ILIKE '%in office%')`);
+    } else if (query.workStyle === 'local_remote') {
+      clauses.push(`(
+        j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%' OR
+        j.location ILIKE '%toronto%' OR j.location ILIKE '%gta%' OR j.location ILIKE '%mississauga%' OR
+        j.location ILIKE '%brampton%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%vaughan%' OR
+        j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
+        j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
+        j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
+        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
+      )`);
+    }
+  }
+  if (query.hasContacts === 'true' || query.hasContacts === true || query.hasConnections === 'true' || query.hasConnections === true || query.networkOnly === 'true' || query.networkOnly === true) {
+    clauses.push(`COALESCE((j.raw->>'connectionCount')::int, 0) > 0`);
+  }
+  const minConnections = Number(query.minConnections || 0);
+  if (minConnections > 0) {
+    clauses.push(`COALESCE((j.raw->>'connectionCount')::int, 0) >= ${addParam(minConnections)}`);
   }
   if (query.ats) {
     const [mode, value] = normalizedAtsFilter(query.ats);
@@ -334,11 +372,13 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
   const countParams = [...params];
   const limitRef = addParam(pageSize);
   const offsetRef = addParam(offset);
-  const orderSql = query.sortBy === 'relevance'
-    ? `${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
-    : query.sortBy === 'retrieved'
-      ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
-      : 'source_order.position ASC';
+  const orderSql = query.sortBy === 'connections'
+    ? `COALESCE((j.raw->>'connectionCount')::int, 0) DESC, ${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
+    : query.sortBy === 'relevance'
+      ? `${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
+      : query.sortBy === 'retrieved'
+        ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
+        : 'source_order.position ASC';
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `WITH source_order AS (
