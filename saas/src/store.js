@@ -5922,14 +5922,20 @@ function accountPriority(item = {}) {
 }
 
 function accountMatchesGeography(item = {}, geography = '') {
-  const location = normalizeKey(item.location);
+  const location = String(item.location || '').trim();
   if (!location) return false;
-  const canada = /\b(canada|ontario|quebec|alberta|british columbia|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island)\b/.test(location)
-    || /(?:^|,\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe)(?:\s|,|$)/i.test(String(item.location));
-  const us = /\b(united states|usa|u\.s\.|us)\b/.test(location)
-    || /(?:^|,\s*)(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(String(item.location));
+  const lower = location.toLowerCase();
+
+  const isUsState = /(?:^|,\s*)(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(location);
+  const isUsCountry = /\b(united states|usa|u\.s\.)\b/i.test(lower) || (/\bus\b/i.test(lower) && !/\b(on-site|onsite|contact us|about us)\b/i.test(lower));
+  const us = isUsCountry || (isUsState && !/\b(toronto|gta|ontario|canada)\b/i.test(lower));
+
+  const isCanadaProvince = /(?:^|,\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe|ontario|quebec|alberta|british columbia)\b/i.test(lower) && !/\b(on-site|onsite)\b/i.test(lower);
+  const canada = /\b(canada|toronto|gta|mississauga|brampton|vancouver|montreal|calgary|ottawa)\b/i.test(lower) || isCanadaProvince;
+
   const requested = normalizeKey(geography);
-  if (requested === 'canada') return canada;
+  if (requested === 'gta') return isGtaLocation(location);
+  if (requested === 'canada') return canada && !us;
   if (requested === 'us') return us;
   if (requested === 'canada_us') return canada || us;
   return true;
@@ -8785,7 +8791,17 @@ function jobMatchesGeography(item, accountItem, allow) {
 }
 
 function isGtaLocation(location) {
-  return /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill)\b/i.test(String(location || ''));
+  const str = String(location || '').trim();
+  if (!str) return false;
+  if (/\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|kitchener|waterloo|hamilton)\b/i.test(str)) {
+    return true;
+  }
+  if (/(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i.test(str) && !/\b(on-site|onsite)\b/i.test(str)) {
+    if (!/\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec)\b/i.test(str)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
