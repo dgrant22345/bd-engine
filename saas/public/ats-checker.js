@@ -8,8 +8,14 @@ const PROVIDERS = [
   ['Workable', ['workable.com']],
   ['Jobvite', ['jobvite.com']],
   ['Recruitee', ['recruitee.com']],
-  ['Personio', ['jobs.personio.de']],
-  ['Rippling', ['ats.rippling.com']],
+  ['Personio', ['jobs.personio.de', 'personio.de', 'personio.com']],
+  ['Rippling', ['ats.rippling.com', 'rippling.com']],
+  ['JazzHR', ['applytojob.com', 'jazz.co', 'jazzhr.com']],
+  ['Breezy HR', ['breezy.hr']],
+  ['Paylocity', ['recruiting.paylocity.com', 'paylocity.com']],
+  ['Teamtailor', ['teamtailor.com']],
+  ['iCIMS', ['icims.com']],
+  ['Taleo', ['taleo.net']],
 ];
 
 export const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';

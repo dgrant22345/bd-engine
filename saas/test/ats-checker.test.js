@@ -23,6 +23,12 @@ test('ATS checker recognizes every provider advertised on the public page', () =
     ['https://example.recruitee.com', 'Recruitee'],
     ['https://example.jobs.personio.de', 'Personio'],
     ['https://ats.rippling.com/example/jobs', 'Rippling'],
+    ['https://example.applytojob.com/apply', 'JazzHR'],
+    ['https://example.breezy.hr', 'Breezy HR'],
+    ['https://recruiting.paylocity.com/recruiting/jobs/details/123/example', 'Paylocity'],
+    ['https://example.teamtailor.com', 'Teamtailor'],
+    ['https://careers-example.icims.com/jobs', 'iCIMS'],
+    ['https://example.taleo.net/careersection', 'Taleo'],
   ];
 
   for (const [url, provider] of examples) {
