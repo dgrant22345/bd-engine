@@ -101,6 +101,9 @@ async function seedSource(client) {
     [tenant, 'recovery-tenant', 'Recovery Tenant', '2026-07-26T12:00:00.000Z', FIXED_TIME]);
     await client.query(`INSERT INTO memberships (tenant_id, user_id, role, created_at)
       VALUES ($1, $2, 'owner', $3)`, [tenant, user, FIXED_TIME]);
+    await client.query(`INSERT INTO legal_consents
+      (tenant_id, user_id, terms_version, privacy_version, accepted_at, created_at)
+      VALUES ($1, $2, '2026-08-21', '2026-08-21', $3, $3)`, [tenant, user, FIXED_TIME]);
     await client.query(`INSERT INTO tenant_data
       (tenant_id, accounts, contacts, jobs, configs, activities, tasks, settings, updated_at)
       VALUES ($1, $2, $3, $4, $5, '[]', '[]', $6, $7)`,

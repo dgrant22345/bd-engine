@@ -1252,6 +1252,9 @@ function Handle-ApiRequest {
                 settings = $settings
                 filters = $filters
                 ownerRoster = @(Get-OwnerRoster)
+                capabilities = [ordered]@{
+                    commercialOutcomes = $false
+                }
                 defaults = [ordered]@{
                     workbookPath = $defaultWorkbookPath
                     connectionsCsvPath = $defaultConnectionsCsvPath

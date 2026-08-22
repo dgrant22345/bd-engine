@@ -127,6 +127,7 @@ test('backup schema covers every durable PostgreSQL table without restore drift'
   assert.ok(BACKUP_TABLES.every((table) => table.conflict.length > 0));
   assert.ok(backupTables().some((table) => table.name === 'account_closures'));
   assert.ok(backupTables().some((table) => table.name === 'commercial_outcomes'));
+  assert.ok(backupTables().some((table) => table.name === 'legal_consents'));
   assert.ok(!backupTables().some((table) => table.name === 'sessions'));
   assert.ok(backupTables({ includeVolatile: true }).some((table) => table.name === 'email_verification_tokens'));
 });

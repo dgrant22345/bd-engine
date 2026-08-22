@@ -40,6 +40,24 @@ test('product events reject unknown types and discard arbitrary dimensions', () 
   assert.deepEqual(event.metadata, { source: 'manual' });
 });
 
+test('signup milestones retain document versions without accepting arbitrary consent content', () => {
+  const event = buildProductEvent({
+    eventType: 'signup_completed',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+    dimensions: {
+      termsVersion: '2026-08-21',
+      privacyVersion: '2026-08-21',
+      acceptedAt: 'client-controlled timestamp',
+      consentNote: 'arbitrary customer content',
+    },
+  });
+  assert.deepEqual(event.metadata, {
+    termsVersion: '2026-08-21',
+    privacyVersion: '2026-08-21',
+  });
+});
+
 test('core value milestones are accepted and idempotent per workspace', () => {
   const board = buildProductEvent({ eventType: 'board_resolved', tenantId: 'tenant-1', eventKey: 'tenant-1' });
   const jobs = buildProductEvent({ eventType: 'useful_jobs_found', tenantId: 'tenant-1', eventKey: 'tenant-1' });

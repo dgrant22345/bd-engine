@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260821-modern-palette-10';
+const ASSET_VERSION = '20260821-commercial-loop-12';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

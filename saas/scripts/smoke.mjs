@@ -7,6 +7,12 @@ const mutationCheck = allowMutations ? check : skip;
 const checks = [];
 let cookie = '';
 let authEmail = '';
+const signupLegalAcceptance = {
+  accepted: true,
+  termsVersion: '2026-08-21',
+  privacyVersion: '2026-08-21',
+  acceptedAt: new Date().toISOString(),
+};
 
 await check('public health is availability-only (no internals leak)', async () => {
   const body = await getJson('/health');
@@ -85,6 +91,7 @@ await mutationCheck('signup creates a session', async () => {
       password: 'smoke-password-1234',
       name: 'Smoke Auth User',
       workspaceName: 'Smoke Auth Workspace',
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(response.status === 201, `signup failed with ${response.status}`);
@@ -287,6 +294,7 @@ await mutationCheck('new signup gets an empty first-run workspace', async () => 
       password: 'smoke-password-1234',
       name: 'Smoke Test User',
       workspaceName: 'Smoke Test Workspace',
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(response.status === 201, `signup returned ${response.status}`);
@@ -307,6 +315,7 @@ await mutationCheck('sample workspace completes onboarding without overwriting d
       password: 'smoke-password-1234',
       name: 'Smoke Sample User',
       workspaceName: 'Smoke Sample Workspace',
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(response.status === 201, `signup returned ${response.status}`);
@@ -352,6 +361,7 @@ await mutationCheck('job seeker signup preserves its persona across the app', as
       name: 'Smoke Job Seeker',
       workspaceName: 'Smoke Job Search',
       persona: 'jobseeker',
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(response.status === 201, `signup returned ${response.status}`);
@@ -377,6 +387,7 @@ await mutationCheck('referral code tracks referred signup', async () => {
       password: 'smoke-password-1234',
       name: 'Smoke Referrer',
       workspaceName: 'Smoke Referrer Workspace',
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(referrerResponse.status === 201, `referrer signup returned ${referrerResponse.status}`);
@@ -394,6 +405,7 @@ await mutationCheck('referral code tracks referred signup', async () => {
       name: 'Smoke Referred',
       workspaceName: 'Smoke Referred Workspace',
       referralCode: referrerBilling.referral.code,
+      legalAcceptance: signupLegalAcceptance,
     }),
   });
   assert(referredResponse.status === 201, `referred signup returned ${referredResponse.status}`);

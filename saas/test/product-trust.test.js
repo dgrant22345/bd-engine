@@ -8,6 +8,8 @@ const appPath = new URL('../../app/app.js', import.meta.url);
 const appIndexPath = new URL('../../app/index.html', import.meta.url);
 const appStylesPath = new URL('../../app/styles.css', import.meta.url);
 const serverPath = new URL('../src/server.js', import.meta.url);
+const cloudStylesPath = new URL('../public/cloud.css', import.meta.url);
+const atsStylesPath = new URL('../public/ats-checker.css', import.meta.url);
 
 test('public product claims match implemented job-board coverage and team sync', async () => {
   const [landing, app] = await Promise.all([
@@ -63,6 +65,39 @@ test('signup requires recoverable acceptance of the current Terms and Privacy ve
   assert.match(server, /acceptedCurrentLegalTerms/);
   assert.match(server, /termsVersion: legalAcceptance\.termsVersion/);
   assert.match(server, /privacyVersion: legalAcceptance\.privacyVersion/);
+  assert.match(landing, /const updated = 'August 21, 2026'/);
+  assert.match(landing, /Version \$\{escapeHtml\(content\.version\)\}/);
+  assert.match(landing, /eyebrow: 'Terms of service'/);
+  assert.doesNotMatch(landing, /Terms summary/);
+});
+
+test('saved setup targets and their deferral reason survive the outer shell reload', async () => {
+  const landing = await readFile(landingPath, 'utf8');
+  assert.match(landing, /const pendingTargetSites = sanitizeOnboardingTargetSites\(stored\?\.pendingTargetSites\)/);
+  assert.match(landing, /pendingTargetSites,/);
+  assert.match(landing, /pendingTargetReason: normalizePendingTargetReason/);
+  assert.match(landing, /'setup-deferred', 'setup-skipped'/);
+});
+
+test('public utility and auth notices use the accessible iris color system', async () => {
+  const [landing, cloudStyles, atsStyles] = await Promise.all([
+    readFile(landingPath, 'utf8'),
+    readFile(cloudStylesPath, 'utf8'),
+    readFile(atsStylesPath, 'utf8'),
+  ]);
+  assert.doesNotMatch(landing, /color:\s*#(?:3730a3|166534)/i);
+  assert.match(cloudStyles, /\.auth-notice--intent[\s\S]*?color:\s*#d6d3ff/);
+  assert.match(cloudStyles, /\.auth-notice--success[\s\S]*?color:\s*#a7efd9/);
+  assert.match(atsStyles, /--accent:\s*#5a56d6/);
+});
+
+test('commercial outcome failures remain distinct from genuine empty states', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /return \{ unavailable: true \}/);
+  assert.match(app, /Commercial outcomes are temporarily unavailable/);
+  assert.match(app, /data-action="retry-outcome-summary"/);
+  assert.match(app, /data-action="retry-account-outcomes"/);
+  assert.match(app, /activityResult\?\.partialSuccess/);
 });
 
 test('public prices and limits match enforced plan entitlements', async () => {

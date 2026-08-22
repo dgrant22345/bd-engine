@@ -23,7 +23,7 @@ export const PRODUCT_EVENT_TYPES = new Set([
   'payment_recovered',
 ]);
 
-const ALLOWED_DIMENSIONS = new Set(['persona', 'planId', 'source', 'mode']);
+const ALLOWED_DIMENSIONS = new Set(['persona', 'planId', 'source', 'mode', 'termsVersion', 'privacyVersion']);
 
 export function buildAcquisitionSource(acquisition = {}, fallback = 'direct') {
   const source = sanitizeAcquisitionToken(acquisition.source || fallback) || 'direct';

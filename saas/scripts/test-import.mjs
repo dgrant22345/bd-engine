@@ -15,7 +15,18 @@ async function run() {
   // 1. Sign up
   const { data: signup, cookie } = await api('/api/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ email: 'smoketest@example.com', password: 'test1234', name: 'Smoke Tester', workspaceName: 'Smoke Corp' }),
+    body: JSON.stringify({
+      email: 'smoketest@example.com',
+      password: 'test123456',
+      name: 'Smoke Tester',
+      workspaceName: 'Smoke Corp',
+      legalAcceptance: {
+        accepted: true,
+        termsVersion: '2026-08-21',
+        privacyVersion: '2026-08-21',
+        acceptedAt: new Date().toISOString(),
+      },
+    }),
   });
   console.log('1. Signup:', signup.user?.name, 'in', signup.tenant?.name);
   const cookieHeader = cookie?.split(';')[0];

@@ -17,7 +17,7 @@ import { buildBackupUpsert, quoteBackupIdentifier, validateBackupRows } from '..
 const { Pool } = pg;
 const TABLE_ORDER = BACKUP_TABLES.map((table) => table.name);
 const TABLE_SCHEMA = new Map(BACKUP_TABLES.map((table) => [table.name, table]));
-const LEGACY_ONLY_TABLES = new Set(['users', 'tenants', 'memberships', 'tenant_data']);
+const LEGACY_ONLY_TABLES = new Set(['users', 'tenants', 'memberships', 'legal_consents', 'tenant_data']);
 const NONEMPTY_GUARD_TABLES = ['users', 'tenants', 'memberships', 'tenant_data', 'accounts', 'contacts', 'jobs', 'board_configs'];
 
 function flag(name) {
