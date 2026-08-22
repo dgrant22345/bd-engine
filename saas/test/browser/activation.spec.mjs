@@ -69,6 +69,19 @@ async function readOnboardingIntentStorage(page) {
   }));
 }
 
+async function readAuthenticatedIdentity(page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+    return response.json();
+  });
+}
+
+async function readFrameIntentScope(page) {
+  const frameSrc = await page.locator('iframe.cloud-app-frame').getAttribute('src');
+  const parsed = new URL(frameSrc, 'http://127.0.0.1:8788');
+  return { frameSrc, scope: parsed.searchParams.get('intentScope') || '' };
+}
+
 test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ page }) => {
   const targets = [
     'https://boards.greenhouse.io/auditactivation',
@@ -89,13 +102,22 @@ test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ 
   await expect(profile.locator('#setup-user-name')).toHaveValue('Activation Tester');
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
   const migratedIntent = await readOnboardingIntentStorage(page);
+  const identity = await readAuthenticatedIdentity(page);
+  const initialFrame = await readFrameIntentScope(page);
   expect(migratedIntent.anonymousLocal).toBeNull();
   expect(migratedIntent.anonymousSession).toBeNull();
   expect(migratedIntent.scoped).toHaveLength(1);
+  expect(initialFrame.scope).toMatch(/^[a-zA-Z0-9_-]{20,86}$/);
+  expect(initialFrame.frameSrc).not.toContain(identity.user.id);
+  expect(initialFrame.frameSrc).not.toContain(identity.tenant.id);
+  expect(migratedIntent.scoped[0].key).toBe(`bd_onboarding_intent:v2:${initialFrame.scope}`);
   expect(migratedIntent.scoped[0].value).toMatchObject({
     source: 'ats-checker',
     careerUrls: targets,
   });
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  expect((await readFrameIntentScope(page)).scope).toBe(initialFrame.scope);
   await continueProfile(app);
 
   const targetForm = app.locator('#setup-target-form');
@@ -211,13 +233,29 @@ test('an authenticated audit intent never appears in the next account in the sam
   expect(firstStorage.anonymousSession).toBeNull();
   expect(firstStorage.scoped).toHaveLength(1);
   expect(firstStorage.scoped[0].value.careerUrls).toEqual([target]);
+  const firstScope = (await readFrameIntentScope(page)).scope;
+
+  await page.evaluate(() => {
+    localStorage.setItem('bd_onboarding_intent:v2:malformed_logout_scope', '{');
+    localStorage.setItem('bd_onboarding_intent:v2:expired_logout_scope', JSON.stringify({
+      version: 1,
+      source: 'pricing',
+      updatedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+    }));
+  });
 
   await page.locator('#cloud-avatar-btn').click();
   await page.locator('#cloud-logout-btn').click();
   await expect(page.locator('#nav-signup')).toBeVisible({ timeout: 10000 });
+  const sweptAtLogout = await page.evaluate(() => ({
+    malformed: localStorage.getItem('bd_onboarding_intent:v2:malformed_logout_scope'),
+    expired: localStorage.getItem('bd_onboarding_intent:v2:expired_logout_scope'),
+  }));
+  expect(sweptAtLogout).toEqual({ malformed: null, expired: null });
   await page.locator('#nav-signup').click();
 
   const secondSignup = await submitSignup(page, 'isolated-intent-next-user');
+  expect((await readFrameIntentScope(page)).scope).not.toBe(firstScope);
   await continueProfile(secondSignup.app);
   const secondTargetForm = secondSignup.app.locator('#setup-target-form');
   await expect(secondTargetForm).toBeVisible({ timeout: 10000 });
@@ -229,4 +267,157 @@ test('an authenticated audit intent never appears in the next account in the sam
   expect(secondStorage.anonymousSession).toBeNull();
   expect(secondStorage.scoped).toHaveLength(1);
   expect(secondStorage.scoped[0].value.careerUrls).toEqual([target]);
+});
+
+test('authenticated startup discards unowned legacy and deferred anonymous intent', async ({ page }) => {
+  const leakedLocalTarget = 'https://boards.greenhouse.io/legacy-other-account';
+  const leakedSessionTarget = 'https://jobs.lever.co/deferred-other-account';
+  await page.goto('/');
+  await page.locator('#nav-signup').click();
+  const { app } = await submitSignup(page, 'legacy-intent-rejection');
+
+  await page.evaluate(({ leakedLocalTarget, leakedSessionTarget }) => {
+    const updatedAt = new Date().toISOString();
+    localStorage.setItem('bd_onboarding_intent', JSON.stringify({
+      version: 1,
+      source: 'pricing',
+      intent: 'monitor-career-sites',
+      careerUrls: [leakedLocalTarget],
+      updatedAt,
+    }));
+    sessionStorage.setItem('bd_onboarding_intent', JSON.stringify({
+      version: 1,
+      source: 'setup-deferred',
+      intent: 'monitor-career-sites',
+      pendingTargetSites: [leakedSessionTarget],
+      updatedAt,
+    }));
+  }, { leakedLocalTarget, leakedSessionTarget });
+
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  const storage = await readOnboardingIntentStorage(page);
+  expect(storage.anonymousLocal).toBeNull();
+  expect(storage.anonymousSession).toBeNull();
+  expect(JSON.stringify(storage.scoped)).not.toContain('other-account');
+
+  await continueProfile(app);
+  const targetForm = app.locator('#setup-target-form');
+  await expect(targetForm).toBeVisible({ timeout: 10000 });
+  await expect(targetForm.locator('#setup-target-sites')).toHaveValue('');
+  await expect(targetForm.locator('.setup-intent-banner')).toHaveCount(0);
+});
+
+test('startup removes malformed, expired, and implausibly future scoped intents', async ({ page }) => {
+  await page.goto('/');
+  const keys = await page.evaluate(() => {
+    const prefix = 'bd_onboarding_intent:v2:';
+    const keys = {
+      fresh: `${prefix}fresh_scope_1234567890`,
+      malformed: `${prefix}malformed_scope_12345`,
+      expired: `${prefix}expired_scope_1234567`,
+      future: `${prefix}future_scope_123456789`,
+      missingDate: `${prefix}missing_date_scope_1234`,
+    };
+    const base = { version: 1, source: 'pricing', intent: 'start-trial' };
+    localStorage.setItem(keys.fresh, JSON.stringify({ ...base, updatedAt: new Date().toISOString() }));
+    localStorage.setItem(keys.malformed, '{');
+    localStorage.setItem(keys.expired, JSON.stringify({
+      ...base,
+      updatedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+    }));
+    localStorage.setItem(keys.future, JSON.stringify({
+      ...base,
+      updatedAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }));
+    localStorage.setItem(keys.missingDate, JSON.stringify(base));
+    return keys;
+  });
+
+  await page.reload();
+  const stored = await page.evaluate((intentKeys) => Object.fromEntries(
+    Object.entries(intentKeys).map(([name, key]) => [name, localStorage.getItem(key)]),
+  ), keys);
+  expect(stored.fresh).not.toBeNull();
+  expect(stored.malformed).toBeNull();
+  expect(stored.expired).toBeNull();
+  expect(stored.future).toBeNull();
+  expect(stored.missingDate).toBeNull();
+});
+
+test('support context strips identity scope and billing fallback preserves it', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#nav-signup').click();
+  await submitSignup(page, 'support-scope-privacy');
+  const identity = await readAuthenticatedIdentity(page);
+  const initialFrame = await readFrameIntentScope(page);
+
+  await page.locator('#cloud-avatar-btn').click();
+  await page.locator('#cloud-support-btn').click();
+  const supportDialog = page.getByRole('dialog', { name: 'Support center' });
+  const supportForm = supportDialog.locator('[data-support-create]');
+  await expect(supportForm).toBeVisible({ timeout: 10000 });
+  await supportForm.locator('[name="subject"]').fill('Scope privacy regression');
+  await supportForm.locator('[name="body"]').fill('Confirm the support context omits private workspace identity.');
+  const supportRequestPromise = page.waitForRequest((request) => (
+    request.url().endsWith('/api/support/tickets') && request.method() === 'POST'
+  ));
+  await supportForm.getByRole('button', { name: 'Send request' }).click();
+  const supportPayload = (await supportRequestPromise).postDataJSON();
+  expect(supportPayload.pageUrl).not.toContain('?');
+  expect(supportPayload.pageUrl).not.toContain('intentScope');
+  expect(supportPayload.pageUrl).not.toContain(initialFrame.scope);
+  expect(supportPayload.pageUrl).not.toContain(identity.user.id);
+  expect(supportPayload.pageUrl).not.toContain(identity.tenant.id);
+  await supportDialog.locator('[data-support-close]').click();
+
+  await page.locator('iframe.cloud-app-frame').evaluate((frame) => { frame.src = 'about:blank'; });
+  await expect(page.locator('iframe.cloud-app-frame')).toHaveAttribute('src', 'about:blank');
+  await page.locator('#cloud-avatar-btn').click();
+  await page.locator('#cloud-billing-btn').click();
+  const billingFrame = await readFrameIntentScope(page);
+  expect(billingFrame.scope).toBe(initialFrame.scope);
+  expect(billingFrame.frameSrc).toContain('#/admin/billing');
+});
+
+test('account closure removes current opaque, legacy, and fallback scope data', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#nav-signup').click();
+  const { email } = await submitSignup(page, 'closed-scope-cleanup');
+  const identity = await readAuthenticatedIdentity(page);
+  const { scope } = await readFrameIntentScope(page);
+  const seededKeys = await page.evaluate(({ identity, scope }) => {
+    const current = `bd_onboarding_intent:v2:${scope}`;
+    const legacy = `bd_onboarding_intent:${identity.tenant.id}:${identity.user.id}`;
+    const fallbackIdentity = `${identity.tenant.id}\n${identity.user.id}`;
+    const intent = JSON.stringify({
+      version: 1,
+      source: 'setup-deferred',
+      intent: 'monitor-career-sites',
+      pendingTargetSites: ['Private deferred target'],
+      updatedAt: new Date().toISOString(),
+    });
+    localStorage.setItem(current, intent);
+    localStorage.setItem(legacy, intent);
+    localStorage.setItem('bd_onboarding_scope_map_v2', JSON.stringify({ [fallbackIdentity]: scope }));
+    return { current, legacy, fallbackIdentity };
+  }, { identity, scope });
+
+  await page.locator('#cloud-avatar-btn').click();
+  await page.locator('#cloud-export-btn').click();
+  const privacyDialog = page.getByRole('dialog', { name: 'Privacy and data' });
+  const closureForm = privacyDialog.locator('[data-account-closure-form]');
+  await expect(closureForm).toBeVisible({ timeout: 10000 });
+  await closureForm.locator('[name="password"]').fill('activation-password-1');
+  await closureForm.locator('[name="confirm"]').fill(`DELETE ACCOUNT ${email}`);
+  await closureForm.locator('[name="exportAcknowledged"]').check();
+  await closureForm.getByRole('button', { name: 'Close account permanently' }).click();
+  await expect(page.locator('#nav-signup')).toBeVisible({ timeout: 15000 });
+
+  const retained = await page.evaluate(({ seededKeys }) => ({
+    current: localStorage.getItem(seededKeys.current),
+    legacy: localStorage.getItem(seededKeys.legacy),
+    fallback: JSON.parse(localStorage.getItem('bd_onboarding_scope_map_v2') || '{}')[seededKeys.fallbackIdentity] || null,
+  }), { seededKeys });
+  expect(retained).toEqual({ current: null, legacy: null, fallback: null });
 });

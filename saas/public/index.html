@@ -66,9 +66,13 @@
   (() => {
     const root = document.getElementById('cloud-root');
     const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
-    const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:`;
+    const ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:`;
+    const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:v2:`;
+    const ONBOARDING_SCOPE_FALLBACK_MAP_KEY = 'bd_onboarding_scope_map_v2';
     const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    const ONBOARDING_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
     const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
+    let anonymousOnboardingHandoffExplicit = false;
 
     // ── State ─────────────────────────────────────────────────────────────
     let state = {
@@ -95,6 +99,7 @@
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
       onboardingIntent: getInitialOnboardingIntent(),
+      onboardingIntentScope: '',
       acquisition: getInitialAcquisition(),
     };
 
@@ -165,9 +170,11 @@
 
     function normalizeStoredOnboardingIntent(stored) {
       const updatedAt = Date.parse(stored?.updatedAt || '');
+      const age = Date.now() - updatedAt;
       const isFresh = stored?.version === 1
         && Number.isFinite(updatedAt)
-        && Date.now() - updatedAt <= ONBOARDING_INTENT_MAX_AGE_MS;
+        && age >= -ONBOARDING_INTENT_CLOCK_SKEW_MS
+        && age <= ONBOARDING_INTENT_MAX_AGE_MS;
       if (!isFresh) return null;
 
       const persona = normalizeOnboardingPersona(stored?.persona);
@@ -190,10 +197,18 @@
     }
 
     function readStoredOnboardingIntent(storage, storageKey) {
+      let raw = null;
+      try { raw = storage.getItem(storageKey); } catch {}
+      if (!raw) return null;
       let stored = null;
-      try { stored = JSON.parse(storage.getItem(storageKey) || 'null'); } catch {}
+      try {
+        stored = JSON.parse(raw);
+      } catch {
+        try { storage.removeItem(storageKey); } catch {}
+        return null;
+      }
       const normalized = normalizeStoredOnboardingIntent(stored);
-      if (stored && !normalized) {
+      if (!normalized) {
         try { storage.removeItem(storageKey); } catch {}
       }
       return normalized;
@@ -201,21 +216,47 @@
 
     function writeAnonymousOnboardingIntent(intent) {
       try { sessionStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch {}
-      // Clean up the legacy, browser-global handoff as soon as it is observed.
+      anonymousOnboardingHandoffExplicit = true;
+      // Anonymous handoffs are tab-scoped. Never revive the legacy global copy.
       try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+    }
+
+    function sweepStoredOnboardingIntents() {
+      try {
+        const scopedKeys = Object.keys(localStorage)
+          .filter((key) => key.startsWith(ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX));
+        for (const storageKey of scopedKeys) readStoredOnboardingIntent(localStorage, storageKey);
+      } catch {}
+    }
+
+    function hasExplicitOnboardingHandoff(params = new URLSearchParams(window.location.search)) {
+      return params.get('signup') === '1'
+        || Boolean(normalizeOnboardingIntent(params.get('intent')) || normalizeOnboardingPlan(params.get('plan')));
+    }
+
+    function isSafeAnonymousOnboardingIntent(intent) {
+      return Boolean(intent && ['ats-checker', 'pricing'].includes(intent.source));
     }
 
     function getInitialOnboardingIntent() {
       const params = new URLSearchParams(window.location.search);
-      let stored = readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY);
-      if (!stored) {
-        stored = readStoredOnboardingIntent(localStorage, ONBOARDING_INTENT_STORAGE_KEY);
-        if (stored) writeAnonymousOnboardingIntent(stored);
-      }
-
       const queryIntent = normalizeOnboardingIntent(params.get('intent'));
       const queryPlan = normalizeOnboardingPlan(params.get('plan'));
-      const hasExplicitHandoff = params.get('signup') === '1' || Boolean(queryIntent || queryPlan);
+      const hasExplicitHandoff = hasExplicitOnboardingHandoff(params);
+      sweepStoredOnboardingIntents();
+
+      // Legacy localStorage was shared by every account in the browser. It has
+      // no trustworthy owner, so discard it instead of attaching it to a user.
+      try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+
+      let stored = hasExplicitHandoff
+        ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
+        : null;
+      if (!isSafeAnonymousOnboardingIntent(stored)) {
+        stored = null;
+        try { sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+      }
+      anonymousOnboardingHandoffExplicit = hasExplicitHandoff;
       if (!stored && !hasExplicitHandoff) return null;
 
       const persona = normalizeOnboardingPersona(params.get('persona') || stored?.persona);
@@ -229,7 +270,7 @@
         || (persona === 'jobseeker' ? 'jobseeker' : 'trial');
       const next = {
         version: 1,
-        source: ['ats-checker', 'setup-deferred', 'setup-skipped'].includes(stored?.source) ? stored.source : 'pricing',
+        source: stored?.source === 'ats-checker' || params.get('utm_source') === 'ats-checker' ? 'ats-checker' : 'pricing',
         persona,
         intent,
         planIntent,
@@ -247,15 +288,94 @@
       return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
     }
 
-    function getAuthenticatedOnboardingIntentScope(user = state.user, tenant = state.tenant) {
+    function getLegacyAuthenticatedOnboardingIntentStorageKey(user = state.user, tenant = state.tenant) {
       const tenantId = normalizeOnboardingIntentScopePart(tenant?.id);
       const userId = normalizeOnboardingIntentScopePart(user?.id);
-      return tenantId && userId ? `${tenantId}:${userId}` : '';
+      return tenantId && userId ? `${ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX}${tenantId}:${userId}` : '';
     }
 
-    function getAuthenticatedOnboardingIntentStorageKey(user = state.user, tenant = state.tenant) {
-      const scope = getAuthenticatedOnboardingIntentScope(user, tenant);
+    function readFallbackOnboardingScopeMap() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY) || '{}');
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        try { localStorage.removeItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY); } catch {}
+        return {};
+      }
+    }
+
+    function getFallbackOpaqueOnboardingScope(identity) {
+      const scopeMap = readFallbackOnboardingScopeMap();
+      const existing = String(scopeMap[identity] || '');
+      if (/^[a-zA-Z0-9_-]{20,86}$/.test(existing)) return existing;
+      const randomPart = globalThis.crypto?.randomUUID?.().replace(/-/g, '')
+        || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+      const scope = `scope_${randomPart}`.slice(0, 86);
+      scopeMap[identity] = scope;
+      try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(scopeMap)); } catch {}
+      return scope;
+    }
+
+    async function deriveOpaqueOnboardingIntentScope(user = state.user, tenant = state.tenant) {
+      const tenantId = String(tenant?.id || '').trim();
+      const userId = String(user?.id || '').trim();
+      if (!tenantId || !userId) return '';
+      const identity = `${tenantId}\n${userId}`;
+      if (globalThis.crypto?.subtle && globalThis.TextEncoder && globalThis.btoa) {
+        try {
+          const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+          const binary = String.fromCharCode(...new Uint8Array(digest));
+          return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+        } catch {
+          // Older embedded browsers may expose Web Crypto without supporting
+          // digest. Keep the public scope opaque with a persisted random token.
+        }
+      }
+      return getFallbackOpaqueOnboardingScope(identity);
+    }
+
+    function getAuthenticatedOnboardingIntentScope() {
+      return String(state.onboardingIntentScope || '');
+    }
+
+    function getAuthenticatedOnboardingIntentStorageKey() {
+      const scope = getAuthenticatedOnboardingIntentScope();
       return scope ? `${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}` : '';
+    }
+
+    async function clearAuthenticatedOnboardingIntentsForUser(user, tenants = []) {
+      const userId = String(user?.id || '').trim();
+      if (!userId) return;
+      const uniqueTenants = [...new Map(
+        [state.tenant, ...(Array.isArray(tenants) ? tenants : [])]
+          .filter((tenant) => tenant?.id)
+          .map((tenant) => [tenant.id, tenant]),
+      ).values()];
+      for (const tenant of uniqueTenants) {
+        const scope = await deriveOpaqueOnboardingIntentScope(user, tenant);
+        if (scope) {
+          try { localStorage.removeItem(`${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}`); } catch {}
+        }
+        const legacyKey = getLegacyAuthenticatedOnboardingIntentStorageKey(user, tenant);
+        if (legacyKey) {
+          try { localStorage.removeItem(legacyKey); } catch {}
+        }
+      }
+      const fallbackMap = readFallbackOnboardingScopeMap();
+      let fallbackChanged = false;
+      for (const identity of Object.keys(fallbackMap)) {
+        if (identity.endsWith(`\n${userId}`)) {
+          delete fallbackMap[identity];
+          fallbackChanged = true;
+        }
+      }
+      if (fallbackChanged) {
+        try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(fallbackMap)); } catch {}
+      }
+      try {
+        sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+      } catch {}
     }
 
     function clearOnboardingHandoffQuery() {
@@ -265,17 +385,33 @@
       window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
     }
 
-    function activateAuthenticatedOnboardingIntent() {
+    async function activateAuthenticatedOnboardingIntent() {
+      state.onboardingIntentScope = await deriveOpaqueOnboardingIntentScope();
       const scopedKey = getAuthenticatedOnboardingIntentStorageKey();
       if (!scopedKey) {
         state.onboardingIntent = null;
         return '';
       }
 
-      const anonymousIntent = readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
-        || readStoredOnboardingIntent(localStorage, ONBOARDING_INTENT_STORAGE_KEY);
+      sweepStoredOnboardingIntents();
+      const anonymousIntent = anonymousOnboardingHandoffExplicit
+        ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
+        : null;
       let activeIntent = readStoredOnboardingIntent(localStorage, scopedKey);
-      if (anonymousIntent) {
+      const legacyScopedKey = getLegacyAuthenticatedOnboardingIntentStorageKey();
+      const legacyScopedIntent = legacyScopedKey
+        ? readStoredOnboardingIntent(localStorage, legacyScopedKey)
+        : null;
+      if (!activeIntent && legacyScopedIntent) {
+        try {
+          localStorage.setItem(scopedKey, JSON.stringify(legacyScopedIntent));
+          activeIntent = legacyScopedIntent;
+        } catch {}
+      }
+      if (legacyScopedKey) {
+        try { localStorage.removeItem(legacyScopedKey); } catch {}
+      }
+      if (isSafeAnonymousOnboardingIntent(anonymousIntent)) {
         const migratedIntent = { ...anonymousIntent, updatedAt: new Date().toISOString() };
         try {
           localStorage.setItem(scopedKey, JSON.stringify(migratedIntent));
@@ -289,9 +425,10 @@
           localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
         } catch {}
       }
+      anonymousOnboardingHandoffExplicit = false;
       state.onboardingIntent = activeIntent;
       clearOnboardingHandoffQuery();
-      return getAuthenticatedOnboardingIntentScope();
+      return state.onboardingIntentScope;
     }
 
     function persistOnboardingIntent(patch = {}) {
@@ -496,7 +633,7 @@
             state.persona = 'jobseeker';
             state.view = 'landing';
           } else {
-            if (!state.demo) activateAuthenticatedOnboardingIntent();
+            if (!state.demo) await activateAuthenticatedOnboardingIntent();
             state.view = 'app';
           }
         } else if (state.resetToken) {
@@ -554,7 +691,7 @@
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
         state.canManageWorkspace = Boolean(data.canManageWorkspace);
-        activateAuthenticatedOnboardingIntent();
+        await activateAuthenticatedOnboardingIntent();
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -623,7 +760,7 @@
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
         state.canManageWorkspace = Boolean(data.canManageWorkspace);
-        activateAuthenticatedOnboardingIntent();
+        await activateAuthenticatedOnboardingIntent();
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
@@ -698,6 +835,7 @@
         state.referral = data.referral || null;
         state.demo = true;
         state.readOnly = true;
+        state.onboardingIntentScope = '';
         state.canManageSupport = false;
         state.canManageWorkspace = false;
         state.view = 'app';
@@ -713,8 +851,17 @@
 
     async function doLogout() {
       try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+      // Keep fresh account-scoped setup progress available for a later login,
+      // but remove invalid records and every anonymous handoff on sign-out.
+      sweepStoredOnboardingIntents();
+      try {
+        sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+      } catch {}
+      anonymousOnboardingHandoffExplicit = false;
       state.user = null;
       state.tenant = null;
+      state.tenants = [];
       state.plan = null;
       state.trialDaysRemaining = null;
       state.referral = null;
@@ -723,6 +870,7 @@
       state.emailVerificationAvailable = false;
       state.canManageSupport = false;
       state.canManageWorkspace = false;
+      state.onboardingIntentScope = '';
       state.onboardingIntent = getInitialOnboardingIntent();
       state.view = 'landing';
       state.error = '';
@@ -819,7 +967,10 @@
           return;
         }
       } catch { /* cross-origin/not-ready — fall through to full navigation */ }
-      frame.src = '/app/#/admin/billing';
+      const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
+      frame.src = onboardingIntentScope
+        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/admin/billing`
+        : '/app/#/admin/billing';
     }
 
     async function copyReferralLink(btn) {
@@ -1844,10 +1995,7 @@
               }),
             });
             backdrop.remove();
-            const closedAccountIntentKey = getAuthenticatedOnboardingIntentStorageKey();
-            if (closedAccountIntentKey) {
-              try { localStorage.removeItem(closedAccountIntentKey); } catch {}
-            }
+            await clearAuthenticatedOnboardingIntentsForUser(state.user, state.tenants);
             state.user = null;
             state.tenant = null;
             state.tenants = [];
@@ -1860,6 +2008,7 @@
             state.canManageSupport = false;
             state.canManageWorkspace = false;
             state.onboardingIntent = null;
+            state.onboardingIntentScope = '';
             state.accountClosedMessage = result.message || 'Your account has been closed.';
             state.view = 'landing';
             render();
@@ -1874,6 +2023,36 @@
       }
     }
 
+    function getSanitizedSupportPageUrl(frame) {
+      let candidate = window.location.href;
+      try {
+        candidate = frame?.contentWindow?.location?.href || frame?.src || candidate;
+      } catch {
+        candidate = window.location.href;
+      }
+      let page;
+      try {
+        page = new URL(candidate, window.location.origin);
+      } catch {
+        page = new URL(window.location.pathname, window.location.origin);
+      }
+      if (page.origin !== window.location.origin) {
+        page = new URL(window.location.pathname, window.location.origin);
+      }
+      // Query parameters can contain the opaque workspace scope or auth-flow
+      // tokens. The route hash is enough context for support triage.
+      page.search = '';
+      let pageUrl = `${page.origin}${page.pathname}${page.hash}`;
+      for (const rawId of [state.tenant?.id, state.user?.id]) {
+        const normalizedId = String(rawId || '').trim();
+        if (!normalizedId) continue;
+        for (const representation of [normalizedId, encodeURIComponent(normalizedId)]) {
+          pageUrl = pageUrl.split(representation).join('[redacted]');
+        }
+      }
+      return pageUrl.slice(0, 500);
+    }
+
     function wireCustomerSupportForms(backdrop) {
       backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -1883,7 +2062,7 @@
         button.textContent = 'Sending...';
         try {
           const frame = root.querySelector('.cloud-app-frame');
-          const pageUrl = frame?.contentWindow?.location?.href || frame?.src || window.location.href;
+          const pageUrl = getSanitizedSupportPageUrl(frame);
           const data = await api('/api/support/tickets', {
             method: 'POST',
             body: JSON.stringify({

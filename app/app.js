@@ -19,11 +19,17 @@ const defaultAdminCollapsed = {
 
 const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
 const ONBOARDING_INTENT_ANONYMOUS_KEY = 'bd_onboarding_intent';
-const onboardingIntentScope = String(new URLSearchParams(window.location.search).get('intentScope') || '').trim();
-const ONBOARDING_INTENT_KEY = /^[a-zA-Z0-9:_-]{1,260}$/.test(onboardingIntentScope)
-  ? `${ONBOARDING_INTENT_ANONYMOUS_KEY}:${onboardingIntentScope}`
-  : ONBOARDING_INTENT_ANONYMOUS_KEY;
+const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_ANONYMOUS_KEY}:v2:`;
+const onboardingIntentParams = new URLSearchParams(window.location.search);
+const onboardingIntentScope = String(onboardingIntentParams.get('intentScope') || '').trim();
+const hasOnboardingIntentScope = onboardingIntentParams.has('intentScope');
+const ONBOARDING_INTENT_KEY = /^[a-zA-Z0-9_-]{20,86}$/.test(onboardingIntentScope)
+  ? `${ONBOARDING_INTENT_SCOPED_PREFIX}${onboardingIntentScope}`
+  : hasOnboardingIntentScope
+    ? ''
+    : ONBOARDING_INTENT_ANONYMOUS_KEY;
 const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const ONBOARDING_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DASHBOARD_RENDER_LIMITS = {
   todayQueue: 50,
   followUps: 10,
@@ -44,10 +50,12 @@ function readJsonSetting(key, fallback) {
 }
 
 function readOnboardingIntent() {
+  if (!ONBOARDING_INTENT_KEY) return null;
   const stored = readJsonSetting(ONBOARDING_INTENT_KEY, null);
   if (!stored || stored.version !== 1 || typeof stored !== 'object') return null;
   const updatedAt = new Date(stored.updatedAt || '').getTime();
-  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ONBOARDING_INTENT_MAX_AGE_MS) {
+  const age = Date.now() - updatedAt;
+  if (!Number.isFinite(updatedAt) || age < -ONBOARDING_INTENT_CLOCK_SKEW_MS || age > ONBOARDING_INTENT_MAX_AGE_MS) {
     localStorage.removeItem(ONBOARDING_INTENT_KEY);
     return null;
   }
@@ -2876,7 +2884,7 @@ function bindEvents() {
           body: JSON.stringify({ planId }),
         });
         if (result.url) {
-          localStorage.removeItem(ONBOARDING_INTENT_KEY);
+          if (ONBOARDING_INTENT_KEY) localStorage.removeItem(ONBOARDING_INTENT_KEY);
           appState.onboardingIntent = null;
           (window.top || window).location.href = result.url;
         } else {
@@ -5405,7 +5413,7 @@ function persistSetupIntentAfterImport(targetImport) {
       careerUrls: deferredTargetSites.filter((value) => /^https?:\/\//i.test(value)),
       updatedAt: new Date().toISOString(),
     };
-    localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
+    if (ONBOARDING_INTENT_KEY) localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
     return;
   }
   if (planIntent === 'sales' || planIntent === 'jobseeker') {
@@ -5420,9 +5428,9 @@ function persistSetupIntentAfterImport(targetImport) {
       consumedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
+    if (ONBOARDING_INTENT_KEY) localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
   } else {
-    localStorage.removeItem(ONBOARDING_INTENT_KEY);
+    if (ONBOARDING_INTENT_KEY) localStorage.removeItem(ONBOARDING_INTENT_KEY);
     appState.onboardingIntent = null;
   }
 }
