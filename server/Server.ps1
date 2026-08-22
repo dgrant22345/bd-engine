@@ -1,7 +1,6 @@
 param(
-    [int]$Port = 8173,
-    [switch]$OpenBrowser,
-    [switch]$LocalOnly
+    [int]$Port = $(if ($env:PORT) { [int]$env:PORT } else { 8173 }),
+    [switch]$OpenBrowser
 )
 
 try {
@@ -96,6 +95,26 @@ $script:ServerWarmedAt = ''
 function Write-ServerLog {
     param([string]$Message)
     Write-Host ("[{0}] {1}" -f (Get-Date).ToString('HH:mm:ss'), $Message)
+}
+
+function Write-RequestTimingLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Operation,
+        [hashtable]$Timings = @{},
+        [hashtable]$Metrics = @{}
+    )
+
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($key in @($Timings.Keys | Sort-Object)) {
+        [void]$parts.Add(('{0}Ms={1}' -f [string]$key, [int]$Timings[$key]))
+    }
+    foreach ($key in @($Metrics.Keys | Sort-Object)) {
+        [void]$parts.Add(('{0}={1}' -f [string]$key, [string]$Metrics[$key]))
+    }
+    Write-ServerLog ("PERF {0} {1} {2}" -f $Path, $Operation, ([string]::Join(' ', @($parts.ToArray()))))
 }
 
 function Write-SnapshotLog {
@@ -1300,28 +1319,61 @@ function Handle-ApiRequest {
         })
     }
     if ($path -eq '/api/accounts' -and $method -eq 'POST') {
+        $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $state = Get-AppState
+        $loadMs = [int]$totalStopwatch.ElapsedMilliseconds
         $payload = Read-JsonBody -Request $Request
         if (@($payload.Keys) -contains 'tags') {
             $payload.tags = Convert-ToStringList $payload.tags
         }
+        $addStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $result = Add-Account -State $state -Payload $payload
+        $addStopwatch.Stop()
         $state = $result.state
-        Save-AppSegment -Segment 'Companies' -Data $state.companies -SkipSnapshots
+        $persistStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Save-AppSegmentPartial -Segment 'Companies' -Data @($result.account)
+        $persistStopwatch.Stop()
         $account = @($state.companies | Where-Object { $_.id -eq $result.account.id } | Select-Object -First 1)
+        $totalStopwatch.Stop()
+        Write-RequestTimingLog -Path '/api/accounts' -Operation 'POST' -Timings @{
+            load = $loadMs
+            add = [int]$addStopwatch.ElapsedMilliseconds
+            persist = [int]$persistStopwatch.ElapsedMilliseconds
+            total = [int]$totalStopwatch.ElapsedMilliseconds
+        } -Metrics @{
+            companyCount = @($state.companies).Count
+        }
         return (New-JsonResult $account 201)
     }
     if ($path -eq '/api/accounts/import' -and $method -eq 'POST') {
+        $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $payload = Read-JsonBody -Request $Request
         $rows = @(Parse-AccountImportRows -Payload $payload)
         if ($rows.Count -eq 0) {
             return (New-JsonResult ([ordered]@{ error = 'No importable account rows were found.' }) 400)
         }
 
+        $loadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $state = Get-AppState
+        $loadStopwatch.Stop()
+        $importStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $result = Import-Accounts -State $state -Rows $rows
+        $importStopwatch.Stop()
         $state = $result.state
+        $persistStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         Save-AppSegment -Segment 'Companies' -Data $state.companies
+        $persistStopwatch.Stop()
+        $totalStopwatch.Stop()
+        Write-RequestTimingLog -Path '/api/accounts/import' -Operation 'POST' -Timings @{
+            load = [int]$loadStopwatch.ElapsedMilliseconds
+            import = [int]$importStopwatch.ElapsedMilliseconds
+            persist = [int]$persistStopwatch.ElapsedMilliseconds
+            total = [int]$totalStopwatch.ElapsedMilliseconds
+        } -Metrics @{
+            inputRows = $rows.Count
+            imported = [int]$result.count
+            companyCount = @($state.companies).Count
+        }
         return (New-JsonResult ([ordered]@{
             ok = $true
             count = $result.count
@@ -1472,13 +1524,16 @@ function Handle-ApiRequest {
                 $payload.tags = Convert-ToStringList $payload.tags
             }
             $result = Set-AccountFields -State $state -AccountId $accountId -Patch $payload
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
+            Save-AppSegmentPartial -Segment 'Companies' -Data @($result.account)
             return (New-JsonResult $result.account)
         }
         if ($method -eq 'DELETE') {
             $state = Get-AppState
             $result = Remove-Account -State $state -AccountId $accountId
-            Save-AppSegment -Segment 'Companies' -Data $result.state.companies -SkipSnapshots
+            $updatedAccount = @($result.state.companies | Where-Object { $_.id -eq $accountId } | Select-Object -First 1)
+            if ($updatedAccount) {
+                Save-AppSegmentPartial -Segment 'Companies' -Data @($updatedAccount)
+            }
             return (New-JsonResult ([ordered]@{ ok = $true }))
         }
     }
@@ -2108,6 +2163,7 @@ function Handle-ApiRequest {
         }
     }
     if ($path -eq '/api/import/connections-csv' -and $method -eq 'POST') {
+        $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $payload = Read-JsonBody -Request $Request
 
         # Support file upload (csvContent) or server-side path (csvPath)
@@ -2138,16 +2194,23 @@ function Handle-ApiRequest {
             return (New-JsonResult ([ordered]@{ error = "CSV file not found: $csvPath" }) 400)
         }
         if (Test-Truthy $payload.dryRun) {
-            $result = Get-BdConnectionsCsvPreview `
-                -CsvPath $csvPath `
-                -MergeExisting `
+            $dryRunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $result = Import-BdConnectionsCsv `
+                -CsvPath ([string]$payload.csvPath) `
+                -DryRun:(Test-Truthy $payload.dryRun) `
                 -UseEmptyState:(Test-Truthy $payload.useEmptyState)
-            if ($isTempFile -and (Test-Path -LiteralPath $csvPath)) {
-                Remove-Item -LiteralPath $csvPath -Force -ErrorAction SilentlyContinue
+            $dryRunStopwatch.Stop()
+            $totalStopwatch.Stop()
+            Write-RequestTimingLog -Path '/api/import/connections-csv' -Operation 'POST-dry-run' -Timings @{
+                import = [int]$dryRunStopwatch.ElapsedMilliseconds
+                total = [int]$totalStopwatch.ElapsedMilliseconds
+            } -Metrics @{
+                csvPath = [string]$payload.csvPath
             }
             return (New-JsonResult $result.importRun 201)
         }
 
+        $enqueueStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $job = Enqueue-BackgroundJob -Type 'connections-csv-import' -Payload ([ordered]@{
             csvPath    = $csvPath
             isTempFile = $isTempFile
@@ -2156,6 +2219,15 @@ function Handle-ApiRequest {
             sourceFileName = $sourceFileName
             sourceByteLength = $sourceByteLength
         }) -Summary 'Import LinkedIn connections CSV' -ProgressMessage 'Queued connections import'
+        $enqueueStopwatch.Stop()
+        $totalStopwatch.Stop()
+        Write-RequestTimingLog -Path '/api/import/connections-csv' -Operation 'POST-enqueue' -Timings @{
+            enqueue = [int]$enqueueStopwatch.ElapsedMilliseconds
+            total = [int]$totalStopwatch.ElapsedMilliseconds
+        } -Metrics @{
+            jobId = [string]$job.id
+            csvPath = [string]$payload.csvPath
+        }
         Write-ServerLog ("JOB enqueue id={0} type={1}" -f $job.id, $job.type)
         return (New-JsonResult (Get-BackgroundJobAcceptedResult -Job $job) 202)
     }
@@ -2265,8 +2337,7 @@ if (Test-AppStoreUsesSqlite) {
     $script:ServerWarmedAt = (Get-Date).ToString('o')
 }
 
-$bindAddr = if ($LocalOnly) { [System.Net.IPAddress]::Loopback } else { [System.Net.IPAddress]::Any }
-$listener = [System.Net.Sockets.TcpListener]::new($bindAddr, $Port)
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
 $listener.Start()
 $prefix = "http://localhost:$Port/"
 if (-not $LocalOnly) {

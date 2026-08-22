@@ -120,7 +120,8 @@ const appState = {
   localData: null,
   localOverlays: null,
   activeView: 'dashboard',
-  accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
+  accountQuery: { page: 1, pageSize: 20, q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', priority: '', status: '', owner: '', outreachStatus: '', sortBy: '' },
+  taskQuery: { page: 1, pageSize: 25, q: '', owner: '', due: 'all' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
   jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
@@ -485,29 +486,45 @@ function showAppDialog({
         event.preventDefault();
         finish(input ? input.value.trim() : true);
       }
-      if (event.key === 'Tab') {
-        const focusable = [...backdrop.querySelectorAll('button:not([disabled]), input:not([disabled])')];
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first?.focus();
-        }
+      return;
+    }
+
+    const actionName = action.dataset.action;
+    if (actionName === 'paginate') {
+      const view = action.dataset.view;
+      const page = Number(action.dataset.page);
+      if (view === 'accounts') appState.accountQuery.page = page;
+      if (view === 'tasks') appState.taskQuery.page = page;
+      if (view === 'contacts') appState.contactQuery.page = page;
+      if (view === 'jobs') appState.jobQuery.page = page;
+      if (view === 'configs') appState.configQuery.page = page;
+      if (view === 'enrichmentQueue') {
+        appState.enrichmentQuery.page = page;
+        await refreshEnrichmentPanel();
+        return;
       }
-    };
-    backdrop.querySelector('[data-dialog-cancel]').addEventListener('click', () => finish(input ? null : false));
-    backdrop.querySelector('[data-dialog-confirm]').addEventListener('click', () => finish(input ? input.value.trim() : true));
-    backdrop.addEventListener('click', (event) => {
-      if (event.target === backdrop) finish(input ? null : false);
-    });
-    document.addEventListener('keydown', onKeyDown);
-    document.body.appendChild(backdrop);
-    requestAnimationFrame(() => (input || backdrop.querySelector('[data-dialog-confirm]')).focus());
-  });
-}
+      if (view === 'tasks') {
+        await renderTasksView();
+        return;
+      }
+      await renderRoute();
+      return;
+    }
+    if (actionName === 'complete-task') {
+      await completeTask(action.dataset.id);
+      return;
+    }
+    if (actionName === 'apply-enrichment-filter') {
+      applyEnrichmentFilters();
+      return;
+    }
+    if (actionName === 'enrichment-top-n') {
+      const topN = action.dataset.topn;
+      appState.enrichmentQuery.topN = topN;
+      appState.enrichmentQuery.page = 1;
+      await refreshEnrichmentPanel();
+      return;
+    }
 
 function buildSafeDiagnosticSummary() {
   const runtime = appState.runtimeStatus || {};
@@ -845,16 +862,17 @@ function recordScoreHistory(accountId, score) {
   try { localStorage.setItem('bd_score_history', JSON.stringify(history)); } catch(e) { /* quota */ }
 }
 
-function renderSparkline(accountId, width = 60, height = 20) {
-  const points = (appState.scoreHistory[accountId] || []).map(p => p.v);
-  if (points.length < 2) return '';
-  const min = Math.min(...points);
-  const max = Math.max(...points, min + 1);
-  const step = width / (points.length - 1);
-  const coords = points.map((v, i) => `${(i * step).toFixed(1)},${(height - ((v - min) / (max - min)) * height).toFixed(1)}`).join(' ');
-  const trend = points[points.length - 1] >= points[0] ? 'var(--success)' : 'var(--danger)';
-  return `<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><polyline points="${coords}" fill="none" stroke="${trend}" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-}
+    if (form.id === 'tasks-filter-form') {
+      appState.taskQuery = { ...appState.taskQuery, page: 1, ...getFormValues(form) };
+      await renderTasksView();
+      return;
+    }
+
+    if (form.id === 'jobs-filter-form') {
+      appState.jobQuery = { ...appState.jobQuery, page: 1, ...getFormValues(form) };
+      await renderJobsView();
+      return;
+    }
 
 /* ── Kanban board ── */
 function renderKanbanBoard(items) {
@@ -1157,13 +1175,8 @@ function renderSmartAlerts(alerts) {
   `;
 }
 
-/* ── Deal velocity / stage tracking ── */
-function trackStageChange(accountId, newStage) {
-  const timestamps = appState.stageTimestamps;
-  if (!timestamps[accountId]) timestamps[accountId] = [];
-  timestamps[accountId].push({ stage: newStage, at: new Date().toISOString() });
-  if (timestamps[accountId].length > 20) timestamps[accountId] = timestamps[accountId].slice(-20);
-  try { localStorage.setItem('bd_stage_ts', JSON.stringify(timestamps)); } catch(e) { /* quota */ }
+function routeNeedsBootstrapFilters(routeRoot) {
+  return routeRoot === 'accounts' || routeRoot === 'admin' || routeRoot === 'tasks';
 }
 
 function computeStageVelocity(accountId) {
@@ -1524,18 +1537,16 @@ function normalizeForDupeCheck(name) {
   return (name || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(inc|corp|ltd|llc|co|company|technologies|tech|group|holdings|solutions)$/g, '');
 }
 
-function levenshtein(a, b) {
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const matrix = [];
-  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
-  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      matrix[i][j] = b[i - 1] === a[j - 1]
-        ? matrix[i - 1][j - 1]
-        : Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
-    }
+  if (root === 'tasks') {
+    activateNav('tasks');
+    await renderTasksView();
+    return;
+  }
+
+  if (root === 'jobs') {
+    activateNav('jobs');
+    await renderJobsView();
+    return;
   }
   return matrix[b.length][a.length];
 }
@@ -2147,18 +2158,76 @@ function shouldShowWorkspaceLoadProgress(hint) {
   }
 }
 
-function describeWorkspaceLoadSize(hint = {}) {
-  const counts = hint.counts || {};
-  const parts = [
-    ['contacts', counts.contacts],
-    ['accounts', counts.accounts],
-    ['jobs', counts.jobs],
-    ['ATS boards', counts.configs],
-  ]
-    .filter(([, value]) => Number(value || 0) > 0)
-    .map(([label, value]) => `${formatNumber(value)} ${label}`);
-  return parts.slice(0, 2).join(' and ') || 'a large dataset';
+async function renderTasksView() {
+  renderLoadingState('Tasks', 'Prioritizing follow-ups and next actions...');
+  setViewTitle('Tasks');
+  const query = {
+    page: appState.taskQuery.page,
+    pageSize: appState.taskQuery.pageSize,
+    q: appState.taskQuery.q,
+    owner: appState.taskQuery.owner,
+    sortBy: 'score',
+    active: 'true',
+  };
+  const result = await api(`/api/accounts${buildQuery(query)}`);
+  const dueFilter = appState.taskQuery.due || 'all';
+  const now = new Date();
+  const filtered = (result.items || []).filter((item) => {
+    const hasTask = Boolean((item.nextAction || '').trim()) || Boolean(item.nextActionAt);
+    if (!hasTask) return false;
+    if (dueFilter === 'all') return true;
+    if (!item.nextActionAt) return dueFilter === 'unscheduled';
+    const dueAt = new Date(item.nextActionAt);
+    if (Number.isNaN(dueAt.getTime())) return dueFilter === 'unscheduled';
+    if (dueFilter === 'overdue') return dueAt < now;
+    if (dueFilter === 'today') return dueAt.toDateString() === now.toDateString();
+    if (dueFilter === 'week') return dueAt <= new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+    return true;
+  });
+
+  appRoot.innerHTML = `
+    <section class="hero-card">
+      <div class="hero-layout">
+        <div class="hero-copy">
+          <p class="eyebrow">Task board</p>
+          <h3>Focused follow-up queue</h3>
+          <p class="subtitle">Track due outreach and clear completed next actions without leaving the app.</p>
+        </div>
+        <div class="kpi-ribbon">
+          ${renderMetricTile('Visible tasks', formatNumber(filtered.length))}
+          ${renderMetricTile('Overdue', formatNumber(filtered.filter((item) => item.nextActionAt && new Date(item.nextActionAt) < now).length))}
+          ${renderMetricTile('Unscheduled', formatNumber(filtered.filter((item) => !item.nextActionAt).length))}
+        </div>
+      </div>
+    </section>
+    <section class="table-card">
+      <form id="tasks-filter-form" class="filter-grid">
+        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Company, owner, or action">`)}
+        ${renderField('Owner', `<input name="owner" value="${escapeAttr(appState.taskQuery.owner || '')}" placeholder="Owner name">`)}
+        ${renderField('Due window', `
+          <select name="due">
+            ${renderOption('all', 'All tasks', appState.taskQuery.due)}
+            ${renderOption('overdue', 'Overdue', appState.taskQuery.due)}
+            ${renderOption('today', 'Due today', appState.taskQuery.due)}
+            ${renderOption('week', 'Due in 7 days', appState.taskQuery.due)}
+            ${renderOption('unscheduled', 'Unscheduled', appState.taskQuery.due)}
+          </select>
+        `)}
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">Apply</button>
+        </div>
+      </form>
+      ${renderTasksTable(filtered)}
+    </section>
+  `;
 }
+
+async function renderJobsView() {
+  renderLoadingState('Jobs', 'Loading job activity...');
+  setViewTitle('Jobs');
+  const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
+  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
+  const atsOptions = stateBootstrap.filters?.atsTypes || [];
 
 async function loadWorkspaceLoadHint() {
   const startedAt = performance.now();
@@ -8392,9 +8461,42 @@ async function runLaunchWorkflow(buttonEl) {
   }
 }
 
-function getConnectionsCsvPath() {
-  const input = document.getElementById('connections-csv-path');
-  return (input?.value || appState.bootstrap?.defaults?.connectionsCsvPath || '').trim();
+function renderTasksTable(items) {
+  if (!items || items.length === 0) {
+    return '<div class="empty-state">No tasks match these filters. Try switching the due window or adding a next action on an account.</div>';
+  }
+  return `
+    <table>
+      <thead><tr><th>Account</th><th>Next action</th><th>Owner</th><th>Due</th><th></th></tr></thead>
+      <tbody>
+        ${items.map((item) => `
+          <tr>
+            <td><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a></td>
+            <td>${escapeHtml(item.nextAction || 'Follow up')}</td>
+            <td>${escapeHtml(item.owner || 'Unassigned')}</td>
+            <td>${item.nextActionAt ? escapeHtml(formatDate(item.nextActionAt)) : '<span class="muted">Unscheduled</span>'}</td>
+            <td><button class="ghost-button" data-action="complete-task" data-id="${item.id}">Mark done</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderJobsTable(items, compact) {
+  return `
+    <div class="table-scroll"><table class="table"><thead><tr><th>Role</th><th>Company</th><th>Location</th><th>ATS</th><th>Posted</th><th>Retrieved</th><th>Status</th></tr></thead><tbody>
+      ${items.map((item) => `
+        <tr>
+          <td>${(item.jobUrl || item.url) ? `<a class="row-link" href="${escapeAttr(item.jobUrl || item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>`}</td>
+          <td>${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
+          <td>${escapeHtml(item.location || '')}${item.isGta ? `<div class="small muted">GTA priority</div>` : ''}</td>
+          <td>${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
+          <td>${formatDate(item.postedAt)}</td>
+          <td>${formatDate(item.retrievedAt || item.importedAt)}<div class="small muted">${escapeHtml(item.jobId || '')}</div></td>
+          <td>${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}${item.isNew ? '<div class="small muted">New this sync</div>' : ''}</td>
+        </tr>`).join('')}
+    </tbody></table></div>`;
 }
 
 async function runConnectionsCsvImport(dryRun) {
@@ -9415,6 +9517,47 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
     syncOutreachComposerState();
     buttonEl.disabled = false;
   }
+}
+
+async function retryConfigResolution(configId) {
+  if (!configId) return;
+  const accepted = await api(`/api/configs/${configId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ forceRefresh: true }),
+  });
+  window.bdLocalApi.setAlert('Config resolution queued.', appAlert);
+  await watchBackgroundJob(accepted.jobId, { label: 'Config resolution' });
+  window.bdLocalApi.setAlert('Config resolution finished.', appAlert);
+}
+
+async function completeTask(accountId) {
+  if (!accountId) return;
+  await api(`/api/accounts/${accountId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ nextAction: '', nextActionAt: '' }),
+  });
+  invalidateAppData();
+  window.bdLocalApi.setAlert('Task marked complete.', appAlert);
+  await renderTasksView();
+}
+
+async function reviewConfig(configId, decision) {
+  if (!configId || !decision) return;
+  await api(`/api/configs/${configId}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ action: decision }),
+  });
+  invalidateAppData();
+  await renderAdminView();
+  window.bdLocalApi.setAlert(`Config ${decision}d.`, appAlert);
+}
+
+async function cancelBackgroundJob(jobId) {
+  if (!jobId) return;
+  await api(`/api/background-jobs/${jobId}/cancel`, { method: 'POST', body: JSON.stringify({}) });
+  const runtime = await loadRuntimeStatus(true);
+  hydrateAdminRuntimePanels(runtime);
+  window.bdLocalApi.setAlert('Queued background job cancelled.', appAlert);
 }
 
 async function archiveAccount(accountId) {

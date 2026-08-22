@@ -5754,7 +5754,8 @@ function Add-Account {
         [Parameter(Mandatory = $true)]
         $State,
         [Parameter(Mandatory = $true)]
-        $Payload
+        $Payload,
+        [switch]$SkipSort
     )
 
     $payloadCompany = [string](Get-ObjectValue -Object $Payload -Name 'company')
@@ -5825,8 +5826,10 @@ function Add-Account {
     $existing.updatedAt = (Get-Date).ToString('o')
 
     $existing = Update-CompanyProjection -Company $existing
-    $State.companies = Sort-Companies -Companies @($State.companies)
-    $account = @($State.companies | Where-Object { $_.normalizedName -eq $companyKey } | Select-Object -First 1)
+    if (-not $SkipSort) {
+        $State.companies = Sort-Companies -Companies @($State.companies)
+    }
+    $account = @($State.companies | Where-Object { $_.id -eq $existing.id } | Select-Object -First 1)
     return [ordered]@{ state = $State; account = $account }
 }
 
@@ -5839,11 +5842,22 @@ function Import-Accounts {
     )
 
     $created = New-Object System.Collections.ArrayList
+    $addLoopStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($row in @($Rows)) {
-        $result = Add-Account -State $State -Payload $row
+        $result = Add-Account -State $State -Payload $row -SkipSort
         $State = $result.state
         [void]$created.Add($result.account)
     }
+    $addLoopStopwatch.Stop()
+    $sortStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $State.companies = Sort-Companies -Companies @($State.companies)
+    $sortStopwatch.Stop()
+
+    Write-Host ("[PERF] server/Modules/BdEngine.Domain.psm1 Import-Accounts rows={0} addLoopMs={1} sortMs={2} totalMs={3}" -f `
+        @($Rows).Count,
+        [int]$addLoopStopwatch.ElapsedMilliseconds,
+        [int]$sortStopwatch.ElapsedMilliseconds,
+        [int]($addLoopStopwatch.ElapsedMilliseconds + $sortStopwatch.ElapsedMilliseconds))
 
     return [ordered]@{
         state = $State

@@ -46,23 +46,8 @@ $script:GtaCities = @(
     'unionville','gta','greater toronto'
 )
 
-$script:CanadaKeywords = @(
-    'canada',
-    'toronto','vancouver','montreal','calgary','ottawa',
-    'edmonton','mississauga','markham','waterloo','kitchener',
-    'burnaby','winnipeg','halifax','brampton','vaughan',
-    'richmond hill','oakville','burlington','pickering','ajax',
-    'whitby','oshawa','scarborough','etobicoke','north york',
-    'newmarket','aurora','caledon','milton','stouffville',
-    'thornhill','woodbridge','london, on','hamilton','guelph',
-    'barrie','kingston','victoria','surrey','richmond, bc',
-    'quebec city','saskatoon','regina','st. john',
-    'ontario','british columbia','alberta','quebec',
-    'manitoba','saskatchewan','nova scotia','new brunswick',
-    'newfoundland','prince edward island',
-    ', on',', bc',', ab',', qc',', mb',', sk',', ns',
-    ', nb',', nl',', pe',', nt',', nu',', yt'
-)
+$script:CanadaCitiesPattern = '\b(toronto|vancouver|montreal|calgary|ottawa|edmonton|mississauga|markham|waterloo|kitchener|burnaby|winnipeg|halifax|brampton|vaughan|richmond hill|oakville|burlington|pickering|ajax|whitby|oshawa|scarborough|etobicoke|north york|newmarket|aurora|caledon|milton|stouffville|thornhill|woodbridge|hamilton|guelph|barrie|kingston|victoria|surrey|quebec city|saskatoon|regina|st. john|ontario|british columbia|alberta|quebec|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island|canada)\b'
+$script:CanadaAbbrevPattern = '(?<=[\s,/-]|^)(on|bc|ab|qc|mb|sk|ns|nb|nl|pe|nt|nu|yt)\b(?![- ]?(?:site|premise|campus|call|going|boarding|line))'
 
 function Test-CanadaLocation {
     param([string]$Location)
@@ -72,10 +57,18 @@ function Test-CanadaLocation {
         return $false
     }
 
-    foreach ($keyword in $script:CanadaKeywords) {
-        if ($value.Contains($keyword)) {
-            return $true
+    # Match specific cities/provinces/country
+    if ($value -match $script:CanadaCitiesPattern) {
+        # Special check for duplicate names: Richmond, London, Aurora, Woodbridge, Milton, Burlington, Victoria
+        if ($value -match '\b(richmond|london|aurora|woodbridge|milton|burlington|victoria)\b' -and $value -notmatch '\b(on|ontario|bc|british columbia|ab|alberta|qc|quebec|canada)\b') {
+            return $false
         }
+        return $true
+    }
+
+    # Match province abbreviations in location contexts
+    if ($value -match $script:CanadaAbbrevPattern) {
+        return $true
     }
 
     return $false
@@ -7309,6 +7302,7 @@ function Invoke-LiveJobImport {
                 atsType = [string]$config.atsType; boardId = [string]$config.boardId; jobCount = $fetchedCount; elapsedMs = [int]$fetchElapsed
             }
 
+            $filterStartTime = Get-Date
             foreach ($job in @($jobs)) {
                 if (-not (Test-CanadaLocation -Location $job.location)) {
                     $configFilteredOut += 1
@@ -7370,6 +7364,7 @@ function Invoke-LiveJobImport {
                     [void]$changedJobs.Add($jobRecord)
                 }
             }
+            $filterElapsed = ((Get-Date) - $filterStartTime).TotalMilliseconds
 
             foreach ($existingJob in @($jobMap.Values | Where-Object {
                         $_.configKey -eq $configKey -and
@@ -7390,12 +7385,12 @@ function Invoke-LiveJobImport {
             if ($configFilteredOut -gt 0) {
                 Write-PipelineDiag -Stage 'job_filter' -Company $config.companyName -Message ('Location filter: ' + $configFilteredOut + ' of ' + $fetchedCount + ' jobs dropped (non-Canada)') -Data @{
                     fetched = $fetchedCount; filteredOut = $configFilteredOut; kept = ($fetchedCount - $configFilteredOut)
-                    reason = 'Non-Canada location'; atsType = [string]$config.atsType
+                    reason = 'Non-Canada location'; atsType = [string]$config.atsType; elapsedMs = [int]$filterElapsed
                 }
             }
             if ($fetchedCount -gt 0 -and $configFilteredOut -eq $fetchedCount) {
                 Write-PipelineDiag -Stage 'job_filter_zero' -Company $config.companyName -Message ('ALL ' + $fetchedCount + ' jobs filtered out by Canada location filter - zero imported') -Data @{
-                    atsType = [string]$config.atsType; boardId = [string]$config.boardId
+                    atsType = [string]$config.atsType; boardId = [string]$config.boardId; elapsedMs = [int]$filterElapsed
                 }
             }
 
