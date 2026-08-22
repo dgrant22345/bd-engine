@@ -2752,13 +2752,13 @@ function serveStaticOrSPA(pathname, req, res) {
   if (pathname === '/app' || pathname.startsWith('/app/')) {
     const appSubPath = pathname === '/app' ? '/' : pathname.slice(4); // strip '/app'
     if (appSubPath === '/' || appSubPath === '/index.html') {
-      return sendHtml(res, getAppIndexHtml());
+      return sendHtml(res, getAppIndexHtml(res.bdScriptNonce));
     }
     const appPath = tryStaticFile(appDir, appSubPath);
     if (appPath) return streamFile(appPath, res);
     // SPA fallback for /app/ routes — serve app's index.html
     const appIndex = join(appDir, 'index.html');
-    if (existsSync(appIndex)) return sendHtml(res, getAppIndexHtml());
+    if (existsSync(appIndex)) return sendHtml(res, getAppIndexHtml(res.bdScriptNonce));
     return sendJson(res, 404, { error: 'Not found' });
   }
 
@@ -2826,24 +2826,23 @@ function getAtsCheckerHtml(scriptNonce) {
   return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
 }
 
-function getAppIndexHtml() {
+function getAppIndexHtml(scriptNonce) {
   // The file only changes on deploy (= process restart), so cache the
   // read + regex rewrite instead of doing it on every /app request.
-  if (cachedAppIndexHtml) return cachedAppIndexHtml;
-  const appIndex = join(appDir, 'index.html');
-  const html = readFileSync(appIndex, 'utf8');
-  cachedAppIndexHtml = html
-    .replace(/href="\/styles\.css/g, 'href="/app/styles.css')
-    .replace(/href="\/palette\.css/g, 'href="/app/palette.css')
-    .replace(/href="\/manifest\.json/g, 'href="/app/manifest.json')
-    .replace(/href="\/icons\//g, 'href="/app/icons/')
-    .replace(/href="\/app\.js/g, 'href="/app/app.js')
-    .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
-    .replace(/src="\/app\.js/g, 'src="/app/app.js')
-    .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
-  // Persona language is rendered directly by the shared app, so no DOM label
-  // overlay is injected into the cloud shell.
-  return cachedAppIndexHtml;
+  if (!cachedAppIndexHtml) {
+    const appIndex = join(appDir, 'index.html');
+    const html = readFileSync(appIndex, 'utf8');
+    cachedAppIndexHtml = html
+      .replace(/href="\/styles\.css/g, 'href="/app/styles.css')
+      .replace(/href="\/palette\.css/g, 'href="/app/palette.css')
+      .replace(/href="\/manifest\.json/g, 'href="/app/manifest.json')
+      .replace(/href="\/icons\//g, 'href="/app/icons/')
+      .replace(/href="\/app\.js/g, 'href="/app/app.js')
+      .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
+      .replace(/src="\/app\.js/g, 'src="/app/app.js')
+      .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
+  }
+  return injectScriptNonce(cachedAppIndexHtml, scriptNonce);
 }
 
 function tryStaticFile(baseDir, pathname) {
