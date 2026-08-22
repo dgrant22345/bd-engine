@@ -8796,8 +8796,8 @@ function isGtaLocation(location) {
   if (/\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|kitchener|waterloo|hamilton)\b/i.test(str)) {
     return true;
   }
-  if (/(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i.test(str) && !/\b(on-site|onsite)\b/i.test(str)) {
-    if (!/\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec)\b/i.test(str)) {
+  if (/\b(canada|ontario)\b/i.test(str) || /(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i.test(str)) {
+    if (!/\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec|bc|ab|qc)\b/i.test(str)) {
       return true;
     }
   }

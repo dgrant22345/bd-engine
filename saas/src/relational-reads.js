@@ -288,7 +288,7 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
         j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
         j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
         j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
-        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%'
+        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
       )`);
     } else if (query.geography === 'canada') {
       clauses.push(`(
