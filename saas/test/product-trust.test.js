@@ -5,6 +5,8 @@ import { getPlan } from '../src/billing.js';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const appPath = new URL('../../app/app.js', import.meta.url);
+const appIndexPath = new URL('../../app/index.html', import.meta.url);
+const appStylesPath = new URL('../../app/styles.css', import.meta.url);
 const serverPath = new URL('../src/server.js', import.meta.url);
 
 test('public product claims match implemented job-board coverage and team sync', async () => {
@@ -32,6 +34,35 @@ test('public product claims match implemented job-board coverage and team sync',
 
 test('Sales Professional does not advertise unavailable login seats', () => {
   assert.equal(getPlan('sales').limits.users, 1);
+});
+
+test('shared app shell copy stays within capabilities available in every build', async () => {
+  const appIndex = await readFile(appIndexPath, 'utf8');
+  assert.match(appIndex, /prioritized next actions/i);
+  assert.doesNotMatch(appIndex, /measurable client outcomes|meetings and client outcomes/i);
+});
+
+test('commercial outcome metrics use balanced responsive columns', async () => {
+  const styles = await readFile(appStylesPath, 'utf8');
+  const outcomeStart = styles.indexOf('.outcome-value-grid {', styles.indexOf('/* Commercial quick start'));
+  assert.ok(outcomeStart >= 0, 'commercial outcome metric grid not found');
+  const outcomeStyles = styles.slice(outcomeStart);
+  assert.match(outcomeStyles, /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(outcomeStyles, /@media \(max-width: 1040px\)[\s\S]*?\.outcome-value-grid \{[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(outcomeStyles, /@media \(max-width: 680px\)[\s\S]*?\.outcome-value-grid,[\s\S]*?grid-template-columns:\s*1fr/);
+});
+
+test('signup requires recoverable acceptance of the current Terms and Privacy versions', async () => {
+  const [landing, server] = await Promise.all([
+    readFile(landingPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+  ]);
+  assert.match(landing, /id="signup-legal-consent" required/);
+  assert.match(landing, /termsVersion: COMMERCIAL_LEGAL_VERSION/);
+  assert.match(landing, /privacyVersion: COMMERCIAL_LEGAL_VERSION/);
+  assert.match(server, /acceptedCurrentLegalTerms/);
+  assert.match(server, /termsVersion: legalAcceptance\.termsVersion/);
+  assert.match(server, /privacyVersion: legalAcceptance\.privacyVersion/);
 });
 
 test('public prices and limits match enforced plan entitlements', async () => {

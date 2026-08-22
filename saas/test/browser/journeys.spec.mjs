@@ -129,6 +129,66 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
+test('post-setup tour is labelled, keyboard-contained, dismissible, and restores focus', async ({ page }) => {
+  const { app } = await signup(page);
+  const profile = app.locator('#setup-profile-form');
+  const setupTitle = app.locator('#setup-title');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await expect(setupTitle).toHaveText('Workspace');
+  await expect(setupTitle).toBeFocused();
+
+  await fillProfileForm(profile);
+  await profile.locator('button[type="submit"]').click();
+  await expect(setupTitle).toHaveText('Watchlist');
+  await expect(setupTitle).toBeFocused();
+
+  await app.locator('[data-action="setup-skip-targets"]').click();
+  await expect(setupTitle).toHaveText('Contacts (optional)');
+  await expect(setupTitle).toBeFocused();
+  await app.locator('[data-action="setup-skip-import"]').click();
+  await expect(app.locator('[data-action="setup-open-dashboard"]')).toBeVisible({ timeout: 15000 });
+  await app.locator('[data-action="setup-open-dashboard"]').click();
+
+  const dialog = app.getByRole('dialog', { name: 'Your workspace is ready' });
+  await expect(dialog).toBeVisible({ timeout: 10000 });
+  await expect(app.locator('.shell')).toHaveAttribute('inert', '');
+  const skip = dialog.getByRole('button', { name: 'Skip tour' });
+  const next = dialog.getByRole('button', { name: 'Next' });
+  await expect(next).toBeFocused();
+
+  await next.press('Tab');
+  await expect(skip).toBeFocused();
+  await skip.press('Shift+Tab');
+  await expect(next).toBeFocused();
+
+  await next.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(app.locator('.shell')).not.toHaveAttribute('inert', '');
+  await expect(app.locator('#view-title')).toBeFocused();
+});
+
+test('mobile setup keeps the active step and readiness hierarchy compact', async ({ page }) => {
+  const { app } = await signup(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+
+  const stepperHeight = await app.locator('.setup-steps').evaluate((element) => element.getBoundingClientRect().height);
+  const readinessHeight = await app.locator('.setup-value-guide').evaluate((element) => element.getBoundingClientRect().height);
+  expect(stepperHeight).toBeLessThanOrEqual(64);
+  expect(readinessHeight).toBeLessThanOrEqual(200);
+
+  await fillProfileForm(profile);
+  await profile.locator('button[type="submit"]').click();
+  await expect(app.locator('#setup-title')).toHaveText('Watchlist');
+  const flowTops = await app.locator('.setup-flow-preview > span').evaluateAll((elements) => (
+    elements.map((element) => Math.round(element.getBoundingClientRect().top))
+  ));
+  expect(Math.max(...flowTops) - Math.min(...flowTops)).toBeLessThanOrEqual(2);
+  const overflow = await app.locator('body').evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
 test('sample setup journey: loaded data updates readiness before launch', async ({ page }) => {
   const { app } = await signup(page);
   const profile = app.locator('#setup-profile-form');

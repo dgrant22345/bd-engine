@@ -18,6 +18,8 @@ const defaultAdminCollapsed = {
 };
 
 const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
+const ONBOARDING_INTENT_KEY = 'bd_onboarding_intent';
+const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DASHBOARD_RENDER_LIMITS = {
   todayQueue: 50,
   followUps: 10,
@@ -36,6 +38,38 @@ function readJsonSetting(key, fallback) {
     return fallback;
   }
 }
+
+function readOnboardingIntent() {
+  const stored = readJsonSetting(ONBOARDING_INTENT_KEY, null);
+  if (!stored || stored.version !== 1 || typeof stored !== 'object') return null;
+  const updatedAt = new Date(stored.updatedAt || '').getTime();
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ONBOARDING_INTENT_MAX_AGE_MS) {
+    localStorage.removeItem(ONBOARDING_INTENT_KEY);
+    return null;
+  }
+  const careerUrls = [...new Set((Array.isArray(stored.careerUrls) ? stored.careerUrls : [])
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      try {
+        const parsed = new URL(value);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+      } catch {
+        return false;
+      }
+    }))].slice(0, 50);
+  const pendingTargetSites = [...new Set((Array.isArray(stored.pendingTargetSites) ? stored.pendingTargetSites : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))].slice(0, 50);
+  return {
+    ...stored,
+    persona: stored.persona === 'jobseeker' ? 'jobseeker' : 'bd',
+    careerUrls,
+    pendingTargetSites,
+    pendingTargetReason: ['capacity', 'skipped'].includes(stored.pendingTargetReason) ? stored.pendingTargetReason : '',
+  };
+}
+
+const onboardingIntent = readOnboardingIntent();
 
 const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
 const defaultDashboardCollapsed = {
@@ -118,6 +152,7 @@ const appState = {
   onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
   postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
   tourActive: false,
+  tourTrigger: null,
   dashboardLayout: readJsonSetting('bd_dash_layout', null),
   dashboardCollapsed: savedDashboardCollapsed && typeof savedDashboardCollapsed === 'object'
     ? { ...defaultDashboardCollapsed, ...savedDashboardCollapsed }
@@ -140,6 +175,12 @@ const appState = {
   setupResult: null,
   setupImportJobId: '',
   setupProgressMessage: '',
+  setupTargetImportResult: null,
+  setupSignalJobId: '',
+  setupTargetsSkipped: false,
+  setupLastFocusedStep: '',
+  onboardingIntent,
+  outcomeSummary: null,
   workspaceLoadHint: null,
   workspaceLoadProgressTimer: null,
   workspaceLoadProgressKey: '',
@@ -151,6 +192,9 @@ const appState = {
     userEmail: '',
     ownersText: '',
     licenseKey: '',
+    targetSites: (onboardingIntent?.pendingTargetSites?.length
+      ? onboardingIntent.pendingTargetSites
+      : onboardingIntent?.careerUrls || []).join('\n'),
   },
   taskQuery: { page: 1, pageSize: 50, status: 'pending' },
 };
@@ -464,7 +508,7 @@ function buildSafeDiagnosticSummary() {
     'BD Engine diagnostic summary',
     `Generated: ${new Date().toISOString()}`,
     `Route: ${getRouteRoot() || 'unknown'}`,
-    `Mode: ${appState.bootstrap?.readOnly ? 'read-only demo' : 'authenticated workspace'}`,
+    `Mode: ${canMutateWorkspace() ? 'authenticated workspace' : 'read-only workspace'}`,
     `Background work: ${Number(runtime.runningJobs || 0)} running, ${Number(runtime.queuedJobs || 0)} waiting`,
     `Last successful refresh: ${scheduler.lastSuccessAt || appState.bootstrap?.settings?.lastPipelineRun || 'not yet completed'}`,
     `Tracked companies: ${Number(coverage.trackedCompanies || coverage.totalTrackedCompanies || 0)}`,
@@ -1648,6 +1692,155 @@ function renderActivityTimeline(accountId) {
     </div>`;
 }
 
+const COMMERCIAL_OUTCOME_STAGES = [
+  { id: 'outreach_logged', label: 'Outreach logged', tone: 'neutral' },
+  { id: 'replied', label: 'Reply received', tone: 'accent' },
+  { id: 'positive_reply', label: 'Positive reply', tone: 'accent' },
+  { id: 'meeting_booked', label: 'Meeting booked', tone: 'success' },
+  { id: 'opportunity_created', label: 'Opportunity created', tone: 'warning' },
+  { id: 'won', label: 'Client won', tone: 'success' },
+  { id: 'lost', label: 'Closed lost', tone: 'danger' },
+];
+
+const COMMERCIAL_VALUE_ACTIVITY_STAGES = new Set(['opportunity', 'won', 'lost']);
+
+function getCommercialOutcomeCount(summary = {}, stage) {
+  const value = summary.counts?.[stage] ?? summary.byStage?.[stage]?.count ?? summary.byStage?.[stage] ?? 0;
+  return Number(value || 0);
+}
+
+function formatCurrencyFromCents(valueCents, currency = 'USD') {
+  const value = Number(valueCents || 0) / 100;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: String(currency || 'USD').toUpperCase(),
+      maximumFractionDigits: value % 1 ? 2 : 0,
+    }).format(value);
+  } catch {
+    return `$${formatNumber(value)}`;
+  }
+}
+
+function renderCommercialOutcomeSummary(summary = {}) {
+  if (summary.unavailable) {
+    return `
+      <section class="detail-card commercial-outcomes-panel commercial-outcomes-panel--unavailable">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Commercial evidence</p>
+            <h3>Account signals and client outcomes</h3>
+            <p class="muted small">Outcome data could not be loaded just now. Your saved account activity is unaffected.</p>
+          </div>
+        </div>
+        ${renderEmptyState({
+          icon: '!',
+          title: 'Commercial outcomes are temporarily unavailable',
+          copy: 'Try this section again without leaving the dashboard.',
+          action: '<button class="secondary-button" type="button" data-action="retry-outcome-summary">Try again</button>',
+          compact: true,
+        })}
+      </section>`;
+  }
+  const total = Number(summary.total || Object.values(summary.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0));
+  const meetings = getCommercialOutcomeCount(summary, 'meeting_booked');
+  const opportunities = getCommercialOutcomeCount(summary, 'opportunity_created');
+  const wins = getCommercialOutcomeCount(summary, 'won');
+  const replies = getCommercialOutcomeCount(summary, 'replied') + getCommercialOutcomeCount(summary, 'positive_reply');
+  const valueEntries = Object.entries(summary.valuesByCurrency || {}).sort(([a], [b]) => a.localeCompare(b));
+  if (!valueEntries.length && (summary.wonValueCents || summary.openOpportunityValueCents)) {
+    valueEntries.push([summary.currency || 'USD', {
+      opportunityCreatedCents: summary.openOpportunityValueCents || 0,
+      wonCents: summary.wonValueCents || 0,
+    }]);
+  }
+  return `
+    <section class="detail-card commercial-outcomes-panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Commercial evidence</p>
+          <h3>Account signals and client outcomes</h3>
+          <p class="muted small">Track what happened alongside each account. This shows an association with the account context, not proof that a hiring signal caused the result.</p>
+        </div>
+        ${total ? `<span class="outcome-total">${formatNumber(total)} logged</span>` : ''}
+      </div>
+      ${total ? `
+        <div class="outcome-value-grid">
+          ${renderMetricTile('Replies', formatNumber(replies))}
+          ${renderMetricTile('Meetings', formatNumber(meetings))}
+          ${renderMetricTile('Opportunities', formatNumber(opportunities))}
+          ${renderMetricTile('Clients won', formatNumber(wins))}
+        </div>
+        ${valueEntries.length ? `<div class="outcome-currency-grid" aria-label="Commercial value by currency">
+          ${valueEntries.map(([currency, values]) => `
+            <div class="outcome-currency-row">
+              <strong>${escapeHtml(currency)}</strong>
+              <span>${escapeHtml(formatCurrencyFromCents(values.opportunityCreatedCents || 0, currency))} opportunity value</span>
+              <span>${escapeHtml(formatCurrencyFromCents(values.wonCents || 0, currency))} won</span>
+              ${values.lostCents ? `<span>${escapeHtml(formatCurrencyFromCents(values.lostCents, currency))} lost</span>` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+        <div class="outcome-stage-strip" aria-label="Commercial outcome funnel">
+          ${COMMERCIAL_OUTCOME_STAGES.map((stage) => `
+            <span class="outcome-stage outcome-stage--${stage.tone}">
+              <strong>${formatNumber(getCommercialOutcomeCount(summary, stage.id))}</strong>
+              ${escapeHtml(stage.label)}
+            </span>`).join('')}
+        </div>` : renderEmptyState({
+          icon: 'ROI',
+          title: 'Start proving commercial value',
+          copy: 'Open an account after outreach and record the next real outcome. Meetings and wins will roll up here automatically.',
+          action: '<a class="secondary-button" href="#/accounts">Open target accounts</a>',
+          compact: true,
+        })}
+    </section>`;
+}
+
+function renderAccountCommercialOutcomes(payload = {}) {
+  if (payload.unavailable) {
+    return `
+      <div class="account-outcomes account-outcomes--unavailable">
+        <div class="panel-header panel-header--compact">
+          <div>
+            <h4>Commercial outcomes</h4>
+            <p class="muted small">Outcome history could not be loaded. Activity on this account is still available below.</p>
+          </div>
+        </div>
+        <button class="secondary-button" type="button" data-action="retry-account-outcomes" data-account-id="${escapeAttr(payload.accountId || '')}">Try outcome history again</button>
+      </div>`;
+  }
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const guidance = canMutateWorkspace()
+    ? 'Choose a result in the activity form above. Outreach and replies are recorded once through that same workflow.'
+    : 'This outcome history is read-only for the current session.';
+  return `
+    <div class="account-outcomes">
+      <div class="panel-header panel-header--compact">
+        <div>
+          <h4>Commercial outcomes</h4>
+          <p class="muted small">Results recorded alongside this account's hiring and relationship context.</p>
+        </div>
+        ${items.length ? `<span class="small muted">${formatNumber(payload.total || items.length)} logged</span>` : ''}
+      </div>
+      <p class="small muted outcome-empty-copy">${escapeHtml(guidance)}</p>
+      ${items.length ? `
+        <div class="outcome-timeline">
+          ${items.slice(0, 8).map((item) => `
+            <article class="outcome-timeline__item">
+              <span class="outcome-timeline__mark" aria-hidden="true"></span>
+              <div>
+                <div class="inline-header">
+                  <strong>${escapeHtml(COMMERCIAL_OUTCOME_STAGES.find((stage) => stage.id === item.stage)?.label || humanize(item.stage || 'outcome'))}</strong>
+                  <span class="small muted">${formatDate(item.occurredAt || item.createdAt)}</span>
+                </div>
+                ${item.valueCents !== null && item.valueCents !== undefined ? `<p class="outcome-value">${escapeHtml(formatCurrencyFromCents(item.valueCents, item.currency))}</p>` : ''}
+                ${(item.notes || item.lostReason) ? `<p class="small muted">${escapeHtml(item.notes || item.lostReason)}</p>` : ''}
+              </div>
+            </article>`).join('')}
+        </div>` : '<p class="small muted outcome-empty-copy">No commercial outcome has been recorded for this account yet.</p>'}
+    </div>`;
+}
+
 /* ── Phase 6: Sales cycle analytics ── */
 function renderSalesCycleAnalytics(accounts) {
   if (!Array.isArray(accounts) || !accounts.length) return '';
@@ -1765,6 +1958,7 @@ function getDashboardSections() {
     { id: 'hero', label: 'Daily summary', required: true },
     { id: 'workflow', label: 'Quick working lanes' },
     { id: 'action-plan', label: 'Recommended next actions' },
+    { id: 'outcomes', label: 'Commercial outcomes' },
     { id: 'readiness', label: 'Workspace readiness' },
     { id: 'alerts-bar', label: 'Important alerts' },
     { id: 'queue', label: "Today's priority queue" },
@@ -1781,7 +1975,7 @@ function getDashboardSections() {
     { id: 'duplicates', label: 'Possible duplicates' },
     { id: 'sales-cycle', label: 'Sales cycle analytics' },
     { id: 'charts', label: 'Pipeline charts' },
-  ];
+  ].filter((section) => section.id !== 'outcomes' || (!isJobSeekerPersona() && supportsCommercialOutcomes()));
 }
 
 function renderDashboardCustomizer() {
@@ -2179,6 +2373,36 @@ function bindEvents() {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
 
+    if (appState.tourActive) {
+      const dialog = document.querySelector('.tour-card[role="dialog"]');
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        endTour({ skipped: true });
+        return;
+      }
+      if (e.key === 'Tab' && dialog) {
+        const focusable = [...dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+          .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+        if (!focusable.length) {
+          e.preventDefault();
+          dialog.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      // The tour is modal; suppress global navigation shortcuts while it is open.
+      return;
+    }
+
     const taskTab = e.target.closest?.('.tasks-tabs [role="tab"]');
     if (taskTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
       e.preventDefault();
@@ -2384,7 +2608,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'end-tour') {
-      endTour();
+      endTour({ skipped: true });
       return;
     }
     if (actionName === 'setup-browse-csv') {
@@ -2404,6 +2628,28 @@ function bindEvents() {
       appState.setupPreview = null;
       appState.setupTrackedCompanies = [];
       await completeSetupWizard();
+      return;
+    }
+    if (actionName === 'setup-skip-targets') {
+      persistSetupDraftFromDom();
+      appState.setupTargetsSkipped = true;
+      appState.setupTargetImportResult = null;
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
+    if (actionName === 'retry-deferred-targets') {
+      await retryDeferredSetupTargets(action);
+      return;
+    }
+    if (actionName === 'retry-outcome-summary') {
+      action.disabled = true;
+      await renderDashboardView();
+      return;
+    }
+    if (actionName === 'retry-account-outcomes') {
+      const accountId = action.dataset.accountId || appState.accountDetail?.account?.id;
+      if (accountId) await renderAccountDetail(accountId);
       return;
     }
     if (actionName === 'setup-load-sample') {
@@ -2626,6 +2872,8 @@ function bindEvents() {
           body: JSON.stringify({ planId }),
         });
         if (result.url) {
+          localStorage.removeItem(ONBOARDING_INTENT_KEY);
+          appState.onboardingIntent = null;
           (window.top || window).location.href = result.url;
         } else {
           showToast(result.error || 'Failed to initialize checkout', 'error');
@@ -2876,7 +3124,30 @@ function bindEvents() {
       return;
     }
 
-    if (form.id === 'setup-team-form' || form.id === 'setup-license-form') {
+    if (form.id === 'setup-target-form') {
+      persistSetupDraftFromDom();
+      const parsed = parseSetupTargetSites(appState.setupDraft.targetSites);
+      if (!parsed.targets.length) {
+        showToast('Add at least one company name, domain, or careers URL—or choose Skip for now.', 'warning');
+        syncSetupTargetFeedback({ forceError: true });
+        document.getElementById('setup-target-sites')?.focus();
+        return;
+      }
+      if (parsed.invalid.length) {
+        showToast(`${formatNumber(parsed.invalid.length)} line${parsed.invalid.length === 1 ? '' : 's'} could not be read. Fix or remove them before continuing.`, 'warning');
+        syncSetupTargetFeedback({ forceError: true });
+        document.getElementById('setup-target-sites')?.focus();
+        return;
+      }
+      if (parsed.truncated) showToast('The first 50 targets will be added. You can add more later.', 'info');
+      appState.setupTargetsSkipped = false;
+      appState.setupTargetImportResult = null;
+      appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
+      await renderSetupWizard();
+      return;
+    }
+
+    if (form.id === 'setup-license-form') {
       persistSetupDraftFromDom();
       appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
       await renderSetupWizard();
@@ -3068,7 +3339,38 @@ function bindEvents() {
     }
 
     if (form.id === 'activity-form') {
-      const payload = getFormValues(form);
+      const values = getFormValues(form);
+      const payload = { ...values };
+      const hasMeaningfulResult = Boolean(values.pipelineStage) || values.type === 'outreach';
+      if (!String(values.summary || '').trim() && !hasMeaningfulResult) {
+        showToast('Add a note or choose a result before saving activity.', 'warning');
+        form.elements.summary?.focus();
+        return;
+      }
+      const rawValue = String(values.value || '').trim();
+      const acceptsValue = COMMERCIAL_VALUE_ACTIVITY_STAGES.has(values.pipelineStage);
+      const numericValue = rawValue ? Number(rawValue) : null;
+      const occurredAt = parseActivityDateInput(values.occurredOn);
+      if (rawValue && !acceptsValue) {
+        showToast('Add a value only when logging an opportunity, win, or loss.', 'warning');
+        return;
+      }
+      if (rawValue && (!Number.isFinite(numericValue) || numericValue < 0)) {
+        showToast('Commercial value must be zero or a positive number.', 'warning');
+        return;
+      }
+      if (values.occurredOn && !occurredAt) {
+        showToast('Choose a valid activity date that is not in the future.', 'warning');
+        return;
+      }
+      delete payload.value;
+      delete payload.currency;
+      delete payload.occurredOn;
+      if (occurredAt) payload.occurredAt = occurredAt;
+      if (rawValue && acceptsValue) {
+        payload.valueCents = Math.round(numericValue * 100);
+        payload.currency = values.currency || 'USD';
+      }
       await api('/api/activity', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -3248,6 +3550,16 @@ function isJobSeekerPersona() {
   return normalizeAppPersona(appState.persona || appState.bootstrap?.persona || appState.setupStatus?.persona) === 'jobseeker';
 }
 
+function supportsCommercialOutcomes() {
+  return appState.bootstrap?.capabilities?.commercialOutcomes === true;
+}
+
+function canMutateWorkspace() {
+  const session = appState.bootstrap?.session;
+  const role = String(session?.membership?.role || '').toLowerCase();
+  return session?.readOnly !== true && session?.demo !== true && role !== 'viewer';
+}
+
 function hasPlanFeature(feature) {
   const features = appState.bootstrap?.session?.plan?.features;
   return !Array.isArray(features) || features.includes(feature);
@@ -3271,7 +3583,7 @@ function applyPersonaChrome() {
   if (jobsLabel) jobsLabel.textContent = jobSeeker ? 'Open roles' : 'Jobs';
   if (contactsLabel) contactsLabel.textContent = jobSeeker ? 'Network' : 'Contacts';
   if (adminLabel) adminLabel.textContent = jobSeeker ? 'Tools' : 'Admin';
-  if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Commercial revenue operating system';
+  if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Hiring-signal workspace';
 }
 
 function getFormValues(form) {
@@ -3639,6 +3951,26 @@ function renderWorkspaceReadinessPanel(readiness = {}) {
   `;
 }
 
+function renderDeferredTargetNotice() {
+  const pendingCount = Number(appState.onboardingIntent?.pendingTargetSites?.length || 0);
+  if (!pendingCount) return '';
+  const capacityDeferred = appState.onboardingIntent?.pendingTargetReason === 'capacity';
+  return `
+    <section class="deferred-target-notice" role="status">
+      <div>
+        <p class="eyebrow">Saved watchlist</p>
+        <strong>${formatNumber(pendingCount)} target${pendingCount === 1 ? '' : 's'} ready to add</strong>
+        <p>${capacityDeferred
+          ? 'These targets were preserved when setup reached the current account limit. Nothing was discarded.'
+          : 'You chose to finish setup without adding these targets. They are still here when you are ready.'}</p>
+      </div>
+      <div class="button-row">
+        <button class="secondary-button" type="button" data-action="retry-deferred-targets">Add saved targets</button>
+        ${capacityDeferred ? '<a class="ghost-button" href="#/admin/billing-subscription">Review account limit</a>' : ''}
+      </div>
+    </section>`;
+}
+
 function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCopy()) {
   const readinessMetrics = dashboard.readiness?.metrics || {};
   const summary = dashboard.summary || {};
@@ -3655,15 +3987,15 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
       cta: jobSeeker ? 'Add company' : 'Add account',
       href: '#/accounts/new',
     },
-    {
+    jobSeeker ? {
       id: 'contact',
       title: 'Map a warm contact',
       description: 'Import the Connections.csv file you choose. BD Engine does not log into or automate LinkedIn.',
       value: Number(readinessMetrics.contactCount || 0),
-      valueLabel: jobSeeker ? 'network contact' : 'contact',
+      valueLabel: 'network contact',
       cta: 'Import contacts',
       href: '#/admin/pipeline-ops/contacts',
-    },
+    } : null,
     {
       id: 'board',
       title: 'Find a job board',
@@ -3684,13 +4016,22 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
       cta: jobSeeker ? 'Import roles' : 'Import jobs',
       href: '#/admin/pipeline-ops/jobs',
     },
-  ].map((step) => ({ ...step, complete: step.value > 0 }));
+    jobSeeker || !supportsCommercialOutcomes() ? null : {
+      id: 'action',
+      title: 'Work the first signal',
+      description: 'Open the recommended account, log the outreach, and schedule the next follow-up.',
+      value: getCommercialOutcomeCount(appState.outcomeSummary || {}, 'outreach_logged'),
+      valueLabel: 'outreach action',
+      cta: 'Open account queue',
+      href: '#/accounts',
+    },
+  ].filter(Boolean).map((step) => ({ ...step, complete: step.value > 0 }));
   const completeCount = steps.filter((step) => step.complete).length;
   if (completeCount === steps.length) return '';
   const progress = Math.round((completeCount / steps.length) * 100);
   const summaryCopy = jobSeeker
     ? 'Complete these four steps so BD Engine can rank a company using live roles and your existing network.'
-    : 'Complete these four steps so BD Engine can rank an account using live hiring signals and relationship context.';
+    : 'Complete the signal-to-action loop using a real account. Contacts can be added later when a warm path is useful.';
 
   return `
     <section class="detail-card activation-path" data-first-value-checklist aria-labelledby="first-value-title">
@@ -4198,13 +4539,13 @@ async function renderRoute() {
 function getSetupSteps() {
   const jobSeeker = isJobSeekerPersona();
   const steps = [
-    { key: 'profile', label: 'Profile' },
-    { key: 'team', label: jobSeeker ? 'Support (optional)' : 'Owners (optional)' },
+    { key: 'profile', label: 'Workspace' },
   ];
   if (appState.setupStatus?.licensingEnabled) {
     steps.push({ key: 'license', label: 'License' });
   }
-  steps.push({ key: 'import', label: 'Import' });
+  steps.push({ key: 'targets', label: jobSeeker ? 'Companies' : 'Watchlist' });
+  steps.push({ key: 'import', label: 'Contacts (optional)' });
   steps.push({ key: 'launch', label: 'Launch' });
   return steps;
 }
@@ -4221,11 +4562,13 @@ function persistSetupDraftFromDom() {
   const userEmailInput = document.getElementById('setup-user-email');
   const ownersInput = document.getElementById('setup-owners-text');
   const licenseInput = document.getElementById('setup-license-key');
+  const targetsInput = document.getElementById('setup-target-sites');
   if (workspaceInput) appState.setupDraft.workspaceName = workspaceInput.value.trim();
   if (userNameInput) appState.setupDraft.userName = userNameInput.value.trim();
   if (userEmailInput) appState.setupDraft.userEmail = userEmailInput.value.trim();
   if (ownersInput) appState.setupDraft.ownersText = ownersInput.value;
   if (licenseInput) appState.setupDraft.licenseKey = licenseInput.value.trim();
+  if (targetsInput) appState.setupDraft.targetSites = targetsInput.value;
 }
 
 function parseSetupOwners(text) {
@@ -4249,6 +4592,124 @@ function parseSetupOwners(text) {
     });
 }
 
+function titleCaseTargetName(value, fallback = 'Target company') {
+  const cleaned = decodeURIComponent(String(value || ''))
+    .replace(/\b(careers?|jobs?|openings?|opportunities)\b/gi, ' ')
+    .replace(/[_\-.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return fallback;
+  return cleaned.replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function getCompanyLabelFromTargetUrl(url, index = 0) {
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+  const pathParts = url.pathname.split('/').map((part) => part.trim()).filter(Boolean);
+  const providerHosts = [
+    'greenhouse.io', 'lever.co', 'ashbyhq.com', 'workable.com', 'smartrecruiters.com',
+    'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com',
+  ];
+  const providerHost = providerHosts.find((host) => hostname === host || hostname.endsWith(`.${host}`));
+  let candidate = '';
+  if (hostname.includes('greenhouse.io')) candidate = url.searchParams.get('for') || pathParts[0] || '';
+  else if (hostname.endsWith('.bamboohr.com')) candidate = hostname.split('.')[0];
+  else if (hostname === 'jobs.jobvite.com' || hostname.endsWith('.jobvite.com')) candidate = pathParts[0] || hostname.split('.')[0];
+  else if (hostname.endsWith('.recruitee.com')) candidate = hostname.split('.')[0];
+  else if (hostname.endsWith('.jobs.personio.com')) candidate = hostname.split('.')[0];
+  else if (hostname === 'jobs.personio.com') candidate = pathParts[0] || '';
+  else if (hostname === 'ats.rippling.com' || hostname.endsWith('.rippling.com')) candidate = pathParts[0] || hostname.split('.')[0];
+  else if (providerHost) candidate = pathParts[0] || hostname.split('.')[0];
+  else if (hostname.includes('myworkdayjobs.com')) candidate = hostname.split('.')[0];
+  else {
+    const parts = hostname.split('.').filter(Boolean);
+    const suffixIndex = parts.length >= 3 && ['co', 'com', 'org', 'net'].includes(parts.at(-2)) ? -3 : -2;
+    candidate = parts.at(suffixIndex) || parts[0] || '';
+  }
+  return titleCaseTargetName(candidate, `Target company ${index + 1}`);
+}
+
+function parseSetupTargetSites(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const targets = [];
+  const invalid = [];
+  const seen = new Set();
+  lines.slice(0, 50).forEach((line, index) => {
+    const rawValue = line.replace(/^[\s"']+|[\s"']+$/g, '');
+    if (!rawValue) return;
+    const looksLikeCompanyName = !rawValue.includes('://') && !rawValue.includes('.') && !rawValue.includes('/');
+    if (looksLikeCompanyName) {
+      const key = rawValue.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ company: rawValue, domain: '', careersUrl: '' });
+      }
+      return;
+    }
+    try {
+      const url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(rawValue) ? rawValue : `https://${rawValue}`);
+      if (!['https:', 'http:'].includes(url.protocol) || !url.hostname.includes('.')) throw new Error('Unsupported URL');
+      url.hash = '';
+      const careersUrl = url.href;
+      const key = careersUrl.toLowerCase().replace(/\/$/, '');
+      if (seen.has(key)) return;
+      seen.add(key);
+      const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+      const isHostedBoard = [
+        'greenhouse.io', 'lever.co', 'ashbyhq.com', 'workable.com', 'smartrecruiters.com',
+        'myworkdayjobs.com', 'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com',
+      ]
+        .some((host) => hostname === host || hostname.endsWith(`.${host}`));
+      targets.push({
+        company: getCompanyLabelFromTargetUrl(url, index),
+        domain: isHostedBoard ? '' : hostname,
+        careersUrl,
+      });
+    } catch {
+      invalid.push(line);
+    }
+  });
+  return { targets, invalid, truncated: lines.length > 50 };
+}
+
+function buildSetupTargetImportCsv(targets = []) {
+  const quote = (value) => `"${String(value || '').replace(/"/g, '""')}"`;
+  return [
+    'company,domain,careers_url,priority,status,notes',
+    ...targets.map((target) => [
+      target.company,
+      target.domain,
+      target.careersUrl,
+      'high',
+      'new',
+      'Added during quick-start watchlist setup',
+    ].map(quote).join(',')),
+  ].join('\n');
+}
+
+function syncSetupTargetFeedback({ forceError = false } = {}) {
+  const input = document.getElementById('setup-target-sites');
+  const feedback = document.getElementById('setup-target-feedback');
+  if (!input || !feedback) return;
+  appState.setupDraft.targetSites = input.value;
+  const parsed = parseSetupTargetSites(input.value);
+  const hasError = Boolean(forceError || parsed.invalid.length);
+  const targetLabel = isJobSeekerPersona() ? 'companies' : 'target accounts';
+  input.setAttribute('aria-invalid', String(hasError));
+  feedback.classList.toggle('setup-target-feedback--error', hasError);
+  const count = feedback.querySelector('strong');
+  const message = feedback.querySelector('span');
+  if (count) count.textContent = `${formatNumber(parsed.targets.length)} ${targetLabel} ready`;
+  if (message) {
+    message.textContent = parsed.invalid.length
+      ? `${formatNumber(parsed.invalid.length)} line${parsed.invalid.length === 1 ? '' : 's'} need a valid company name, domain, or URL.`
+      : forceError && !parsed.targets.length
+        ? 'Add at least one company name, domain, or careers URL, or choose Skip for now.'
+        : parsed.truncated
+          ? 'The first 50 entries are ready; add the remainder later.'
+          : 'One company per line. You can edit the watchlist later.';
+  }
+}
+
 async function renderSetupWizard() {
   await loadSetupStatus(false);
   if (appState.setupResult) {
@@ -4262,15 +4723,15 @@ async function renderSetupWizard() {
   const setupTitle = current.key === 'launch'
     ? 'Setup complete'
     : jobSeeker ? 'Job search setup' : 'First-run setup';
-  // Card headline is distinct from the topbar view title so the two stacked
-  // headers don't repeat the same words back to back.
+  // Focus lands here after each transition, so use the current step label
+  // instead of repeating a generic setup heading for assistive technology.
   const setupCardTitle = current.key === 'launch'
     ? 'You are ready to go'
-    : jobSeeker ? 'Set up your search workspace' : 'Set up your workspace';
+    : current.label;
   const setupEyebrow = `${steps.length} quick steps`;
   const setupIntro = jobSeeker
-    ? 'Create your search workspace, bring in your LinkedIn connections, and start mapping target companies from your own network.'
-    : 'Create your workspace, bring in your LinkedIn connections, and start from your own data.';
+    ? 'Start with companies you care about, then add contacts when you are ready to map warm paths.'
+    : 'Start with a focused company watchlist, see the first hiring signals, then add contacts when they are useful.';
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -4281,12 +4742,12 @@ async function renderSetupWizard() {
         <div class="setup-header">
           <div>
             <p class="eyebrow">${escapeHtml(setupEyebrow)}</p>
-            <h2 id="setup-title">${escapeHtml(setupCardTitle)}</h2>
+            <h2 id="setup-title" tabindex="-1">${escapeHtml(setupCardTitle)}</h2>
             <p class="muted">${escapeHtml(setupIntro)}</p>
           </div>
           <ol class="setup-steps" aria-label="Setup progress">
             ${steps.map((step, index) => `
-              <li class="setup-step ${index + 1 === appState.setupStep ? 'active' : ''} ${index + 1 < appState.setupStep ? 'complete' : ''}">
+              <li class="setup-step ${index + 1 === appState.setupStep ? 'active' : ''} ${index + 1 < appState.setupStep ? 'complete' : ''}" ${index + 1 === appState.setupStep ? 'aria-current="step"' : ''}>
                 <span>${index + 1}</span>
                 <strong>${escapeHtml(step.label)}</strong>
               </li>
@@ -4300,21 +4761,25 @@ async function renderSetupWizard() {
   `;
 
   wireSetupDropZone();
+  if (appState.setupLastFocusedStep !== current.key) {
+    appState.setupLastFocusedStep = current.key;
+    window.requestAnimationFrame(() => document.getElementById('setup-title')?.focus({ preventScroll: true }));
+  }
 }
 
 function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
-  const checks = Array.isArray(readiness?.checks) ? readiness.checks : [];
-  const score = Number(readiness?.score || 0);
-  const title = jobSeeker ? 'Build a useful daily shortlist' : 'Build a useful daily prospecting list';
-  const copy = jobSeeker
-    ? 'Add target companies, open roles, and people you know so your next step is clear each day.'
-    : 'Add target accounts, contacts, hiring sources, and live jobs so your next outreach is clear each day.';
-  const visibleChecks = checks.length ? checks.slice(0, 4) : [
-    { label: jobSeeker ? 'Target companies imported' : 'Target accounts imported', value: 0, target: jobSeeker ? 15 : 25, suffix: '' },
-    { label: 'Mapped contacts', value: 0, target: jobSeeker ? 25 : 50, suffix: '' },
-    { label: 'Resolved ATS boards', value: 0, target: jobSeeker ? 8 : 12, suffix: '' },
-    { label: jobSeeker ? 'Open roles tracked' : 'Hiring signals tracked', value: 0, target: jobSeeker ? 20 : 40, suffix: '' },
+  const metrics = readiness?.metrics || {};
+  const visibleChecks = [
+    { label: jobSeeker ? 'Target companies' : 'Target accounts', value: Number(metrics.accountCount || 0), target: 5, suffix: '' },
+    { label: 'Resolved ATS board', value: Number(metrics.resolvedBoardCount || 0), target: 1, suffix: '' },
+    { label: jobSeeker ? 'Live role' : 'Live hiring signal', value: Number(metrics.activeJobCount || 0), target: 1, suffix: '' },
   ];
+  const completedChecks = visibleChecks.filter((check) => check.value >= check.target).length;
+  const score = Math.round((completedChecks / visibleChecks.length) * 100);
+  const title = jobSeeker ? 'Reach a useful first shortlist' : 'Reach a useful first account signal';
+  const copy = jobSeeker
+    ? 'Start with five companies, one resolved board, and one live role. Add contacts later when you want warmer paths.'
+    : 'Start with five accounts, one resolved board, and one live hiring signal. Contacts are optional until they improve a real next move.';
   return `
     <div class="setup-value-guide">
       <div>
@@ -4344,6 +4809,7 @@ function renderSetupStepContent(stepKey) {
   if (stepKey === 'profile') {
     const defaultName = draft.userName || appState.user?.name || '';
     const defaultEmail = draft.userEmail || appState.user?.email || '';
+    const hasSignupIdentity = Boolean(defaultName && defaultEmail);
     const workspaceLabel = jobSeeker ? 'Search workspace name' : 'Workspace or company name';
     const workspacePlaceholder = jobSeeker ? 'My Job Search 2026' : 'Your company or team';
     return `
@@ -4352,33 +4818,21 @@ function renderSetupStepContent(stepKey) {
           <label>${escapeHtml(workspaceLabel)}
             <input id="setup-workspace-name" name="workspaceName" required autocomplete="organization" value="${escapeHtml(draft.workspaceName)}" placeholder="${escapeAttr(workspacePlaceholder)}" />
           </label>
-          <label>Your name
-            <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(defaultName)}" placeholder="Full name" />
-          </label>
-          <label>Your email
-            <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(defaultEmail)}" placeholder="you@example.com" />
-          </label>
+          ${hasSignupIdentity ? `
+            <div class="setup-identity-confirmation">
+              <span class="setup-identity-confirmation__avatar" aria-hidden="true">${escapeHtml(defaultName.charAt(0).toUpperCase())}</span>
+              <span><small>Signed in as</small><strong>${escapeHtml(defaultName)}</strong><small>${escapeHtml(defaultEmail)}</small></span>
+            </div>
+            <input id="setup-user-name" name="userName" type="hidden" value="${escapeAttr(defaultName)}">
+            <input id="setup-user-email" name="userEmail" type="hidden" value="${escapeAttr(defaultEmail)}">` : `
+            <label>Your name
+              <input id="setup-user-name" name="userName" required autocomplete="name" value="${escapeHtml(defaultName)}" placeholder="Full name" />
+            </label>
+            <label>Your email
+              <input id="setup-user-email" name="userEmail" type="email" required autocomplete="email" value="${escapeHtml(defaultEmail)}" placeholder="you@example.com" />
+            </label>`}
         </div>
         <div class="button-row">
-          <button class="primary-button" type="submit">Continue</button>
-        </div>
-      </form>
-    `;
-  }
-
-  if (stepKey === 'team') {
-    const rosterLabel = jobSeeker ? 'Optional collaborators or coaches' : 'Optional team or owner roster';
-    const rosterHelp = jobSeeker
-      ? 'Leave this blank if you are running the search yourself. You can add collaborators later.'
-      : 'Leave this blank if you are the only owner. You can add or edit owners later.';
-    return `
-      <form id="setup-team-form" class="setup-form">
-        <label>${escapeHtml(rosterLabel)}
-          <textarea id="setup-owners-text" name="ownersText" rows="7" placeholder="One person per line, for example: Name, email@example.com">${escapeHtml(draft.ownersText)}</textarea>
-        </label>
-        <p class="muted small">${escapeHtml(rosterHelp)}</p>
-        <div class="button-row">
-          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
           <button class="primary-button" type="submit">Continue</button>
         </div>
       </form>
@@ -4400,12 +4854,54 @@ function renderSetupStepContent(stepKey) {
     `;
   }
 
+  if (stepKey === 'targets') {
+    const parsedTargets = parseSetupTargetSites(draft.targetSites);
+    const audit = appState.onboardingIntent?.source === 'ats-checker' ? appState.onboardingIntent.audit || {} : null;
+    const targetLabel = jobSeeker ? 'companies' : 'target accounts';
+    const carriedAudit = audit ? `
+      <div class="setup-intent-banner" role="status">
+        <span class="setup-intent-banner__mark" aria-hidden="true">&#10003;</span>
+        <div>
+          <strong>Your ATS audit is ready to become a live watchlist.</strong>
+          <p>${formatNumber(audit.validCount || parsedTargets.targets.length)} valid career site${Number(audit.validCount || parsedTargets.targets.length) === 1 ? '' : 's'} carried into setup${audit.recognizedCount ? `; ${formatNumber(audit.recognizedCount)} recognized automatically` : ''}.</p>
+        </div>
+      </div>` : '';
+    return `
+      <form id="setup-target-form" class="setup-form setup-target-quickstart">
+        <div class="setup-import-copy">
+          <p class="eyebrow">Fastest path to value</p>
+          <h3>${jobSeeker ? 'Which companies should BD Engine watch?' : 'Which accounts should BD Engine monitor?'}</h3>
+          <p class="muted">Paste 5–20 company domains or careers URLs. BD Engine will create the watchlist, resolve supported job boards, and start looking for hiring changes.</p>
+        </div>
+        ${carriedAudit}
+        <label>Company domains or careers URLs
+          <textarea id="setup-target-sites" name="targetSites" rows="10" aria-describedby="setup-target-feedback${appState.setupTargetImportResult?.error ? ' setup-target-import-error' : ''}" aria-invalid="${parsedTargets.invalid.length ? 'true' : 'false'}" placeholder="acme.com&#10;https://northstar.example/careers&#10;https://jobs.lever.co/vertex">${escapeHtml(draft.targetSites)}</textarea>
+        </label>
+        <div id="setup-target-feedback" class="setup-target-feedback${parsedTargets.invalid.length ? ' setup-target-feedback--error' : ''}" aria-live="polite">
+          <strong>${formatNumber(parsedTargets.targets.length)} ${escapeHtml(targetLabel)} ready</strong>
+          <span>${parsedTargets.invalid.length ? `${formatNumber(parsedTargets.invalid.length)} line${parsedTargets.invalid.length === 1 ? '' : 's'} need a valid company name, domain, or URL.` : 'One company per line. You can edit the watchlist later.'}</span>
+        </div>
+        ${appState.setupTargetImportResult?.error ? `<p id="setup-target-import-error" class="setup-inline-error" role="alert"><strong>Watchlist not imported.</strong> ${escapeHtml(appState.setupTargetImportResult.error)} Your list is still here; correct it or try again.</p>` : ''}
+        <div class="setup-flow-preview" aria-label="What happens next">
+          <span><strong>1</strong> Create watchlist</span>
+          <span><strong>2</strong> Resolve hiring sources</span>
+          <span><strong>3</strong> Rank the first action</span>
+        </div>
+        <div class="button-row">
+          <button class="secondary-button" type="button" data-action="setup-back">Back</button>
+          <button class="ghost-button" type="button" data-action="setup-skip-targets">Skip for now</button>
+          <button class="primary-button" type="submit">Use this watchlist</button>
+        </div>
+      </form>
+    `;
+  }
+
   if (stepKey === 'import') {
     const hasCsv = Boolean(appState.setupCsvFile);
-    const importTitle = jobSeeker ? 'Import LinkedIn Connections.csv' : 'Import LinkedIn Connections.csv';
+    const importTitle = 'Add warm contacts when they are useful';
     const importCopyHtml = jobSeeker
-      ? 'Upload your LinkedIn <code>Connections.csv</code> to map people you know to target companies and open roles.'
-      : 'From LinkedIn, request a copy of your data and choose Connections. When the archive is ready, upload the included <code>Connections.csv</code> file here.';
+      ? 'Optional: upload LinkedIn <code>Connections.csv</code> to map people you know to the companies and open roles in your watchlist.'
+      : 'Optional: upload LinkedIn <code>Connections.csv</code> to find warm paths into the accounts you just selected. You can finish now and add contacts later.';
     return `
       <div class="setup-form">
         <div class="setup-import-copy">
@@ -4446,7 +4942,7 @@ function renderSetupStepContent(stepKey) {
           ${hasCsv ? `<button class="secondary-button" type="button" data-action="setup-preview-csv" ${!appState.setupBusy ? '' : 'disabled'}>${appState.setupBusy ? 'Working...' : 'Preview CSV'}</button>` : ''}
           ${hasCsv
             ? `<button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy || !appState.setupPreview ? 'disabled' : ''}>${appState.setupBusy ? 'Importing...' : appState.setupPreview ? 'Import and finish setup' : 'Preview before importing'}</button>`
-            : `<button class="primary-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Continue without a CSV</button>`}
+            : `<button class="primary-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Finish setup</button>`}
         </div>
       </div>
     `;
@@ -4455,6 +4951,11 @@ function renderSetupStepContent(stepKey) {
   const result = appState.setupResult || {};
   const stats = result.stats || {};
   const sampleLoaded = Boolean(result.sample || result.sampleLoaded);
+  const targetImport = result.targetImport || appState.setupTargetImportResult;
+  const pendingTargetCount = Number(targetImport?.deferred || appState.onboardingIntent?.pendingTargetSites?.length || 0);
+  const pendingTargetReason = targetImport?.capacityReached
+    ? 'capacity'
+    : appState.onboardingIntent?.pendingTargetReason || (appState.setupTargetsSkipped ? 'skipped' : '');
   const summaryItems = sampleLoaded
     ? [
       { label: jobSeeker ? 'Companies' : 'Accounts', value: stats.accounts || 0 },
@@ -4462,7 +4963,12 @@ function renderSetupStepContent(stepKey) {
       { label: jobSeeker ? 'Open roles' : 'Jobs', value: stats.jobs || 0 },
       { label: 'Boards', value: stats.configs || 0 },
     ]
-    : [
+    : targetImport || pendingTargetCount ? [
+      { label: jobSeeker ? 'Companies added' : 'Accounts added', value: targetImport?.count || 0 },
+      { label: 'Already present', value: Array.isArray(targetImport?.skipped) ? targetImport.skipped.length : 0 },
+      { label: 'Saved for later', value: pendingTargetCount },
+      { label: 'Monitoring queued', value: targetImport?.workflowQueued ? 1 : 0 },
+    ] : [
       { label: 'Imported', value: stats.imported || 0 },
       { label: 'Updated', value: stats.updated || 0 },
       { label: 'Skipped', value: stats.skipped || 0 },
@@ -4479,8 +4985,14 @@ function renderSetupStepContent(stepKey) {
 
   const successTitle = jobSeeker ? 'Your job search workspace is ready' : 'Your workspace is ready';
   const successCopy = jobSeeker
-    ? 'BD Engine will now open your job search dashboard using your own network and target-company data.'
-    : 'BD Engine will now open your dashboard using this workspace data.';
+    ? 'BD Engine will now open your dashboard using the companies you chose. Add contacts whenever you want warmer paths.'
+    : pendingTargetCount
+      ? pendingTargetReason === 'capacity'
+        ? `${formatNumber(pendingTargetCount)} targets are safely saved for later. The targets within your current account limit are ready now.`
+        : `${formatNumber(pendingTargetCount)} targets are saved for whenever you are ready to add them from the dashboard.`
+      : targetImport?.workflowQueued
+      ? 'Your watchlist is live and the first hiring-signal refresh is running in the background.'
+      : 'Your workspace is ready. Open the dashboard to start working the ranked account queue.';
   return `
     <div class="setup-success">
       <div class="setup-success-mark" aria-hidden="true">OK</div>
@@ -4489,8 +5001,13 @@ function renderSetupStepContent(stepKey) {
       <div class="setup-summary-grid">
         ${summaryItems.map((item) => `<div><strong>${formatNumber(item.value)}</strong><span>${escapeHtml(item.label)}</span></div>`).join('')}
       </div>
+      ${targetImport?.workflowError ? `<p class="setup-launch-note muted">Monitoring did not start automatically: ${escapeHtml(targetImport.workflowError)} Start it from Admin when you are ready.</p>` : ''}
+      ${pendingTargetCount ? `<p class="setup-launch-note muted">${pendingTargetReason === 'capacity'
+        ? 'Your saved targets stay available in this browser. Increase the account limit, then add them from the dashboard.'
+        : 'Your saved targets stay available in this browser and can be added from the dashboard.'}</p>` : ''}
       <div class="button-row center">
-        <button class="primary-button" type="button" data-action="setup-open-dashboard">Open dashboard</button>
+        <button class="primary-button" type="button" data-action="setup-open-dashboard">Open ranked dashboard</button>
+        ${pendingTargetCount && pendingTargetReason === 'capacity' ? '<a class="ghost-button" href="#/admin/billing-subscription">Review plan</a>' : ''}
       </div>
     </div>
   `;
@@ -4731,6 +5248,208 @@ async function previewSetupCsv() {
   }
 }
 
+function serializeSetupTargetSite(target = {}) {
+  return target.careersUrl || target.domain || target.company || '';
+}
+
+async function getSetupAccountCapacity() {
+  let limit = Number(appState.bootstrap?.session?.plan?.limits?.accounts);
+  let current = 0;
+  try {
+    const billing = await api('/api/billing', { skipCache: true });
+    const usage = billing?.usage?.accounts || {};
+    const usageLimit = usage.limit === 'unlimited' ? -1 : Number(usage.limit);
+    if (Number.isFinite(usageLimit)) limit = usageLimit;
+    if (Number.isFinite(Number(usage.current))) current = Math.max(0, Number(usage.current));
+  } catch {
+    // Desktop builds do not expose cloud billing. A fresh setup starts empty,
+    // so the bootstrap plan limit remains a safe upper bound there.
+  }
+  if (!Number.isFinite(limit) || limit < 0) return { limit: -1, current, available: Infinity };
+  return { limit, current, available: Math.max(0, limit - current) };
+}
+
+async function getSetupExistingAccountNames() {
+  try {
+    const payload = await api('/api/accounts?portfolio=all&page=1&pageSize=10000', { skipCache: true });
+    return new Set((payload?.items || []).map((item) => (
+      String(item.normalizedName || item.displayName || '').trim().toLowerCase()
+    )).filter(Boolean));
+  } catch (error) {
+    console.warn('Existing accounts could not be checked before setup import:', error);
+    return null;
+  }
+}
+
+async function queueSetupSignalRefresh(targetImport) {
+  if (!targetImport || Number(targetImport.count || 0) < 1) return targetImport;
+  try {
+    const workflow = await api('/api/admin/run-workflow', {
+      method: 'POST',
+      body: JSON.stringify({ source: 'quick_start_watchlist' }),
+    });
+    appState.setupSignalJobId = workflow?.jobId || workflow?.id || '';
+    Object.assign(targetImport, {
+      workflowQueued: Boolean(workflow),
+      workflowJobId: appState.setupSignalJobId,
+      workflowError: '',
+    });
+    if (appState.setupSignalJobId) watchSetupSignalRefresh(appState.setupSignalJobId);
+  } catch (error) {
+    Object.assign(targetImport, {
+      workflowQueued: false,
+      workflowJobId: '',
+      workflowError: error.message || String(error || 'Signal refresh could not be queued.'),
+    });
+  }
+  return targetImport;
+}
+
+function watchSetupSignalRefresh(jobId) {
+  void watchBackgroundJob(jobId, { label: 'First hiring-signal refresh', refreshRoute: false }).then(async (job) => {
+    appState.setupSignalJobId = '';
+    invalidateAppData();
+    if (job?.status === 'completed') {
+      showToast('Your first hiring-signal refresh is ready.', 'success', 7000);
+      if (getRouteRoot() === 'dashboard') await renderDashboardView();
+    }
+  }).catch((error) => {
+    appState.setupSignalJobId = '';
+    showToast(`The first signal refresh needs attention: ${error.message || error}`, 'warning', 8000);
+  });
+}
+
+async function importSetupTargets({ queueWorkflow = true } = {}) {
+  const parsed = parseSetupTargetSites(appState.setupDraft.targetSites);
+  if (!parsed.targets.length || appState.setupTargetsSkipped) return null;
+  const [capacity, existingAccountNames] = await Promise.all([
+    getSetupAccountCapacity(),
+    getSetupExistingAccountNames(),
+  ]);
+  const activeTargets = [];
+  const deferredTargets = [];
+  let remainingNewSlots = capacity.available;
+  for (const target of parsed.targets) {
+    const key = String(target.company || '').trim().toLowerCase();
+    const alreadyExists = existingAccountNames?.has(key) === true;
+    if (alreadyExists || !Number.isFinite(remainingNewSlots) || remainingNewSlots > 0) {
+      activeTargets.push(target);
+      if (!alreadyExists && Number.isFinite(remainingNewSlots)) remainingNewSlots -= 1;
+    } else {
+      deferredTargets.push(target);
+    }
+  }
+  const activatedNewCount = existingAccountNames
+    ? activeTargets.filter((target) => !existingAccountNames.has(String(target.company || '').trim().toLowerCase())).length
+    : activeTargets.length;
+  const deferredTargetSites = deferredTargets.map(serializeSetupTargetSite).filter(Boolean);
+  if (!activeTargets.length) {
+    return {
+      count: 0,
+      skipped: [],
+      total: 0,
+      requested: parsed.targets.length,
+      activatedRequested: 0,
+      deferred: deferredTargets.length,
+      deferredTargetSites,
+      capacityReached: deferredTargets.length > 0,
+      accountLimit: capacity.limit,
+      workflowQueued: false,
+    };
+  }
+  const imported = await api('/api/accounts/import', {
+    method: 'POST',
+    body: JSON.stringify({ text: buildSetupTargetImportCsv(activeTargets) }),
+  });
+  const result = {
+    ...imported,
+    requested: parsed.targets.length,
+    activatedRequested: activatedNewCount,
+    deferred: deferredTargets.length,
+    deferredTargetSites,
+    capacityReached: deferredTargets.length > 0,
+    accountLimit: capacity.limit,
+    workflowQueued: false,
+    workflowJobId: '',
+    workflowError: '',
+  };
+  if (queueWorkflow) await queueSetupSignalRefresh(result);
+  return result;
+}
+
+function persistSetupIntentAfterImport(targetImport) {
+  const deferredTargetSites = targetImport?.deferredTargetSites?.length
+    ? targetImport.deferredTargetSites
+    : appState.setupTargetsSkipped
+      ? parseSetupTargetSites(appState.setupDraft.targetSites).targets.map(serializeSetupTargetSite).filter(Boolean)
+      : [];
+  const planIntent = appState.onboardingIntent?.planIntent;
+  if (deferredTargetSites.length) {
+    const pendingTargetReason = targetImport?.capacityReached ? 'capacity' : 'skipped';
+    appState.setupDraft.targetSites = deferredTargetSites.join('\n');
+    appState.onboardingIntent = {
+      version: 1,
+      ...(appState.onboardingIntent || {}),
+      source: pendingTargetReason === 'capacity' ? 'setup-deferred' : 'setup-skipped',
+      persona: isJobSeekerPersona() ? 'jobseeker' : 'bd',
+      intent: 'monitor-career-sites',
+      pendingTargetSites: deferredTargetSites,
+      pendingTargetReason,
+      careerUrls: deferredTargetSites.filter((value) => /^https?:\/\//i.test(value)),
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
+    return;
+  }
+  if (planIntent === 'sales' || planIntent === 'jobseeker') {
+    appState.onboardingIntent = {
+      ...appState.onboardingIntent,
+      source: 'pricing',
+      intent: 'start-trial',
+      careerUrls: [],
+      pendingTargetSites: [],
+      pendingTargetReason: '',
+      audit: undefined,
+      consumedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(ONBOARDING_INTENT_KEY, JSON.stringify(appState.onboardingIntent));
+  } else {
+    localStorage.removeItem(ONBOARDING_INTENT_KEY);
+    appState.onboardingIntent = null;
+  }
+}
+
+async function retryDeferredSetupTargets(button) {
+  const pending = appState.onboardingIntent?.pendingTargetSites || [];
+  if (!pending.length) return;
+  const originalLabel = button?.textContent || 'Add remaining targets';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Adding targets...';
+  }
+  appState.setupDraft.targetSites = pending.join('\n');
+  appState.setupTargetsSkipped = false;
+  try {
+    const result = await importSetupTargets({ queueWorkflow: true });
+    appState.setupTargetImportResult = result;
+    persistSetupIntentAfterImport(result);
+    invalidateAppData();
+    if (result?.capacityReached) {
+      showToast(`${formatNumber(result.deferred || 0)} targets are still saved. Increase the account limit to add them.`, 'warning', 8000);
+    } else {
+      showToast('Remaining watchlist targets added.', 'success');
+    }
+    if (getRouteRoot() === 'dashboard') await renderDashboardView();
+  } catch (error) {
+    showToast(`Targets are still saved: ${error.message || error}`, 'error', 8000);
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+}
+
 async function completeSetupWizard() {
   persistSetupDraftFromDom();
   if (appState.setupPreview) syncSetupTrackedCompaniesFromDom();
@@ -4747,6 +5466,27 @@ async function completeSetupWizard() {
     : 'Saving setup...';
 
   try {
+    let targetImport = null;
+    if (!appState.setupTargetsSkipped && parseSetupTargetSites(draft.targetSites).targets.length) {
+      appState.setupProgressMessage = 'Creating your watchlist...';
+      try {
+        targetImport = await importSetupTargets({ queueWorkflow: false });
+        appState.setupTargetImportResult = targetImport;
+      } catch (error) {
+        appState.setupTargetImportResult = {
+          error: error.message || String(error || 'Watchlist import failed.'),
+          retryable: true,
+        };
+        const targetIndex = getSetupSteps().findIndex((step) => step.key === 'targets');
+        if (targetIndex >= 0) appState.setupStep = targetIndex + 1;
+        showToast('Your watchlist is still saved. Fix the issue or try the import again.', 'warning', 8000);
+        return;
+      }
+    }
+
+    appState.setupProgressMessage = appState.setupCsvFile
+      ? 'Saving setup and queuing your contacts import...'
+      : 'Saving setup...';
     const result = await api('/api/setup/complete', {
       method: 'POST',
       body: JSON.stringify({
@@ -4763,6 +5503,26 @@ async function completeSetupWizard() {
     appState.setupStep = getSetupSteps().length;
     invalidateAppData();
 
+    if (targetImport) {
+      appState.setupProgressMessage = 'Starting the first hiring-signal refresh...';
+      await queueSetupSignalRefresh(targetImport);
+      appState.setupTargetImportResult = targetImport;
+      appState.setupResult = {
+        ...appState.setupResult,
+        targetImport,
+        stats: {
+          ...(appState.setupResult.stats || {}),
+          accounts: targetImport.count || 0,
+        },
+      };
+      if (targetImport.workflowError) {
+        showToast('Watchlist created. Automatic monitoring can be started from Admin.', 'warning', 7000);
+      } else if (targetImport.deferred) {
+        showToast(`${formatNumber(targetImport.count || 0)} targets added; ${formatNumber(targetImport.deferred)} saved for later because of the account limit.`, 'warning', 8000);
+      }
+    }
+    persistSetupIntentAfterImport(targetImport);
+
     if (appState.setupCsvFile) {
       const accepted = await postConnectionsCsvFile(appState.setupCsvFile, {
         dryRun: false,
@@ -4775,7 +5535,7 @@ async function completeSetupWizard() {
       appState.setupImportJobId = jobId || '';
 
       appState.setupResult = {
-        ...result,
+        ...appState.setupResult,
         importQueued: Boolean(jobId),
         jobId,
         stats: {
@@ -4914,14 +5674,29 @@ function getDashboardPosted24h(summary = {}) {
 
 async function renderDashboardView(options = {}) {
   const dashboardStartedAt = performance.now();
+  if (!appState.bootstrap) await loadBootstrap(false);
   if (!options.skipLoading) {
     renderLoadingState('Dashboard', "Building today's hiring radar...");
   }
   setViewTitle('Dashboard');
   const shouldHydrateExtended = !options.extendedPayload;
-  const dashboardPayload = options.dashboardPayload
-    ? await Promise.resolve(options.dashboardPayload)
-    : await api('/api/dashboard', { skipCache: true });
+  const dashboardPromise = options.dashboardPayload
+    ? Promise.resolve(options.dashboardPayload)
+    : api('/api/dashboard', { skipCache: true });
+  const outcomeStartedAt = performance.now();
+  const commercialOutcomesEnabled = !isJobSeekerPersona() && supportsCommercialOutcomes();
+  const outcomePromise = options.outcomeSummary
+    ? Promise.resolve(options.outcomeSummary)
+    : (commercialOutcomesEnabled
+      ? api('/api/outcomes/summary', { skipCache: true }).catch((error) => {
+          console.warn('Commercial outcome summary unavailable:', error);
+          return { unavailable: true };
+        })
+      : Promise.resolve({}));
+  const [dashboardPayload, outcomeSummary] = await Promise.all([dashboardPromise, outcomePromise]);
+  appState.outcomeSummary = outcomeSummary || {};
+  const outcomeElapsedMs = Math.round(performance.now() - outcomeStartedAt);
+  if (outcomeElapsedMs > 250) console.info(`BD Engine outcome summary load: ${outcomeElapsedMs}ms`);
   const extendedPayload = options.extendedPayload || null;
   const dashboard = dashboardPayload || {};
   dashboard.todayQueue = (Array.isArray(dashboard.todayQueue) ? dashboard.todayQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.todayQueue);
@@ -4999,11 +5774,15 @@ async function renderDashboardView(options = {}) {
 
     </section>`)}
 
+    ${renderDeferredTargetNotice()}
+
     ${renderFirstValueChecklist(dashboard, personaCopy)}
 
     ${dashSection('workflow', renderDashboardWorkflowStrip({ dashboard, extended, topCompany, resolutionPressure }))}
 
     ${dashSection('action-plan', renderPersonaActionPlan(dashboard.actionPlan))}
+
+    ${commercialOutcomesEnabled ? dashSection('outcomes', renderCommercialOutcomeSummary(appState.outcomeSummary)) : ''}
 
     ${dashSection('readiness', renderWorkspaceReadinessPanel(dashboard.readiness))}
 
@@ -5054,7 +5833,7 @@ async function renderDashboardView(options = {}) {
         <div class="panel-header">
           <div>
             <h3>Hiring trigger board</h3>
-            <p class="muted small">Live account alerts ranked by hiring urgency and commercial upside.</p>
+            <p class="muted small">Accounts with verified active roles, ranked by the current target score.</p>
           </div>
         </div>
         ${extended.alertQueue.length ? `<div class="timeline">${extended.alertQueue.map((item) => `
@@ -5179,11 +5958,9 @@ async function renderDashboardView(options = {}) {
           const total = ef.total || 1;
           const stages = [
             { label: 'Total', count: ef.total || 0, cls: 'funnel-total' },
-            { label: 'Enriched', count: ef.enriched || 0, cls: 'funnel-enriched' },
-            { label: 'Verified', count: ef.verified || 0, cls: 'funnel-verified' },
-            { label: 'Importing', count: ef.importing || 0, cls: 'funnel-importing' },
-            { label: 'Pending', count: ef.pending || 0, cls: 'funnel-pending' },
-            { label: 'Unresolved', count: ef.unresolved || 0, cls: 'funnel-unresolved' },
+            { label: 'Resolved', count: ef.resolved || 0, cls: 'funnel-verified' },
+            { label: 'Needs review', count: ef.needsReview || 0, cls: 'funnel-pending' },
+            { label: 'Missing inputs', count: ef.missing || 0, cls: 'funnel-unresolved' },
           ];
           return stages.map(s => '<div class="funnel-stage ' + s.cls + '"><span class="funnel-stage-count">' + s.count + '</span><span class="funnel-stage-label small">' + s.label + '</span><div class="funnel-fill" style="width:' + Math.round((s.count / total) * 100) + '%"></div></div>').join('');
         })()}
@@ -5259,6 +6036,7 @@ async function renderDashboardView(options = {}) {
         void renderDashboardView({
           dashboardPayload,
           extendedPayload: payload,
+          outcomeSummary,
           skipLoading: true,
         });
       }).catch((e) => {
@@ -5447,7 +6225,10 @@ async function renderAccountsView() {
 
 async function renderAccountDetail(accountId) {
   renderLoadingState('Account detail', 'Loading account context...');
-  const detail = await api(`/api/accounts/${accountId}`);
+  const [detail] = await Promise.all([
+    api(`/api/accounts/${accountId}`),
+    appState.bootstrap ? Promise.resolve(appState.bootstrap) : loadBootstrap(false),
+  ]);
   appState.accountDetail = detail;
   appState.generatedOutreach = null;
   setViewTitle(detail.account.displayName);
@@ -5470,14 +6251,52 @@ async function renderAccountDetail(accountId) {
     || ({ A: 'high', B: 'medium', C: 'low' })[String(detail.account.priorityTier || '').toUpperCase()]
     || 'medium';
 
-  // Fetch hiring velocity in background (non-blocking)
+  // Fetch account analytics in parallel so outcome tracking does not add a serial wait.
   let hiringVelocity = [];
-  try {
-    const vData = await api(`/api/accounts/${accountId}/hiring-velocity`);
-    if (vData.weeks) {
-      hiringVelocity = Object.entries(vData.weeks).map(([label, count]) => ({ label, count }));
-    }
-  } catch(e) { console.warn('Hiring velocity data unavailable:', e); }
+  let accountOutcomes = { items: [], total: 0, accountId };
+  const accountAnalyticsStartedAt = performance.now();
+  const commercialOutcomesEnabled = !isJobSeekerPersona() && supportsCommercialOutcomes();
+  const [velocityResult, outcomeResult] = await Promise.allSettled([
+    api(`/api/accounts/${accountId}/hiring-velocity`),
+    commercialOutcomesEnabled
+      ? api(`/api/outcomes?accountId=${encodeURIComponent(accountId)}&page=1&pageSize=20`, { skipCache: true })
+      : Promise.resolve({ items: [], total: 0 }),
+  ]);
+  if (velocityResult.status === 'fulfilled' && velocityResult.value?.weeks) {
+    hiringVelocity = Object.entries(velocityResult.value.weeks).map(([label, count]) => ({ label, count }));
+  } else if (velocityResult.status === 'rejected') {
+    console.warn('Hiring velocity data unavailable:', velocityResult.reason);
+  }
+  if (outcomeResult.status === 'fulfilled') accountOutcomes = { ...(outcomeResult.value || accountOutcomes), accountId };
+  else {
+    console.warn('Commercial outcomes unavailable:', outcomeResult.reason);
+    accountOutcomes = { items: [], total: 0, accountId, unavailable: true };
+  }
+  const accountAnalyticsElapsedMs = Math.round(performance.now() - accountAnalyticsStartedAt);
+  if (accountAnalyticsElapsedMs > 250) console.info(`BD Engine account analytics load: ${accountAnalyticsElapsedMs}ms`);
+  const activityFormHtml = canMutateWorkspace() ? `
+    <form id="activity-form" class="compact-activity-form${commercialOutcomesEnabled ? ' compact-activity-form--commercial' : ''}">
+      <input type="hidden" name="accountId" value="${detail.account.id}">
+      <input type="hidden" name="normalizedCompanyName" value="${escapeAttr(detail.account.normalizedName)}">
+      <input name="summary" aria-label="Activity note" placeholder="What happened?" class="compact-input">
+      <select name="type" aria-label="Activity type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
+      <select name="pipelineStage" aria-label="Result" class="compact-select">${renderActivityPipelineStageOptions(commercialOutcomesEnabled)}</select>
+      ${commercialOutcomesEnabled ? `
+        <input name="occurredOn" aria-label="Activity date" type="date" class="compact-input compact-date-input" value="${formatLocalDateInput()}" max="${formatLocalDateInput()}">
+        <label class="compact-outcome-value hidden" data-commercial-value-fields>
+          <span class="visually-hidden">Commercial value</span>
+          <select name="currency" aria-label="Currency" disabled><option value="USD">USD</option><option value="CAD">CAD</option></select>
+          <input name="value" aria-label="Commercial value" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Value" disabled>
+        </label>` : ''}
+      <select name="followUpDays" aria-label="Follow-up reminder" class="compact-select">
+        <option value="">No reminder</option>
+        <option value="3">Follow up in 3 days</option>
+        <option value="7">Follow up in 1 week</option>
+        <option value="14">Follow up in 2 weeks</option>
+        <option value="30">Follow up in 1 month</option>
+      </select>
+      <button class="secondary-button compact-btn" type="submit">Log activity</button>
+    </form>` : '<p class="small muted read-only-workflow-note">Activity editing is unavailable in this read-only session.</p>';
 
   appRoot.innerHTML = `
     <section class="hero-card hero-card--dashboard">
@@ -5593,22 +6412,9 @@ async function renderAccountDetail(accountId) {
 
       <div class="action-zone-col">
         <div class="detail-card">
-          <div class="panel-header"><div><h3>Activity & pipeline</h3><p class="muted small">Log outreach and track the conversation.</p></div></div>
-          <form id="activity-form" class="compact-activity-form">
-            <input type="hidden" name="accountId" value="${detail.account.id}">
-            <input type="hidden" name="normalizedCompanyName" value="${escapeAttr(detail.account.normalizedName)}">
-            <input name="summary" aria-label="Activity note" placeholder="Quick note..." class="compact-input">
-            <select name="type" aria-label="Activity type" class="compact-select"><option value="note">Note</option><option value="outreach">Outreach</option><option value="pipeline">Pipeline</option></select>
-            <select name="pipelineStage" aria-label="Pipeline stage" class="compact-select"><option value="">No stage change</option>${renderOutreachStageOptions('')}</select>
-            <select name="followUpDays" aria-label="Follow-up reminder" class="compact-select">
-              <option value="">No reminder</option>
-              <option value="3">Follow up in 3 days</option>
-              <option value="7">Follow up in 1 week</option>
-              <option value="14">Follow up in 2 weeks</option>
-              <option value="30">Follow up in 1 month</option>
-            </select>
-            <button class="secondary-button compact-btn" type="submit">Log</button>
-          </form>
+          <div class="panel-header"><div><h3>Activity & results</h3><p class="muted small">Log the conversation once; replies, meetings, opportunities, and wins update the commercial view automatically.</p></div></div>
+          ${activityFormHtml}
+          ${commercialOutcomesEnabled ? renderAccountCommercialOutcomes(accountOutcomes) : ''}
           <div class="timeline" style="max-height:400px;overflow-y:auto;">
             ${detail.activity.length ? detail.activity.map(renderTimelineItem).join('') : renderEmptyState({ icon: 'Log', title: 'No activity on this account', copy: 'Log outreach or a note so the next step is easy to remember.' })}
           </div>
@@ -6042,6 +6848,10 @@ async function renderAdminView() {
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
   const canChangeBilling = billing.canChangeBilling !== false;
+  const rememberedPlanIntent = appState.onboardingIntent?.planIntent;
+  const billingSelectedPlanId = billing.plan?.id === 'trial' && ['sales', 'jobseeker'].includes(rememberedPlanIntent)
+    ? rememberedPlanIntent
+    : billing.plan?.id;
   const billingPrimaryAction = billing.canManageBilling ? 'billing-portal' : 'billing-checkout';
   const billingPrimaryLabel = !canChangeBilling
     ? 'Owner access required'
@@ -6169,8 +6979,8 @@ async function renderAdminView() {
               ${paymentAttentionRequired ? `<div class="billing-notice billing-notice--warning" role="status"><strong>Workspace access remains available during recovery.</strong><span>Update the payment method by ${escapeHtml(billingGraceDate || 'the grace deadline')}${billingAccess.graceDaysRemaining !== null && billingAccess.graceDaysRemaining !== undefined ? ` (${formatNumber(billingAccess.graceDaysRemaining)} day${billingAccess.graceDaysRemaining === 1 ? '' : 's'} remaining)` : ''}.</span></div>` : ''}
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
-                  <option value="jobseeker" ${selected(billing.plan?.id, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
-                  <option value="sales" ${selected(billing.plan?.id, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
+                  <option value="jobseeker" ${selected(billingSelectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
+                  <option value="sales" ${selected(billingSelectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
                 </select>
                 <div class="button-row">
                   <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${canChangeBilling && (stripeReady || billing.canManageBilling) ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>
@@ -6179,8 +6989,8 @@ async function renderAdminView() {
             </div>
             <div class="action-card">
               <p class="eyebrow">Referral credit</p>
-              <h4>Give $5, get $5</h4>
-              <p class="small muted">Share your referral link. When a referred user becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
+              <h4>Earn a $5 credit</h4>
+              <p class="small muted">Share your referral link. When a referred workspace becomes a paid subscriber, Stripe applies a $5 credit to your next BD Engine invoice.</p>
               <div class="inline-field-stack">
                 <input id="referral-link" readonly value="${escapeAttr(referralLink || 'Referral link will appear after your workspace finishes loading.')}">
                 <div class="button-row">
@@ -7244,6 +8054,19 @@ function renderOutreachStageOptions(currentValue, includeBlank = false) {
   ].join('');
 }
 
+function renderActivityPipelineStageOptions(includeCommercialOutcomes = false) {
+  return [
+    '<option value="">No result change</option>',
+    '<option value="contacted">Outreach sent</option>',
+    '<option value="replied">Reply received</option>',
+    includeCommercialOutcomes ? '<option value="positive_reply">Positive reply</option>' : '',
+    includeCommercialOutcomes ? '<option value="meeting_booked">Meeting booked</option>' : '',
+    includeCommercialOutcomes ? '<option value="opportunity">Opportunity created</option>' : '',
+    includeCommercialOutcomes ? '<option value="won">Client won</option>' : '',
+    includeCommercialOutcomes ? '<option value="lost">Closed lost</option>' : '',
+  ].join('');
+}
+
 function renderAccountSortSelect(currentValue) {
   return `
     <select name="sortBy">
@@ -7646,7 +8469,36 @@ async function reviewConfig(configId, decision) {
   window.bdLocalApi.setAlert(`Config ${decision}d.`, appAlert);
 }
 
+function syncCommercialActivityFields(form) {
+  if (!form || form.id !== 'activity-form') return;
+  const stage = form.elements.pipelineStage?.value || '';
+  const acceptsValue = COMMERCIAL_VALUE_ACTIVITY_STAGES.has(stage);
+  const valueFields = form.querySelector('[data-commercial-value-fields]');
+  const valueInput = form.elements.value;
+  const currencyInput = form.elements.currency;
+  valueFields?.classList.toggle('hidden', !acceptsValue);
+  if (valueInput) {
+    valueInput.disabled = !acceptsValue;
+    if (!acceptsValue) valueInput.value = '';
+  }
+  if (currencyInput) currencyInput.disabled = !acceptsValue;
+  if (stage && form.elements.type?.value === 'note') {
+    form.elements.type.value = stage === 'contacted' ? 'outreach' : 'pipeline';
+  }
+  if (form.elements.summary) {
+    form.elements.summary.placeholder = stage === 'lost'
+      ? 'Why was it lost?'
+      : stage === 'won'
+        ? 'What did the client choose?'
+        : 'What happened?';
+  }
+}
+
 document.addEventListener('change', (event) => {
+  if (event.target.matches('#activity-form [name="pipelineStage"]')) {
+    syncCommercialActivityFields(event.target.form);
+    return;
+  }
   if (event.target.classList.contains('setup-target-checkbox')) {
     syncSetupTrackedCompaniesFromDom();
     return;
@@ -7673,6 +8525,11 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('input', (event) => {
+  if (event.target?.id === 'setup-target-sites') {
+    appState.setupTargetImportResult = null;
+    syncSetupTargetFeedback();
+    return;
+  }
   const fieldName = event.target?.dataset?.outreachField;
   if (!fieldName || !appState.generatedOutreach || !Object.prototype.hasOwnProperty.call(appState.generatedOutreach, fieldName)) return;
   appState.generatedOutreach[fieldName] = event.target.value;
@@ -8784,6 +9641,26 @@ function formatDateInput(value) {
   return date.toISOString().slice(0, 10);
 }
 
+function formatLocalDateInput(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseActivityDateInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const nowDate = new Date();
+  const timestamp = raw === formatLocalDateInput(nowDate)
+    ? nowDate
+    : new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() > nowDate.getTime() + 5 * 60 * 1000) return '';
+  return timestamp.toISOString();
+}
+
 function selected(currentValue, expectedValue) {
   return String(currentValue || '') === String(expectedValue) ? 'selected' : '';
 }
@@ -8819,13 +9696,26 @@ function maybeStartPendingProductTour() {
   if (!appState.postSetupTourPending || appState.onboardingDone || appState.tourActive || getRouteRoot() !== 'dashboard') return;
   appState.postSetupTourPending = false;
   localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
-  window.setTimeout(() => startProductTour(), 250);
+  window.setTimeout(() => {
+    if (getRouteRoot() === 'dashboard' && !appState.onboardingDone && !appState.tourActive) {
+      startProductTour();
+      return;
+    }
+    if (!appState.onboardingDone) {
+      appState.postSetupTourPending = true;
+      localStorage.setItem(POST_SETUP_TOUR_PENDING_KEY, 'true');
+    }
+  }, 250);
 }
 
 function startProductTour() {
   if (appState.onboardingDone || appState.tourActive) return;
   currentTourStep = 0;
+  appState.tourTrigger = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+    ? document.activeElement
+    : null;
   appState.tourActive = true;
+  document.querySelector('.shell')?.setAttribute('inert', '');
   renderTourStep();
 }
 
@@ -8839,13 +9729,13 @@ function renderTourStep() {
   const overlay = document.createElement('div');
   overlay.className = 'tour-overlay';
   overlay.innerHTML = `
-    <div class="tour-card">
+    <div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-copy" tabindex="-1">
       <p class="tour-step-indicator">Step ${currentTourStep + 1} of ${tourSteps.length}</p>
-      <h3 class="tour-title">${step.title}</h3>
-      <p class="tour-copy">${step.copy}</p>
+      <h3 class="tour-title" id="tour-title">${escapeHtml(step.title)}</h3>
+      <p class="tour-copy" id="tour-copy">${escapeHtml(step.copy)}</p>
       <div class="tour-actions">
-        <button class="ghost-button" data-action="end-tour">Skip tour</button>
-        <button class="primary-button" data-action="next-tour-step">${currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}</button>
+        <button class="ghost-button" type="button" data-action="end-tour">Skip tour</button>
+        <button class="primary-button" type="button" data-action="next-tour-step" data-tour-primary>${currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -8856,6 +9746,7 @@ function renderTourStep() {
       const rect = targetEl.getBoundingClientRect();
       const highlight = document.createElement('div');
       highlight.className = 'tour-highlight';
+      highlight.setAttribute('aria-hidden', 'true');
       highlight.style.top = `${rect.top - 8 + window.scrollY}px`;
       highlight.style.left = `${rect.left - 8 + window.scrollX}px`;
       highlight.style.width = `${rect.width + 16}px`;
@@ -8864,6 +9755,7 @@ function renderTourStep() {
       targetEl.scrollIntoView({ behavior: 'auto', block: 'center' });
     }
   }
+  window.requestAnimationFrame(() => overlay.querySelector('[data-tour-primary]')?.focus({ preventScroll: true }));
 }
 
 function nextTourStep() {
@@ -8875,15 +9767,21 @@ function nextTourStep() {
   }
 }
 
-function endTour() {
+function endTour(options = {}) {
   const overlay = document.querySelector('.tour-overlay');
   if (overlay) overlay.remove();
+  document.querySelector('.shell')?.removeAttribute('inert');
   appState.tourActive = false;
   appState.postSetupTourPending = false;
   appState.onboardingDone = true;
   localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
   localStorage.setItem('bd_onboarding_done', 'true');
-  showToast('Tour complete.', 'success');
+  const focusTarget = appState.tourTrigger instanceof HTMLElement && document.contains(appState.tourTrigger)
+    ? appState.tourTrigger
+    : viewTitle;
+  appState.tourTrigger = null;
+  window.requestAnimationFrame(() => focusTarget?.focus({ preventScroll: true }));
+  showToast(options.skipped ? 'Tour dismissed.' : 'Tour complete.', options.skipped ? 'info' : 'success');
 }
 
 async function renderTasksView() {
