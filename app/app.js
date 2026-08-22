@@ -2576,6 +2576,24 @@ function bindEvents() {
       document.getElementById('setup-csv-file')?.click();
       return;
     }
+    if (actionName === 'load-niche-kit') {
+      const kit = action.dataset.kit;
+      const kits = {
+        fintech: ['stripe.com', 'plaid.com', 'brex.com', 'chime.com', 'ramp.com', 'affirm.com', 'klarna.com', 'revolut.com', 'robinhood.com', 'toasttab.com'],
+        cybersecurity: ['crowdstrike.com', 'paloaltonetworks.com', 'sentinelone.com', 'cloudflare.com', 'wiz.io', 'snyk.io', 'okta.com', 'datadoghq.com', 'zscaler.com', 'cyberark.com'],
+        'ai-devtools': ['openai.com', 'anthropic.com', 'vercel.com', 'figma.com', 'databricks.com', 'pinecone.io', 'cohere.com', 'supabase.com', 'scale.com', 'huggingface.co'],
+        healthtech: ['veeva.com', 'doximity.com', 'ro.co', 'oscarhealth.com', 'goodrx.com', 'zocdoc.com', 'onemedical.com', 'devoted.com', 'tempus.com', 'hims.com'],
+      };
+      const domains = kits[kit] || kits.fintech;
+      const textarea = document.getElementById('setup-target-sites');
+      if (textarea) {
+        textarea.value = domains.join('\n');
+        appState.setupDraft.targetSites = textarea.value;
+        showToast(`Loaded ${domains.length} target accounts for ${kit.toUpperCase()}`, 'success');
+        updateSetupTargetFeedback();
+      }
+      return;
+    }
     if (actionName === 'setup-back') {
       persistSetupDraftFromDom();
       appState.setupStep = Math.max(1, appState.setupStep - 1);
@@ -4838,6 +4856,15 @@ function renderSetupStepContent(stepKey) {
           <p class="muted">Paste 5–20 company domains or careers URLs. BD Engine will create the watchlist, resolve supported job boards, and start looking for hiring changes.</p>
         </div>
         ${carriedAudit}
+        <div class="setup-starter-kits">
+          <span class="setup-brief-label">Or load a 1-click Industry Starter Kit:</span>
+          <div class="setup-kit-chips">
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="fintech">🚀 Fintech (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="cybersecurity">🛡️ Cybersecurity (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="ai-devtools">💻 AI & DevTools (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="healthtech">🏥 HealthTech (10)</button>
+          </div>
+        </div>
         <label>Company domains or careers URLs
           <textarea id="setup-target-sites" name="targetSites" rows="10" aria-describedby="setup-target-feedback${appState.setupTargetImportResult?.error ? ' setup-target-import-error' : ''}" aria-invalid="${parsedTargets.invalid.length ? 'true' : 'false'}" placeholder="acme.com&#10;https://northstar.example/careers&#10;https://jobs.lever.co/vertex">${escapeHtml(draft.targetSites)}</textarea>
         </label>
@@ -9248,7 +9275,10 @@ function renderGeneratedOutreach(outreach) {
           </div>
           <label class="outreach-edit-label" for="outreach-subject-input">Subject</label>
           <input id="outreach-subject-input" class="outreach-editable outreach-editable--subject" data-outreach-field="subjectLine" value="${escapeAttr(outreach.subjectLine)}">
-          <label class="outreach-edit-label" for="outreach-email-body">Message</label>
+          <div class="outreach-piece-options-bar">
+            <label class="outreach-edit-label" for="outreach-email-body">Message</label>
+            <span class="outreach-stats-badge">📝 ${outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0} words · ~${Math.max(5, Math.round((outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0) / 3.5))}s read</span>
+          </div>
           <textarea id="outreach-email-body" class="outreach-editable outreach-editable--email" data-outreach-field="messageBody">${escapeHtml(outreach.messageBody)}</textarea>
           <div class="button-row outreach-piece-actions">
             <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy email</button>

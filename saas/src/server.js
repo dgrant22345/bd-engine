@@ -1335,6 +1335,26 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, await store.getWorkspaceLoadHint(tenantId));
   }
 
+  if (pathname === '/api/notifications/weekly-digest') {
+    const summary = await store.getDashboardBootstrap(tenantId);
+    const topAccounts = (summary.accounts || [])
+      .filter((acc) => acc.score >= 50 && acc.activeRoles > 0)
+      .slice(0, 5)
+      .map((acc) => ({
+        id: acc.id,
+        displayName: acc.displayName,
+        score: acc.score,
+        activeRoles: acc.activeRoles,
+        summary: acc.summary,
+      }));
+    return sendJson(res, 200, {
+      digestDate: new Date().toISOString(),
+      topAccounts,
+      totalAccountsCount: summary.accounts?.length || 0,
+      totalActiveRolesCount: summary.jobs?.length || 0,
+    });
+  }
+
   if (pathname === '/api/ingestion/diagnostics') {
     return sendJson(res, 200, await store.getIngestionDiagnostics(tenantId));
   }
