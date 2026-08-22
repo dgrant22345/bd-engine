@@ -10294,4 +10294,53 @@ body.global-dragover::after {
   font-size: 1.2rem;
 }
 
+/* ── Job Skills Chips ── */
+.job-skills-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 6px 0;
+}
+
+.job-skill-chip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  white-space: nowrap;
+}
+
+/* ── Daily Network Alert Digest Card ── */
+.network-digest-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(59, 130, 246, 0.12));
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: var(--radius-md);
+  padding: 12px 18px;
+  margin-bottom: 16px;
+}
+
+.network-digest-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.network-digest-icon {
+  font-size: 1.4rem;
+}
+
+.network-digest-text strong {
+  display: block;
+  font-size: 0.88rem;
+  margin-bottom: 2px;
+}
+
+
 

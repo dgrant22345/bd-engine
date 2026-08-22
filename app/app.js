@@ -8351,12 +8351,54 @@ async function exportContactsCsv() {
   );
 }
 
+function extractRoleSkills(title = '', department = '') {
+  const text = `${title} ${department}`.toLowerCase();
+  const known = [
+    { label: 'React', test: /\breact\b/i },
+    { label: 'TypeScript', test: /\btypescript\b|\bts\b/i },
+    { label: 'Node.js', test: /\bnode(\.js)?\b/i },
+    { label: 'Python', test: /\bpython\b/i },
+    { label: 'AWS', test: /\baws\b|\bcloud\b/i },
+    { label: 'Go', test: /\bgolang\b/i },
+    { label: 'Kubernetes', test: /\bkubernetes\b|\bk8s\b/i },
+    { label: 'SQL / DB', test: /\b(sql|postgres|database)\b/i },
+    { label: 'Product', test: /\bproduct\b/i },
+    { label: 'Design / UX', test: /\b(design|ui|ux|figma)\b/i },
+    { label: 'Sales / BD', test: /\b(sales|account executive|sdr|bdr|business development)\b/i },
+    { label: 'Recruiting', test: /\b(recruiter|recruiting|talent|sourcer)\b/i },
+    { label: 'Leadership', test: /\b(lead|manager|director|vp|head|chief)\b/i },
+  ];
+  return known.filter(k => k.test.test(text)).map(k => k.label).slice(0, 3);
+}
+
 async function exportJobsCsv() {
   const items = await fetchAllForExport('/api/jobs', appState.jobQuery);
-  exportToCsv('jobs.csv',
-    ['Title', 'Company', 'Location', 'Fit score', 'Fit reasons', 'ATS', 'Posted', 'Active', 'URL'],
-    items.map(j => [j.title, j.companyName, j.location, j.relevanceScore ?? '', (j.relevanceReasons || []).join('; '), j.atsType, j.postedAt, j.active !== false ? 'Yes' : 'No', j.jobUrl || j.url])
+  exportToCsv('network-jobs-pipeline.csv',
+    ['Role Title', 'Company', 'Location', 'Work Style', 'Connection Count', 'Matched Contacts', 'Pipeline Stage', 'Fit Score', 'Posting URL', 'Generated Warm Referral Note'],
+    items.map(j => {
+      const contacts = Array.isArray(j.contacts) ? j.contacts.map(c => `${c.fullName} (${c.title || 'Contact'})`).join('; ') : (j.topContactName || '');
+      const stage = appState.jobPipelineStages?.[j.id] || 'Not tracked';
+      const copyObj = generateWarmStudioCopy({
+        job: j,
+        account: { displayName: j.companyName },
+        selectedContact: j.contacts?.[0] || { fullName: j.topContactName || 'Team Member' },
+        selectedTone: 'casual',
+      });
+      return [
+        j.title,
+        j.companyName,
+        j.location || (j.isRemote ? 'Remote' : ''),
+        j.workStyle || (j.isRemote ? 'Remote' : 'On-site'),
+        j.connectionCount || 0,
+        contacts,
+        stage,
+        j.relevanceScore ?? '',
+        j.jobUrl || j.url || '',
+        copyObj.referralDm.replace(/\n+/g, ' '),
+      ];
+    })
   );
+  showToast('📥 Pipeline and network roles exported to CSV!', 'success');
 }
 
 function renderTodayQueueTable(items) {
@@ -8442,10 +8484,12 @@ function renderJobsTable(items, compact) {
         const contacts = Array.isArray(item.contacts) ? item.contacts : [];
         const isJobSeeker = isJobSeekerPersona();
         const pipelineStage = appState.jobPipelineStages?.[item.id] || '';
+        const skills = extractRoleSkills(item.title, item.department);
         return `
         <tr class="${hasConn ? 'job-row--connected' : ''}${pipelineStage ? ' job-row--pipelined' : ''}">
           <td data-label="Role">
             ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
+            ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
             ${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div><button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(contacts[0]?.id || '')}">💌 Warm Referral Studio</button>`}
           </td>
           <td data-label="Company">
