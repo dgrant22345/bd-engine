@@ -215,6 +215,10 @@ const appState = {
   modalImportResult: null,
   networkModalOpen: false,
   linkedinGuideModalOpen: false,
+  warmStudioModalOpen: false,
+  pricingModalOpen: false,
+  warmStudioData: null,
+  jobPipelineStages: readJsonSetting('bd_job_pipeline', {}),
 };
 
 const sharedWorkspaceStorageKeys = {
@@ -333,6 +337,8 @@ const themeLabel = document.getElementById('theme-label');
 const hamburgerBtn = document.getElementById('mobile-hamburger');
 const networkImportModalBackdrop = document.getElementById('network-import-modal-backdrop');
 const linkedinGuideModalBackdrop = document.getElementById('linkedin-guide-modal-backdrop');
+const warmStudioModalBackdrop = document.getElementById('warm-studio-modal-backdrop');
+const pricingModalBackdrop = document.getElementById('pricing-modal-backdrop');
 
 const defaultQueries = {
   accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
@@ -2389,6 +2395,8 @@ function bindEvents() {
       if (appState.mobileNavOpen) { closeMobileNav(); return; }
       if (appState.networkModalOpen) { closeNetworkImportModal(); return; }
       if (appState.linkedinGuideModalOpen) { closeLinkedInGuideModal(); return; }
+      if (appState.warmStudioModalOpen) { closeWarmStudioModal(); return; }
+      if (appState.pricingModalOpen) { closePricingModal(); return; }
       const backdrop = document.getElementById('outreach-modal-backdrop');
       if (backdrop && !backdrop.classList.contains('hidden')) {
         setOutreachModalOpen(false);
@@ -2774,6 +2782,46 @@ function bindEvents() {
     }
     if (actionName === 'network-modal-run-import') {
       await runNetworkModalImport();
+      return;
+    }
+    if (actionName === 'open-pricing-modal') {
+      openPricingModal();
+      return;
+    }
+    if (actionName === 'close-pricing-modal') {
+      closePricingModal();
+      return;
+    }
+    if (actionName === 'open-warm-studio') {
+      await openWarmStudioModal(action.dataset.jobId, action.dataset.contactId);
+      return;
+    }
+    if (actionName === 'close-warm-studio') {
+      closeWarmStudioModal();
+      return;
+    }
+    if (actionName === 'warm-studio-switch-format') {
+      switchWarmStudioFormat(action.dataset.format);
+      return;
+    }
+    if (actionName === 'warm-studio-switch-tone') {
+      switchWarmStudioTone(action.dataset.tone);
+      return;
+    }
+    if (actionName === 'warm-studio-copy') {
+      await copyWarmStudioText(action);
+      return;
+    }
+    if (actionName === 'warm-studio-log-sent') {
+      await logWarmStudioSent(action.dataset.jobId, action.dataset.contactId);
+      return;
+    }
+    if (actionName === 'share-network-stats') {
+      shareNetworkStats();
+      return;
+    }
+    if (actionName === 'update-job-pipeline-stage') {
+      await updateJobPipelineStage(action.dataset.jobId, action.dataset.stage);
       return;
     }
     if (actionName === 'open-admin-section') {
@@ -3879,6 +3927,18 @@ async function applyJobPreset(presetId) {
       page: 1,
     };
     showToast('Filtered to past 7 days.', 'info');
+  } else if (presetId === 'pipeline') {
+    const trackedCount = Object.keys(appState.jobPipelineStages || {}).length;
+    if (!trackedCount) {
+      showToast('No roles in your pipeline yet. Choose a stage from "+ Track" on any job row!', 'info');
+      return;
+    }
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      pipelineOnly: 'true',
+      page: 1,
+    };
+    showToast(`Showing ${trackedCount} role(s) tracked in your pipeline.`, 'info');
   }
   await renderJobsView();
 }
@@ -6238,6 +6298,8 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
           </button>
           ${!hasContacts ? `<button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button>` : ''}
           <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">📥 Export Guide</button>
+          <button class="ghost-button ghost-button--sm" type="button" data-action="share-network-stats" title="Share your network matches on LinkedIn">📢 Share Stats</button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="open-pricing-modal">💎 Upgrade ($5/mo)</button>
         </div>
       </div>
 
@@ -6291,6 +6353,422 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
         </div>
       ` : ''}
     </section>
+  `;
+}
+
+/* ── Phase 7: Warm Referral Studio & 1-Click Outreach Powerhouse ── */
+
+async function openWarmStudioModal(jobId, contactId) {
+  if (!warmStudioModalBackdrop) return;
+  appState.warmStudioModalOpen = true;
+
+  let targetJob = null;
+  let targetAccount = null;
+  let targetContacts = [];
+
+  if (jobId) {
+    try {
+      const res = await api(`/api/jobs?q=${encodeURIComponent(jobId)}`);
+      targetJob = res.items?.find((j) => j.id === jobId) || res.items?.[0] || null;
+      if (targetJob?.accountId) {
+        const accRes = await api(`/api/accounts/${targetJob.accountId}`);
+        targetAccount = accRes?.account || null;
+        targetContacts = accRes?.contacts || targetJob.contacts || [];
+      } else if (targetJob?.contacts) {
+        targetContacts = targetJob.contacts;
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  let selectedContact = null;
+  if (contactId && targetContacts.length) {
+    selectedContact = targetContacts.find((c) => c.id === contactId || c.fullName === contactId) || null;
+  }
+  if (!selectedContact && targetContacts.length) {
+    selectedContact = targetContacts[0];
+  }
+
+  appState.warmStudioData = {
+    job: targetJob,
+    account: targetAccount,
+    contacts: targetContacts,
+    selectedContact: selectedContact,
+    selectedFormat: 'referral_dm',
+    selectedTone: 'casual',
+  };
+
+  renderWarmStudioModal();
+  warmStudioModalBackdrop.classList.remove('hidden');
+  warmStudioModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeWarmStudioModal() {
+  if (!warmStudioModalBackdrop) return;
+  appState.warmStudioModalOpen = false;
+  appState.warmStudioData = null;
+  warmStudioModalBackdrop.classList.add('hidden');
+  warmStudioModalBackdrop.setAttribute('aria-hidden', 'true');
+  warmStudioModalBackdrop.innerHTML = '';
+}
+
+function switchWarmStudioFormat(format) {
+  if (!appState.warmStudioData) return;
+  appState.warmStudioData.selectedFormat = format;
+  renderWarmStudioModal();
+}
+
+function switchWarmStudioTone(tone) {
+  if (!appState.warmStudioData) return;
+  appState.warmStudioData.selectedTone = tone;
+  renderWarmStudioModal();
+}
+
+function generateWarmStudioCopy(data) {
+  const { job, account, selectedContact, selectedTone } = data;
+  const contactName = selectedContact?.fullName || selectedContact?.firstName || 'there';
+  const firstName = selectedContact?.firstName || contactName.split(' ')[0] || 'there';
+  const contactTitle = selectedContact?.title || 'Team Member';
+  const companyName = job?.companyName || job?.company || account?.displayName || 'the team';
+  const jobTitle = job?.title || 'Open Role';
+  const jobLocation = job?.location || (job?.isRemote ? 'Remote' : '');
+  const jobUrl = job?.url || job?.jobUrl || '';
+  const myName = appState.bootstrap?.user?.name || 'Applicant';
+
+  let linkedinNote = '';
+  if (selectedTone === 'casual') {
+    linkedinNote = `Hi ${firstName}! Saw your work at ${companyName} and wanted to connect. I noticed ${companyName} has an open ${jobTitle} role—would love to connect and learn more about your experience on the team! Best, ${myName}`;
+  } else if (selectedTone === 'direct') {
+    linkedinNote = `Hi ${firstName}, reaching out as I'm applying for the ${jobTitle} opening at ${companyName}. Would value connecting and hearing any quick advice on the team. Thanks! - ${myName}`;
+  } else {
+    linkedinNote = `Hello ${firstName}, I came across your profile and admire your work as ${contactTitle} at ${companyName}. I'm following ${companyName}'s ${jobTitle} opening and would be grateful to connect. Regards, ${myName}`;
+  }
+  if (linkedinNote.length > 295) linkedinNote = linkedinNote.slice(0, 292) + '...';
+
+  let referralDm = '';
+  if (selectedTone === 'casual') {
+    referralDm = `Hey ${firstName}! Hope all is well with you.\n\nI saw that ${companyName} is currently hiring for a ${jobTitle}${jobLocation ? ` (${jobLocation})` : ''} and the role looks like a great match for my background.\n\nAre you still enjoying your time at ${companyName}? If you're open to it, I'd love to ask for your internal referral or advice on who leads the team. Happy to send over my resume and a 2-line summary to make it super easy.\n\nThanks a ton!\n${myName}`;
+  } else if (selectedTone === 'direct') {
+    referralDm = `Hi ${firstName},\n\nI noticed ${companyName} posted a ${jobTitle} role recently. My experience aligns closely with what the team is looking for.\n\nWould you be open to submitting an internal referral or introducing me to the hiring manager? I can share a quick blurb and my resume right away.\n\nAppreciate your time!\n${myName}`;
+  } else {
+    referralDm = `Hi ${firstName},\n\nI hope you are doing well. I have been following ${companyName}'s growth and noticed the recent opening for ${jobTitle}.\n\nGiven your role at ${companyName}, I would appreciate any insight you might have into the team. If you feel comfortable, I would be grateful for an internal referral.\n\nLet me know if you might have 5 minutes to connect, or if I can send over my background materials.\n\nBest regards,\n${myName}`;
+  }
+
+  let emailPitch = '';
+  const emailSubject = selectedTone === 'casual'
+    ? `${jobTitle} inquiry — ${myName}`
+    : `Application & Introduction: ${jobTitle} (${myName})`;
+
+  if (selectedTone === 'casual') {
+    emailPitch = `Hi ${firstName},\n\nI'm reaching out because I saw ${companyName}'s open ${jobTitle} role${jobLocation ? ` in ${jobLocation}` : ''} and was really excited by what the team is building.\n\nOver the past few years, I've specialized in delivering impactful results and driving technical excellence. I'd love the opportunity to bring that experience to ${companyName}.\n\nI've reviewed the requirements and believe I can hit the ground running immediately. Would you be open to a quick 10-minute chat this week?\n\nBest,\n${myName}${jobUrl ? `\n\nRole link: ${jobUrl}` : ''}`;
+  } else if (selectedTone === 'direct') {
+    emailPitch = `Hi ${firstName},\n\nI'm writing regarding the ${jobTitle} role at ${companyName}.\n\nHere is what I bring to the table:\n• Proven track record delivering key initiatives on time and scale\n• Deep familiarity with modern tech stacks and collaborative workflows\n• Strong background matching the exact responsibilities for this opening\n\nCould we schedule a brief 10-minute intro call this week to see if there's a strong mutual fit?\n\nBest regards,\n${myName}`;
+  } else {
+    emailPitch = `Dear ${firstName},\n\nI am writing to express my strong interest in the ${jobTitle} position currently open at ${companyName}.\n\nWith my background and proven success in similar environments, I am confident in my ability to make an immediate, positive contribution to your team's objectives.\n\nI would welcome the opportunity to discuss how my skill set aligns with your current priorities. Thank you for your time and consideration.\n\nSincerely,\n${myName}`;
+  }
+
+  let recruiterPitch = '';
+  if (selectedTone === 'casual') {
+    recruiterPitch = `Hi ${firstName}! I saw you're on the Talent team at ${companyName}. I recently came across the ${jobTitle} posting and would love to connect. I have strong experience in this domain and would appreciate connecting with the recruiter managing this search! Cheers, ${myName}`;
+  } else if (selectedTone === 'direct') {
+    recruiterPitch = `Hi ${firstName}, I'm an active candidate for the ${jobTitle} role at ${companyName}. My profile aligns directly with the posted qualifications. Are you managing this search, or could you point me to the right recruiter on your team? Thanks, ${myName}`;
+  } else {
+    recruiterPitch = `Hello ${firstName}, I noticed you lead recruitment efforts at ${companyName}. I am very interested in the ${jobTitle} position and believe my background would be a strong asset. I would welcome the chance to share my profile with you. Best regards, ${myName}`;
+  }
+
+  return {
+    linkedinNote,
+    referralDm,
+    emailPitch,
+    emailSubject,
+    recruiterPitch,
+  };
+}
+
+function renderWarmStudioModal() {
+  if (!warmStudioModalBackdrop || !appState.warmStudioData) return;
+  const data = appState.warmStudioData;
+  const copyObj = generateWarmStudioCopy(data);
+  const { job, selectedContact, contacts, selectedFormat, selectedTone } = data;
+
+  let activeText = '';
+  let activeTitle = '';
+  let charLimit = 0;
+
+  if (selectedFormat === 'linkedin_note') {
+    activeText = copyObj.linkedinNote;
+    activeTitle = 'LinkedIn Connection Request Note';
+    charLimit = 300;
+  } else if (selectedFormat === 'referral_dm') {
+    activeText = copyObj.referralDm;
+    activeTitle = '1st-Degree Colleague Referral Request DM';
+  } else if (selectedFormat === 'email_pitch') {
+    activeText = `Subject: ${copyObj.emailSubject}\n\n${copyObj.emailPitch}`;
+    activeTitle = 'Direct Email / Referral Pitch';
+  } else {
+    activeText = copyObj.recruiterPitch;
+    activeTitle = 'Recruiter / Talent Partner Message';
+  }
+
+  const charCount = activeText.length;
+  const isOverLimit = charLimit && charCount > charLimit;
+
+  warmStudioModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--lg warm-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="warm-studio-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">💌</span>
+          <div>
+            <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
+            <p class="muted small">Generate 1-click tailored intro messages for <strong>${escapeHtml(job?.title || 'Open Role')}</strong> at <strong>${escapeHtml(job?.companyName || job?.company || 'Company')}</strong>.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-warm-studio" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body warm-studio-body">
+        <div class="warm-studio-context-bar">
+          <div class="warm-studio-contact-picker">
+            <label for="warm-studio-contact-select" class="small muted"><strong>Recipient Contact:</strong></label>
+            <select id="warm-studio-contact-select" class="compact-select">
+              ${(contacts || []).map((c) => `<option value="${escapeAttr(c.id || c.fullName)}" ${selected(selectedContact?.id || selectedContact?.fullName, c.id || c.fullName)}>${escapeHtml(c.fullName)} (${escapeHtml(c.title || 'Connection')})</option>`).join('')}
+              ${!contacts?.length ? `<option value="">General Network Connection</option>` : ''}
+            </select>
+          </div>
+
+          <div class="warm-studio-tone-picker">
+            <span class="small muted"><strong>Tone:</strong></span>
+            <div class="tone-button-group">
+              <button class="tone-btn ${selectedTone === 'casual' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-tone" data-tone="casual">Casual & Warm</button>
+              <button class="tone-btn ${selectedTone === 'professional' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-tone" data-tone="professional">Professional</button>
+              <button class="tone-btn ${selectedTone === 'direct' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-tone" data-tone="direct">Direct & Concise</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="warm-studio-format-tabs" role="tablist">
+          <button class="format-tab-btn ${selectedFormat === 'referral_dm' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="referral_dm">
+            💌 1st-Degree Referral DM
+          </button>
+          <button class="format-tab-btn ${selectedFormat === 'linkedin_note' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="linkedin_note">
+            💬 LinkedIn Note (<300 chars)
+          </button>
+          <button class="format-tab-btn ${selectedFormat === 'email_pitch' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="email_pitch">
+            📧 Direct Email Pitch
+          </button>
+          <button class="format-tab-btn ${selectedFormat === 'recruiter_pitch' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="recruiter_pitch">
+            🎯 Recruiter Pitch
+          </button>
+        </div>
+
+        <div class="warm-studio-output-card">
+          <div class="output-card-header">
+            <strong>${escapeHtml(activeTitle)}</strong>
+            <div class="output-header-actions">
+              ${charLimit ? `<span class="char-count-meter ${isOverLimit ? 'is-overflow' : ''}">${charCount} / ${charLimit} chars</span>` : `<span class="char-count-meter">${charCount} chars</span>`}
+              <button class="primary-button primary-button--xs" type="button" data-action="warm-studio-copy">
+                📋 Copy Message
+              </button>
+            </div>
+          </div>
+          <textarea id="warm-studio-textarea" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          ${selectedContact?.linkedinUrl ? `
+            <a class="secondary-button secondary-button--sm" href="${escapeAttr(selectedContact.linkedinUrl)}" target="_blank" rel="noopener noreferrer">
+              Open ${escapeHtml(selectedContact.firstName || 'Contact')}'s LinkedIn &nearr;
+            </a>
+          ` : `
+            <a class="secondary-button secondary-button--sm" href="https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(`${selectedContact?.fullName || ''} ${job?.companyName || job?.company || ''}`)}" target="_blank" rel="noopener noreferrer">
+              Search Contact on LinkedIn &nearr;
+            </a>
+          `}
+          ${job?.url || job?.jobUrl ? `
+            <a class="ghost-button ghost-button--sm" href="${escapeAttr(job.url || job.jobUrl)}" target="_blank" rel="noopener noreferrer">
+              View Careers Board Posting &nearr;
+            </a>
+          ` : ''}
+        </div>
+        <div class="modal-footer-right">
+          <button class="ghost-button" type="button" data-action="close-warm-studio">Done</button>
+          <button class="primary-button" type="button" data-action="warm-studio-log-sent" data-job-id="${escapeAttr(job?.id || '')}" data-contact-id="${escapeAttr(selectedContact?.id || '')}">
+            ✓ Mark Intro Sent (Advance Pipeline)
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const contactSelect = document.getElementById('warm-studio-contact-select');
+  if (contactSelect) {
+    contactSelect.onchange = () => {
+      const chosenVal = contactSelect.value;
+      appState.warmStudioData.selectedContact = (contacts || []).find((c) => c.id === chosenVal || c.fullName === chosenVal) || null;
+      renderWarmStudioModal();
+    };
+  }
+}
+
+async function copyWarmStudioText(buttonEl) {
+  const textarea = document.getElementById('warm-studio-textarea');
+  if (!textarea) return;
+  const text = textarea.value;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('📋 Message copied to clipboard!', 'success');
+  } catch {
+    textarea.select();
+    document.execCommand('copy');
+    showToast('📋 Message copied!', 'success');
+  }
+}
+
+async function logWarmStudioSent(jobId, contactId) {
+  if (jobId) {
+    appState.jobPipelineStages[jobId] = 'contacted';
+    localStorage.setItem('bd_job_pipeline', JSON.stringify(appState.jobPipelineStages));
+    showToast('✓ Pipeline updated: Marked as Warm Intro Sent!', 'success');
+  }
+  closeWarmStudioModal();
+  if (getRouteRoot() === 'jobs') await renderJobsView();
+}
+
+async function updateJobPipelineStage(jobId, stage) {
+  if (!jobId) return;
+  if (!stage) {
+    delete appState.jobPipelineStages[jobId];
+  } else {
+    appState.jobPipelineStages[jobId] = stage;
+  }
+  localStorage.setItem('bd_job_pipeline', JSON.stringify(appState.jobPipelineStages));
+  showToast(stage ? `✓ Role updated in Pipeline: ${stage}` : 'Role removed from pipeline.', 'success');
+  if (getRouteRoot() === 'jobs') await renderJobsView();
+}
+
+/* ── Phase 7: Viral Growth & Social Sharing Loop ── */
+
+function shareNetworkStats() {
+  const summary = appState.bootstrap?.summary || {};
+  const contactCount = summary.contactCount || 240;
+  const companyCount = summary.accountCount || 35;
+  const jobCount = summary.activeJobCount || 18;
+
+  const shareText = `I just mapped my LinkedIn network against live tech job boards using BD Engine. 🚀\n\nDiscovered ${companyCount} hiring companies and ${jobCount} live Remote & Local roles where I have 1st-degree connections for warm referrals!\n\nCheck out your network matches for free here:`;
+  const shareUrl = 'https://bd-engine-production.up.railway.app';
+
+  navigator.clipboard?.writeText?.(`${shareText} ${shareUrl}`).catch(() => {});
+  showToast('📢 Viral share text copied to clipboard! Opening LinkedIn...', 'success');
+
+  const linkedinShareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`;
+  window.open(linkedinShareUrl, '_blank', 'noopener,noreferrer,width=600,height=600');
+}
+
+/* ── Phase 7: Pricing & Upgrade Modal ── */
+
+function openPricingModal() {
+  if (!pricingModalBackdrop) return;
+  appState.pricingModalOpen = true;
+  renderPricingModal();
+  pricingModalBackdrop.classList.remove('hidden');
+  pricingModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closePricingModal() {
+  if (!pricingModalBackdrop) return;
+  appState.pricingModalOpen = false;
+  pricingModalBackdrop.classList.add('hidden');
+  pricingModalBackdrop.setAttribute('aria-hidden', 'true');
+  pricingModalBackdrop.innerHTML = '';
+}
+
+function renderPricingModal() {
+  if (!pricingModalBackdrop) return;
+  const currentPlan = appState.bootstrap?.session?.plan?.id || 'trial';
+
+  pricingModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--lg pricing-dialog" role="dialog" aria-modal="true" aria-labelledby="pricing-modal-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">💎</span>
+          <div>
+            <h3 id="pricing-modal-title">Simple, Value-Packed Pricing</h3>
+            <p class="muted small">Turn your LinkedIn network into interviews and clients. Cancel anytime.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-pricing-modal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body pricing-body">
+        <div class="pricing-cards-grid">
+          <!-- Job Seeker Plan ($5/mo) -->
+          <div class="pricing-card ${currentPlan === 'jobseeker' ? 'is-current' : 'is-popular'}">
+            <div class="pricing-badge-popular">MOST POPULAR FOR JOB HUNTING</div>
+            <div class="pricing-card-header">
+              <h4>Job Seeker</h4>
+              <p class="muted small">Land warm referrals and skip cold job application queues.</p>
+              <div class="pricing-price-tag">
+                <span class="price-currency">$</span>
+                <span class="price-amount">5</span>
+                <span class="price-period">/ month</span>
+              </div>
+            </div>
+            <ul class="pricing-feature-list">
+              <li>✓ <strong>Unlimited LinkedIn Connections CSV Imports</strong></li>
+              <li>✓ <strong>Live Matching to 50+ ATS Boards</strong> (Greenhouse, Lever, Ashby, Workday)</li>
+              <li>✓ <strong>1-Click Warm Referral & Intro Generator</strong> (LinkedIn notes & DMs)</li>
+              <li>✓ <strong>Local GTA & Remote Work-Style Filters</strong></li>
+              <li>✓ <strong>Up to 1,000 Network Contacts & 200 Tracked Companies</strong></li>
+              <li>✓ <strong>Job Application Pipeline Tracker</strong></li>
+            </ul>
+            <a class="primary-button pricing-cta-btn" href="#/admin" data-action="close-pricing-modal">
+              ${currentPlan === 'jobseeker' ? 'Current Plan' : 'Get Job Seeker — $5/mo'}
+            </a>
+          </div>
+
+          <!-- Sales / Staffing Pro Plan ($10/mo) -->
+          <div class="pricing-card ${currentPlan === 'sales' ? 'is-current' : ''}">
+            <div class="pricing-card-header">
+              <h4>Sales & Staffing Pro</h4>
+              <p class="muted small">For recruiters, staffing BD reps, and agency founders.</p>
+              <div class="pricing-price-tag">
+                <span class="price-currency">$</span>
+                <span class="price-amount">10</span>
+                <span class="price-period">/ month</span>
+              </div>
+            </div>
+            <ul class="pricing-feature-list">
+              <li>✓ <strong>Everything in Job Seeker</strong></li>
+              <li>✓ <strong>10,000 Contacts & 1,000 Accounts</strong></li>
+              <li>✓ <strong>Unlimited ATS Job Boards Monitoring</strong></li>
+              <li>✓ <strong>Hiring Velocity & Lead Scoring Engine</strong></li>
+              <li>✓ <strong>Multi-Channel Outreach Sequences</strong></li>
+              <li>✓ <strong>Full CSV & CRM Contact Export</strong></li>
+            </ul>
+            <a class="secondary-button pricing-cta-btn" href="#/admin" data-action="close-pricing-modal">
+              ${currentPlan === 'sales' ? 'Current Plan' : 'Upgrade to Pro — $10/mo'}
+            </a>
+          </div>
+        </div>
+
+        <div class="pricing-guarantee-strip">
+          <span class="shield-icon" aria-hidden="true">🛡️</span>
+          <span><strong>14-Day Money-Back Guarantee:</strong> 100% satisfaction guaranteed. If you don't get at least 3 warm referral opportunities in your first week, email support for an immediate refund.</span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <span class="muted small">🔒 Secure checkout powered by Stripe</span>
+        </div>
+        <div class="modal-footer-right">
+          <button class="ghost-button" type="button" data-action="close-pricing-modal">Close</button>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -7238,6 +7716,9 @@ async function renderJobsView() {
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
+  if (appState.jobQuery.pipelineOnly === 'true') {
+    result.items = result.items.filter((item) => Boolean(appState.jobPipelineStages?.[item.id]));
+  }
   const jobAdvancedCount = ['geography', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
@@ -7265,10 +7746,11 @@ async function renderJobsView() {
       </div>
       <div class="job-preset-strip" role="group" aria-label="Job quick filters">
         <span class="job-preset-label">Quick filters:</span>
-        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.recencyDays && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
         <button class="job-preset-chip${appState.jobQuery.workStyle === 'local_remote' || appState.jobQuery.geography === 'local_remote' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="local_remote">🏡 Local or Remote</button>
         <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
         <button class="job-preset-chip${appState.jobQuery.sortBy === 'connections' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="most_connected">⚡ Most Connected</button>
+        <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">🎯 In Pipeline (${Object.keys(appState.jobPipelineStages || {}).length})</button>
         <button class="job-preset-chip${appState.jobQuery.minRelevance === '45' || appState.jobQuery.sortBy === 'relevance' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="best_fit">🌟 Best Fit</button>
         <button class="job-preset-chip${appState.jobQuery.recencyDays === '7' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="recent">⏱️ Past 7 Days</button>
       </div>
@@ -7954,16 +8436,17 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Network / Contacts</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Network / Contacts</th><th>Pipeline</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
       ${items.map((item) => {
         const hasConn = Number(item.connectionCount || 0) > 0;
         const contacts = Array.isArray(item.contacts) ? item.contacts : [];
         const isJobSeeker = isJobSeekerPersona();
+        const pipelineStage = appState.jobPipelineStages?.[item.id] || '';
         return `
-        <tr class="${hasConn ? 'job-row--connected' : ''}">
+        <tr class="${hasConn ? 'job-row--connected' : ''}${pipelineStage ? ' job-row--pipelined' : ''}">
           <td data-label="Role">
             ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
-            ${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div>${item.accountId ? `<button class="inline-action-link job-outreach-link" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-template="${isJobSeeker ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true">Use as outreach trigger</button>` : ''}`}
+            ${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div><button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(contacts[0]?.id || '')}">💌 Warm Referral Studio</button>`}
           </td>
           <td data-label="Company">
             ${item.accountId ? `<a class="row-link company-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : `<span class="company-name">${escapeHtml(item.companyName || '')}</span>`}
@@ -7978,7 +8461,7 @@ function renderJobsTable(items, compact) {
                       <div class="job-contact-chip">
                         <span class="job-contact-name">${escapeHtml(c.fullName)}</span>
                         ${c.title ? `<span class="job-contact-title"> · ${escapeHtml(c.title)}</span>` : ''}
-                        ${item.accountId ? `<button class="inline-action-link job-contact-outreach-btn" type="button" data-action="open-contact-outreach" data-account-id="${escapeAttr(item.accountId)}" data-contact-id="${escapeAttr(c.id || '')}" data-contact-name="${escapeAttr(c.fullName)}" data-contact-title="${escapeAttr(c.title || '')}" data-template="${isJobSeeker ? 'job_intro' : 'hiring_manager'}" data-job-id="${escapeAttr(item.id || '')}" data-auto-generate="true" title="Reach out to ${escapeAttr(c.fullName)}">Warm path →</button>` : ''}
+                        <button class="inline-action-link job-contact-outreach-btn" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(c.id || c.fullName || '')}" title="Generate 1-click warm intro to ${escapeAttr(c.fullName)}">Warm path →</button>
                       </div>
                     `).join('')}
                   </div>
@@ -7990,6 +8473,18 @@ function renderJobsTable(items, compact) {
                 ${item.accountId ? `<div class="small muted"><a class="inline-action-link" href="#/accounts/${item.accountId}">View company</a></div>` : ''}
               </div>
             `}
+          </td>
+          <td data-label="Pipeline">
+            <div class="job-pipeline-cell">
+              <select class="job-pipeline-select compact-select" data-action="update-job-pipeline-stage" data-job-id="${escapeAttr(item.id || '')}">
+                <option value="" ${!pipelineStage ? 'selected' : ''}>+ Track</option>
+                <option value="saved" ${pipelineStage === 'saved' ? 'selected' : ''}>🔖 Saved</option>
+                <option value="contacted" ${pipelineStage === 'contacted' ? 'selected' : ''}>💬 Intro Sent</option>
+                <option value="replied" ${pipelineStage === 'replied' ? 'selected' : ''}>💌 Replied</option>
+                <option value="interviewing" ${pipelineStage === 'interviewing' ? 'selected' : ''}>🎯 Interview</option>
+                <option value="offer" ${pipelineStage === 'offer' ? 'selected' : ''}>🎉 Offer</option>
+              </select>
+            </div>
           </td>
           <td data-label="Fit">${renderJobRelevance(item)}</td>
           <td data-label="Location">
