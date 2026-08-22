@@ -112,6 +112,8 @@ PostgreSQL schema migrations are idempotent entries in `saas/src/db.js` recorded
 - [Provider adapter guide](docs/provider-adapter-guide.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Release process](docs/release-process.md)
+- [30-day founder-led marketing launch plan](docs/marketing-launch-plan-30-days.md)
+- [Commercial launch checklist](docs/commercial-launch-checklist.md)
 - [Hosted operations](saas/OPERATIONS.md)
 - [Disaster recovery](saas/docs/disaster-recovery.md)
 - [Windows packaging](PACKAGING.md)
