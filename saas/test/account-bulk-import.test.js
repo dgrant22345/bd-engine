@@ -89,9 +89,37 @@ test('importAccountsList parses CSV headers with per-row fields', async () => {
   assert.equal(item.status, 'researching');
 });
 
-test('parseAccountImportText counts rows for entitlement checks before any write', () => {
+test('account import entitlement counts only unique new companies', async () => {
   const store = createStore();
+  const tenantId = 'tenant-import-entitlement';
+  addTenant(store, tenantId);
+  await store.addAccount(tenantId, { displayName: 'Existing Inc' });
   assert.equal(store.parseAccountImportText('A\nB\nC').length, 3);
   assert.equal(store.parseAccountImportText('   \n \n').length, 0);
   assert.equal(store.parseAccountImportText('').length, 0);
+  assert.equal(await store.countNewAccountImports(tenantId, 'New Co\nExisting Inc\nNew Co'), 1);
+});
+
+test('account import serialization keeps the entitlement decision and write atomic per tenant', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-import-serialized';
+  addTenant(store, tenantId);
+
+  async function importWithinOneAccountLimit(company) {
+    return store.serializeAccountImport(tenantId, async () => {
+      const current = (await store.findAccounts(tenantId, { page: 1, pageSize: 5 })).total;
+      const increment = await store.countNewAccountImports(tenantId, company);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (current + increment > 1) return { blocked: true, company };
+      return store.importAccountsList(tenantId, company);
+    });
+  }
+
+  const results = await Promise.all([
+    importWithinOneAccountLimit('First Serialized Co'),
+    importWithinOneAccountLimit('Second Serialized Co'),
+  ]);
+  assert.equal(results.filter((result) => result.count === 1).length, 1);
+  assert.equal(results.filter((result) => result.blocked).length, 1);
+  assert.equal((await store.findAccounts(tenantId, { page: 1, pageSize: 5 })).total, 1);
 });

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
-import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
+import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbListLegalConsents, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
@@ -9,9 +9,63 @@ import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
-import { CommercialOutcomeValidationError, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
+import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
 
 const now = () => new Date().toISOString();
+const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
+  'not_started',
+  'researching',
+  'ready_to_contact',
+  'contacted',
+  'replied',
+  'opportunity',
+]);
+const ACCOUNT_OUTREACH_STATUSES = new Set(ACCOUNT_OUTREACH_STATUS_ORDER);
+const ACCOUNT_OUTREACH_STATUS_RANK = new Map(
+  ACCOUNT_OUTREACH_STATUS_ORDER.map((status, index) => [status, index])
+);
+
+function boundedActivityText(value, maxLength) {
+  return String(value || '').trim().slice(0, maxLength);
+}
+
+function accountOutreachStatusForActivity(payload = {}, currentStatus = '') {
+  const requestedStatus = String(payload.pipelineStage || '').trim().toLowerCase();
+  const outcomeStage = outcomeStageForActivity(payload);
+  let candidate = '';
+  if (ACCOUNT_OUTREACH_STATUSES.has(requestedStatus)) candidate = requestedStatus;
+  else if (outcomeStage === 'outreach_logged' || outcomeStage === 'lost') candidate = 'contacted';
+  else if (outcomeStage === 'replied' || outcomeStage === 'positive_reply') candidate = 'replied';
+  else if (['meeting_booked', 'opportunity_created', 'won'].includes(outcomeStage)) candidate = 'opportunity';
+  if (!candidate) return '';
+
+  const normalizedCurrent = String(currentStatus || '').trim().toLowerCase();
+  const currentRank = ACCOUNT_OUTREACH_STATUS_RANK.get(normalizedCurrent);
+  const candidateRank = ACCOUNT_OUTREACH_STATUS_RANK.get(candidate);
+  return currentRank !== undefined && currentRank > candidateRank ? normalizedCurrent : candidate;
+}
+
+function activityResultLabel(payload = {}) {
+  const requestedStatus = String(payload.pipelineStage || '').trim().toLowerCase();
+  const result = (ACCOUNT_OUTREACH_STATUSES.has(requestedStatus) ? requestedStatus : '')
+    || outcomeStageForActivity(payload);
+  return result.replace(/_/g, ' ');
+}
+
+function buildActivityFollowUpSummary(activity, payload = {}) {
+  const result = activityResultLabel(payload) || activity.summary;
+  const occurredOn = String(activity.occurredAt || '').slice(0, 10);
+  const contactName = boundedActivityText(payload.contactName, 160);
+  return `Follow up on ${result} recorded ${occurredOn}${contactName ? ` with ${contactName}` : ''}.`;
+}
+
+function buildActivityOutcomeNotes(payload = {}, stage = '') {
+  const explicitNotes = boundedActivityText(payload.outcomeNotes, 2000);
+  if (stage !== 'won' && stage !== 'lost') return explicitNotes;
+  const summary = boundedActivityText(payload.summary, 2000);
+  return [...new Set([summary, explicitNotes].filter(Boolean))].join('\n\n').slice(0, 2000);
+}
+
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
@@ -1645,6 +1699,7 @@ async function runLinkedInCsvBackgroundJob(storeApi, tenantId, job) {
 }
 
 export function createStore() {
+  const accountImportTails = new Map();
   return {
     // Load basic tenant profiles only on startup
     async loadFromDb() {
@@ -1701,13 +1756,17 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, true);
       const profile = getTenantProfile(tenantId);
-      const commercialOutcomes = await dbLoadAllCommercialOutcomes(tenantId);
+      const [commercialOutcomes, legalConsents] = await Promise.all([
+        dbLoadAllCommercialOutcomes(tenantId),
+        context.user?.id ? dbListLegalConsents({ tenantId, userId: context.user.id }) : Promise.resolve([]),
+      ]);
       return {
         exportedAt: now(),
         product: 'BD Engine',
         tenant: context.tenant || { id: tenantId },
         user: context.user || null,
         membership: context.membership || null,
+        legalConsents,
         workspace: {
           profile: profile ? {
             persona: profile.persona,
@@ -2270,6 +2329,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
+        capabilities: { commercialOutcomes: true },
         ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
@@ -2354,54 +2414,109 @@ export function createStore() {
     },
 
     async getDashboardExtended(tenantId) {
+      const extendedStartedAt = performance.now();
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, true); // introQueue reads contacts
       const tenantAccounts = accountsForTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
+      const tenantActivities = activitiesForTenant(tenantId);
+      const pendingFollowUps = tasksForTenant(tenantId)
+        .filter((item) => item.type === 'follow_up' && item.status === 'pending');
       const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const unresolvedDashboardAccounts = unresolvedAccounts
         .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
         .map(dashboardAccountSummary);
-      return {
-        playbook: tenantAccounts.slice(0, 5).map(dashboardAccountSummary),
-        overdueFollowUps: [],
-        staleAccounts: unresolvedDashboardAccounts,
-        activityFeed: activitiesForTenant(tenantId).slice(0, 10),
-        enrichmentFunnel: { resolved: 2, needsReview: 1, missing: 0 },
-        alertQueue: tenantAccounts.slice(0, 3).map((item) => ({
+      const latestActivityByAccount = new Map();
+      tenantActivities.forEach((item) => {
+        if (item.accountId && !latestActivityByAccount.has(item.accountId)) {
+          latestActivityByAccount.set(item.accountId, item.occurredAt || item.createdAt || '');
+        }
+      });
+      const staleBefore = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      const staleAccounts = tenantAccounts
+        .filter((item) => {
+          const lastTouch = latestActivityByAccount.get(item.id) || item.lastContactedAt || item.updatedAt || item.createdAt;
+          const lastTouchAt = new Date(lastTouch || '').getTime();
+          return Number.isFinite(lastTouchAt) && lastTouchAt < staleBefore;
+        })
+        .sort((a, b) => {
+          const aTouch = latestActivityByAccount.get(a.id) || a.lastContactedAt || a.updatedAt || a.createdAt;
+          const bTouch = latestActivityByAccount.get(b.id) || b.lastContactedAt || b.updatedAt || b.createdAt;
+          return new Date(aTouch).getTime() - new Date(bTouch).getTime();
+        })
+        .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
+        .map(dashboardAccountSummary);
+      const activeHiringAccounts = tenantAccounts
+        .filter((item) => Number(item.jobCount || item.openRoleCount || 0) > 0)
+        .sort((a, b) => Number(b.targetScore || 0) - Number(a.targetScore || 0));
+      const activeHiringAccountIds = new Set(activeHiringAccounts.map((item) => item.id));
+      const needsReviewCount = unresolvedAccounts.filter((item) => item.domain || item.canonicalDomain || item.careersUrl).length;
+      const missingCount = Math.max(0, unresolvedAccounts.length - needsReviewCount);
+      const mapFollowUp = (item) => {
+        const itemAccount = accountById(item.accountId, tenantId);
+        return {
+          accountId: item.accountId,
+          displayName: itemAccount?.displayName || 'Account',
+          status: item.status,
+          nextStepLabel: item.summary || 'Follow up',
+          nextStepAt: item.dueDate,
+          targetScore: itemAccount?.targetScore || 0,
+          relationshipStrengthScore: itemAccount?.relationshipStrengthScore || 0,
+          isOverdue: new Date(item.dueDate || '').getTime() < Date.now(),
+        };
+      };
+      const payload = {
+        playbook: [...tenantAccounts]
+          .sort((a, b) => Number(b.targetScore || 0) - Number(a.targetScore || 0))
+          .slice(0, 5)
+          .map(dashboardAccountSummary),
+        overdueFollowUps: pendingFollowUps
+          .filter((item) => new Date(item.dueDate || '').getTime() < Date.now())
+          .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
+          .map(mapFollowUp),
+        staleAccounts,
+        activityFeed: tenantActivities.slice(0, 10),
+        enrichmentFunnel: {
+          total: tenantAccounts.length,
+          resolved: Math.max(0, tenantAccounts.length - unresolvedAccounts.length),
+          needsReview: needsReviewCount,
+          missing: missingCount,
+        },
+        alertQueue: activeHiringAccounts.slice(0, 3).map((item) => ({
           ...dashboardAccountSummary(item),
           accountId: item.id,
-          type: 'hiring_signal',
-          title: 'Hiring signal',
-          summary: item.targetScoreExplanation,
+          type: 'active_hiring',
+          title: 'Active hiring',
+          summary: item.targetScoreExplanation || item.recommendedAction,
+          alertPriorityScore: Number(item.targetScore || 0),
         })),
-        sequenceQueue: followups
-          .filter((item) => item.tenantId === tenantId && item.status === 'open')
+        sequenceQueue: pendingFollowUps
           .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
+          .map(mapFollowUp),
+        introQueue: contactsForTenant(tenantId)
+          .filter((item) => item.accountId && activeHiringAccountIds.has(item.accountId))
+          .sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0))
+          .slice(0, 3)
           .map((item) => {
             const itemAccount = accountById(item.accountId, tenantId);
             return {
               accountId: item.accountId,
-              displayName: itemAccount?.displayName || 'Account',
-              status: item.status,
-              nextStepLabel: item.note,
-              nextStepAt: item.dueAt,
-              targetScore: itemAccount?.targetScore || 0,
-              relationshipStrengthScore: itemAccount?.relationshipStrengthScore || 0,
+              displayName: itemAccount?.displayName || item.companyName || 'Account',
+              contactName: item.fullName,
+              contactTitle: item.title,
+              relationshipStrengthScore: item.priorityScore,
+              introSummary: `Mapped relationship to ${item.fullName}.`,
+              pathLength: 1,
             };
           }),
-        introQueue: contactsForTenant(tenantId).slice(0, 3).map((item) => ({
-          accountId: item.accountId,
-          displayName: item.companyName,
-          contactName: item.fullName,
-          contactTitle: item.title,
-          relationshipStrengthScore: item.priorityScore,
-          introSummary: `Best path is through ${item.fullName}.`,
-          pathLength: 1,
-        })),
         resolutionQueue: unresolvedDashboardAccounts,
         resolutionQueueTotal: unresolvedAccounts.length,
       };
+      const extendedElapsedMs = Math.round(performance.now() - extendedStartedAt);
+      if (extendedElapsedMs > 250) {
+        console.warn(`Slow extended dashboard: saas/src/store.js getDashboardExtended ${extendedElapsedMs}ms`);
+      }
+      return payload;
     },
 
     async findAccounts(tenantId, query) {
@@ -2911,6 +3026,45 @@ export function createStore() {
       replaceTenantItems(configsByTenant, 'configs', tenantId, sample.configs);
       replaceTenantItems(activitiesByTenant, 'activities', tenantId, sample.activities);
       replaceTenantItems(tasksByTenant, 'tasks', tenantId, sample.tasks);
+      await dbDeleteCommercialOutcomes(tenantId);
+      let sampleOutcomeCount = 0;
+      if (persona === 'bd') {
+        const accountByName = new Map(sample.accounts.map((item) => [item.displayName, item]));
+        const sampleOutcomeRows = [
+          ['Northstar Robotics', 'outreach_logged', 12, null, 'Initial hiring-signal outreach sent.'],
+          ['Northstar Robotics', 'replied', 10, null, 'Talent leader replied.'],
+          ['Northstar Robotics', 'positive_reply', 9, null, 'Asked for a short capability overview.'],
+          ['Northstar Robotics', 'meeting_booked', 7, null, 'Discovery call booked.'],
+          ['Northstar Robotics', 'opportunity_created', 5, 1800000, 'Controls hiring project qualified.'],
+          ['Northstar Robotics', 'won', 1, 1800000, 'Synthetic client win for demo purposes.'],
+          ['Vertex Health Systems', 'outreach_logged', 8, null, 'Warm outreach logged.'],
+          ['Vertex Health Systems', 'replied', 6, null, 'Reply received.'],
+          ['Vertex Health Systems', 'meeting_booked', 3, null, 'Introductory meeting booked.'],
+          ['Vertex Health Systems', 'opportunity_created', 2, 1200000, 'Hiring project entered the pipeline.'],
+          ['Luma Climate', 'lost', 4, null, 'Timing was not active after review.'],
+        ];
+        for (const [companyName, stage, daysAgo, valueCents, notes] of sampleOutcomeRows) {
+          const sampleAccount = accountByName.get(companyName);
+          if (!sampleAccount) continue;
+          const occurredAt = new Date(Date.now() - Number(daysAgo) * 24 * 60 * 60 * 1000).toISOString();
+          await dbCreateCommercialOutcome({
+            id: `outcome-sample-${tenantId}-${stage}-${sampleOutcomeCount + 1}`,
+            tenantId,
+            accountId: sampleAccount.id,
+            stage,
+            valueCents,
+            currency: 'USD',
+            lostReason: stage === 'lost' ? notes : '',
+            notes,
+            source: 'sample_workspace',
+            occurredAt,
+            createdByUserId: 'system',
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+          });
+          sampleOutcomeCount += 1;
+        }
+      }
       if (profile) {
         profile.settings.setupComplete = true;
         profile.settings.sampleDataLoadedAt = now();
@@ -2927,6 +3081,7 @@ export function createStore() {
           jobs: sample.jobs.length,
           configs: sample.configs.length,
           tasks: sample.tasks.length,
+          outcomes: sampleOutcomeCount,
           imported: sample.contacts.length,
           updated: 0,
           skipped: 0,
@@ -2940,13 +3095,20 @@ export function createStore() {
       return paginate(activitiesForTenant(tenantId), query);
     },
 
-    async addActivity(tenantId, userId, payload) {
+    async addActivity(tenantId, userId, payload = {}) {
       assertTenant(tenantId);
+      const submittedSummary = boundedActivityText(payload.summary, 2000);
+      const mappedResult = activityResultLabel(payload);
+      if (!submittedSummary && !mappedResult) {
+        throw new CommercialOutcomeValidationError('Add an activity summary or select a recognized result.');
+      }
+      const occurredAt = normalizeActivityOccurredAt(payload.occurredAt);
       // Load core first: otherwise on a cold tenant this creates a fresh
       // single-item tenant array, persistTenant skips it (status.core false ->
       // COALESCE keeps old DB rows), and the next load overwrites it — the
       // logged activity/follow-up would silently vanish.
       await ensureDataLoaded(tenantId, false);
+      const createdAt = now();
       const activity = {
         id: `act-${Date.now()}-${randomUUID().slice(0, 12)}`,
         tenantId,
@@ -2954,11 +3116,15 @@ export function createStore() {
         contactId: payload.contactId || '',
         normalizedCompanyName: payload.normalizedCompanyName || '',
         type: payload.type || 'note',
-        summary: payload.summary || 'Activity note',
+        summary: submittedSummary || `Recorded ${mappedResult}.`,
         notes: payload.notes || '',
         pipelineStage: payload.pipelineStage || '',
-        occurredAt: now(),
-        createdAt: now(),
+        valueCents: payload.valueCents ?? null,
+        currency: boundedActivityText(payload.currency, 3).toUpperCase(),
+        lostReason: boundedActivityText(payload.lostReason, 240),
+        outcomeNotes: boundedActivityText(payload.outcomeNotes, 2000),
+        occurredAt,
+        createdAt,
         createdByUserId: userId,
         metadata: payload.metadata || {},
       };
@@ -2967,10 +3133,17 @@ export function createStore() {
       // saves ONLY the tenant maps, so global-only writes were invisible in
       // the UI and silently dropped on restart.
       getTenantArray(activitiesByTenant, tenantId).unshift(activity);
-      const itemAccount = activity.accountId ? accountById(activity.accountId, tenantId) : null;
+      const itemAccount = activity.accountId
+        ? accountsForTenant(tenantId).find((item) => item.id === activity.accountId)
+        : null;
       if (itemAccount) {
-        itemAccount.lastContactedAt = activity.occurredAt;
-        if (activity.pipelineStage) itemAccount.outreachStatus = activity.pipelineStage;
+        const currentLastContactedAt = new Date(itemAccount.lastContactedAt || 0).getTime();
+        const activityOccurredAt = new Date(activity.occurredAt).getTime();
+        if (!Number.isFinite(currentLastContactedAt) || activityOccurredAt >= currentLastContactedAt) {
+          itemAccount.lastContactedAt = activity.occurredAt;
+        }
+        const mappedOutreachStatus = accountOutreachStatusForActivity(payload, itemAccount.outreachStatus);
+        if (mappedOutreachStatus) itemAccount.outreachStatus = mappedOutreachStatus;
       }
 
       // Auto-create follow-up task if requested
@@ -2983,7 +3156,7 @@ export function createStore() {
             accountId: payload.accountId,
             type: 'follow_up',
             status: 'pending',
-            summary: `Follow up on outreach sent today to ${payload.contactName || 'contact'}.`,
+            summary: buildActivityFollowUpSummary(activity, payload),
             dueDate: new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString(),
             createdAt: now(),
           };
@@ -3042,7 +3215,7 @@ export function createStore() {
         valueCents: payload.valueCents,
         currency: payload.currency,
         lostReason: payload.lostReason,
-        notes: payload.outcomeNotes || '',
+        notes: buildActivityOutcomeNotes(payload, stage),
         source: 'activity',
         sourceActivityId: activity.id,
       });
@@ -4858,6 +5031,44 @@ export function createStore() {
 
     // Import a pasted target list. Creates accounts for new companies, skips
     // duplicates/invalid rows with per-row reasons, persists once at the end.
+    async serializeAccountImport(tenantId, operation) {
+      assertTenant(tenantId);
+      if (typeof operation !== 'function') throw new TypeError('Account import operation is required.');
+      const queuedAt = performance.now();
+      const previousTail = accountImportTails.get(tenantId) || Promise.resolve();
+      let releaseCurrent;
+      const currentGate = new Promise((resolve) => {
+        releaseCurrent = resolve;
+      });
+      const currentTail = previousTail.catch(() => {}).then(() => currentGate);
+      accountImportTails.set(tenantId, currentTail);
+      await previousTail.catch(() => {});
+      const queueWaitMs = Math.round(performance.now() - queuedAt);
+      if (queueWaitMs > 250) {
+        console.warn(`Slow account import queue: saas/src/store.js serializeAccountImport waited ${queueWaitMs}ms for ${tenantId}`);
+      }
+      try {
+        return await operation();
+      } finally {
+        releaseCurrent();
+        if (accountImportTails.get(tenantId) === currentTail) accountImportTails.delete(tenantId);
+      }
+    },
+
+    async countNewAccountImports(tenantId, text) {
+      assertTenant(tenantId);
+      await ensureDataLoaded(tenantId);
+      const existing = new Set(
+        accountsForTenant(tenantId).map((item) => item.normalizedName).filter(Boolean)
+      );
+      const pending = new Set();
+      for (const row of this.parseAccountImportText(text)) {
+        const key = normalizeKey(row.company);
+        if (key && !existing.has(key)) pending.add(key);
+      }
+      return pending.size;
+    },
+
     async importAccountsList(tenantId, text) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);

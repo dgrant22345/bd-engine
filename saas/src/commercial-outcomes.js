@@ -11,8 +11,13 @@ export const COMMERCIAL_OUTCOME_STAGES = Object.freeze([
 export const COMMERCIAL_OUTCOME_STAGE_SET = new Set(COMMERCIAL_OUTCOME_STAGES);
 
 const COMMERCIAL_OUTCOME_SOURCES = new Set(['manual', 'activity', 'import', 'integration']);
+const COMMERCIAL_VALUE_OUTCOME_STAGES = new Set(['opportunity_created', 'won', 'lost']);
 const MAX_VALUE_CENTS = 9_000_000_000_000;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
+const ACTIVITY_OUTCOME_WARNING = Object.freeze({
+  code: 'commercial_outcome_not_recorded',
+  message: 'The activity was saved, but its commercial outcome was not recorded. Review the activity and try the outcome again.',
+});
 
 export class CommercialOutcomeValidationError extends Error {
   constructor(message, status = 400) {
@@ -39,6 +44,18 @@ function normalizeTimestamp(value, { field = 'occurredAt', allowEmpty = false } 
   return timestamp.toISOString();
 }
 
+export function normalizeActivityOccurredAt(value) {
+  const raw = String(value || '').trim();
+  const timestamp = new Date(raw || Date.now());
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new CommercialOutcomeValidationError('occurredAt must be a valid date and time.');
+  }
+  if (timestamp.getTime() > Date.now()) {
+    throw new CommercialOutcomeValidationError('occurredAt cannot be in the future.');
+  }
+  return timestamp.toISOString();
+}
+
 export function validateCommercialOutcomeInput(payload = {}) {
   const stage = boundedText(payload.stage, 40).toLowerCase();
   if (!COMMERCIAL_OUTCOME_STAGE_SET.has(stage)) {
@@ -51,7 +68,16 @@ export function validateCommercialOutcomeInput(payload = {}) {
   if (!accountId) throw new CommercialOutcomeValidationError('accountId is required.');
 
   let valueCents = null;
-  if (payload.valueCents !== undefined && payload.valueCents !== null && payload.valueCents !== '') {
+  const hasSubmittedValue = payload.valueCents !== undefined
+    && payload.valueCents !== null
+    && payload.valueCents !== '';
+  const submittedCurrency = boundedText(payload.currency, 3);
+  if (!COMMERCIAL_VALUE_OUTCOME_STAGES.has(stage) && (hasSubmittedValue || submittedCurrency)) {
+    throw new CommercialOutcomeValidationError(
+      'valueCents and currency can only be recorded for opportunity_created, won, or lost outcomes.'
+    );
+  }
+  if (hasSubmittedValue) {
     valueCents = Number(payload.valueCents);
     if (!Number.isSafeInteger(valueCents) || valueCents < 0 || valueCents > MAX_VALUE_CENTS) {
       throw new CommercialOutcomeValidationError('valueCents must be a non-negative integer in the supported range.');
@@ -176,10 +202,30 @@ export function productEventTypeForOutcomeStage(stage) {
 
 export function outcomeStageForActivity(payload = {}) {
   const pipelineStage = boundedText(payload.pipelineStage, 40).toLowerCase();
-  if (pipelineStage === 'replied') return 'replied';
+  if (COMMERCIAL_OUTCOME_STAGE_SET.has(pipelineStage)) return pipelineStage;
   if (pipelineStage === 'opportunity') return 'opportunity_created';
   if (pipelineStage === 'contacted' || boundedText(payload.type, 40).toLowerCase() === 'outreach') {
     return 'outreach_logged';
   }
   return '';
+}
+
+export function buildActivityApiResponse(activity = {}, bridgeResult = {}) {
+  const requestedStatus = String(bridgeResult.status || '').trim().toLowerCase();
+  const status = ['recorded', 'not_applicable', 'failed'].includes(requestedStatus)
+    ? requestedStatus
+    : 'not_applicable';
+  const partialSuccess = status === 'failed';
+  return {
+    ...activity,
+    commercialOutcomeStatus: status,
+    commercialOutcome: bridgeResult.outcome || null,
+    partialSuccess,
+    warning: partialSuccess
+      ? {
+          code: String(bridgeResult.warning?.code || ACTIVITY_OUTCOME_WARNING.code),
+          message: String(bridgeResult.warning?.message || ACTIVITY_OUTCOME_WARNING.message),
+        }
+      : null,
+  };
 }

@@ -732,6 +732,7 @@ test('logging outreach creates a durable follow-up task', async () => {
     type: 'outreach',
     summary: 'Sent email outreach to Dana',
     contactName: 'Dana',
+    occurredAt: '2026-08-14T15:00:00.000Z',
     followUpDays: 7,
     metadata: { channels: ['email'] },
   });
@@ -740,7 +741,8 @@ test('logging outreach creates a durable follow-up task', async () => {
   assert.equal(tasks.total, 1);
   assert.equal(tasks.items[0].accountId, account.id);
   assert.equal(tasks.items[0].type, 'follow_up');
-  assert.match(tasks.items[0].summary, /Dana/);
+  assert.equal(tasks.items[0].summary, 'Follow up on outreach logged recorded 2026-08-14 with Dana.');
+  assert.doesNotMatch(tasks.items[0].summary, /today/i);
 });
 
 test('generic company identities do not probe unrelated public ATS slugs', async () => {

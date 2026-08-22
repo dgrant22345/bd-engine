@@ -8,7 +8,7 @@ import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTe
 import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
 import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
@@ -24,7 +24,7 @@ import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
-import { productEventTypeForOutcomeStage } from './commercial-outcomes.js';
+import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './commercial-outcomes.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -35,6 +35,7 @@ const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const MIN_PASSWORD_LENGTH = 10;
+const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
 const referralCreditAmountCents = Number(process.env.BD_REFERRAL_CREDIT_CENTS || 500);
 const internalOwnerEmails = new Set(parseEmailList([
@@ -619,13 +620,13 @@ function getEffectivePlanId(tenant, user) {
   return isInternalOwner(user) ? ownerPlanId : (tenant?.plan || 'trial');
 }
 
-function ensureInternalOwnerEntitlement(tenant, user) {
+function ensureInternalOwnerEntitlement(tenant, user, { persist = true } = {}) {
   if (!tenant || !isInternalOwner(user)) return tenant;
   if (tenant.plan === ownerPlanId && tenant.status === 'active') return tenant;
   const updated = updateTenant(tenant.id, {
     plan: ownerPlanId,
     status: 'active',
-  }) || { ...tenant, plan: ownerPlanId, status: 'active' };
+  }, { persist }) || { ...tenant, plan: ownerPlanId, status: 'active' };
   console.log(`Owner entitlement applied: ${user.email} -> ${tenant.id}`);
   return updated;
 }
@@ -1651,8 +1652,12 @@ self.addEventListener('activate', (event) => {
     if (!rows.length) {
       return sendJson(res, 400, { error: 'Paste one company per line, or CSV with a company column.' });
     }
-    if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts', increment: rows.length })) return;
-    const result = await store.importAccountsList(tenantId, payload.text);
+    const result = await store.serializeAccountImport(tenantId, async () => {
+      const newAccountCount = await store.countNewAccountImports(tenantId, payload.text);
+      if (!await requireEntitlement(res, tenant, user, { feature: 'accounts', resource: 'accounts', increment: newAccountCount })) return null;
+      return store.importAccountsList(tenantId, payload.text);
+    });
+    if (!result) return;
     if (result.count > 0) {
       await recordProductMilestone({
         eventType: 'target_created', tenantId, userId: user.id,
@@ -1807,8 +1812,8 @@ self.addEventListener('activate', (event) => {
     if (req.method === 'POST') {
       const payload = await readJson(req);
       const activity = await store.addActivity(tenantId, user.id, payload);
-      await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity, payload });
-      return sendJson(res, 201, activity);
+      const bridgeResult = await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity, payload });
+      return sendJson(res, 201, buildActivityApiResponse(activity, bridgeResult));
     }
   }
 
@@ -2023,8 +2028,8 @@ self.addEventListener('activate', (event) => {
     };
     const result = await store.addActivity(tenantId, user.id, activityPayload);
     if (!result) return sendJson(res, 404, { error: 'Contact not found' });
-    await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity: result, payload: activityPayload });
-    return sendJson(res, 201, result);
+    const bridgeResult = await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity: result, payload: activityPayload });
+    return sendJson(res, 201, buildActivityApiResponse(result, bridgeResult));
   }
 
   return sendJson(res, 404, { error: 'Not found' });
@@ -2076,12 +2081,18 @@ async function bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, act
   try {
     const outcome = await store.createCommercialOutcomeFromActivity(tenantId, user.id, activity, payload);
     if (outcome) await recordCommercialOutcomeMilestone(outcome, tenant, user);
-    return outcome;
+    return {
+      status: outcome ? 'recorded' : 'not_applicable',
+      outcome: outcome || null,
+    };
   } catch (error) {
     // Activity logging is an established workflow. Preserve its response even
     // if derived ROI tracking fails, while surfacing the bridge failure to ops.
     console.error('Commercial outcome activity bridge failed:', safeErrorSummary(error));
-    return null;
+    return {
+      status: 'failed',
+      outcome: null,
+    };
   }
 }
 
@@ -2501,7 +2512,7 @@ async function handleStartDemo(req, res) {
 }
 
 async function handleSignup(req, res) {
-  const { email, password, name, workspaceName, persona, referralCode, acquisition } = await readJson(req);
+  const { email, password, name, workspaceName, persona, referralCode, acquisition, legalAcceptance } = await readJson(req);
 
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
@@ -2509,9 +2520,15 @@ async function handleSignup(req, res) {
   if (String(password).length < MIN_PASSWORD_LENGTH) {
     return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
   }
+  const acceptedCurrentLegalTerms = legalAcceptance?.accepted === true
+    && legalAcceptance.termsVersion === COMMERCIAL_LEGAL_VERSION
+    && legalAcceptance.privacyVersion === COMMERCIAL_LEGAL_VERSION;
+  if (!acceptedCurrentLegalTerms) {
+    return sendJson(res, 400, { error: 'Review and accept the current Terms and Privacy notice before creating an account.' });
+  }
 
   // Create user
-  const userResult = createUser({ email, name, password });
+  const userResult = createUser({ email, name, password }, { persist: false });
   if (userResult.error) {
     return sendJson(res, 409, { error: userResult.error });
   }
@@ -2525,18 +2542,38 @@ async function handleSignup(req, res) {
     plan: 'trial',
     referredByTenantId: referrerTenant?.id || '',
     storageMode: RELATIONAL_WRITE_NEW_TENANTS ? 'relational' : 'legacy',
+    persist: false,
   });
 
   if (tenantResult.error) {
+    forgetClosedAccount(userResult.user.id, []);
     return sendJson(res, 409, { error: tenantResult.error });
   }
 
-  tenantResult.tenant = ensureInternalOwnerEntitlement(tenantResult.tenant, userResult.user);
+  tenantResult.tenant = ensureInternalOwnerEntitlement(tenantResult.tenant, userResult.user, { persist: false });
   const tenantId = tenantResult.tenant.id;
+  const membership = getMembership(tenantId, userResult.user.id);
+  try {
+    await dbPersistSignupWithLegalConsent({
+      user: userResult.user,
+      tenant: tenantResult.tenant,
+      membership,
+      termsVersion: legalAcceptance.termsVersion,
+      privacyVersion: legalAcceptance.privacyVersion,
+    });
+  } catch (error) {
+    const createdTenantIds = tenantResult.attachedExisting ? [] : [tenantId];
+    forgetClosedAccount(userResult.user.id, createdTenantIds);
+    reportServerError(503, req, error);
+    return sendJson(res, 503, {
+      error: 'Your account could not be created because acceptance records are temporarily unavailable. Please try again.',
+      code: 'signup_persistence_unavailable',
+      requestId: req.requestId,
+    });
+  }
   // Ensure the store also knows the persona
   store.ensureTenant(tenantResult.tenant, userResult.user);
   store.setPersona(tenantId, userPersona);
-  await persistUserWorkspace(userResult.user, tenantResult.tenant);
   const verification = await issueEmailVerification(req, userResult.user);
   const { cookie } = await createSession(userResult.user.id, tenantId);
   setSessionCookie(res, cookie);
@@ -2548,6 +2585,8 @@ async function handleSignup(req, res) {
       persona: userPersona,
       planId: getEffectivePlanId(tenantResult.tenant, userResult.user),
       source: referrerTenant ? 'referral' : buildAcquisitionSource(acquisition),
+      termsVersion: legalAcceptance.termsVersion,
+      privacyVersion: legalAcceptance.privacyVersion,
     },
   });
 
