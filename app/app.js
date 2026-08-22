@@ -5224,8 +5224,9 @@ async function previewSetupCsv() {
       fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
     });
     const companies = Array.isArray(appState.setupPreview?.companies) ? appState.setupPreview.companies : [];
+    // User requested: all imported companies should be tracked by default so they go straight to Watchlist
     appState.setupTrackedCompanies = companies
-      .filter((company) => company.selected && !company.overLimit)
+      .filter((company) => !company.overLimit)
       .map((company) => company.key);
 
     showToast('Preview ready.', 'success');
