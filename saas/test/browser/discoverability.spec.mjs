@@ -58,8 +58,129 @@ test('clean job-search route publishes focused metadata and campaign attribution
   await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://bd-engine-production.up.railway.app/job-search');
 
-  const source = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
-  expect(source).toMatchObject({ source: 'linkedin', campaign: 'role_focus' });
+  const attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution).toMatchObject({
+    version: 2,
+    firstTouch: {
+      source: 'linkedin',
+      campaign: 'role_focus',
+      landingPath: '/job-search',
+      persona: 'jobseeker',
+    },
+    lastNonDirectTouch: {
+      source: 'linkedin',
+      campaign: 'role_focus',
+      landingPath: '/job-search',
+      persona: 'jobseeker',
+    },
+  });
+});
+
+test('first touch and last non-direct touch survive direct revisits through signup', async ({ page }) => {
+  await page.goto('/job-search?utm_source=linkedin&utm_medium=organic&utm_campaign=founder_workflow&utm_content=workflow_video');
+  await page.goto('/');
+
+  let attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution).toMatchObject({
+    version: 2,
+    firstTouch: {
+      source: 'linkedin',
+      medium: 'organic',
+      campaign: 'founder_workflow',
+      content: 'workflow_video',
+      landingPath: '/job-search',
+      persona: 'jobseeker',
+    },
+    lastNonDirectTouch: {
+      source: 'linkedin',
+      campaign: 'founder_workflow',
+    },
+  });
+
+  await page.goto('/ats-checker?utm_source=discord&utm_medium=community&utm_campaign=signal_clinic&utm_content=office_hours');
+  await page.goto('/?signup=1&persona=bd');
+  attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution.firstTouch.source).toBe('linkedin');
+  expect(attribution.lastNonDirectTouch).toMatchObject({
+    source: 'discord',
+    medium: 'community',
+    campaign: 'signal_clinic',
+    content: 'office_hours',
+    landingPath: '/ats-checker',
+    persona: 'bd',
+  });
+
+  let signupPayload = null;
+  await page.route('**/api/auth/signup', async (route) => {
+    signupPayload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Attribution test intercepted signup.' }),
+    });
+  });
+  await page.locator('#signup-name').fill('Attribution "Tester"');
+  await page.locator('#signup-email').fill('attribution-browser@example.com');
+  await page.locator('#signup-password').fill('attribution-password-1');
+  await page.locator('#signup-workspace').fill('Attribution & "Workspace"');
+  await page.locator('#signup-legal-consent').check();
+  await page.locator('#signup-form button[type="submit"]').click();
+  await expect(page.locator('.auth-error')).toContainText('Attribution test intercepted signup.');
+
+  await expect(page.locator('#signup-name')).toHaveValue('Attribution "Tester"');
+  await expect(page.locator('#signup-email')).toHaveValue('attribution-browser@example.com');
+  await expect(page.locator('#signup-workspace')).toHaveValue('Attribution & "Workspace"');
+  await expect(page.locator('#signup-password')).toHaveValue('');
+  await expect(page.locator('#signup-legal-consent')).toBeChecked();
+  await expect(page.locator('#workspace-label')).toContainText('(optional)');
+
+  const passwordToggle = page.locator('[data-password-toggle="signup-password"]');
+  await expect(passwordToggle).toHaveAccessibleName('Show password');
+  await page.locator('#signup-password').fill('retry-password-2');
+  await passwordToggle.click();
+  await expect(page.locator('#signup-password')).toHaveAttribute('type', 'text');
+  await expect(passwordToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(passwordToggle).toHaveAccessibleName('Hide password');
+  await passwordToggle.click();
+  await expect(page.locator('#signup-password')).toHaveAttribute('type', 'password');
+
+  expect(signupPayload.persona).toBe('bd');
+  expect(signupPayload.acquisition).toEqual(attribution);
+  expect(JSON.stringify(signupPayload.acquisition)).not.toMatch(/[?@]|https?:\/\//);
+  const browserStorage = await page.evaluate(() => [
+    ...Object.values(localStorage),
+    ...Object.values(sessionStorage),
+  ].join('\n'));
+  expect(browserStorage).not.toContain('attribution-password-1');
+  expect(browserStorage).not.toContain('retry-password-2');
+});
+
+test('failed login preserves the email but never stores or restores the password', async ({ page }) => {
+  await page.route('**/api/auth/login', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Email or password is incorrect.' }),
+    });
+  });
+  await page.goto('/?login=1');
+  await page.locator('#login-email').fill('returning-recruiter@example.com');
+  await page.locator('#login-password').fill('never-store-this-password');
+  await page.locator('#login-form button[type="submit"]').click();
+
+  await expect(page.locator('.auth-error')).toContainText('Email or password is incorrect.');
+  await expect(page.locator('#login-email')).toHaveValue('returning-recruiter@example.com');
+  await expect(page.locator('#login-password')).toHaveValue('');
+  await page.locator('#login-password').fill('temporary-retry');
+  await page.getByRole('button', { name: 'Show password' }).click();
+  await expect(page.locator('#login-password')).toHaveAttribute('type', 'text');
+
+  const browserStorage = await page.evaluate(() => [
+    ...Object.values(localStorage),
+    ...Object.values(sessionStorage),
+  ].join('\n'));
+  expect(browserStorage).not.toContain('never-store-this-password');
+  expect(browserStorage).not.toContain('temporary-retry');
 });
 
 test('coverage-denominator campaign routes to the ATS audit and preserves attribution', async ({ page }) => {
@@ -145,10 +266,15 @@ test('ATS audit hands the audited list and workflow intent into signup', async (
 
 test('pricing selection persists the intended paid plan through signup', async ({ page }) => {
   await page.goto('/');
+  await expect(page.locator('.pricing-card')).toHaveCount(1);
   const salesPlan = page.locator('.pricing-card', { hasText: 'Sales Professional' });
-  await salesPlan.getByRole('button', { name: 'Get started' }).click();
+  await expect(salesPlan).toContainText('$10');
+  await expect(salesPlan).not.toContainText('Job Seeker');
+  await expect(page.locator('#referrals')).toHaveCount(0);
+  await salesPlan.getByRole('button', { name: 'Start 14-day trial' }).click();
 
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeFocused();
   await expect(page.locator('[role="status"]', { hasText: 'Sales Professional selected.' })).toBeVisible();
   const planIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
   expect(planIntent).toMatchObject({
@@ -161,12 +287,45 @@ test('pricing selection persists the intended paid plan through signup', async (
   });
 });
 
+test('job-seeker route shows only its relevant paid offer and preserves plan intent', async ({ page }) => {
+  await page.goto('/job-search');
+
+  await expect(page.locator('.pricing-card')).toHaveCount(1);
+  const jobSeekerPlan = page.locator('.pricing-card', { hasText: 'Job Seeker' });
+  await expect(jobSeekerPlan).toContainText('$5');
+  await expect(jobSeekerPlan).not.toContainText('Sales Professional');
+  await jobSeekerPlan.getByRole('button', { name: 'Start 14-day trial' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.locator('[role="status"]', { hasText: 'Job Seeker selected.' })).toBeVisible();
+  const planIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
+  expect(planIntent).toMatchObject({
+    persona: 'jobseeker',
+    intent: 'start-trial',
+    planIntent: 'jobseeker',
+  });
+});
+
+test('recruiter hero prioritizes the attributed ATS audit over the live demo', async ({ page }) => {
+  await page.goto('/');
+
+  const audit = page.locator('.hero-cta a.btn-primary', { hasText: 'Run free ATS audit' });
+  await expect(audit).toBeVisible();
+  await expect(audit).toHaveAttribute('href', /utm_source=homepage/);
+  await expect(audit).toHaveAttribute('href', /utm_medium=product/);
+  await expect(audit).toHaveAttribute('href', /utm_campaign=coverage_audit/);
+  await expect(audit).toHaveAttribute('href', /utm_content=recruiter_hero_primary/);
+  await expect(page.locator('.hero-cta [data-demo-start]')).toHaveClass(/btn-ghost/);
+  await expect(page.locator('.hero-cta #hero-signup')).toHaveCount(0);
+  await expect(page.locator('#nav-signup')).toHaveText('Start free trial');
+});
+
 test('Terms review returns to the pricing decision instead of opening signup', async ({ page }) => {
   await page.goto('/?legal=terms');
   await page.getByRole('button', { name: 'Review pricing' }).click();
 
   await expect(page).toHaveURL((url) => !url.searchParams.has('legal') && url.hash === '#pricing');
-  await expect(page.getByRole('heading', { name: 'Try the workflow before choosing a plan' })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'One focused plan, 14 days free' })).toBeFocused();
   await expect(page.locator('#signup-form')).toHaveCount(0);
 });
 

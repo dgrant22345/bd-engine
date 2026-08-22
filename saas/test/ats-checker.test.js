@@ -112,10 +112,13 @@ test('ATS workflow links carry signup, persona, monitoring, and plan intent', ()
   assert.equal(staffingUrl.searchParams.get('persona'), 'bd');
   assert.equal(staffingUrl.searchParams.get('intent'), 'monitor-audited-career-sites');
   assert.equal(staffingUrl.searchParams.get('plan'), 'trial');
+  assert.equal(staffingUrl.searchParams.get('utm_source'), 'ats-checker');
+  assert.equal(staffingUrl.searchParams.get('utm_content'), 'staffing_result_cta');
 
   const jobSearchUrl = new URL(buildWorkflowSignupHref('jobseeker'), 'https://bd-engine.example');
   assert.equal(jobSearchUrl.pathname, '/job-search');
   assert.equal(jobSearchUrl.searchParams.get('signup'), '1');
   assert.equal(jobSearchUrl.searchParams.get('persona'), 'jobseeker');
   assert.equal(jobSearchUrl.searchParams.get('plan'), 'jobseeker');
+  assert.equal(jobSearchUrl.searchParams.get('utm_content'), 'jobseeker_result_cta');
 });

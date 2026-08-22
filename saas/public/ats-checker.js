@@ -13,6 +13,9 @@ const PROVIDERS = [
 ];
 
 export const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
+const ACQUISITION_STORAGE_KEY = 'bd_acquisition';
+const ACQUISITION_STORAGE_VERSION = 2;
+const PUBLIC_ACQUISITION_PATHS = new Set(['/', '/job-search', '/ats-checker']);
 
 export function buildAuditOnboardingIntent(audit, persona = 'bd') {
   const normalizedPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
@@ -50,6 +53,7 @@ export function buildWorkflowSignupHref(persona = 'bd') {
     utm_source: 'ats-checker',
     utm_medium: 'tool',
     utm_campaign: 'coverage_audit_result',
+    utm_content: normalizedPersona === 'jobseeker' ? 'jobseeker_result_cta' : 'staffing_result_cta',
   });
   return `${normalizedPersona === 'jobseeker' ? '/job-search' : '/'}?${params.toString()}`;
 }
@@ -334,21 +338,102 @@ function getVisitorId() {
   return visitorId;
 }
 
-function campaignSource() {
+function normalizeAcquisitionToken(value) {
+  const raw = String(value || '').trim();
+  if (raw.includes('@') || /(?:[a-z]+:\/\/|[\\/?#])/i.test(raw)) return '';
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .slice(0, 32);
+}
+
+function normalizeAcquisitionLandingPath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const pathname = new URL(raw, window.location.origin).pathname.replace(/\/+$/, '') || '/';
+    return PUBLIC_ACQUISITION_PATHS.has(pathname) ? pathname : '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeAcquisitionTouch(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const touch = {
+    source: normalizeAcquisitionToken(value.source),
+    medium: normalizeAcquisitionToken(value.medium),
+    campaign: normalizeAcquisitionToken(value.campaign),
+    content: normalizeAcquisitionToken(value.content),
+    landingPath: normalizeAcquisitionLandingPath(value.landingPath),
+    persona: value.persona === 'jobseeker' ? 'jobseeker' : (value.persona === 'bd' ? 'bd' : ''),
+  };
+  return Object.fromEntries(Object.entries(touch).filter(([, item]) => item));
+}
+
+function persistCheckerAcquisition() {
   const params = new URLSearchParams(window.location.search);
-  const sanitize = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '-').slice(0, 32);
-  const source = sanitize(params.get('utm_source')) || 'direct';
-  const campaign = sanitize(params.get('utm_campaign'));
+  const hasTaggedTouch = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content']
+    .some((key) => Boolean(params.get(key))) || Boolean(params.get('ref'));
+  const hasExternalReferrer = (() => {
+    if (!document.referrer) return false;
+    try { return new URL(document.referrer).origin !== window.location.origin; } catch { return false; }
+  })();
+  const currentTouch = normalizeAcquisitionTouch({
+    source: normalizeAcquisitionToken(params.get('utm_source'))
+      || (params.get('ref') ? 'referral' : '')
+      || (hasTaggedTouch ? 'campaign' : '')
+      || (hasExternalReferrer ? 'referrer' : 'direct'),
+    medium: normalizeAcquisitionToken(params.get('utm_medium')),
+    campaign: normalizeAcquisitionToken(params.get('utm_campaign')),
+    content: normalizeAcquisitionToken(params.get('utm_content')),
+    landingPath: window.location.pathname,
+    persona: params.get('persona') === 'jobseeker' ? 'jobseeker' : 'bd',
+  });
+  if (!currentTouch.medium && ['referral', 'referrer'].includes(currentTouch.source)) {
+    currentTouch.medium = 'referral';
+  }
+
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(ACQUISITION_STORAGE_KEY) || '{}'); } catch {}
+  const legacyTouch = normalizeAcquisitionTouch(stored);
+  let firstTouch = normalizeAcquisitionTouch(stored?.firstTouch || legacyTouch);
+  if (!firstTouch.source) firstTouch = { ...currentTouch };
+  if (!firstTouch.landingPath) firstTouch.landingPath = currentTouch.landingPath;
+  if (!firstTouch.persona) firstTouch.persona = currentTouch.persona;
+
+  let lastNonDirectTouch = normalizeAcquisitionTouch(
+    stored?.lastNonDirectTouch
+      || (legacyTouch.source && legacyTouch.source !== 'direct' ? legacyTouch : {}),
+  );
+  if (currentTouch.source && currentTouch.source !== 'direct') lastNonDirectTouch = { ...currentTouch };
+  const acquisition = {
+    version: ACQUISITION_STORAGE_VERSION,
+    firstTouch,
+    lastNonDirectTouch,
+  };
+  try { localStorage.setItem(ACQUISITION_STORAGE_KEY, JSON.stringify(acquisition)); } catch {}
+  return acquisition;
+}
+
+function campaignSource(acquisition = {}) {
+  const touch = acquisition.lastNonDirectTouch?.source
+    ? acquisition.lastNonDirectTouch
+    : acquisition.firstTouch;
+  const source = normalizeAcquisitionToken(touch?.source) || 'direct';
+  const campaign = normalizeAcquisitionToken(touch?.campaign);
   return (campaign ? `${source}.${campaign}` : source).slice(0, 48);
 }
 
-function trackCheckerEvent(eventType = 'pageview') {
+function trackCheckerEvent(eventType = 'pageview', acquisition = {}) {
   const body = JSON.stringify({
     visitorId: getVisitorId(),
     eventType,
     path: '/ats-checker',
     referrer: document.referrer || '',
-    source: campaignSource(),
+    source: campaignSource(acquisition),
   });
   if (navigator.sendBeacon) {
     navigator.sendBeacon('/api/analytics/visit', new Blob([body], { type: 'application/json' }));
@@ -364,13 +449,14 @@ function trackCheckerEvent(eventType = 'pageview') {
 }
 
 if (typeof document !== 'undefined') {
+  const acquisition = persistCheckerAcquisition();
   const checkerForm = document.getElementById('ats-checker-form');
   let sampleSubmissionPending = false;
   checkerForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     const input = document.getElementById('career-urls');
     renderResult(buildCoverageAudit(input?.value));
-    trackCheckerEvent(sampleSubmissionPending ? 'ats_sample_used' : 'ats_audit_completed');
+    trackCheckerEvent(sampleSubmissionPending ? 'ats_sample_used' : 'ats_audit_completed', acquisition);
     sampleSubmissionPending = false;
   });
   document.getElementById('example-audit')?.addEventListener('click', () => {
@@ -384,5 +470,5 @@ if (typeof document !== 'undefined') {
     sampleSubmissionPending = true;
     checkerForm.requestSubmit();
   });
-  trackCheckerEvent();
+  trackCheckerEvent('pageview', acquisition);
 }

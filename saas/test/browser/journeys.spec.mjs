@@ -70,16 +70,6 @@ async function completeSetup(page, app) {
     // Some flows land on the dashboard directly after completion.
   }
   await expect(app.locator('#setup-profile-form')).toHaveCount(0, { timeout: 10000 });
-  // Opening the dashboard can queue the product tour, whose overlay intercepts
-  // all pointer events — end it before the journey continues.
-  const endTour = app.locator('[data-action="end-tour"]');
-  try {
-    await endTour.waitFor({ state: 'visible', timeout: 4000 });
-    await endTour.click();
-    await app.locator('.tour-overlay').waitFor({ state: 'detached', timeout: 5000 });
-  } catch {
-    // No tour queued for this flow.
-  }
 }
 
 async function startDemo(page) {
@@ -129,7 +119,7 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
-test('post-setup tour is labelled, keyboard-contained, dismissible, and restores focus', async ({ page }) => {
+test('post-setup dashboard is usable and its optional tour is accessible', async ({ page }) => {
   const { app } = await signup(page);
   const profile = app.locator('#setup-profile-form');
   const setupTitle = app.locator('#setup-title');
@@ -150,6 +140,13 @@ test('post-setup tour is labelled, keyboard-contained, dismissible, and restores
   await app.locator('[data-action="setup-open-dashboard"]').click();
 
   const dialog = app.getByRole('dialog', { name: 'Your workspace is ready' });
+  await expect(dialog).toHaveCount(0);
+  await expect(app.locator('.shell')).not.toHaveAttribute('inert', '');
+  const quickTour = app.getByRole('button', { name: 'Quick tour' });
+  await expect(quickTour).toBeVisible({ timeout: 10000 });
+  await expect(app.locator('[data-first-value-step="target"] .activation-step__cta')).toBeVisible();
+
+  await quickTour.click();
   await expect(dialog).toBeVisible({ timeout: 10000 });
   await expect(app.locator('.shell')).toHaveAttribute('inert', '');
   const skip = dialog.getByRole('button', { name: 'Skip tour' });
@@ -164,7 +161,7 @@ test('post-setup tour is labelled, keyboard-contained, dismissible, and restores
   await next.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(app.locator('.shell')).not.toHaveAttribute('inert', '');
-  await expect(app.locator('#view-title')).toBeFocused();
+  await expect(quickTour).toBeFocused();
 });
 
 test('mobile setup keeps the active step and readiness hierarchy compact', async ({ page }) => {
@@ -202,15 +199,9 @@ test('sample setup journey: loaded data updates readiness before launch', async 
   await expect(app.locator('.setup-summary-grid')).toContainText('Jobs');
 
   await app.locator('[data-action="setup-open-dashboard"]').click();
-  const endTour = app.locator('[data-action="end-tour"]');
-  try {
-    await endTour.waitFor({ state: 'visible', timeout: 4000 });
-    await endTour.click();
-  } catch {
-    // The tour may already be dismissed for this browser profile.
-  }
+  await expect(app.locator('[data-dash-section="queue"]')).toBeVisible({ timeout: 15000 });
   await gotoAppRoute(page, '#/accounts');
-  const rows = app.locator('table tbody tr:not(.quick-log-row)');
+  const rows = app.locator('.accounts-table tbody tr:not(.quick-log-row)');
   await expect(rows).toHaveCount(3, { timeout: 10000 });
   await expect(rows.first()).toContainText(/greenhouse|lever|ashby/i);
   await expect(app.locator('table tbody')).not.toContainText(/no board|missing inputs/i);
@@ -257,13 +248,6 @@ test('job seeker journey keeps company, network, role, and outreach language', a
   await expect(app.locator('.setup-summary-grid')).not.toContainText('Accounts');
 
   await app.locator('[data-action="setup-open-dashboard"]').click();
-  const endTour = app.locator('[data-action="end-tour"]');
-  try {
-    await endTour.waitFor({ state: 'visible', timeout: 4000 });
-    await endTour.click();
-  } catch {
-    // The tour may already be dismissed for this browser profile.
-  }
   const openRole = app.getByRole('link', { name: 'Open role', exact: true }).first();
   await expect(openRole).toBeVisible({ timeout: 10000 });
   await expect(openRole).toHaveAttribute('href', /^https?:\/\//);
@@ -313,12 +297,6 @@ test('commercial loop: quick-start watchlist becomes a measurable account outcom
   await expect(app.locator('.setup-summary-grid')).toContainText('Accounts added', { timeout: 15000 });
   await expect(app.locator('.setup-summary-grid')).toContainText('1');
   await app.locator('[data-action="setup-open-dashboard"]').click();
-
-  const endTour = app.locator('[data-action="end-tour"]');
-  const tourAppeared = await endTour.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false);
-  if (tourAppeared) {
-    await endTour.click();
-  }
 
   await gotoAppRoute(page, '#/accounts');
   await expect(app.locator('table tbody')).toContainText('Acme Staffing Test', { timeout: 15000 });
@@ -427,6 +405,10 @@ test('analytics admin journey: campaign and activation milestones are visible', 
   await expect(funnel.locator('[data-analytics-event="ats_audit_completed"]')).toContainText(/[1-9][\d,]* events?/);
   await expect(funnel.locator('[data-analytics-event="signup_completed"]')).toContainText(/[1-9][\d,]* workspaces?/);
   await expect(funnel.locator('[data-analytics-event="setup_completed"]')).toContainText(/[1-9][\d,]* workspaces?/);
+  await expect(funnel.locator('[data-analytics-kpi="seven-day-activation"]')).toBeVisible();
+  const sourceQuality = analyticsSection.getByRole('table', { name: 'Activation quality by first-touch source' });
+  await expect(sourceQuality).toBeVisible();
+  await expect(sourceQuality.locator('[data-analytics-source="linkedin"]')).toBeVisible();
   await expect(analyticsSection).toContainText('not a person-level cohort report');
 });
 

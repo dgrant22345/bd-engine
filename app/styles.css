@@ -4404,6 +4404,26 @@ a {
   max-width: 720px;
 }
 
+.activation-path__tour {
+  margin-top: 10px;
+}
+
+.analytics-source-breakdown {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.analytics-source-breakdown h5,
+.analytics-source-breakdown p {
+  margin: 0;
+}
+
+.analytics-source-breakdown .table-meta {
+  display: block;
+  margin-top: 2px;
+}
+
 .activation-path__progress {
   width: min(240px, 32%);
   flex: 0 0 auto;

@@ -2236,7 +2236,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
   }
 
   try {
-    const [totals, recent, byDay, topPaths, topSources, funnel] = await Promise.all([
+    const [totals, recent, byDay, topPaths, topSources, funnel, activation, activationBySource] = await Promise.all([
       pool.query("SELECT COUNT(*)::int AS visits, COUNT(DISTINCT visitor_id)::int AS visitors FROM analytics_events WHERE event_type = 'pageview'"),
       pool.query(
         `SELECT
@@ -2284,6 +2284,90 @@ export async function dbGetAnalyticsSummary(days = 30) {
          ORDER BY events DESC, event_type ASC`,
         [sinceDay]
       ),
+      pool.query(
+        `WITH signups AS (
+           SELECT tenant_id, MIN(created_at::timestamptz) AS signup_at
+           FROM analytics_events
+           WHERE day >= $1 AND event_type = 'signup_completed' AND tenant_id <> ''
+           GROUP BY tenant_id
+         ), milestone_flags AS (
+           SELECT
+             signups.tenant_id,
+             signups.signup_at,
+             COALESCE(BOOL_OR(events.event_type = 'setup_completed'), FALSE) AS has_setup,
+             COALESCE(BOOL_OR(events.event_type = 'target_created'), FALSE) AS has_target,
+             COALESCE(BOOL_OR(events.event_type IN ('board_resolved', 'useful_jobs_found')), FALSE) AS has_signal,
+             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_logged')), FALSE) AS has_action
+           FROM signups
+           LEFT JOIN analytics_events AS events
+             ON events.tenant_id = signups.tenant_id
+            AND events.created_at::timestamptz >= signups.signup_at
+            AND events.created_at::timestamptz <= signups.signup_at + INTERVAL '7 days'
+           GROUP BY signups.tenant_id, signups.signup_at
+         )
+         SELECT
+           COUNT(*)::int AS cohort_signups,
+           COUNT(*) FILTER (WHERE has_setup AND has_target AND has_signal AND has_action)::int AS activated_workspaces,
+           COUNT(*) FILTER (
+             WHERE NOT (has_setup AND has_target AND has_signal AND has_action)
+               AND signup_at > CURRENT_TIMESTAMP - INTERVAL '7 days'
+           )::int AS pending_window
+         FROM milestone_flags`,
+        [sinceDay]
+      ),
+      pool.query(
+        `WITH signups AS (
+           SELECT DISTINCT ON (tenant_id)
+             tenant_id,
+             created_at::timestamptz AS signup_at,
+             CASE
+               WHEN COALESCE(metadata->>'firstTouchSource', '') ~ '^[a-z0-9_.-]{1,32}$'
+                 THEN metadata->>'firstTouchSource'
+               ELSE 'direct'
+             END AS first_touch_source,
+             CASE
+               WHEN COALESCE(metadata->>'firstTouchCampaign', '') ~ '^[a-z0-9_.-]{1,32}$'
+                 THEN metadata->>'firstTouchCampaign'
+               ELSE ''
+             END AS first_touch_campaign,
+             CASE WHEN metadata->>'persona' IN ('bd', 'jobseeker') THEN metadata->>'persona' ELSE '' END AS persona
+           FROM analytics_events
+           WHERE day >= $1 AND event_type = 'signup_completed' AND tenant_id <> ''
+           ORDER BY tenant_id, created_at::timestamptz ASC
+         ), milestone_flags AS (
+           SELECT
+             signups.tenant_id,
+             signups.signup_at,
+             signups.first_touch_source,
+             signups.first_touch_campaign,
+             signups.persona,
+             COALESCE(BOOL_OR(events.event_type = 'setup_completed'), FALSE) AS has_setup,
+             COALESCE(BOOL_OR(events.event_type = 'target_created'), FALSE) AS has_target,
+             COALESCE(BOOL_OR(events.event_type IN ('board_resolved', 'useful_jobs_found')), FALSE) AS has_signal,
+             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_logged')), FALSE) AS has_action
+           FROM signups
+           LEFT JOIN analytics_events AS events
+             ON events.tenant_id = signups.tenant_id
+            AND events.created_at::timestamptz >= signups.signup_at
+            AND events.created_at::timestamptz <= signups.signup_at + INTERVAL '7 days'
+           GROUP BY signups.tenant_id, signups.signup_at, signups.first_touch_source, signups.first_touch_campaign, signups.persona
+         )
+         SELECT
+           first_touch_source,
+           first_touch_campaign,
+           persona,
+           COUNT(*)::int AS signups,
+           COUNT(*) FILTER (WHERE has_setup AND has_target AND has_signal AND has_action)::int AS activated_workspaces,
+           COUNT(*) FILTER (
+             WHERE NOT (has_setup AND has_target AND has_signal AND has_action)
+               AND signup_at > CURRENT_TIMESTAMP - INTERVAL '7 days'
+           )::int AS pending_window
+         FROM milestone_flags
+         GROUP BY first_touch_source, first_touch_campaign, persona
+         ORDER BY activated_workspaces DESC, signups DESC, first_touch_source ASC
+         LIMIT 8`,
+        [sinceDay]
+      ),
     ]);
 
     return {
@@ -2302,6 +2386,20 @@ export async function dbGetAnalyticsSummary(days = 30) {
       topPaths: topPaths.rows.map((row) => ({ path: row.path || '/', visits: row.visits, visitors: row.visitors })),
       topSources: topSources.rows.map((row) => ({ source: row.source || 'direct', visits: row.visits, visitors: row.visitors })),
       funnel: funnel.rows.map((row) => ({ eventType: row.event_type, events: row.events, workspaces: row.workspaces, users: row.users })),
+      activation: {
+        windowDays: 7,
+        cohortSignups: activation.rows[0]?.cohort_signups || 0,
+        workspaces: activation.rows[0]?.activated_workspaces || 0,
+        pendingWindow: activation.rows[0]?.pending_window || 0,
+      },
+      activationBySource: activationBySource.rows.map((row) => ({
+        source: row.first_touch_source || 'direct',
+        campaign: row.first_touch_campaign || '',
+        persona: row.persona || '',
+        signups: row.signups || 0,
+        workspaces: row.activated_workspaces || 0,
+        pendingWindow: row.pending_window || 0,
+      })),
     };
   } catch (err) {
     console.error('DB: Failed to load analytics summary:', safeErrorSummary(err));
@@ -2396,7 +2494,93 @@ function summarizeAnalyticsRows(rows, sinceDay, today) {
       workspaces: new Set(eventRows.map((row) => row.tenantId).filter(Boolean)).size,
       users: new Set(eventRows.map((row) => row.userId).filter(Boolean)).size,
     })).sort((a, b) => b.events - a.events || a.eventType.localeCompare(b.eventType)),
+    activation: summarizeActivationCohort(rows, sinceDay),
+    activationBySource: summarizeActivationBySource(rows, sinceDay),
   };
+}
+
+function summarizeActivationCohort(rows, sinceDay, nowMs = Date.now()) {
+  const windowDays = 7;
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const signupByTenant = new Map();
+  for (const row of rows) {
+    if (row.eventType !== 'signup_completed' || !row.tenantId || row.day < sinceDay) continue;
+    const signupAt = Date.parse(row.createdAt || '');
+    if (!Number.isFinite(signupAt)) continue;
+    const existing = signupByTenant.get(row.tenantId);
+    if (!Number.isFinite(existing) || signupAt < existing) signupByTenant.set(row.tenantId, signupAt);
+  }
+
+  let workspaces = 0;
+  let pendingWindow = 0;
+  for (const [tenantId, signupAt] of signupByTenant) {
+    const milestones = new Set(rows
+      .filter((row) => row.tenantId === tenantId)
+      .filter((row) => {
+        const occurredAt = Date.parse(row.createdAt || '');
+        return Number.isFinite(occurredAt) && occurredAt >= signupAt && occurredAt <= signupAt + windowMs;
+      })
+      .map((row) => row.eventType));
+    const activated = milestones.has('setup_completed')
+      && milestones.has('target_created')
+      && (milestones.has('board_resolved') || milestones.has('useful_jobs_found'))
+      && (milestones.has('outreach_generated') || milestones.has('outreach_logged'));
+    if (activated) workspaces += 1;
+    else if (nowMs - signupAt < windowMs) pendingWindow += 1;
+  }
+
+  return {
+    windowDays,
+    cohortSignups: signupByTenant.size,
+    workspaces,
+    pendingWindow,
+  };
+}
+
+function summarizeActivationBySource(rows, sinceDay, nowMs = Date.now()) {
+  const windowMs = 7 * 24 * 60 * 60 * 1000;
+  const signupByTenant = new Map();
+  for (const row of rows) {
+    if (row.eventType !== 'signup_completed' || !row.tenantId || row.day < sinceDay) continue;
+    const signupAt = Date.parse(row.createdAt || '');
+    if (!Number.isFinite(signupAt)) continue;
+    const existing = signupByTenant.get(row.tenantId);
+    if (!existing || signupAt < existing.signupAt) signupByTenant.set(row.tenantId, { row, signupAt });
+  }
+
+  const groups = new Map();
+  for (const [tenantId, signup] of signupByTenant) {
+    const metadata = signup.row.metadata && typeof signup.row.metadata === 'object' ? signup.row.metadata : {};
+    const source = safeAnalyticsDimension(metadata.firstTouchSource) || 'direct';
+    const campaign = safeAnalyticsDimension(metadata.firstTouchCampaign);
+    const persona = ['bd', 'jobseeker'].includes(metadata.persona) ? metadata.persona : '';
+    const key = `${source}\u0000${campaign}\u0000${persona}`;
+    if (!groups.has(key)) groups.set(key, { source, campaign, persona, signups: 0, workspaces: 0, pendingWindow: 0 });
+    const group = groups.get(key);
+    group.signups += 1;
+    const milestones = new Set(rows
+      .filter((row) => row.tenantId === tenantId)
+      .filter((row) => {
+        const occurredAt = Date.parse(row.createdAt || '');
+        return Number.isFinite(occurredAt) && occurredAt >= signup.signupAt && occurredAt <= signup.signupAt + windowMs;
+      })
+      .map((row) => row.eventType));
+    const activated = milestones.has('setup_completed')
+      && milestones.has('target_created')
+      && (milestones.has('board_resolved') || milestones.has('useful_jobs_found'))
+      && (milestones.has('outreach_generated') || milestones.has('outreach_logged'));
+    if (activated) group.workspaces += 1;
+    else if (nowMs - signup.signupAt < windowMs) group.pendingWindow += 1;
+  }
+
+  return [...groups.values()]
+    .sort((a, b) => b.workspaces - a.workspaces || b.signups - a.signups || a.source.localeCompare(b.source))
+    .slice(0, 8);
+}
+
+function safeAnalyticsDimension(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return /^[a-z0-9_.-]{1,32}$/.test(raw) ? raw : '';
 }
 
 function summarizeAnalyticsGroup(groupMap, key) {

@@ -17,7 +17,7 @@ import { canDeleteWorkspaceData, canManageBilling, canMutateWorkspace } from './
 import { consumeMemoryRateLimitBucket, hashRateLimitKey } from './rate-limit.js';
 import { isEmailVerificationRequired, requiresVerifiedEmail } from './verification-policy.js';
 import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-closure.js';
-import { buildAcquisitionSource, buildProductEvent } from './product-analytics.js';
+import { buildAcquisitionDimensions, buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
@@ -2582,9 +2582,11 @@ async function handleSignup(req, res) {
     eventType: 'signup_completed', tenantId, userId: userResult.user.id,
     eventKey: userResult.user.id,
     dimensions: {
-      persona: userPersona,
+      ...buildAcquisitionDimensions(acquisition, {
+        persona: userPersona,
+        forceLastNonDirectSource: referrerTenant ? 'referral' : '',
+      }),
       planId: getEffectivePlanId(tenantResult.tenant, userResult.user),
-      source: referrerTenant ? 'referral' : buildAcquisitionSource(acquisition),
       termsVersion: legalAcceptance.termsVersion,
       privacyVersion: legalAcceptance.privacyVersion,
     },

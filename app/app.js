@@ -17,7 +17,6 @@ const defaultAdminCollapsed = {
   'alert-thresholds': true,
 };
 
-const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
 const ONBOARDING_INTENT_ANONYMOUS_KEY = 'bd_onboarding_intent';
 const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_ANONYMOUS_KEY}:v2:`;
 const onboardingIntentParams = new URLSearchParams(window.location.search);
@@ -162,7 +161,6 @@ const appState = {
   stageTimestamps: readJsonSetting('bd_stage_ts', {}),
   // Phase 6: Commercial-grade features
   onboardingDone: localStorage.getItem('bd_onboarding_done') === 'true',
-  postSetupTourPending: localStorage.getItem(POST_SETUP_TOUR_PENDING_KEY) === 'true',
   tourActive: false,
   tourTrigger: null,
   dashboardLayout: readJsonSetting('bd_dash_layout', null),
@@ -1597,59 +1595,6 @@ function renderDuplicatePanel(dupeGroups) {
     </section>`;
 }
 
-/* ── Phase 6: Guided onboarding tour ── */
-function renderOnboardingTour() {
-  if (appState.onboardingDone) return '';
-  return `
-    <div class="onboarding-overlay" id="onboarding-overlay">
-      <div class="onboarding-modal">
-        <div class="onboarding-header">
-          <h2>Welcome to BD Engine</h2>
-          <p>Let's get you set up in 3 steps.</p>
-        </div>
-        <div class="onboarding-steps">
-          <div class="onboarding-step" data-step="1">
-            <div class="onboarding-step-number">1</div>
-            <div class="onboarding-step-content">
-              <h4>Import your target accounts</h4>
-              <p>Go to <strong>Accounts</strong> and paste a list of companies or import a CSV. You can also add them one at a time.</p>
-            </div>
-          </div>
-          <div class="onboarding-step" data-step="2">
-            <div class="onboarding-step-number">2</div>
-            <div class="onboarding-step-content">
-              <h4>Run ATS discovery</h4>
-              <p>Head to <strong>Admin</strong> and click "Run ATS discovery" to automatically find job boards for your accounts.</p>
-            </div>
-          </div>
-          <div class="onboarding-step" data-step="3">
-            <div class="onboarding-step-number">3</div>
-            <div class="onboarding-step-content">
-              <h4>Work the ranked queue</h4>
-              <p>Your <strong>Dashboard</strong> will now show prioritized accounts with hiring signals, ready for outreach.</p>
-            </div>
-          </div>
-        </div>
-        <div class="onboarding-actions">
-          <button class="primary-button" id="onboarding-dismiss">Get started</button>
-          <button class="ghost-button" id="onboarding-skip">Skip tour</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-function wireOnboarding() {
-  const overlay = document.getElementById('onboarding-overlay');
-  if (!overlay) return;
-  const dismiss = () => {
-    appState.onboardingDone = true;
-    localStorage.setItem('bd_onboarding_done', 'true');
-    overlay.remove();
-  };
-  document.getElementById('onboarding-dismiss')?.addEventListener('click', dismiss);
-  document.getElementById('onboarding-skip')?.addEventListener('click', dismiss);
-}
-
 /* ── Phase 6: Outreach sequences ── */
 function renderOutreachSequencePanel(accountId) {
   const seqs = appState.outreachSequences.filter(s => s.accountId === accountId);
@@ -2623,6 +2568,10 @@ function bindEvents() {
       endTour({ skipped: true });
       return;
     }
+    if (actionName === 'start-product-tour') {
+      startProductTour();
+      return;
+    }
     if (actionName === 'setup-browse-csv') {
       document.getElementById('setup-csv-file')?.click();
       return;
@@ -2693,7 +2642,6 @@ function bindEvents() {
       return;
     }
     if (actionName === 'setup-open-dashboard') {
-      queuePostSetupTour();
       invalidateAppData();
       await loadBootstrap(true, { includeFilters: true });
       location.hash = '#/dashboard';
@@ -4055,6 +4003,7 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
           <p class="eyebrow">First value</p>
           <h3 id="first-value-title">Get to your first ranked recommendation</h3>
           <p class="muted small">${escapeHtml(summaryCopy)}</p>
+          <button class="ghost-button ghost-button--xs activation-path__tour" type="button" data-action="start-product-tour">Quick tour</button>
         </div>
         <div class="activation-path__progress" aria-label="${completeCount} of ${steps.length} complete">
           <strong>${completeCount} of ${steps.length} complete</strong>
@@ -6059,7 +6008,6 @@ async function renderDashboardView(options = {}) {
       });
     }, 0);
   }
-  maybeStartPendingProductTour();
 }
 
 async function renderAccountsView() {
@@ -6737,15 +6685,29 @@ const ACQUISITION_FUNNEL_STAGES = [
   { eventType: 'demo_started', label: 'Demo starts', description: 'Read-only workspace opened', tone: 'accent', unit: 'event' },
   { eventType: 'signup_started', label: 'Signup opens', description: 'Signup form opened', tone: 'warning', unit: 'event' },
   { eventType: 'signup_completed', label: 'Trials created', description: 'New trial workspaces', tone: 'success', unit: 'workspace' },
-  { eventType: 'setup_completed', label: 'Setup complete', description: 'Activated workspaces', tone: 'success', unit: 'workspace' },
+  { eventType: 'setup_completed', label: 'Setup complete', description: 'Workspace configured', tone: 'accent', unit: 'workspace' },
   { eventType: 'target_created', label: 'First targets', description: 'Workspaces creating a target', tone: 'success', unit: 'workspace' },
   { eventType: 'useful_jobs_found', label: 'Useful roles found', description: 'Workspaces finding live roles', tone: 'success', unit: 'workspace' },
+  { eventType: 'outreach_generated', label: 'First action', description: 'Workspaces generating outreach', tone: 'success', unit: 'workspace' },
 ];
 
 function renderAcquisitionFunnel(analytics = {}) {
   const rows = Array.isArray(analytics.funnel) ? analytics.funnel : [];
   const byEvent = new Map(rows.map((row) => [row.eventType, row]));
   const lookbackDays = Math.max(1, Number(analytics.lookbackDays || 30));
+  const activation = analytics.activation || {};
+  const activatedWorkspaces = Math.max(0, Number(activation.workspaces || 0));
+  const cohortSignups = Math.max(0, Number(activation.cohortSignups || 0));
+  const pendingWindow = Math.max(0, Number(activation.pendingWindow || 0));
+  const windowDays = Math.max(1, Number(activation.windowDays || 7));
+  const sourceRows = Array.isArray(analytics.activationBySource) ? analytics.activationBySource : [];
+  const activationCard = `
+    <article class="story-card story-card--success" data-analytics-kpi="seven-day-activation">
+      <span class="story-card__label">${formatNumber(windowDays)}-day activation</span>
+      <strong>${formatNumber(activatedWorkspaces)} ${activatedWorkspaces === 1 ? 'workspace' : 'workspaces'}</strong>
+      <p>Setup + target + usable signal + workflow action. ${formatNumber(cohortSignups)} signup ${cohortSignups === 1 ? 'workspace' : 'workspaces'} in this cohort${pendingWindow ? `; ${formatNumber(pendingWindow)} still inside the measurement window` : ''}.</p>
+    </article>
+  `;
   const cards = ACQUISITION_FUNNEL_STAGES.map((stage) => {
     const row = byEvent.get(stage.eventType) || {};
     const value = stage.unit === 'workspace'
@@ -6760,6 +6722,28 @@ function renderAcquisitionFunnel(analytics = {}) {
       </article>
     `;
   }).join('');
+  const sourceBreakdown = sourceRows.length ? `
+    <div class="analytics-source-breakdown">
+      <div>
+        <h5>Activation quality by first touch</h5>
+        <p class="small muted">Compare acquisition channels after the seven-day value threshold, not on traffic alone.</p>
+      </div>
+      <div class="table-scroll">
+        <table class="table" aria-label="Activation quality by first-touch source">
+          <thead><tr><th>First touch</th><th>Persona</th><th>Signups</th><th>Activated</th><th>Pending</th></tr></thead>
+          <tbody>${sourceRows.map((row) => `
+            <tr data-analytics-source="${escapeAttr(row.source || 'direct')}">
+              <td><strong>${escapeHtml(row.source || 'direct')}</strong>${row.campaign ? `<span class="table-meta">${escapeHtml(row.campaign)}</span>` : ''}</td>
+              <td>${escapeHtml(row.persona === 'jobseeker' ? 'Job seeker' : (row.persona === 'bd' ? 'Recruiter' : 'Unspecified'))}</td>
+              <td>${formatNumber(row.signups || 0)}</td>
+              <td>${formatNumber(row.workspaces || 0)}</td>
+              <td>${formatNumber(row.pendingWindow || 0)}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+  ` : '';
 
   return `
     <div class="panel-header">
@@ -6770,9 +6754,11 @@ function renderAcquisitionFunnel(analytics = {}) {
       </div>
     </div>
     <div class="story-strip" aria-label="Acquisition and activation funnel">
+      ${activationCard}
       ${cards}
     </div>
-    <p class="small muted">Public actions are event counts; account and activation milestones are unique workspaces. Use this as directional evidence, not a person-level cohort report.</p>
+    ${sourceBreakdown}
+    <p class="small muted">Public actions are event counts; product milestones are unique workspaces. Seven-day activation is the value threshold; the remaining cards diagnose where workspaces stop. Use this as directional evidence, not a person-level cohort report.</p>
   `;
 }
 
@@ -9700,31 +9686,8 @@ tourSteps[1].copy = "These chips summarize today's account queue, fresh roles, f
 
 let currentTourStep = 0;
 
-function queuePostSetupTour() {
-  appState.postSetupTourPending = true;
-  appState.onboardingDone = false;
-  localStorage.setItem(POST_SETUP_TOUR_PENDING_KEY, 'true');
-  localStorage.removeItem('bd_onboarding_done');
-}
-
-function maybeStartPendingProductTour() {
-  if (!appState.postSetupTourPending || appState.onboardingDone || appState.tourActive || getRouteRoot() !== 'dashboard') return;
-  appState.postSetupTourPending = false;
-  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
-  window.setTimeout(() => {
-    if (getRouteRoot() === 'dashboard' && !appState.onboardingDone && !appState.tourActive) {
-      startProductTour();
-      return;
-    }
-    if (!appState.onboardingDone) {
-      appState.postSetupTourPending = true;
-      localStorage.setItem(POST_SETUP_TOUR_PENDING_KEY, 'true');
-    }
-  }, 250);
-}
-
 function startProductTour() {
-  if (appState.onboardingDone || appState.tourActive) return;
+  if (appState.tourActive) return;
   currentTourStep = 0;
   appState.tourTrigger = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
     ? document.activeElement
@@ -9787,9 +9750,7 @@ function endTour(options = {}) {
   if (overlay) overlay.remove();
   document.querySelector('.shell')?.removeAttribute('inert');
   appState.tourActive = false;
-  appState.postSetupTourPending = false;
   appState.onboardingDone = true;
-  localStorage.removeItem(POST_SETUP_TOUR_PENDING_KEY);
   localStorage.setItem('bd_onboarding_done', 'true');
   const focusTarget = appState.tourTrigger instanceof HTMLElement && document.contains(appState.tourTrigger)
     ? appState.tourTrigger

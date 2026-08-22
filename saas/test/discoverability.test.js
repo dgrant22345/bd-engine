@@ -71,15 +71,20 @@ test('landing attribution distinguishes campaigns and records acquisition action
   ]);
 
   assert.match(landing, /utm_campaign/);
+  assert.match(landing, /utm_content/);
   assert.match(landing, /bd_acquisition/);
+  assert.match(landing, /firstTouch/);
+  assert.match(landing, /lastNonDirectTouch/);
   assert.match(landing, /trackAcquisitionEvent\('signup_started'\)/);
   assert.match(landing, /trackAcquisitionEvent\('demo_started'\)/);
   assert.match(landing, /acquisition: state\.acquisition/);
   assert.match(server, /PUBLIC_ANALYTICS_EVENT_TYPES = new Set\(/);
   assert.match(server, /'ats_sample_used'/);
   assert.match(server, /'ats_audit_completed'/);
-  assert.match(server, /buildAcquisitionSource\(acquisition\)/);
+  assert.match(server, /buildAcquisitionDimensions\(acquisition/);
   const checkerScript = await readFile(new URL('../public/ats-checker.js', import.meta.url), 'utf8');
+  assert.match(checkerScript, /firstTouch/);
+  assert.match(checkerScript, /lastNonDirectTouch/);
   assert.match(checkerScript, /sampleSubmissionPending \? 'ats_sample_used' : 'ats_audit_completed'/);
   assert.match(checkerScript, /sampleSubmissionPending = false/);
 });

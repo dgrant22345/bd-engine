@@ -21,7 +21,7 @@ test('signup presents legal consent with accessible document structure', async (
     readFile(cloudStylesPath, 'utf8'),
   ]);
   assert.match(landing, /<main class="auth-page" aria-labelledby="signup-title">/);
-  assert.match(landing, /<h1 id="signup-title">Create your account<\/h1>/);
+  assert.match(landing, /<h1 id="signup-title" tabindex="-1">Create your account<\/h1>/);
   assert.match(landing, /<div class="auth-consent">[\s\S]*?<label for="signup-legal-consent">/);
   assert.match(landing, /<p class="auth-consent__links" id="signup-legal-links"><a [^>]*>Open Terms<\/a>/);
   assert.doesNotMatch(landing, /<label class="auth-consent"[\s\S]*?<a /);

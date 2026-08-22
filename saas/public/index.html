@@ -71,6 +71,9 @@
     const ONBOARDING_SCOPE_FALLBACK_MAP_KEY = 'bd_onboarding_scope_map_v2';
     const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
     const ONBOARDING_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+    const ACQUISITION_STORAGE_KEY = 'bd_acquisition';
+    const ACQUISITION_STORAGE_VERSION = 2;
+    const PUBLIC_ACQUISITION_PATHS = new Set(['/', '/job-search', '/ats-checker']);
     const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
     let anonymousOnboardingHandoffExplicit = false;
 
@@ -98,6 +101,13 @@
       canManageWorkspace: false,
       persona: 'bd',
       signupPersona: getInitialSignupPersona(),
+      authDraft: {
+        loginEmail: '',
+        signupName: '',
+        signupEmail: '',
+        signupWorkspace: '',
+        signupLegalAccepted: false,
+      },
       onboardingIntent: getInitialOnboardingIntent(),
       onboardingIntentScope: '',
       acquisition: getInitialAcquisition(),
@@ -479,32 +489,86 @@
 
     function getInitialAcquisition() {
       const params = new URLSearchParams(window.location.search);
-      const current = {
-        source: normalizeAcquisitionToken(params.get('utm_source')),
+      const hasTaggedTouch = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content']
+        .some((key) => Boolean(params.get(key))) || Boolean(params.get('ref'));
+      const hasExternalReferrer = (() => {
+        if (!document.referrer) return false;
+        try { return new URL(document.referrer).origin !== window.location.origin; } catch { return false; }
+      })();
+      const taggedSource = normalizeAcquisitionToken(params.get('utm_source'));
+      const source = taggedSource
+        || (params.get('ref') ? 'referral' : '')
+        || (hasTaggedTouch ? 'campaign' : '')
+        || (hasExternalReferrer ? 'referrer' : 'direct');
+      const currentTouch = normalizeAcquisitionTouch({
+        source,
         medium: normalizeAcquisitionToken(params.get('utm_medium')),
         campaign: normalizeAcquisitionToken(params.get('utm_campaign')),
-      };
+        content: normalizeAcquisitionToken(params.get('utm_content')),
+        landingPath: window.location.pathname,
+        persona: window.location.pathname === '/job-search' || params.get('persona') === 'jobseeker'
+          ? 'jobseeker'
+          : 'bd',
+      });
+      if (!currentTouch.medium && ['referral', 'referrer'].includes(currentTouch.source)) {
+        currentTouch.medium = 'referral';
+      }
+
       let stored = {};
       try {
-        stored = JSON.parse(localStorage.getItem('bd_acquisition') || '{}');
+        stored = JSON.parse(localStorage.getItem(ACQUISITION_STORAGE_KEY) || '{}');
       } catch {}
-      const acquisition = current.source || current.campaign
-        ? current
-        : {
-            source: normalizeAcquisitionToken(stored.source),
-            medium: normalizeAcquisitionToken(stored.medium),
-            campaign: normalizeAcquisitionToken(stored.campaign),
-          };
-      if (!acquisition.source) {
-        acquisition.source = params.get('ref') ? 'referral' : (document.referrer ? 'referrer' : 'direct');
+
+      const storedLegacyTouch = normalizeAcquisitionTouch(stored);
+      let firstTouch = normalizeAcquisitionTouch(stored?.firstTouch || storedLegacyTouch);
+      if (!firstTouch.source) firstTouch = { ...currentTouch };
+      if (!firstTouch.landingPath) firstTouch.landingPath = currentTouch.landingPath;
+      if (!firstTouch.persona) firstTouch.persona = currentTouch.persona;
+
+      let lastNonDirectTouch = normalizeAcquisitionTouch(
+        stored?.lastNonDirectTouch
+          || (storedLegacyTouch.source && storedLegacyTouch.source !== 'direct' ? storedLegacyTouch : {}),
+      );
+      if (currentTouch.source && currentTouch.source !== 'direct') {
+        lastNonDirectTouch = { ...currentTouch };
       }
-      try { localStorage.setItem('bd_acquisition', JSON.stringify(acquisition)); } catch {}
+
+      const acquisition = {
+        version: ACQUISITION_STORAGE_VERSION,
+        firstTouch,
+        lastNonDirectTouch,
+      };
+      try { localStorage.setItem(ACQUISITION_STORAGE_KEY, JSON.stringify(acquisition)); } catch {}
       return acquisition;
+    }
+
+    function normalizeAcquisitionTouch(value = {}) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+      const touch = {
+        source: normalizeAcquisitionToken(value.source),
+        medium: normalizeAcquisitionToken(value.medium),
+        campaign: normalizeAcquisitionToken(value.campaign),
+        content: normalizeAcquisitionToken(value.content),
+        landingPath: normalizeAcquisitionLandingPath(value.landingPath),
+        persona: value.persona === 'jobseeker' ? 'jobseeker' : (value.persona === 'bd' ? 'bd' : ''),
+      };
+      return Object.fromEntries(Object.entries(touch).filter(([, item]) => item));
+    }
+
+    function normalizeAcquisitionLandingPath(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try {
+        const pathname = new URL(raw, window.location.origin).pathname.replace(/\/+$/, '') || '/';
+        return PUBLIC_ACQUISITION_PATHS.has(pathname) ? pathname : '';
+      } catch {
+        return '';
+      }
     }
 
     function normalizeAcquisitionToken(value) {
       const raw = String(value || '').trim();
-      if (raw.includes('@')) return '';
+      if (raw.includes('@') || /(?:[a-z]+:\/\/|[\\/?#])/i.test(raw)) return '';
       return raw
         .toLowerCase()
         .replace(/[^a-z0-9_.-]/g, '-')
@@ -514,8 +578,11 @@
     }
 
     function getAcquisitionSource() {
-      const source = normalizeAcquisitionToken(state.acquisition?.source) || 'direct';
-      const campaign = normalizeAcquisitionToken(state.acquisition?.campaign);
+      const touch = state.acquisition?.lastNonDirectTouch?.source
+        ? state.acquisition.lastNonDirectTouch
+        : state.acquisition?.firstTouch;
+      const source = normalizeAcquisitionToken(touch?.source) || 'direct';
+      const campaign = normalizeAcquisitionToken(touch?.campaign);
       return (campaign && campaign !== source ? `${source}.${campaign}` : source).slice(0, 48);
     }
 
@@ -671,6 +738,7 @@
 
     // ── Auth actions ──────────────────────────────────────────────────────
     async function doLogin(email, password) {
+      state.authDraft.loginEmail = String(email || '');
       state.busy = true;
       state.error = '';
       render();
@@ -692,6 +760,7 @@
         state.canManageSupport = Boolean(data.canManageSupport);
         state.canManageWorkspace = Boolean(data.canManageWorkspace);
         await activateAuthenticatedOnboardingIntent();
+        state.authDraft.loginEmail = '';
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -726,6 +795,9 @@
     }
 
     async function doSignup(email, password, name, workspaceName, persona) {
+      state.authDraft.signupName = String(name || '');
+      state.authDraft.signupEmail = String(email || '');
+      state.authDraft.signupWorkspace = String(workspaceName || '');
       state.busy = true;
       state.error = '';
       render();
@@ -764,6 +836,10 @@
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
+        state.authDraft.signupName = '';
+        state.authDraft.signupEmail = '';
+        state.authDraft.signupWorkspace = '';
+        state.authDraft.signupLegalAccepted = false;
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -943,16 +1019,6 @@
       return new Intl.NumberFormat().format(Number(value || 0));
     }
 
-    function formatCredit(cents) {
-      const amount = Number(cents || 0) / 100;
-      if (!amount) return 'billing credit';
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: amount % 1 ? 2 : 0 }).format(amount);
-    }
-
-    function getReferralLink() {
-      return state.referral?.link || '';
-    }
-
     function openBillingPage() {
       const frame = root.querySelector('.cloud-app-frame');
       if (!frame) return;
@@ -971,36 +1037,6 @@
       frame.src = onboardingIntentScope
         ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/admin/billing`
         : '/app/#/admin/billing';
-    }
-
-    async function copyReferralLink(btn) {
-      const link = getReferralLink();
-      if (!link) {
-        openBillingPage();
-        return;
-      }
-      const original = btn?.textContent || 'Copy referral link';
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(link);
-        } else {
-          const input = document.createElement('input');
-          input.value = link;
-          input.setAttribute('readonly', '');
-          input.style.position = 'fixed';
-          input.style.opacity = '0';
-          document.body.appendChild(input);
-          input.select();
-          document.execCommand('copy');
-          input.remove();
-        }
-        if (btn) {
-          btn.textContent = 'Copied';
-          window.setTimeout(() => { btn.textContent = original; }, 1800);
-        }
-      } catch {
-        openBillingPage();
-      }
     }
 
     // ── Render ────────────────────────────────────────────────────────────
@@ -1042,8 +1078,6 @@
         sectionTitle: 'From a broad search to one useful next action',
         sectionIntro: 'BD Engine keeps the market, your network, and your follow-up work in one explainable daily view.',
         footer: 'Built for focused staffing business development and job searches.',
-        referralTitle: 'Share a focused search, earn billing credit.',
-        referralBody: 'Every workspace gets a referral link. Share BD Engine with another job seeker, recruiter, or founder and earn credit when they become a paid customer.',
         previewLabel: 'Best next move',
         previewReason: 'Three relevant roles and a mapped talent contact make this the clearest company to work next.',
         previewScore: '91',
@@ -1062,8 +1096,6 @@
         sectionTitle: 'From a target list to one useful next action',
         sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
         footer: 'Built for independent recruiters and hands-on agency founders.',
-        referralTitle: 'Share BD Engine, earn billing credit.',
-        referralBody: 'Every workspace gets a referral link. Invite another founder or recruiter and earn credit when their workspace becomes a paid customer.',
         previewLabel: 'Best account today',
         previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
         previewScore: '91',
@@ -1075,6 +1107,21 @@
           ['Work the ranked list', 'See the score explanation, strongest contact, and recommended next move before you reach out.'],
         ],
       };
+      const pricingOffer = isJobSeekerLanding ? {
+        name: 'Job Seeker',
+        priceMarkup: '<span class="price-amount">$5</span><span class="price-period">USD / month after trial</span>',
+        fit: 'For an active search that needs a focused company list, relevant public roles, and warm-contact paths in one place.',
+        features: ['200 target companies', '1,000 network contacts', '50 ATS job boards', 'Job-search action plans', '50 CSV imports'],
+        syncNote: 'Saved companies, notes, contacts, and action plans follow your signed-in account.',
+        trial: 'The free trial includes 25 companies, 100 contacts, 50 ATS boards, and 3 CSV imports. There is no automatic charge.',
+      } : {
+        name: 'Sales Professional',
+        priceMarkup: '<span class="price-amount">$10</span><span class="price-period">USD / month after trial</span>',
+        fit: 'For an independent recruiter or agency founder using live hiring signals to prioritize measurable outreach.',
+        features: ['1 user', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', 'Enrichment and outreach drafts', 'CSV export', 'Workspace sync across your devices'],
+        syncNote: 'Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account.',
+        trial: 'The free trial includes 25 accounts, 100 contacts, 50 ATS boards, and 3 CSV imports. There is no automatic charge.',
+      };
       root.innerHTML = `
         <div class="landing">
           <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -1085,7 +1132,7 @@
                 <span class="brand-text">BD Engine</span>
               </a>
               <div class="landing-nav-actions">
-                <a class="nav-link nav-link--utility" href="/ats-checker?utm_source=homepage&amp;utm_medium=navigation&amp;utm_campaign=coverage_audit">Free ATS audit</a>
+                <a class="nav-link nav-link--utility" href="/ats-checker?utm_source=homepage&amp;utm_medium=navigation&amp;utm_campaign=coverage_audit&amp;utm_content=nav_utility">Free ATS audit</a>
                 <button class="nav-link nav-link--trust" data-trust-page="trust">Trust</button>
                 <button class="nav-link" id="nav-login">Log in</button>
                 <button class="btn btn-primary" id="nav-signup">${landingCopy.primaryCta}</button>
@@ -1107,12 +1154,13 @@
                 <div class="hero-cta">
                   ${isJobSeekerLanding
                     ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
-                       <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage">Audit career sites</a>`
-                    : `<button class="btn btn-primary btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>
-                       <button class="btn btn-ghost btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>`}
+                       <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
+                    : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
+                       <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
                 </div>
-                <p class="hero-note">No credit card required &middot; 14-day trial &middot; cancel anytime</p>
-                ${isJobSeekerLanding ? '' : '<a class="hero-utility-link" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit">Or audit up to 50 career sites free</a>'}
+                <p class="hero-note">${isJobSeekerLanding
+                  ? 'No credit card required &middot; 14-day trial &middot; cancel anytime'
+                  : 'Runs in your browser &middot; up to 50 career sites &middot; CSV export included'}</p>
               </div>
               <div class="product-preview" aria-label="Sample ranked daily action">
                 <div class="product-preview-header">
@@ -1168,7 +1216,7 @@
                 <h2 id="coverage-title">Check the target list before you trust the signal.</h2>
                 <p>The free browser audit checks up to 50 public career-site URLs against ATS hosts BD Engine recognizes. It reports the valid-URL denominator, flags sites that still need discovery, and exports the result as CSV.</p>
                 <p class="coverage-caveat">Recognized hosts include Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and Rippling. Host recognition is not a guarantee of role count, freshness, or complete employer coverage.</p>
-                <a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit">Run the free ATS audit</a>
+                <a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=coverage_section">Run the free ATS audit</a>
               </div>
               <dl class="coverage-facts">
                 <div><dt>Target-list size</dt><dd>Up to 50 URLs</dd></div>
@@ -1181,71 +1229,26 @@
             <section class="pricing" id="pricing" aria-labelledby="pricing-title">
               <div class="section-heading">
                 <span class="section-kicker">Pricing</span>
-                <h2 class="section-title" id="pricing-title" tabindex="-1">Try the workflow before choosing a plan</h2>
-                <p class="section-intro">Every trial starts without a credit card and includes enough room to test the daily-action workflow with your own data.</p>
+                <h2 class="section-title" id="pricing-title" tabindex="-1">One focused plan, 14 days free</h2>
+                <p class="section-intro">Start with your own data and no credit card. Upgrade from Billing only when the workflow earns a place in your week.</p>
               </div>
-            <div class="pricing-grid">
-              <div class="pricing-card">
-                <div class="pricing-badge">Free trial</div>
-                <h3>Trial</h3>
-                <div class="pricing-price"><span class="price-amount">$0</span><span class="price-period">/14 days</span></div>
-                <p class="pricing-fit">Best for proving that your imported companies, contacts, and job boards produce a useful daily action plan.</p>
+              <div class="pricing-grid pricing-grid--focused">
+                <div class="pricing-card pricing-card--popular pricing-card--focused">
+                  <div class="pricing-badge popular">14-day free trial</div>
+                  <h3>${escapeHtml(pricingOffer.name)}</h3>
+                  <div class="pricing-trial-price" aria-label="Free for the first 14 days"><span class="price-amount">$0</span><span class="price-period">/14 days</span></div>
+                  <div class="pricing-price">${pricingOffer.priceMarkup}</div>
+                  <p class="pricing-fit">${escapeHtml(pricingOffer.fit)}</p>
                 <ul class="pricing-features">
-                  <li>25 accounts</li>
-                  <li>100 contacts</li>
-                  <li>50 ATS job boards</li>
-                  <li>Basic outreach drafts</li>
-                  <li>3 CSV imports</li>
+                    ${pricingOffer.features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join('')}
                 </ul>
-                <p class="pricing-upgrade">Upgrade when your readiness score shows enough live data to run the workflow every week.</p>
-                <button class="btn btn-primary btn-block" data-signup data-plan-intent="trial">Start free trial</button>
+                  <p class="pricing-sync-note">${escapeHtml(pricingOffer.syncNote)}</p>
+                  <p class="pricing-upgrade">${escapeHtml(pricingOffer.trial)}</p>
+                  ${isJobSeekerLanding
+                    ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
+                    : '<button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Start 14-day trial</button>'}
+                </div>
               </div>
-              <div class="pricing-card ${isJobSeekerLanding ? '' : 'pricing-card--popular'}">
-                <div class="pricing-badge ${isJobSeekerLanding ? '' : 'popular'}">${isJobSeekerLanding ? 'For staffing BD' : 'Early-access workflow'}</div>
-                <h3>Sales Professional</h3>
-                <div class="pricing-price"><span class="price-amount">$10</span><span class="price-period">USD / month</span></div>
-                <p class="pricing-fit">Best for an independent recruiter or agency founder using live hiring signals to prioritize outreach.</p>
-                <ul class="pricing-features">
-                  <li>1 user</li>
-                  <li>1,000 accounts</li>
-                  <li>10,000 contacts</li>
-                  <li>Unlimited ATS job boards</li>
-                  <li>Enrichment + Outreach Drafts</li>
-                  <li>CSV export</li>
-                  <li>Workspace sync across your devices</li>
-                </ul>
-                <p class="pricing-upgrade">Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account across devices. Personal display preferences stay on each device.</p>
-                <button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Get started</button>
-              </div>
-              <div class="pricing-card ${isJobSeekerLanding ? 'pricing-card--popular' : ''}" ${isJobSeekerLanding ? 'style="order:-1"' : ''}>
-                <div class="pricing-badge ${isJobSeekerLanding ? 'popular' : ''}">${isJobSeekerLanding ? 'Recommended' : 'For job seekers'}</div>
-                <h3>Job Seeker</h3>
-                <div class="pricing-price"><span class="price-amount">$5</span><span class="price-period">USD / month</span></div>
-                <p class="pricing-fit">Best for prioritizing target companies, open roles, and warm contacts during an active search.</p>
-                <ul class="pricing-features">
-                  <li>200 target companies</li>
-                  <li>1,000 network contacts</li>
-                  <li>50 ATS job boards</li>
-                  <li>Job-search action plans</li>
-                  <li>50 CSV imports</li>
-                </ul>
-                <p class="pricing-upgrade">Use your own network and live hiring signals to decide where to focus each day.</p>
-                <button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start job search</button>
-              </div>
-            </div>
-            </section>
-
-            <section class="referral-program" id="referrals" aria-labelledby="referral-title">
-              <div class="referral-copy">
-                <span class="section-kicker">Referral program</span>
-                <h2 id="referral-title">${landingCopy.referralTitle}</h2>
-                <p>${landingCopy.referralBody}</p>
-              </div>
-              <ol class="referral-flow" aria-label="Referral program steps">
-                <li class="referral-step"><span class="referral-step-number">1</span><strong>Share your link</strong><p>Use the referral link in Billing after you create a workspace.</p></li>
-                <li class="referral-step"><span class="referral-step-number">2</span><strong>They upgrade</strong><p>The referral is tracked through signup and subscription.</p></li>
-                <li class="referral-step"><span class="referral-step-number">3</span><strong>You get credit</strong><p>Credits are applied toward future BD Engine billing.</p></li>
-              </ol>
             </section>
           </main>
 
@@ -1445,6 +1448,20 @@
       return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'Operational' : 'Degraded'}</span><small>${escapeHtml(detail || '')}</small></article>`;
     }
 
+    function wirePasswordToggles(scope = root) {
+      scope.querySelectorAll('[data-password-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const input = scope.querySelector(`#${CSS.escape(button.dataset.passwordToggle || '')}`);
+          if (!(input instanceof HTMLInputElement)) return;
+          const reveal = input.type === 'password';
+          input.type = reveal ? 'text' : 'password';
+          button.textContent = reveal ? 'Hide' : 'Show';
+          button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} password`);
+          button.setAttribute('aria-pressed', reveal ? 'true' : 'false');
+        });
+      });
+    }
+
     // ── Login page ────────────────────────────────────────────────────────
     function renderLogin() {
       root.innerHTML = `
@@ -1461,11 +1478,14 @@
             <form id="login-form" class="auth-form">
               <div class="form-group">
                 <label for="login-email">Email</label>
-                <input type="email" id="login-email" placeholder="you@company.com" autocomplete="email" required autofocus>
+                <input type="email" id="login-email" placeholder="you@company.com" autocomplete="email" value="${escapeAttr(state.authDraft.loginEmail)}" required${state.authDraft.loginEmail ? '' : ' autofocus'}>
               </div>
               <div class="form-group">
                 <label for="login-password">Password</label>
-                <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required minlength="6">
+                <div class="password-input-shell">
+                  <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required minlength="6"${state.error && state.authDraft.loginEmail ? ' autofocus' : ''}>
+                  <button class="password-toggle" type="button" data-password-toggle="login-password" aria-controls="login-password" aria-label="Show password" aria-pressed="false">Show</button>
+                </div>
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Logging in...' : 'Log in'}
@@ -1481,6 +1501,7 @@
           </div>
         </div>`;
 
+      wirePasswordToggles();
       root.querySelector('#login-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
         const email = root.querySelector('#login-email').value;
@@ -1546,7 +1567,11 @@
             <form id="reset-form" class="auth-form">
               <div class="form-group">
                 <label for="reset-password">New password</label>
-                <input type="password" id="reset-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10" autofocus>
+                <div class="password-input-shell">
+                  <input type="password" id="reset-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10" aria-describedby="reset-password-requirements" autofocus>
+                  <button class="password-toggle" type="button" data-password-toggle="reset-password" aria-controls="reset-password" aria-label="Show password" aria-pressed="false">Show</button>
+                </div>
+                <span class="form-help" id="reset-password-requirements">Use at least 10 characters.</span>
               </div>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Resetting...' : 'Reset password'}
@@ -1558,6 +1583,7 @@
           </div>
         </div>`;
 
+      wirePasswordToggles();
       root.querySelector('#reset-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
         doConfirmPasswordReset(root.querySelector('#reset-password').value);
@@ -1602,7 +1628,7 @@
               <div class="brand-icon-sm">
                 <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg3)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><path d="M16 10h5a4 4 0 010 8h-5v-8zm2 2v4h3a2 2 0 000-4h-3z" fill="rgba(255,255,255,.7)"/><defs><linearGradient id="bg3" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#2563eb"/><stop offset="1" stop-color="#0284c7"/></linearGradient></defs></svg>
               </div>
-              <h1 id="signup-title">Create your account</h1>
+              <h1 id="signup-title" tabindex="-1">Create your account</h1>
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
             ${onboardingSummary}
@@ -1619,22 +1645,26 @@
               </div>
               <div class="form-group">
                 <label for="signup-name">Full name</label>
-                <input type="text" id="signup-name" placeholder="Jane Smith" autocomplete="name" required autofocus>
+                <input type="text" id="signup-name" placeholder="Jane Smith" autocomplete="name" value="${escapeAttr(state.authDraft.signupName)}" required>
               </div>
               <div class="form-group">
                 <label for="signup-email">Email</label>
-                <input type="email" id="signup-email" placeholder="jane@company.com" autocomplete="email" required>
+                <input type="email" id="signup-email" placeholder="jane@company.com" autocomplete="email" value="${escapeAttr(state.authDraft.signupEmail)}" required>
               </div>
               <div class="form-group">
                 <label for="signup-password">Password</label>
-                <input type="password" id="signup-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10">
+                <div class="password-input-shell">
+                  <input type="password" id="signup-password" placeholder="Min. 10 characters" autocomplete="new-password" required minlength="10" aria-describedby="signup-password-requirements"${state.error && state.authDraft.signupEmail ? ' autofocus' : ''}>
+                  <button class="password-toggle" type="button" data-password-toggle="signup-password" aria-controls="signup-password" aria-label="Show password" aria-pressed="false">Show</button>
+                </div>
+                <span class="form-help" id="signup-password-requirements">Use at least 10 characters. A longer, unique passphrase is easier to remember and safer.</span>
               </div>
               <div class="form-group">
-                <label for="signup-workspace" id="workspace-label">Workspace name</label>
-                <input type="text" id="signup-workspace" placeholder="My Company" autocomplete="organization">
+                <label for="signup-workspace" id="workspace-label">Workspace name (optional)</label>
+                <input type="text" id="signup-workspace" placeholder="My Company" autocomplete="organization" value="${escapeAttr(state.authDraft.signupWorkspace)}">
               </div>
               <div class="auth-consent">
-                <input type="checkbox" id="signup-legal-consent" required aria-describedby="signup-legal-links">
+                <input type="checkbox" id="signup-legal-consent" required aria-describedby="signup-legal-links"${state.authDraft.signupLegalAccepted ? ' checked' : ''}>
                 <div class="auth-consent__body">
                   <label for="signup-legal-consent">I agree to the Terms and confirm I have read the Privacy notice.</label>
                   <p class="auth-consent__links" id="signup-legal-links"><a href="/?legal=terms" target="_blank" rel="noopener">Open Terms</a><span aria-hidden="true"> · </span><a href="/?legal=privacy" target="_blank" rel="noopener">Open Privacy notice</a></p>
@@ -1656,7 +1686,7 @@
       const workspaceInput = root.querySelector('#signup-workspace');
       const applySignupPersona = () => {
         state.signupPersona = personaSelect?.value === 'jobseeker' ? 'jobseeker' : 'bd';
-        if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name' : 'Workspace name';
+        if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name (optional)' : 'Workspace name (optional)';
         if (workspaceInput) workspaceInput.placeholder = state.signupPersona === 'jobseeker' ? 'My Job Search' : 'My Company';
         if (state.onboardingIntent) {
           persistOnboardingIntent({
@@ -1671,6 +1701,8 @@
       };
       personaSelect?.addEventListener('change', applySignupPersona);
       applySignupPersona();
+      wirePasswordToggles();
+      if (!state.error) root.querySelector('#signup-title')?.focus();
 
       root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -1678,6 +1710,7 @@
         const email = root.querySelector('#signup-email').value;
         const password = root.querySelector('#signup-password').value;
         const workspace = root.querySelector('#signup-workspace').value;
+        state.authDraft.signupLegalAccepted = Boolean(root.querySelector('#signup-legal-consent')?.checked);
         doSignup(email, password, name, workspace, state.signupPersona);
       });
       root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
@@ -2203,8 +2236,6 @@
     function renderTrialUpgradeBanner() {
       if (!isTrialPlan()) return '';
       const trialLimits = getPlanLimits('trial');
-      const creditLabel = formatCredit(state.referral?.creditAmountCents);
-      const referralAction = getReferralLink() ? 'Copy referral link' : 'Referral program';
       const daysCopy = state.trialDaysRemaining !== null
         ? `${state.trialDaysRemaining} day${state.trialDaysRemaining === 1 ? '' : 's'} left`
         : '14-day trial';
@@ -2220,8 +2251,6 @@
           </div>
           <div class="cloud-trial-cta-actions">
             <button class="btn btn-primary btn-sm" id="cloud-upgrade-btn">Upgrade plan</button>
-            <button class="btn btn-ghost btn-sm" id="cloud-referral-btn">${escapeHtml(referralAction)}</button>
-            <span class="cloud-referral-note">Earn ${escapeHtml(creditLabel)} when referrals upgrade.</span>
           </div>
         </div>`;
     }
@@ -2272,7 +2301,7 @@
                   <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Privacy and data</button>
                   <button class="cloud-menu-item" id="cloud-support-btn" type="button" role="menuitem">Support center</button>
                   ${state.canManageSupport ? '<button class="cloud-menu-item" id="cloud-support-inbox-btn" type="button" role="menuitem">Support inbox</button>' : ''}
-                  ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : '<button class="cloud-menu-item" id="cloud-referral-menu-btn" type="button" role="menuitem">Referral program</button>'}
+                  ${state.demo ? '<button class="cloud-menu-item" id="cloud-demo-signup-menu-btn" type="button" role="menuitem">Start free trial</button>' : ''}
                   <button class="cloud-menu-item" id="cloud-logout-btn" type="button" role="menuitem">Log out</button>
                 </div>
               </div>
@@ -2324,11 +2353,6 @@
         setUserMenuOpen(false);
       });
       root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
-      root.querySelector('#cloud-referral-btn')?.addEventListener('click', (event) => copyReferralLink(event.currentTarget));
-      root.querySelector('#cloud-referral-menu-btn')?.addEventListener('click', (event) => {
-        copyReferralLink(event.currentTarget);
-        setUserMenuOpen(false);
-      });
     }
 
     // ── Utility ───────────────────────────────────────────────────────────
@@ -2336,6 +2360,10 @@
       const div = document.createElement('div');
       div.textContent = String(str || '');
       return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+      return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // ── Init ──────────────────────────────────────────────────────────────

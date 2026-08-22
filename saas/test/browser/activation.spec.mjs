@@ -38,11 +38,6 @@ async function finishSetup(app) {
 
 async function openDashboard(app) {
   await app.locator('[data-action="setup-open-dashboard"]').click();
-  const endTour = app.locator('[data-action="end-tour"]');
-  const tourAppeared = await endTour.waitFor({ state: 'visible', timeout: 2500 })
-    .then(() => true)
-    .catch(() => false);
-  if (tourAppeared) await endTour.click();
 }
 
 async function goToAccounts(page, app) {
