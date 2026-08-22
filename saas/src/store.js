@@ -747,18 +747,18 @@ const settings = {
   jobRetentionDays: 28,
   searchFocusByPersona: {
     bd: {
-      targetRoles: '',
-      excludedRoles: '',
-      targetIndustries: '',
+      targetRoles: 'Recruiter, Talent Acquisition, TA Manager, HR Leader, People Partner, Talent Lead, HR Business Partner, Talent Acquisition Specialist',
+      excludedRoles: 'Intern, Co-op, Retail',
+      targetIndustries: 'Software, SaaS, Technology, Financial Services, HealthTech',
       workStyle: 'any',
-      minimumRelevanceScore: 45,
+      minimumRelevanceScore: 35,
     },
     jobseeker: {
-      targetRoles: '',
-      excludedRoles: '',
-      targetIndustries: '',
+      targetRoles: 'Recruiter, Talent Acquisition, TA Manager, HR Leader, People Partner, Talent Lead, HR Business Partner, Talent Acquisition Specialist',
+      excludedRoles: 'Intern, Co-op, Retail',
+      targetIndustries: 'Software, SaaS, Technology, Financial Services, HealthTech',
       workStyle: 'any',
-      minimumRelevanceScore: 45,
+      minimumRelevanceScore: 35,
     },
   },
   ownerRoster: [
@@ -959,10 +959,10 @@ function buildSampleWorkspaceData(tenantId, persona = 'bd') {
     contact({ id: id('elena'), tenantId, accountId: id('luma'), fullName: 'Elena Park', firstName: 'Elena', lastName: 'Park', email: 'elena.park@example.com', linkedinUrl: 'https://www.linkedin.com/in/elena-park', companyName: 'Luma Climate', title: 'Head of Partnerships', connectedOn: pastDate(220), outreachStatus: 'researching', priorityScore: 71, seniority: 'head', isTalentLeader: false }),
   ];
   const sampleJobs = [
-    job({ id: id('controls-job'), tenantId, accountId: id('northstar'), title: 'Senior Controls Engineer', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/controls', postedAt: pastDate(2), retrievedAt: now(), importedAt: now(), isNew: true }),
-    job({ id: id('embedded-job'), tenantId, accountId: id('northstar'), title: 'Embedded Robotics Developer', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/embedded', postedAt: pastDate(6), retrievedAt: now(), importedAt: now(), isNew: true }),
-    job({ id: id('data-platform-job'), tenantId, accountId: id('vertex'), title: 'Data Platform Engineer', companyName: 'Vertex Health Systems', location: 'Boston, MA', source: 'Lever', atsType: 'lever', jobUrl: 'https://vertexhealth.example/jobs/data-platform', postedAt: pastDate(4), retrievedAt: now(), importedAt: now(), isNew: true }),
-    job({ id: id('climate-pm-job'), tenantId, accountId: id('luma'), title: 'Product Manager, Climate Intelligence', companyName: 'Luma Climate', location: 'Remote', source: 'Ashby', atsType: 'ashby', jobUrl: 'https://jobs.ashbyhq.com/lumaclimate/pm', postedAt: pastDate(12), retrievedAt: now(), importedAt: now(), isNew: false }),
+    job({ id: id('controls-job'), tenantId, accountId: id('northstar'), title: 'Senior Technical Recruiter', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/recruiter', postedAt: pastDate(1), retrievedAt: now(), importedAt: now(), isNew: true, active: true }),
+    job({ id: id('ta-mgr-job'), tenantId, accountId: id('northstar'), title: 'Talent Acquisition Manager', companyName: 'Northstar Robotics', location: 'Toronto, ON', source: 'Greenhouse', atsType: 'greenhouse', jobUrl: 'https://northstar.example/jobs/ta-mgr', postedAt: pastDate(3), retrievedAt: now(), importedAt: now(), isNew: true, active: true }),
+    job({ id: id('data-platform-job'), tenantId, accountId: id('vertex'), title: 'HR Business Partner, Tech & Engineering', companyName: 'Vertex Health Systems', location: 'Toronto, ON', source: 'Lever', atsType: 'lever', jobUrl: 'https://vertexhealth.example/jobs/hrbp', postedAt: pastDate(4), retrievedAt: now(), importedAt: now(), isNew: true, active: true }),
+    job({ id: id('climate-pm-job'), tenantId, accountId: id('luma'), title: 'Lead Talent Acquisition Partner', companyName: 'Luma Climate', location: 'Toronto, ON (Remote)', source: 'Ashby', atsType: 'ashby', jobUrl: 'https://jobs.ashbyhq.com/lumaclimate/ta-lead', postedAt: pastDate(2), retrievedAt: now(), importedAt: now(), isNew: true, active: true }),
   ];
   const sampleConfigs = [
     { id: id('cfg-northstar'), tenantId, accountId: id('northstar'), companyName: 'Northstar Robotics', normalizedCompanyName: 'northstar robotics', ats: 'greenhouse', atsType: 'greenhouse', boardId: 'northstar', domain: 'northstar.example', careersUrl: 'https://northstar.example/careers', discoveryStatus: 'resolved', discoveryMethod: 'sample', confidenceBand: 'high', reviewStatus: 'approved', active: true, source: 'sample_workspace', createdAt: now(), updatedAt: now() },
