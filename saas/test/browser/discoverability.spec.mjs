@@ -170,7 +170,7 @@ test('Terms review returns to the pricing decision instead of opening signup', a
   await expect(page.locator('#signup-form')).toHaveCount(0);
 });
 
-test('signup distinguishes saved setup targets and treats referral codes as pending validation', async ({ page }) => {
+test('signup rejects unowned setup targets and treats referral codes as pending validation', async ({ page }) => {
   await page.addInitScript(() => {
     sessionStorage.setItem('bd_onboarding_intent', JSON.stringify({
       version: 1,
@@ -186,10 +186,16 @@ test('signup distinguishes saved setup targets and treats referral codes as pend
   });
   await page.goto('/?signup=1&ref=not-yet-validated');
 
-  await expect(page.locator('[role="status"]', { hasText: '2 saved targets found.' })).toContainText('saved when setup was skipped');
-  await expect(page.locator('[role="status"]', { hasText: '2 saved targets found.' })).not.toContainText('audit');
+  await expect(page.locator('[role="status"]', { hasText: 'saved targets found' })).toHaveCount(0);
+  await expect(page.getByText('Saved Target One')).toHaveCount(0);
   await expect(page.locator('[role="status"]', { hasText: 'Referral code NOTYETVALIDATED detected.' })).toContainText('validated when you create the workspace');
   await expect(page.getByText(/Referral from .* recorded/)).toHaveCount(0);
+  const safeIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
+  expect(safeIntent).toMatchObject({
+    source: 'pricing',
+    careerUrls: [],
+    pendingTargetSites: [],
+  });
 });
 
 test('ATS checker offers a useful sample path without signup', async ({ page }) => {
