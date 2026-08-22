@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "5cddbac9f90ba4a2d13ac08e50c9cead419265525b904b07e85376941a5d132b",
+  "sourceSha256": "c2e019eb79cbec861e2c356bca011380d60f14a5b9509a63b37983288cab5d84",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -45,6 +45,10 @@
     {
       "id": "20260821_commercial_outcomes",
       "description": "Add tenant-scoped commercial outcome and ROI tracking"
+    },
+    {
+      "id": "20260821_legal_consents",
+      "description": "Add durable versioned legal consent evidence"
     }
   ],
   "tables": [
@@ -61,6 +65,7 @@
     "import_run_items",
     "import_runs",
     "jobs",
+    "legal_consents",
     "memberships",
     "password_reset_tokens",
     "rate_limit_buckets",
@@ -123,6 +128,7 @@
     "jobs_tenant_natural_key_uidx",
     "jobs_tenant_posted_idx",
     "jobs_tenant_updated_idx",
+    "legal_consents_user_accepted_idx",
     "password_reset_tokens_expires_idx",
     "password_reset_tokens_user_idx",
     "rate_limit_buckets_expires_idx",

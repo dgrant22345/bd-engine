@@ -17,6 +17,18 @@ const users = new Map();
 const tenants = new Map();
 const memberships = []; // { tenantId, userId, role }
 
+const ID_ALLOCATION_ATTEMPTS = 16;
+
+function allocateUniqueId(prefix, registry, generateId = randomUUID) {
+  for (let attempt = 0; attempt < ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+    const candidate = String(generateId() || '').trim();
+    if (!candidate) continue;
+    const id = `${prefix}-${candidate}`;
+    if (!registry.has(id)) return id;
+  }
+  return '';
+}
+
 
 
 // ── Load from database on startup ───────────────────────────────────────────
@@ -62,12 +74,13 @@ export function findUserById(userId) {
   return users.get(userId) || null;
 }
 
-export function createUser({ email, name, password }) {
+export function createUser({ email, name, password }, { persist = true, generateId = randomUUID } = {}) {
   const normalized = String(email || '').trim().toLowerCase();
   if (findUserByEmail(normalized)) {
     return { error: 'An account with this email already exists.' };
   }
-  const id = `user-${randomUUID().slice(0, 8)}`;
+  const id = allocateUniqueId('user', users, generateId);
+  if (!id) return { error: 'A unique account identifier could not be allocated. Please try again.' };
   const user = {
     id,
     email: normalized,
@@ -79,8 +92,10 @@ export function createUser({ email, name, password }) {
     updatedAt: now(),
   };
   users.set(id, user);
-  // Persist to DB (fire-and-forget)
-  dbSaveUser(user).catch(() => {});
+  // Most callers preserve the existing fire-and-forget behavior. Signup can
+  // opt out so identity, workspace, membership, and legal consent are written
+  // atomically by the server before a session is issued.
+  if (persist) dbSaveUser(user).catch(() => {});
   return { user };
 }
 
@@ -121,8 +136,9 @@ export async function markUserEmailVerified(userId) {
   return { user };
 }
 
-export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '', storageMode = 'legacy' }) {
-  const id = `tenant-${randomUUID().slice(0, 8)}`;
+export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona = 'bd', referredByTenantId = '', storageMode = 'legacy' }, { persist = true, generateId = randomUUID } = {}) {
+  const id = allocateUniqueId('tenant', tenants, generateId);
+  if (!id) return { error: 'A unique workspace identifier could not be allocated. Please try again.' };
   const normalizedSlug = makeUniqueTenantSlug(slug || name || id, id);
 
   const tenant = {
@@ -158,12 +174,12 @@ export function createTenant({ name, slug, plan = 'trial', ownerUserId, persona 
     memberships.push(membership);
   }
 
-  persistTenantWithMembership(tenant, membership).catch(() => {});
+  if (persist) persistTenantWithMembership(tenant, membership).catch(() => {});
 
   return { tenant };
 }
 
-export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial', referredByTenantId = '', storageMode = 'legacy' } = {}) {
+export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', plan = 'trial', referredByTenantId = '', storageMode = 'legacy', persist = true } = {}) {
   if (!user?.id) return { error: 'User not found.' };
 
   const userTenants = findTenantsForUser(user.id);
@@ -173,7 +189,7 @@ export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', 
 
   const unclaimedTenant = findUnclaimedTenantForUser(user);
   if (unclaimedTenant) {
-    const membership = addMember(unclaimedTenant.id, user.id, 'owner');
+    const membership = addMember(unclaimedTenant.id, user.id, 'owner', { persist });
     const attachedTenants = findTenantsForUser(user.id);
     return {
       tenant: attachedTenants[0] || { ...unclaimedTenant, role: membership.role },
@@ -192,7 +208,7 @@ export function ensureTenantForUser(user, { workspaceName = '', persona = 'bd', 
     persona,
     referredByTenantId,
     storageMode,
-  });
+  }, { persist });
   if (result.error) return result;
 
   const createdTenants = findTenantsForUser(user.id);
@@ -247,11 +263,11 @@ export function findTenantsReferredBy(tenantId) {
   });
 }
 
-export function updateTenant(tenantId, updates) {
+export function updateTenant(tenantId, updates, { persist = true } = {}) {
   const tenant = tenants.get(tenantId);
   if (!tenant) return null;
   Object.assign(tenant, updates, { updatedAt: new Date().toISOString() });
-  dbSaveTenant(tenant).catch(() => {});
+  if (persist) dbSaveTenant(tenant).catch(() => {});
   return tenant;
 }
 
@@ -292,12 +308,12 @@ export function forgetClosedAccount(userId, deletedTenantIds = []) {
   }
 }
 
-export function addMember(tenantId, userId, role = 'member') {
+export function addMember(tenantId, userId, role = 'member', { persist = true } = {}) {
   const existing = getMembership(tenantId, userId);
   if (existing) return existing;
   const membership = { tenantId, userId, role, createdAt: now() };
   memberships.push(membership);
-  dbSaveMembership(membership).catch(() => {});
+  if (persist) dbSaveMembership(membership).catch(() => {});
   return membership;
 }
 

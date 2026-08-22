@@ -21,6 +21,7 @@ let dbReady = false;
 const memoryStripeWebhookEvents = new Map();
 const memorySupportTickets = new Map();
 const memoryCommercialOutcomes = new Map();
+const memoryLegalConsents = new Map();
 let memorySupportMessageId = 0;
 
 // ── Connection ──────────────────────────────────────────────────────────────
@@ -229,6 +230,18 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
         created_at TEXT NOT NULL,
         PRIMARY KEY (tenant_id, user_id)
       );
+
+      CREATE TABLE IF NOT EXISTS legal_consents (
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        terms_version TEXT NOT NULL,
+        privacy_version TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, terms_version, privacy_version)
+      );
+      CREATE INDEX IF NOT EXISTS legal_consents_user_accepted_idx
+        ON legal_consents (user_id, accepted_at DESC);
 
       CREATE TABLE IF NOT EXISTS tenant_data (
         tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),
@@ -855,6 +868,22 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
       `);
     });
 
+    await runSchemaMigration('20260821_legal_consents', 'Add durable versioned legal consent evidence', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS legal_consents (
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          terms_version TEXT NOT NULL,
+          privacy_version TEXT NOT NULL,
+          accepted_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, user_id, terms_version, privacy_version)
+        );
+        CREATE INDEX IF NOT EXISTS legal_consents_user_accepted_idx
+          ON legal_consents (user_id, accepted_at DESC);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -871,6 +900,137 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
 }
 
 // ── User persistence ────────────────────────────────────────────────────────
+
+function normalizeLegalConsent({ userId, tenantId, termsVersion, privacyVersion } = {}) {
+  const normalized = {
+    userId: String(userId || '').trim(),
+    tenantId: String(tenantId || '').trim(),
+    termsVersion: String(termsVersion || '').trim().slice(0, 80),
+    privacyVersion: String(privacyVersion || '').trim().slice(0, 80),
+    acceptedAt: new Date().toISOString(),
+  };
+  if (!normalized.userId || !normalized.tenantId) {
+    throw new Error('Legal consent requires a user and workspace.');
+  }
+  if (!normalized.termsVersion || !normalized.privacyVersion) {
+    throw new Error('Legal consent requires Terms and Privacy document versions.');
+  }
+  return { ...normalized, createdAt: normalized.acceptedAt };
+}
+
+function legalConsentMemoryKey(consent) {
+  return [consent.tenantId, consent.userId, consent.termsVersion, consent.privacyVersion].join(':');
+}
+
+function mapLegalConsent(row = {}) {
+  return {
+    tenantId: row.tenant_id ?? row.tenantId ?? '',
+    userId: row.user_id ?? row.userId ?? '',
+    termsVersion: row.terms_version ?? row.termsVersion ?? '',
+    privacyVersion: row.privacy_version ?? row.privacyVersion ?? '',
+    acceptedAt: row.accepted_at ?? row.acceptedAt ?? '',
+    createdAt: row.created_at ?? row.createdAt ?? '',
+  };
+}
+
+/**
+ * Atomically persists a new signup and its versioned legal acceptance. Signup
+ * callers create the in-memory objects with persistence disabled, then use this
+ * boundary before issuing a session. A configured-but-unavailable database is
+ * an error; only an intentionally database-free development runtime may use the
+ * in-memory consent ledger.
+ */
+export async function dbPersistSignupWithLegalConsent({ user, tenant, membership, termsVersion, privacyVersion } = {}) {
+  if (!user?.id || !tenant?.id || !membership?.userId || !membership?.tenantId) {
+    throw new Error('Signup persistence requires user, workspace, and membership records.');
+  }
+  if (membership.userId !== user.id || membership.tenantId !== tenant.id) {
+    throw new Error('Signup membership does not match the user and workspace.');
+  }
+  const consent = normalizeLegalConsent({
+    userId: user.id,
+    tenantId: tenant.id,
+    termsVersion,
+    privacyVersion,
+  });
+
+  if (!dbReady || !pool) {
+    if (isDbEnabled()) throw new Error('Database is not ready to record legal consent.');
+    const key = legalConsentMemoryKey(consent);
+    const existing = memoryLegalConsents.get(key);
+    if (existing) return { ...existing, storage: 'memory', duplicate: true };
+    memoryLegalConsents.set(key, consent);
+    return { ...consent, storage: 'memory', duplicate: false };
+  }
+
+  return dbTransaction(async (query) => {
+    await query(
+      `INSERT INTO users (id, email, name, password_hash, status, email_verified_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [user.id, user.email, user.name, user.passwordHash, user.status, user.emailVerifiedAt || '', user.createdAt, user.updatedAt]
+    );
+    await query(
+      `INSERT INTO tenants (id, slug, name, plan, status, persona, storage_mode, stripe_customer_id, stripe_subscription_id, billing_grace_ends_at, billing_last_payment_failed_at, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [
+        tenant.id,
+        tenant.slug,
+        tenant.name,
+        tenant.plan,
+        tenant.status,
+        tenant.persona || 'bd',
+        tenant.storageMode || tenant.storage_mode || 'legacy',
+        tenant.stripeCustomerId || tenant.stripe_customer_id || '',
+        tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '',
+        tenant.billingGraceEndsAt || tenant.billing_grace_ends_at || '',
+        tenant.billingLastPaymentFailedAt || tenant.billing_last_payment_failed_at || '',
+        tenant.referralCode || tenant.referral_code || '',
+        tenant.referredByTenantId || tenant.referred_by_tenant_id || '',
+        tenant.referralCreditedAt || tenant.referral_credited_at || '',
+        tenant.referralCreditTransactionId || tenant.referral_credit_transaction_id || '',
+        tenant.createdAt,
+        tenant.updatedAt,
+      ]
+    );
+    await query(
+      `INSERT INTO memberships (tenant_id, user_id, role, created_at)
+       VALUES ($1, $2, $3, $4)`,
+      [membership.tenantId, membership.userId, membership.role, membership.createdAt]
+    );
+    const result = await query(
+      `INSERT INTO legal_consents (
+         tenant_id, user_id, terms_version, privacy_version, accepted_at, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (tenant_id, user_id, terms_version, privacy_version)
+       DO UPDATE SET accepted_at = legal_consents.accepted_at
+       RETURNING *`,
+      [consent.tenantId, consent.userId, consent.termsVersion, consent.privacyVersion, consent.acceptedAt, consent.createdAt]
+    );
+    if (!result.rows[0]) throw new Error('Legal consent evidence was not recorded.');
+    return { ...mapLegalConsent(result.rows[0]), storage: 'postgres', duplicate: result.rows[0].accepted_at !== consent.acceptedAt };
+  });
+}
+
+export async function dbListLegalConsents({ tenantId, userId } = {}) {
+  const normalizedTenantId = String(tenantId || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedTenantId || !normalizedUserId) return [];
+  if (!dbReady || !pool) {
+    if (isDbEnabled()) throw new Error('Database is not ready to export legal consent.');
+    return [...memoryLegalConsents.values()]
+      .filter((item) => item.tenantId === normalizedTenantId && item.userId === normalizedUserId)
+      .sort((a, b) => String(b.acceptedAt).localeCompare(String(a.acceptedAt)))
+      .map((item) => ({ ...item }));
+  }
+  const result = await pool.query(
+    `SELECT tenant_id, user_id, terms_version, privacy_version, accepted_at, created_at
+     FROM legal_consents
+     WHERE tenant_id = $1 AND user_id = $2
+     ORDER BY accepted_at DESC, terms_version DESC, privacy_version DESC`,
+    [normalizedTenantId, normalizedUserId]
+  );
+  return result.rows.map(mapLegalConsent);
+}
 
 export async function dbClaimStripeWebhook(eventId, eventType = '') {
   if (!eventId) return { acquired: false, reason: 'missing_event_id' };
@@ -975,8 +1135,15 @@ export async function dbRecordAccountClosure(record = {}) {
 }
 
 export async function dbCloseUserAccount({ userId, deleteTenantIds = [], closureId, completedAt } = {}) {
-  if (!dbReady || !pool) return { closed: true, storage: 'memory' };
   const deletedIds = [...new Set(deleteTenantIds.filter(Boolean))];
+  if (!dbReady || !pool) {
+    for (const [key, consent] of memoryLegalConsents.entries()) {
+      if (consent.userId === userId || deletedIds.includes(consent.tenantId)) {
+        memoryLegalConsents.delete(key);
+      }
+    }
+    return { closed: true, storage: 'memory' };
+  }
   const finishedAt = completedAt || new Date().toISOString();
   return dbTransaction(async (query) => {
     const lockedUser = await query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
@@ -1003,6 +1170,7 @@ export async function dbCloseUserAccount({ userId, deleteTenantIds = [], closure
       }
     }
     await query('DELETE FROM analytics_events WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
+    await query('DELETE FROM legal_consents WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
     await query('DELETE FROM sessions WHERE user_id = $1', [userId]);
     await query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
     await query('DELETE FROM email_verification_tokens WHERE user_id = $1', [userId]);
