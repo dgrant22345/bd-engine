@@ -58,6 +58,17 @@ async function openAccounts(page, app) {
   await goToAccounts(page, app);
 }
 
+async function readOnboardingIntentStorage(page) {
+  return page.evaluate(() => ({
+    anonymousLocal: localStorage.getItem('bd_onboarding_intent'),
+    anonymousSession: sessionStorage.getItem('bd_onboarding_intent'),
+    scoped: Object.keys(localStorage)
+      .filter((key) => key.startsWith('bd_onboarding_intent:'))
+      .sort()
+      .map((key) => ({ key, value: JSON.parse(localStorage.getItem(key) || 'null') })),
+  }));
+}
+
 test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ page }) => {
   const targets = [
     'https://boards.greenhouse.io/auditactivation',
@@ -77,6 +88,14 @@ test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ 
   const profile = app.locator('#setup-profile-form');
   await expect(profile.locator('#setup-user-name')).toHaveValue('Activation Tester');
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
+  const migratedIntent = await readOnboardingIntentStorage(page);
+  expect(migratedIntent.anonymousLocal).toBeNull();
+  expect(migratedIntent.anonymousSession).toBeNull();
+  expect(migratedIntent.scoped).toHaveLength(1);
+  expect(migratedIntent.scoped[0].value).toMatchObject({
+    source: 'ats-checker',
+    careerUrls: targets,
+  });
   await continueProfile(app);
 
   const targetForm = app.locator('#setup-target-form');
@@ -91,6 +110,10 @@ test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ 
   await expect(summary.locator('div', { hasText: 'Accounts added' })).toContainText('2');
   await expect(summary.locator('div', { hasText: 'Saved for later' })).toContainText('0');
   await expect(summary.locator('div', { hasText: 'Monitoring queued' })).toContainText('1');
+  const consumedIntent = await readOnboardingIntentStorage(page);
+  expect(consumedIntent.anonymousLocal).toBeNull();
+  expect(consumedIntent.anonymousSession).toBeNull();
+  expect(consumedIntent.scoped).toHaveLength(0);
 
   await openAccounts(page, app);
   const rows = app.locator('table tbody tr:not(.quick-log-row)');
@@ -117,15 +140,21 @@ test('trial setup activates 25 targets and preserves the remainder for later', a
   await expect(summary.locator('div', { hasText: 'Accounts added' })).toContainText('25');
   await expect(summary.locator('div', { hasText: 'Saved for later' })).toContainText('2');
   await expect(app.getByRole('link', { name: 'Review plan' })).toBeVisible();
-  const savedTargets = await app.locator('body').evaluate(() => (
-    JSON.parse(localStorage.getItem('bd_onboarding_intent') || '{}').pendingTargetSites || []
-  ));
+  const storedIntent = await readOnboardingIntentStorage(page);
+  expect(storedIntent.anonymousLocal).toBeNull();
+  expect(storedIntent.anonymousSession).toBeNull();
+  expect(storedIntent.scoped).toHaveLength(1);
+  const savedTargets = storedIntent.scoped[0].value.pendingTargetSites || [];
   expect(savedTargets).toEqual(targets.slice(25));
 
   await openDashboard(app);
   await expect(app.locator('.deferred-target-notice')).toContainText('2 targets ready to add');
   await expect(app.locator('.deferred-target-notice')).toContainText('Nothing was discarded.');
   await expect(app.locator('[data-action="retry-deferred-targets"]')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  await expect(app.locator('.deferred-target-notice')).toContainText('2 targets ready to add', { timeout: 15000 });
+  await expect(app.locator('.deferred-target-notice')).toContainText('current account limit');
   await goToAccounts(page, app);
   const rows = app.locator('table tbody tr:not(.quick-log-row)');
   await expect(rows).toHaveCount(20, { timeout: 15000 });
@@ -133,4 +162,71 @@ test('trial setup activates 25 targets and preserves the remainder for later', a
   await app.getByRole('button', { name: 'Next page' }).click();
   await expect(rows).toHaveCount(5, { timeout: 15000 });
   await expect(app.getByRole('navigation', { name: 'Page navigation' })).toContainText('Showing 21-25 of 25 records');
+});
+
+test('skipping a prepared watchlist keeps it saved without implying a plan limit', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#nav-signup').click();
+  const { app } = await submitSignup(page, 'skipped-watchlist');
+  await continueProfile(app);
+
+  const targetForm = app.locator('#setup-target-form');
+  await expect(targetForm).toBeVisible({ timeout: 10000 });
+  await targetForm.locator('#setup-target-sites').fill('Saved Target One\nSaved Target Two');
+  await targetForm.locator('[data-action="setup-skip-targets"]').click();
+  await finishSetup(app);
+
+  await expect(app.locator('.setup-summary-grid').locator('div', { hasText: 'Saved for later' })).toContainText('2');
+  await expect(app.getByRole('link', { name: 'Review plan' })).toHaveCount(0);
+  await openDashboard(app);
+  const notice = app.locator('.deferred-target-notice');
+  await expect(notice).toContainText('2 targets ready to add');
+  await expect(notice).toContainText('You chose to finish setup without adding these targets.');
+  await expect(notice.getByRole('link', { name: 'Review account limit' })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  await expect(notice).toContainText('2 targets ready to add', { timeout: 15000 });
+  await expect(notice).toContainText('You chose to finish setup without adding these targets.');
+  await notice.locator('[data-action="retry-deferred-targets"]').click();
+  await expect(notice).toHaveCount(0, { timeout: 15000 });
+  await goToAccounts(page, app);
+  await expect(app.locator('table tbody tr:not(.quick-log-row)')).toHaveCount(2, { timeout: 15000 });
+  const recoveredIntent = await readOnboardingIntentStorage(page);
+  expect(recoveredIntent.anonymousLocal).toBeNull();
+  expect(recoveredIntent.anonymousSession).toBeNull();
+  expect(recoveredIntent.scoped).toHaveLength(0);
+});
+
+test('an authenticated audit intent never appears in the next account in the same browser', async ({ page }) => {
+  const target = 'https://boards.greenhouse.io/private-account-target';
+  await page.goto('/ats-checker');
+  await page.getByLabel('Career-site or job-board URLs').fill(target);
+  await page.getByRole('button', { name: 'Audit coverage' }).click();
+  await page.getByRole('link', { name: 'Monitor these companies' }).click();
+
+  const firstSignup = await submitSignup(page, 'isolated-intent-owner');
+  await expect(firstSignup.app.locator('#setup-profile-form')).toBeVisible({ timeout: 15000 });
+  const firstStorage = await readOnboardingIntentStorage(page);
+  expect(firstStorage.anonymousLocal).toBeNull();
+  expect(firstStorage.anonymousSession).toBeNull();
+  expect(firstStorage.scoped).toHaveLength(1);
+  expect(firstStorage.scoped[0].value.careerUrls).toEqual([target]);
+
+  await page.locator('#cloud-avatar-btn').click();
+  await page.locator('#cloud-logout-btn').click();
+  await expect(page.locator('#nav-signup')).toBeVisible({ timeout: 10000 });
+  await page.locator('#nav-signup').click();
+
+  const secondSignup = await submitSignup(page, 'isolated-intent-next-user');
+  await continueProfile(secondSignup.app);
+  const secondTargetForm = secondSignup.app.locator('#setup-target-form');
+  await expect(secondTargetForm).toBeVisible({ timeout: 10000 });
+  await expect(secondTargetForm.locator('#setup-target-sites')).toHaveValue('');
+  await expect(secondTargetForm.locator('.setup-intent-banner')).toHaveCount(0);
+
+  const secondStorage = await readOnboardingIntentStorage(page);
+  expect(secondStorage.anonymousLocal).toBeNull();
+  expect(secondStorage.anonymousSession).toBeNull();
+  expect(secondStorage.scoped).toHaveLength(1);
+  expect(secondStorage.scoped[0].value.careerUrls).toEqual([target]);
 });

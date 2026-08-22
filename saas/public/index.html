@@ -57,7 +57,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/cloud.css?v=20260821-modern-palette-10">
+  <link rel="stylesheet" href="/cloud.css?v=20260821-commercial-loop-12">
 </head>
 <body>
   <div id="cloud-root"></div>
@@ -66,7 +66,9 @@
   (() => {
     const root = document.getElementById('cloud-root');
     const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
+    const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:`;
     const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 
     // ── State ─────────────────────────────────────────────────────────────
     let state = {
@@ -129,7 +131,7 @@
     }
 
     function normalizeOnboardingIntent(value) {
-      return ['monitor-audited-career-sites', 'start-trial'].includes(value) ? value : '';
+      return ['monitor-audited-career-sites', 'monitor-career-sites', 'start-trial'].includes(value) ? value : '';
     }
 
     function sanitizeOnboardingCareerUrls(values) {
@@ -146,17 +148,69 @@
       return [...unique];
     }
 
-    function getInitialOnboardingIntent() {
-      const params = new URLSearchParams(window.location.search);
-      let stored = null;
-      try { stored = JSON.parse(localStorage.getItem(ONBOARDING_INTENT_STORAGE_KEY) || 'null'); } catch {}
+    function sanitizeOnboardingTargetSites(values) {
+      if (!Array.isArray(values)) return [];
+      const unique = new Set();
+      for (const value of values) {
+        const normalized = String(value || '').trim().slice(0, 500);
+        if (normalized) unique.add(normalized);
+        if (unique.size >= 50) break;
+      }
+      return [...unique];
+    }
+
+    function normalizePendingTargetReason(value) {
+      return ['capacity', 'skipped'].includes(value) ? value : '';
+    }
+
+    function normalizeStoredOnboardingIntent(stored) {
       const updatedAt = Date.parse(stored?.updatedAt || '');
       const isFresh = stored?.version === 1
         && Number.isFinite(updatedAt)
         && Date.now() - updatedAt <= ONBOARDING_INTENT_MAX_AGE_MS;
-      if (!isFresh && stored) {
-        try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
-        stored = null;
+      if (!isFresh) return null;
+
+      const persona = normalizeOnboardingPersona(stored?.persona);
+      const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
+      const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
+      return {
+        version: 1,
+        source: ['ats-checker', 'setup-deferred', 'setup-skipped'].includes(stored?.source) ? stored.source : 'pricing',
+        persona,
+        intent: normalizeOnboardingIntent(stored?.intent)
+          || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
+        planIntent: normalizeOnboardingPlan(stored?.planIntent)
+          || (persona === 'jobseeker' ? 'jobseeker' : 'trial'),
+        careerUrls,
+        pendingTargetSites,
+        pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
+        audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
+        updatedAt: stored.updatedAt,
+      };
+    }
+
+    function readStoredOnboardingIntent(storage, storageKey) {
+      let stored = null;
+      try { stored = JSON.parse(storage.getItem(storageKey) || 'null'); } catch {}
+      const normalized = normalizeStoredOnboardingIntent(stored);
+      if (stored && !normalized) {
+        try { storage.removeItem(storageKey); } catch {}
+      }
+      return normalized;
+    }
+
+    function writeAnonymousOnboardingIntent(intent) {
+      try { sessionStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch {}
+      // Clean up the legacy, browser-global handoff as soon as it is observed.
+      try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+    }
+
+    function getInitialOnboardingIntent() {
+      const params = new URLSearchParams(window.location.search);
+      let stored = readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY);
+      if (!stored) {
+        stored = readStoredOnboardingIntent(localStorage, ONBOARDING_INTENT_STORAGE_KEY);
+        if (stored) writeAnonymousOnboardingIntent(stored);
       }
 
       const queryIntent = normalizeOnboardingIntent(params.get('intent'));
@@ -166,24 +220,78 @@
 
       const persona = normalizeOnboardingPersona(params.get('persona') || stored?.persona);
       const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
+      const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
       const intent = queryIntent
         || normalizeOnboardingIntent(stored?.intent)
-        || (careerUrls.length ? 'monitor-audited-career-sites' : 'start-trial');
+        || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial');
       const planIntent = queryPlan
         || normalizeOnboardingPlan(stored?.planIntent)
         || (persona === 'jobseeker' ? 'jobseeker' : 'trial');
       const next = {
         version: 1,
-        source: stored?.source === 'ats-checker' ? 'ats-checker' : 'pricing',
+        source: ['ats-checker', 'setup-deferred', 'setup-skipped'].includes(stored?.source) ? stored.source : 'pricing',
         persona,
         intent,
         planIntent,
         careerUrls,
+        pendingTargetSites,
+        pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
         audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
         updatedAt: hasExplicitHandoff ? new Date().toISOString() : stored?.updatedAt || new Date().toISOString(),
       };
-      try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+      writeAnonymousOnboardingIntent(next);
       return next;
+    }
+
+    function normalizeOnboardingIntentScopePart(value) {
+      return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+    }
+
+    function getAuthenticatedOnboardingIntentScope(user = state.user, tenant = state.tenant) {
+      const tenantId = normalizeOnboardingIntentScopePart(tenant?.id);
+      const userId = normalizeOnboardingIntentScopePart(user?.id);
+      return tenantId && userId ? `${tenantId}:${userId}` : '';
+    }
+
+    function getAuthenticatedOnboardingIntentStorageKey(user = state.user, tenant = state.tenant) {
+      const scope = getAuthenticatedOnboardingIntentScope(user, tenant);
+      return scope ? `${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}` : '';
+    }
+
+    function clearOnboardingHandoffQuery() {
+      if (!window.history?.replaceState) return;
+      const cleanUrl = new URL(window.location.href);
+      ['signup', 'intent', 'plan', 'persona'].forEach((key) => cleanUrl.searchParams.delete(key));
+      window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    }
+
+    function activateAuthenticatedOnboardingIntent() {
+      const scopedKey = getAuthenticatedOnboardingIntentStorageKey();
+      if (!scopedKey) {
+        state.onboardingIntent = null;
+        return '';
+      }
+
+      const anonymousIntent = readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
+        || readStoredOnboardingIntent(localStorage, ONBOARDING_INTENT_STORAGE_KEY);
+      let activeIntent = readStoredOnboardingIntent(localStorage, scopedKey);
+      if (anonymousIntent) {
+        const migratedIntent = { ...anonymousIntent, updatedAt: new Date().toISOString() };
+        try {
+          localStorage.setItem(scopedKey, JSON.stringify(migratedIntent));
+          activeIntent = migratedIntent;
+          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        } catch {}
+      } else {
+        try {
+          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        } catch {}
+      }
+      state.onboardingIntent = activeIntent;
+      clearOnboardingHandoffQuery();
+      return getAuthenticatedOnboardingIntentScope();
     }
 
     function persistOnboardingIntent(patch = {}) {
@@ -191,6 +299,9 @@
       const persona = normalizeOnboardingPersona(patch.persona || current.persona || state.signupPersona);
       const careerUrls = sanitizeOnboardingCareerUrls(
         Object.prototype.hasOwnProperty.call(patch, 'careerUrls') ? patch.careerUrls : current.careerUrls,
+      );
+      const pendingTargetSites = sanitizeOnboardingTargetSites(
+        Object.prototype.hasOwnProperty.call(patch, 'pendingTargetSites') ? patch.pendingTargetSites : current.pendingTargetSites,
       );
       const requestedPlan = normalizeOnboardingPlan(patch.planIntent);
       let planIntent = requestedPlan || normalizeOnboardingPlan(current.planIntent);
@@ -200,20 +311,32 @@
         planIntent = 'trial';
       }
       const retainsAuditSource = careerUrls.length > 0 && current.source === 'ats-checker';
+      const retainedSetupSource = ['setup-deferred', 'setup-skipped'].includes(current.source) ? current.source : '';
       const next = {
         version: 1,
-        source: retainsAuditSource ? 'ats-checker' : (patch.source === 'ats-checker' ? 'ats-checker' : 'pricing'),
+        source: retainsAuditSource
+          ? 'ats-checker'
+          : (['ats-checker', 'setup-deferred', 'setup-skipped'].includes(patch.source) ? patch.source : retainedSetupSource || 'pricing'),
         persona,
         intent: normalizeOnboardingIntent(patch.intent)
           || normalizeOnboardingIntent(current.intent)
-          || (careerUrls.length ? 'monitor-audited-career-sites' : 'start-trial'),
+          || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
         planIntent,
         careerUrls,
+        pendingTargetSites,
+        pendingTargetReason: normalizePendingTargetReason(
+          Object.prototype.hasOwnProperty.call(patch, 'pendingTargetReason') ? patch.pendingTargetReason : current.pendingTargetReason,
+        ),
         audit: patch.audit || current.audit,
         updatedAt: new Date().toISOString(),
       };
       state.onboardingIntent = next;
-      try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+      const scopedKey = state.user && !state.demo ? getAuthenticatedOnboardingIntentStorageKey() : '';
+      if (scopedKey) {
+        try { localStorage.setItem(scopedKey, JSON.stringify(next)); } catch {}
+      } else {
+        writeAnonymousOnboardingIntent(next);
+      }
       return next;
     }
 
@@ -317,6 +440,12 @@
     async function checkAuth() {
       cleanupServiceWorkers();
       trackPageVisit().catch(() => {});
+      const requestedLegalView = new URLSearchParams(window.location.search).get('legal');
+      if (requestedLegalView === 'terms' || requestedLegalView === 'privacy') {
+        state.view = requestedLegalView;
+        render();
+        return;
+      }
       if (state.verificationToken) {
         try {
           const verification = await api('/api/auth/email-verification/confirm', {
@@ -367,6 +496,7 @@
             state.persona = 'jobseeker';
             state.view = 'landing';
           } else {
+            if (!state.demo) activateAuthenticatedOnboardingIntent();
             state.view = 'app';
           }
         } else if (state.resetToken) {
@@ -424,6 +554,7 @@
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
         state.canManageWorkspace = Boolean(data.canManageWorkspace);
+        activateAuthenticatedOnboardingIntent();
         state.view = 'app';
         state.error = '';
       } catch (err) {
@@ -465,6 +596,12 @@
             persona: persona || 'bd',
             referralCode: state.referralCode || '',
             acquisition: state.acquisition,
+            legalAcceptance: {
+              accepted: true,
+              termsVersion: COMMERCIAL_LEGAL_VERSION,
+              privacyVersion: COMMERCIAL_LEGAL_VERSION,
+              acceptedAt: new Date().toISOString(),
+            },
           }),
         });
         state.user = data.user;
@@ -479,6 +616,7 @@
         state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
         state.canManageSupport = Boolean(data.canManageSupport);
         state.canManageWorkspace = Boolean(data.canManageWorkspace);
+        activateAuthenticatedOnboardingIntent();
         if (data.verificationEmailSent) {
           state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
         }
@@ -578,6 +716,7 @@
       state.emailVerificationAvailable = false;
       state.canManageSupport = false;
       state.canManageWorkspace = false;
+      state.onboardingIntent = getInitialOnboardingIntent();
       state.view = 'landing';
       state.error = '';
       render();
@@ -758,15 +897,15 @@
           ['Work the best path', 'Bring the strongest role, company context, and network contact into one next-action queue.'],
         ],
       } : {
-        badge: 'A hiring-signal workspace for staffing teams',
-        title: 'Know which staffing accounts are worth your next call.',
-        subtitle: 'Rank target companies using current public hiring activity and the relationships you import, then turn the strongest signal into a clear next action.',
+        badge: 'Hiring-signal intelligence for independent recruiters',
+        title: 'Know which target accounts are worth your next call.',
+        subtitle: 'Monitor current public hiring activity, understand why an account moved up, and turn the strongest signal into outreach you can measure.',
         primaryCta: 'Start free trial',
         sectionTitle: 'From a target list to one useful next action',
         sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
-        footer: 'Built for staffing and recruiting teams.',
+        footer: 'Built for independent recruiters and hands-on agency founders.',
         referralTitle: 'Share BD Engine, earn billing credit.',
-        referralBody: 'Every workspace gets a referral link. Invite another founder, recruiter, or sales team and earn credit when they become a paid customer.',
+        referralBody: 'Every workspace gets a referral link. Invite another founder or recruiter and earn credit when their workspace becomes a paid customer.',
         previewLabel: 'Best account today',
         previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
         previewScore: '91',
@@ -801,7 +940,7 @@
             <section class="hero" aria-labelledby="landing-title">
               <div class="hero-content">
                 <nav class="persona-switch" aria-label="Choose a BD Engine workflow">
-                  <a href="/" class="persona-option ${isJobSeekerLanding ? '' : 'is-active'}" ${isJobSeekerLanding ? '' : 'aria-current="page"'}>Staffing teams</a>
+                  <a href="/" class="persona-option ${isJobSeekerLanding ? '' : 'is-active'}" ${isJobSeekerLanding ? '' : 'aria-current="page"'}>Staffing BD</a>
                   <a href="/job-search" class="persona-option ${isJobSeekerLanding ? 'is-active' : ''}" ${isJobSeekerLanding ? 'aria-current="page"' : ''}>Job seekers</a>
                 </nav>
                 <p class="hero-badge">${landingCopy.badge}</p>
@@ -904,11 +1043,12 @@
                 <button class="btn btn-primary btn-block" data-signup data-plan-intent="trial">Start free trial</button>
               </div>
               <div class="pricing-card ${isJobSeekerLanding ? '' : 'pricing-card--popular'}">
-                <div class="pricing-badge ${isJobSeekerLanding ? '' : 'popular'}">${isJobSeekerLanding ? 'For staffing teams' : 'Complete workflow'}</div>
+                <div class="pricing-badge ${isJobSeekerLanding ? '' : 'popular'}">${isJobSeekerLanding ? 'For staffing BD' : 'Early-access workflow'}</div>
                 <h3>Sales Professional</h3>
                 <div class="pricing-price"><span class="price-amount">$10</span><span class="price-period">USD / month</span></div>
-                <p class="pricing-fit">Best for sales, recruiting, and BD teams using live hiring signals to prioritize outreach.</p>
+                <p class="pricing-fit">Best for an independent recruiter or agency founder using live hiring signals to prioritize outreach.</p>
                 <ul class="pricing-features">
+                  <li>1 user</li>
                   <li>1,000 accounts</li>
                   <li>10,000 contacts</li>
                   <li>Unlimited ATS job boards</li>
@@ -979,9 +1119,10 @@
     }
 
     function getTrustContent(kind) {
-      const updated = 'April 26, 2026';
+      const updated = 'August 21, 2026';
       const shared = {
         updated,
+        version: COMMERCIAL_LEGAL_VERSION,
         support: 'Support: dgfinance15@gmail.com',
       };
       const pages = {
@@ -1010,14 +1151,18 @@
           cta: 'Create account',
         },
         terms: {
-          eyebrow: 'Terms summary',
-          title: 'Launch terms for early customers',
-          intro: 'These terms summarize the responsibilities that apply to early customer subscriptions and acceptable use of the service.',
+          eyebrow: 'Terms of service',
+          title: 'Terms for early-access customers',
+          intro: 'These Terms govern access to BD Engine Cloud, including early-access trials and paid subscriptions.',
           sections: [
             ['Acceptable use', 'Do not use BD Engine Cloud for spam, unlawful outreach, scraping abuse, credential sharing, or processing data you are not allowed to use.'],
             ['Customer responsibility', 'You are responsible for the legality, accuracy, and compliance of imported contacts, outreach, and job-signal use.'],
-            ['Subscription', 'Paid access is month-to-month unless otherwise agreed. Users should be able to cancel from Billing once Stripe is connected.'],
-            ['No guarantee', 'Hiring signals, scores, and drafts are decision-support tools and may be incomplete or wrong. Review before acting.'],
+            ['Subscription and cancellation', 'Paid access is month-to-month unless otherwise agreed. Current pricing, renewal status, and cancellation controls are presented in Billing when paid checkout is enabled.'],
+            ['Service changes', 'Early-access features may change as the product develops. Material changes to these Terms will be published with an updated version and effective date.'],
+            ['Data and privacy', 'You retain responsibility for data you submit. The Privacy notice describes how account and workspace data are handled and the export and deletion controls available to account holders.'],
+            ['Decision support', 'Hiring signals, scores, and drafts may be incomplete or wrong. Review source data and generated content before making outreach, hiring, or commercial decisions.'],
+            ['Suspension and termination', 'Access may be restricted for unlawful use, security threats, non-payment, or material violations of these Terms. Account holders can request account closure from the privacy controls.'],
+            ['Contact', 'Questions about these Terms can be sent to dgfinance15@gmail.com. Additional negotiated terms must be agreed in writing.'],
           ],
           cta: 'Review pricing',
         },
@@ -1053,7 +1198,7 @@
             <h1>${escapeHtml(content.title)}</h1>
             <p class="trust-intro">${escapeHtml(content.intro)}</p>
             <div class="trust-meta">
-              <span>Last updated ${escapeHtml(content.updated)}</span>
+              <span>Last updated ${escapeHtml(content.updated)} · Version ${escapeHtml(content.version)}</span>
               <span>${escapeHtml(content.support)}</span>
             </div>
             <div class="trust-grid">
@@ -1181,7 +1326,7 @@
               <p>Enter your email and we will send a reset link if an account exists.</p>
             </div>
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
-            ${state.resetMessage ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">${escapeHtml(state.resetMessage)}</div>` : ''}
+            ${state.resetMessage ? `<div class="auth-error auth-notice--success" role="status">${escapeHtml(state.resetMessage)}</div>` : ''}
             <form id="forgot-form" class="auth-form">
               <div class="form-group">
                 <label for="forgot-email">Email</label>
@@ -1215,7 +1360,7 @@
                 <svg width="32" height="32" viewBox="0 0 28 28"><rect width="28" height="28" rx="6" fill="url(#bg-reset2)"/><path d="M7 8h6a5 5 0 010 10H7V8zm2 2v6h4a3 3 0 000-6H9z" fill="#fff"/><defs><linearGradient id="bg-reset2" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs></svg>
               </div>
               <h2>Choose a new password</h2>
-              <p>Use at least 6 characters.</p>
+              <p>Use at least 10 characters.</p>
             </div>
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="reset-form" class="auth-form">
@@ -1247,9 +1392,9 @@
         jobseeker: 'Job Seeker',
       }[state.onboardingIntent?.planIntent] || '';
       const onboardingSummary = onboardingUrlCount
-        ? `<div class="auth-error" role="status" style="background: rgba(79, 70, 229, .08); border-color: rgba(79, 70, 229, .26); color: #3730a3;"><strong>Your audit is ready.</strong> ${onboardingUrlCount} ${onboardingUrlCount === 1 ? 'career site' : 'career sites'} will be ready to add during setup.</div>`
+        ? `<div class="auth-error auth-notice--intent" role="status"><strong>Your audit is ready.</strong> ${onboardingUrlCount} ${onboardingUrlCount === 1 ? 'career site' : 'career sites'} will be ready to add during setup.</div>`
         : selectedPlanLabel
-          ? `<div class="auth-error" role="status" style="background: rgba(79, 70, 229, .08); border-color: rgba(79, 70, 229, .26); color: #3730a3;"><strong>${selectedPlanLabel} selected.</strong> Your no-card trial starts first; you can confirm billing later.</div>`
+          ? `<div class="auth-error auth-notice--intent" role="status"><strong>${selectedPlanLabel} selected.</strong> Your no-card trial starts first; you can confirm billing later.</div>`
           : '';
       root.innerHTML = `
         <div class="auth-page">
@@ -1262,7 +1407,7 @@
               <p>Start your 14-day free trial — no credit card required</p>
             </div>
             ${onboardingSummary}
-            ${state.referralCode ? `<div class="auth-error" role="status" style="background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); color: #166534;">Referral code ${escapeHtml(state.referralCode)} will be applied when you subscribe.</div>` : ''}
+            ${state.referralCode ? `<div class="auth-error auth-notice--success" role="status"><strong>Referral from ${escapeHtml(state.referralCode)} recorded.</strong> Your referrer may earn a billing credit if this workspace subscribes.</div>` : ''}
             ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <form id="signup-form" class="auth-form">
               <div class="form-group">
@@ -1289,6 +1434,10 @@
                 <label for="signup-workspace" id="workspace-label">Workspace name</label>
                 <input type="text" id="signup-workspace" placeholder="My Company" autocomplete="organization">
               </div>
+              <label class="auth-consent" for="signup-legal-consent">
+                <input type="checkbox" id="signup-legal-consent" required>
+                <span>I agree to the <a href="/?legal=terms" target="_blank" rel="noopener">Terms</a> and have read the <a href="/?legal=privacy" target="_blank" rel="noopener">Privacy notice</a>.</span>
+              </label>
               <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>
                 ${state.busy ? '<span class="btn-spinner"></span> Creating account...' : 'Create account'}
               </button>
@@ -1644,6 +1793,10 @@
               }),
             });
             backdrop.remove();
+            const closedAccountIntentKey = getAuthenticatedOnboardingIntentStorageKey();
+            if (closedAccountIntentKey) {
+              try { localStorage.removeItem(closedAccountIntentKey); } catch {}
+            }
             state.user = null;
             state.tenant = null;
             state.tenants = [];
@@ -1655,6 +1808,7 @@
             state.emailVerificationAvailable = false;
             state.canManageSupport = false;
             state.canManageWorkspace = false;
+            state.onboardingIntent = null;
             state.accountClosedMessage = result.message || 'Your account has been closed.';
             state.view = 'landing';
             render();
@@ -1845,6 +1999,10 @@
     // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
     function renderApp() {
       const planBadge = state.demo ? 'Demo' : (state.plan ? state.plan.displayName : 'Trial');
+      const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
+      const appFrameSrc = onboardingIntentScope
+        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/dashboard`
+        : '/app/#/dashboard';
       const trialNotice = !state.demo && state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
         ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
       const trialUpgradeBanner = state.demo
@@ -1893,7 +2051,7 @@
           ${trialUpgradeBanner}
           ${verificationNotice}
           <div class="cloud-app-container">
-            <iframe class="cloud-app-frame" title="BD Engine workspace" src="/app/#/dashboard"></iframe>
+            <iframe class="cloud-app-frame" title="BD Engine workspace" src="${appFrameSrc}"></iframe>
           </div>
         </div>`;
 

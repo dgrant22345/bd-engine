@@ -109,7 +109,7 @@ test('ATS audit hands the audited list and workflow intent into signup', async (
   ].join('\n'));
   await page.getByRole('button', { name: 'Audit coverage' }).click();
 
-  const savedAudit = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  const savedAudit = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
   expect(savedAudit).toMatchObject({
     version: 1,
     source: 'ats-checker',
@@ -133,7 +133,7 @@ test('ATS audit hands the audited list and workflow intent into signup', async (
   await expect(page.locator('[role="status"]', { hasText: 'Your audit is ready.' })).toContainText('2 career sites');
   await expect(page.locator('#signup-persona')).toHaveValue('bd');
 
-  const signupIntent = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  const signupIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
   expect(signupIntent).toMatchObject({
     source: 'ats-checker',
     persona: 'bd',
@@ -150,7 +150,7 @@ test('pricing selection persists the intended paid plan through signup', async (
 
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
   await expect(page.locator('[role="status"]', { hasText: 'Sales Professional selected.' })).toBeVisible();
-  const planIntent = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_onboarding_intent') || 'null'));
+  const planIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
   expect(planIntent).toMatchObject({
     version: 1,
     source: 'pricing',

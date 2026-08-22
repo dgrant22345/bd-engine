@@ -56,7 +56,10 @@ export function buildWorkflowSignupHref(persona = 'bd') {
 
 function persistAuditOnboardingIntent(audit, persona = 'bd') {
   const intent = buildAuditOnboardingIntent(audit, persona);
-  try { localStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch {}
+  try {
+    sessionStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent));
+    localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+  } catch {}
   return intent;
 }
 

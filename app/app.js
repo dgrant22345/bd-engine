@@ -18,7 +18,11 @@ const defaultAdminCollapsed = {
 };
 
 const POST_SETUP_TOUR_PENDING_KEY = 'bd_post_setup_tour_pending';
-const ONBOARDING_INTENT_KEY = 'bd_onboarding_intent';
+const ONBOARDING_INTENT_ANONYMOUS_KEY = 'bd_onboarding_intent';
+const onboardingIntentScope = String(new URLSearchParams(window.location.search).get('intentScope') || '').trim();
+const ONBOARDING_INTENT_KEY = /^[a-zA-Z0-9:_-]{1,260}$/.test(onboardingIntentScope)
+  ? `${ONBOARDING_INTENT_ANONYMOUS_KEY}:${onboardingIntentScope}`
+  : ONBOARDING_INTENT_ANONYMOUS_KEY;
 const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DASHBOARD_RENDER_LIMITS = {
   todayQueue: 50,
