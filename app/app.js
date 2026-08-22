@@ -3375,14 +3375,17 @@ function bindEvents() {
         payload.valueCents = Math.round(numericValue * 100);
         payload.currency = values.currency || 'USD';
       }
-      await api('/api/activity', {
+      const activityResult = await api('/api/activity', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
       invalidateAppData();
-      logActivity(payload.type || 'note', { accountId: payload.accountId, summary: payload.summary || 'Activity logged' });
       await renderAccountDetail(payload.accountId);
-      showToast('Activity logged.', 'success');
+      if (activityResult?.partialSuccess) {
+        showToast('Activity saved, but its commercial result was not recorded. Do not submit it again. Open Support from the account menu with the account name and activity date.', 'warning', 12000);
+      } else {
+        showToast(activityResult?.commercialOutcomeStatus === 'recorded' ? 'Activity and result logged.' : 'Activity logged.', 'success');
+      }
       return;
     }
 

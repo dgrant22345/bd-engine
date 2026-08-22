@@ -161,6 +161,37 @@ test('pricing selection persists the intended paid plan through signup', async (
   });
 });
 
+test('Terms review returns to the pricing decision instead of opening signup', async ({ page }) => {
+  await page.goto('/?legal=terms');
+  await page.getByRole('button', { name: 'Review pricing' }).click();
+
+  await expect(page).toHaveURL((url) => !url.searchParams.has('legal') && url.hash === '#pricing');
+  await expect(page.getByRole('heading', { name: 'Try the workflow before choosing a plan' })).toBeFocused();
+  await expect(page.locator('#signup-form')).toHaveCount(0);
+});
+
+test('signup distinguishes saved setup targets and treats referral codes as pending validation', async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('bd_onboarding_intent', JSON.stringify({
+      version: 1,
+      source: 'setup-skipped',
+      persona: 'bd',
+      intent: 'monitor-career-sites',
+      planIntent: 'trial',
+      careerUrls: ['https://example.com/careers'],
+      pendingTargetSites: ['Saved Target One', 'https://example.com/careers'],
+      pendingTargetReason: 'skipped',
+      updatedAt: new Date().toISOString(),
+    }));
+  });
+  await page.goto('/?signup=1&ref=not-yet-validated');
+
+  await expect(page.locator('[role="status"]', { hasText: '2 saved targets found.' })).toContainText('saved when setup was skipped');
+  await expect(page.locator('[role="status"]', { hasText: '2 saved targets found.' })).not.toContainText('audit');
+  await expect(page.locator('[role="status"]', { hasText: 'Referral code NOTYETVALIDATED detected.' })).toContainText('validated when you create the workspace');
+  await expect(page.getByText(/Referral from .* recorded/)).toHaveCount(0);
+});
+
 test('ATS checker offers a useful sample path without signup', async ({ page }) => {
   const trackedEvents = await collectAnalyticsEvents(page);
   await page.goto('/ats-checker');

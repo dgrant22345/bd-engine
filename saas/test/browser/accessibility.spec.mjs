@@ -24,6 +24,27 @@ test('public account entry is accessible', async ({ page }) => {
   await expectNoBlockingViolations(page);
 });
 
+test('signup consent is a labelled main workflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/?signup=1');
+
+  const signupMain = page.getByRole('main');
+  await expect(signupMain).toHaveAttribute('aria-labelledby', 'signup-title');
+  await expect(page.getByRole('heading', { level: 1, name: 'Create your account' })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: /I agree to the Terms/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Terms' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Privacy notice' })).toBeVisible();
+  await expect(page.locator('.auth-consent label a')).toHaveCount(0);
+  const consentLayout = await page.locator('.auth-consent').evaluate((element) => ({
+    fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+    documentWidth: element.ownerDocument.documentElement.scrollWidth,
+    viewportWidth: element.ownerDocument.defaultView.innerWidth,
+  }));
+  expect(consentLayout.fontSize).toBeGreaterThanOrEqual(13);
+  expect(consentLayout.documentWidth).toBeLessThanOrEqual(consentLayout.viewportWidth);
+  await expectNoBlockingViolations(page);
+});
+
 test('ATS coverage audit is accessible before and after results render', async ({ page }) => {
   await page.goto('/ats-checker');
   await expectNoBlockingViolations(page);

@@ -954,6 +954,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: 16px;
 }
 
+.auth-header h1,
 .auth-header h2 {
   font-size: 24px;
   font-weight: 700;
@@ -973,6 +974,18 @@ a:hover { text-decoration: underline; }
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   margin-bottom: 20px;
+}
+
+.auth-notice--intent {
+  border-color: rgba(152, 147, 255, 0.38);
+  background: rgba(90, 86, 214, 0.18);
+  color: #d6d3ff;
+}
+
+.auth-notice--success {
+  border-color: rgba(85, 214, 179, 0.38);
+  background: rgba(85, 214, 179, 0.12);
+  color: #a7efd9;
 }
 
 .auth-success {
@@ -3003,4 +3016,47 @@ a:hover { text-decoration: underline; }
 
 .coverage-proof .btn-primary:hover {
   background: #ecebff;
+}
+
+.auth-consent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.auth-consent input {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  accent-color: var(--accent);
+}
+
+.auth-consent__body {
+  display: grid;
+  gap: 4px;
+}
+
+.auth-consent label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.auth-consent__links {
+  margin: 0;
+}
+
+.auth-consent a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.auth-consent a:hover {
+  text-decoration-color: currentColor;
 }

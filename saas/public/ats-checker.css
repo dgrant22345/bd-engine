@@ -540,11 +540,11 @@ footer {
   background: #f4f7f8;
   color: #17232e;
   --surface: #ffffff;
-  --surface-strong: #edf5f3;
+  --surface-strong: #f0efff;
   --border: #cfd9dd;
   --muted: #536270;
-  --accent: #0f766e;
-  --accent-strong: #0f766e;
+  --accent: #5a56d6;
+  --accent-strong: #5a56d6;
   --success: #13765c;
   --warning: #9a5b08;
   --danger: #b42318;
@@ -699,7 +699,7 @@ button {
 }
 
 button:hover {
-  background: #0b5f59;
+  background: #4844bd;
 }
 
 .sample-button {
@@ -717,7 +717,7 @@ textarea:focus-visible,
 button:focus-visible,
 a:focus-visible,
 .checker-result:focus-visible {
-  outline: 3px solid rgba(15, 118, 110, 0.35);
+  outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
 
@@ -797,7 +797,7 @@ td {
 .result-actions .primary-workflow {
   border-color: var(--accent);
   background: var(--surface-strong);
-  color: #0b5f59;
+  color: #4844bd;
 }
 
 footer {
