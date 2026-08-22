@@ -370,7 +370,7 @@ function applyTheme(mode) {
   document.documentElement.setAttribute('data-theme', effective);
   document.documentElement.style.colorScheme = effective;
   const themeBackground = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#101116' : '#f6f7f9'));
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#0b1120' : '#f8fafc'));
   if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';
   if (themeLabel) themeLabel.textContent = effective === 'dark' ? 'Light' : 'Dark';
 }

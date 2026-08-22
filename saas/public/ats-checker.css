@@ -534,25 +534,26 @@ footer {
   }
 }
 
-/* Public utility refresh: compact, light, and consistent with the main site. */
+/* Public utility refresh: compact, light, and consistent with the sapphire/slate site. */
 :root {
   color-scheme: light;
-  background: #f4f7f8;
-  color: #17232e;
+  background: #f8fafc;
+  color: #0f172a;
   --surface: #ffffff;
-  --surface-strong: #f0efff;
-  --border: #cfd9dd;
-  --muted: #536270;
-  --accent: #5a56d6;
-  --accent-strong: #5a56d6;
-  --success: #13765c;
-  --warning: #9a5b08;
-  --danger: #b42318;
+  --surface-strong: #eff6ff;
+  --border: #cbd5e1;
+  --control-border: #64748b;
+  --muted: #475569;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
 }
 
 body {
-  background: #f4f7f8;
-  color: #17232e;
+  background: #f8fafc;
+  color: #0f172a;
 }
 
 .skip-link {
@@ -562,7 +563,7 @@ body {
   z-index: 100;
   padding: 10px 14px;
   border-radius: 6px;
-  background: #17232e;
+  background: #0f172a;
   color: #ffffff;
   transform: translateY(-150%);
 }
@@ -583,7 +584,7 @@ footer {
 }
 
 .brand {
-  color: #17232e;
+  color: #0f172a;
 }
 
 nav a {
@@ -593,11 +594,11 @@ nav a {
 
 nav a:hover,
 nav a:focus-visible {
-  color: #17232e;
+  color: #0f172a;
 }
 
 .header-cta {
-  border-color: #aebdc2;
+  border-color: var(--control-border);
   border-radius: 7px;
   background: #ffffff;
 }
@@ -618,7 +619,7 @@ main {
 h1 {
   max-width: 780px;
   margin-bottom: 14px;
-  color: #17232e;
+  color: #0f172a;
   font-size: 50px;
   line-height: 1.08;
   letter-spacing: 0;
@@ -658,7 +659,7 @@ h1 {
   border-color: var(--border);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 12px 32px rgba(34, 56, 64, 0.08);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
 }
 
 .input-row {
@@ -679,17 +680,17 @@ button {
 
 textarea {
   min-height: 164px;
-  border-color: #96a6ad;
+  border-color: var(--control-border);
   background: #ffffff;
-  color: #17232e;
+  color: #0f172a;
 }
 
 textarea::placeholder {
-  color: #73828c;
+  color: #64748b;
 }
 
 textarea:hover {
-  border-color: #70848c;
+  border-color: #475569;
 }
 
 button {
@@ -699,13 +700,13 @@ button {
 }
 
 button:hover {
-  background: #4844bd;
+  background: var(--accent-strong);
 }
 
 .sample-button {
-  border-color: #aebdc2;
+  border-color: var(--control-border);
   background: #ffffff;
-  color: #17232e;
+  color: #0f172a;
 }
 
 .sample-button:hover {
@@ -735,7 +736,7 @@ footer {
 .checker-result h2,
 .coverage-notes h2,
 .coverage-notes h3 {
-  color: #17232e;
+  color: #0f172a;
 }
 
 .coverage-summary {
@@ -747,7 +748,7 @@ footer {
 }
 
 .coverage-summary dd {
-  color: #17232e;
+  color: #0f172a;
 }
 
 .audit-table-wrap {
@@ -766,24 +767,24 @@ td {
 }
 
 .audit-status-recognized {
-  background: #e2f3ee;
-  color: #116149;
+  background: #f0fdf4;
+  color: #166534;
 }
 
 .audit-status-review {
-  background: #fff3da;
-  color: #81500a;
+  background: #fffbeb;
+  color: #92400e;
 }
 
 .audit-status-invalid {
-  background: #ffebe9;
-  color: #9d2018;
+  background: #fef2f2;
+  color: #991b1b;
 }
 
 .result-actions a,
 .result-actions button {
-  border-color: #aebdc2;
-  color: #17232e;
+  border-color: var(--control-border);
+  color: #0f172a;
 }
 
 .result-actions button {
@@ -797,7 +798,7 @@ td {
 .result-actions .primary-workflow {
   border-color: var(--accent);
   background: var(--surface-strong);
-  color: #4844bd;
+  color: var(--accent-strong);
 }
 
 footer {

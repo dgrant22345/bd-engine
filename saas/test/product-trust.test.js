@@ -79,16 +79,17 @@ test('saved setup targets and their deferral reason survive the outer shell relo
   assert.match(landing, /'setup-deferred', 'setup-skipped'/);
 });
 
-test('public utility and auth notices use the accessible iris color system', async () => {
+test('public utility and auth notices use the accessible sapphire color system', async () => {
   const [landing, cloudStyles, atsStyles] = await Promise.all([
     readFile(landingPath, 'utf8'),
     readFile(cloudStylesPath, 'utf8'),
     readFile(atsStylesPath, 'utf8'),
   ]);
   assert.doesNotMatch(landing, /color:\s*#(?:3730a3|166534)/i);
-  assert.match(cloudStyles, /\.auth-notice--intent[\s\S]*?color:\s*#d6d3ff/);
-  assert.match(cloudStyles, /\.auth-notice--success[\s\S]*?color:\s*#a7efd9/);
-  assert.match(atsStyles, /--accent:\s*#5a56d6/);
+  assert.match(cloudStyles, /\.auth-notice--intent[\s\S]*?color:\s*#1e40af/);
+  assert.match(cloudStyles, /\.auth-notice--success[\s\S]*?color:\s*#166534/);
+  assert.match(atsStyles, /--accent:\s*#2563eb/);
+  assert.match(atsStyles, /--control-border:\s*#64748b/);
 });
 
 test('commercial outcome failures remain distinct from genuine empty states', async () => {

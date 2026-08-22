@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260821-commercial-loop-12';
+const ASSET_VERSION = '20260821-sapphire-slate-13';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
