@@ -46,3 +46,17 @@ test('public handoff, referral, pricing, and focus copy remain honest and action
   assert.match(atsStyles, /\.checker-result:focus-visible\s*\{\s*outline:\s*3px solid var\(--accent\)/);
   assert.doesNotMatch(atsStyles, /outline:\s*3px solid rgba\(90, 86, 214, 0\.34\)/);
 });
+
+test('Warm Referral Studio provides 3-step multi-touch sequences and 1-click mailto drafts', async () => {
+  const app = await readFile(appPath, 'utf8');
+  assert.match(app, /selectedStep:\s*1/);
+  assert.match(app, /function switchWarmStudioStep\(step\)/);
+  assert.match(app, /function generateWarmStudioCopy\(data\)/);
+  assert.match(app, /mailtoHref\s*=\s*`mailto:\$\{encodeURIComponent\(recipientEmail\)\}/);
+  assert.match(app, /data-action="warm-studio-switch-step"/);
+  assert.match(app, /data-action="warm-studio-copy"/);
+  assert.match(app, /data-action="open-morning-radar"/);
+  assert.match(app, /function getJobSignalBadges\(item\)/);
+  assert.match(app, /function renderDashboardRoiHero\(dashboard/);
+  assert.match(app, /function renderMorningRadarModal\(data\)/);
+});

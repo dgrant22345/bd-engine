@@ -124,3 +124,21 @@ test('the dev seed workspace is coherent too', async () => {
     assert.equal(account.connectionCount, linked, `${account.displayName} connectionCount`);
   }
 });
+
+test('sample workspace commercial outcomes have valid schema sources and funnel values', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-sample-commercial-outcomes';
+  store.ensureTenant({ id: tenantId, name: 'Sample' }, { id: 'u1', name: 'Owner' });
+  const result = await store.loadSampleWorkspace(tenantId, { persona: 'bd' });
+  assert.equal(result.ok, true);
+  assert.ok(result.stats.outcomes > 0, 'sample outcomes should be loaded');
+
+  const outcomes = await store.findCommercialOutcomes(tenantId, { pageSize: 100 });
+  assert.equal(outcomes.total, result.stats.outcomes);
+  for (const outcome of outcomes.items) {
+    assert.ok(['manual', 'activity', 'import', 'integration'].includes(outcome.source), `invalid source: ${outcome.source}`);
+    assert.ok(outcome.stage, 'outcome must have a stage');
+    assert.ok(outcome.accountId, 'outcome must have an accountId');
+  }
+});
+

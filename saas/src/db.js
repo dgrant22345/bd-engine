@@ -1656,6 +1656,11 @@ export async function dbCreateCommercialOutcome(outcome = {}) {
     );
     if (existing.rows[0]) return mapCommercialOutcome(existing.rows[0]);
   }
+  const byId = await pool.query(
+    'SELECT * FROM commercial_outcomes WHERE id = $1',
+    [normalized.id]
+  );
+  if (byId.rows[0]) return mapCommercialOutcome(byId.rows[0]);
   throw new Error('Commercial outcome could not be recorded.');
 }
 

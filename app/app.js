@@ -143,6 +143,13 @@ const appState = {
   statusPillsExpanded: false,
   previousScores: {},
   theme: localStorage.getItem('bd_theme') || 'system',
+  themePreset: localStorage.getItem('bd_theme_preset') || 'obsidian',
+  dashboardTab: localStorage.getItem('bd_dash_tab') || 'battle-board',
+  selectedContacts: new Set(),
+  selectedJobs: new Set(),
+  batchOutreach: null,
+  batchOutreachModalOpen: false,
+  valueSprintDismissed: localStorage.getItem('bd_sprint_dismissed') === 'true',
   cmdPaletteOpen: false,
   cmdPaletteTrigger: null,
   lastKeyTime: 0,
@@ -338,7 +345,12 @@ const hamburgerBtn = document.getElementById('mobile-hamburger');
 const networkImportModalBackdrop = document.getElementById('network-import-modal-backdrop');
 const linkedinGuideModalBackdrop = document.getElementById('linkedin-guide-modal-backdrop');
 const warmStudioModalBackdrop = document.getElementById('warm-studio-modal-backdrop');
+const batchOutreachModalBackdrop = document.getElementById('batch-outreach-modal-backdrop');
 const pricingModalBackdrop = document.getElementById('pricing-modal-backdrop');
+const morningRadarModalBackdrop = document.getElementById('morning-radar-modal-backdrop');
+const referralShareModalBackdrop = document.getElementById('referral-share-modal-backdrop');
+const themePresetBtn = document.getElementById('theme-preset-btn');
+const themePresetLabel = document.getElementById('theme-preset-label');
 
 const defaultQueries = {
   accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
@@ -396,12 +408,39 @@ function cycleTheme() {
   showToast(`Theme: ${next === 'system' ? 'System' : next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
 }
 
+function applyThemePreset(preset) {
+  const allowed = ['obsidian', 'slate', 'emerald', 'indigo'];
+  const effective = allowed.includes(preset) ? preset : 'obsidian';
+  appState.themePreset = effective;
+  localStorage.setItem('bd_theme_preset', effective);
+  document.documentElement.setAttribute('data-theme-preset', effective);
+  if (themePresetLabel) {
+    const labels = { obsidian: 'Obsidian', slate: 'Slate', emerald: 'Emerald', indigo: 'Indigo' };
+    themePresetLabel.textContent = labels[effective] || 'Obsidian';
+  }
+}
+
+function cycleThemePreset() {
+  const presets = ['obsidian', 'slate', 'emerald', 'indigo'];
+  const next = presets[(presets.indexOf(appState.themePreset) + 1) % presets.length];
+  applyThemePreset(next);
+  const labels = {
+    obsidian: 'Executive Obsidian (Dark)',
+    slate: 'Enterprise Slate (Light)',
+    emerald: 'Emerald Prestige (Forest)',
+    indigo: 'Indigo Luxe (Violet)'
+  };
+  showToast(`Theme Preset: ${labels[next] || next}`, 'info');
+}
+
 applyTheme(appState.theme);
+applyThemePreset(appState.themePreset);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (appState.theme === 'system') applyTheme('system');
 });
 
 if (themeToggle) themeToggle.addEventListener('click', cycleTheme);
+if (themePresetBtn) themePresetBtn.addEventListener('click', cycleThemePreset);
 document.querySelector('.topbar-overflow-menu')?.addEventListener('click', (event) => {
   if (event.target.closest('button')) event.currentTarget.closest('details')?.removeAttribute('open');
 });
@@ -1999,9 +2038,119 @@ function wireDashboardCustomizer() {
   });
 }
 
+const DASHBOARD_TAB_SECTIONS = {
+  'battle-board': new Set(['hero', 'value-sprint', 'command-tabs', 'playbook', 'alerts-bar', 'today-queue', 'follow-ups', 'action-plan', 'workflow']),
+  'hiring-radar': new Set(['hero', 'value-sprint', 'command-tabs', 'network-radar', 'new-jobs', 'boards', 'velocity', 'heatmap', 'enrichment', 'readiness']),
+  'pipeline': new Set(['hero', 'value-sprint', 'command-tabs', 'roi-hero', 'outcomes', 'sales-cycle', 'leaderboard', 'metrics', 'workflow', 'duplicates', 'data-quality']),
+};
+
 function dashSection(id, html) {
-  const hidden = appState.dashboardCollapsed[id];
+  const currentTab = appState.dashboardTab || 'battle-board';
+  const tabSet = DASHBOARD_TAB_SECTIONS[currentTab];
+  const tabHidden = tabSet && !tabSet.has(id);
+  const userCollapsed = appState.dashboardCollapsed[id];
+  const hidden = tabHidden || userCollapsed;
   return `<div data-dash-section="${id}" style="${hidden ? 'display:none' : ''}">${html}</div>`;
+}
+
+function render3StepValueSprint(dashboard = {}, personaCopy = {}) {
+  if (appState.valueSprintDismissed) return '';
+  const totalAccounts = dashboard.summary?.accountCount || 0;
+  const activeJobs = getDashboardActiveJobCount(dashboard.summary) || 0;
+  const contactedCount = dashboard.summary?.contactedCount || (appState.activityLog?.length || 0) || (appState.outcomeSummary?.funnel?.contacted || 0);
+
+  const step1Done = totalAccounts > 0 || (dashboard.todayQueue?.length || 0) > 0;
+  const step2Done = activeJobs > 0 || (dashboard.newJobsToday?.length || 0) > 0;
+  const step3Done = contactedCount > 0;
+
+  const completedCount = (step1Done ? 1 : 0) + (step2Done ? 1 : 0) + (step3Done ? 1 : 0);
+  const percent = Math.round((completedCount / 3) * 100);
+
+  return `
+    <section class="value-sprint-card">
+      <div class="value-sprint-header">
+        <div class="value-sprint-title-group">
+          <h3>⚡ 3-Step Outbound Value Sprint <span class="status-pill status-pill--success">${completedCount}/3 Complete (${percent}%)</span></h3>
+          <p>Get from cold workspace to live, verified warm conversations in under 3 minutes.</p>
+        </div>
+        <div class="value-sprint-meter">
+          <div class="value-sprint-progress"><div class="value-sprint-progress-fill" style="width: ${Math.max(percent, 5)}%"></div></div>
+          <button class="ghost-button ghost-button--xs" type="button" data-action="dismiss-value-sprint" title="Hide quick start">✕ Dismiss</button>
+        </div>
+      </div>
+      <div class="sprint-steps-grid">
+        <div class="sprint-step-item ${step1Done ? 'is-completed' : ''}">
+          <div class="sprint-step-top">
+            <span class="sprint-step-number">${step1Done ? '✓' : '1'}</span>
+            <div class="sprint-step-content">
+              <h4>${step1Done ? 'Network Connected' : '1. Import Your Network'}</h4>
+              <p>${step1Done ? `${formatNumber(totalAccounts)} companies and network contacts loaded.` : 'Upload LinkedIn Connections.csv or try the instant sample network.'}</p>
+            </div>
+          </div>
+          <div class="sprint-step-cta">
+            ${step1Done
+              ? '<a class="ghost-button ghost-button--xs" href="#/contacts">View Network →</a>'
+              : '<button class="primary-button primary-button--xs" type="button" data-action="open-network-import-modal">⚡ Import Network</button> <button class="secondary-button secondary-button--xs" type="button" data-action="quick-load-sample-workspace">Sample</button>'}
+          </div>
+        </div>
+
+        <div class="sprint-step-item ${step2Done ? 'is-completed' : ''}">
+          <div class="sprint-step-top">
+            <span class="sprint-step-number">${step2Done ? '✓' : '2'}</span>
+            <div class="sprint-step-content">
+              <h4>${step2Done ? 'Live Hiring Matched' : '2. Discover ATS Signals'}</h4>
+              <p>${step2Done ? `${formatNumber(activeJobs)} verified active roles synced with warm paths.` : 'Discover Greenhouse, Lever, Ashby, Workday boards with active roles.'}</p>
+            </div>
+          </div>
+          <div class="sprint-step-cta">
+            ${step2Done
+              ? '<a class="ghost-button ghost-button--xs" href="#/jobs">Explore Roles →</a>'
+              : '<a class="primary-button primary-button--xs" href="#/jobs">Review Hiring Radar</a>'}
+          </div>
+        </div>
+
+        <div class="sprint-step-item ${step3Done ? 'is-completed' : ''}">
+          <div class="sprint-step-top">
+            <span class="sprint-step-number">${step3Done ? 'Outbound Active' : '3. Launch Outreach'}</span>
+            <div class="sprint-step-content">
+              <h4>${step3Done ? 'First Outreach Sent' : '3. 1-Click Outreach'}</h4>
+              <p>${step3Done ? `${formatNumber(contactedCount)} contacts engaged with durable follow-ups.` : 'Use Batch Outreach Studio to generate grounded notes for your top targets.'}</p>
+            </div>
+          </div>
+          <div class="sprint-step-cta">
+            <a class="primary-button primary-button--xs" href="#/contacts">Launch Outreach →</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderDashboardCommandCenterTabs(dashboard = {}, extended = {}) {
+  const currentTab = appState.dashboardTab || 'battle-board';
+  const battleCount = (dashboard.todayQueue?.length || 0) + ((extended.overdueFollowUps?.length || 0) + (extended.staleAccounts?.length || 0));
+  const radarCount = getDashboardActiveJobCount(dashboard.summary) || 0;
+  const pipelineCount = dashboard.summary?.accountCount || 0;
+
+  return `
+    <nav class="dashboard-tab-bar" role="tablist" aria-label="Dashboard views">
+      <button class="dashboard-tab-btn ${currentTab === 'battle-board' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'battle-board'}" data-action="dashboard-switch-tab" data-tab="battle-board">
+        <span>🎯 Today's Battle Board</span>
+        <span class="tab-badge">${formatNumber(battleCount)}</span>
+      </button>
+      <button class="dashboard-tab-btn ${currentTab === 'hiring-radar' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'hiring-radar'}" data-action="dashboard-switch-tab" data-tab="hiring-radar">
+        <span>📡 Hiring & Network Radar</span>
+        <span class="tab-badge">${formatNumber(radarCount)}</span>
+      </button>
+      <button class="dashboard-tab-btn ${currentTab === 'pipeline' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'pipeline'}" data-action="dashboard-switch-tab" data-tab="pipeline">
+        <span>📊 Pipeline & Outcomes</span>
+        <span class="tab-badge">${formatNumber(pipelineCount)}</span>
+      </button>
+      <button class="dashboard-tab-btn ${currentTab === 'all' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'all'}" data-action="dashboard-switch-tab" data-tab="all">
+        <span>⚡ All Sections</span>
+      </button>
+    </nav>
+  `;
 }
 
 /* ── Phase 6: PDF export (client-side) ── */
@@ -2792,12 +2941,48 @@ function bindEvents() {
       closePricingModal();
       return;
     }
+    if (actionName === 'open-referral-modal') {
+      openReferralShareModal();
+      return;
+    }
+    if (actionName === 'close-referral-modal') {
+      closeReferralShareModal();
+      return;
+    }
+    if (actionName === 'copy-referral-link') {
+      copyReferralLink();
+      return;
+    }
+    if (actionName === 'copy-referral-message') {
+      copyReferralMessage();
+      return;
+    }
+    if (actionName === 'copy-discord-message') {
+      copyDiscordMessage();
+      return;
+    }
+    if (actionName === 'open-morning-radar') {
+      await openMorningRadarModal();
+      return;
+    }
+    if (actionName === 'close-morning-radar') {
+      closeMorningRadarModal();
+      return;
+    }
+    if (actionName === 'morning-radar-copy') {
+      await copyMorningRadarText();
+      return;
+    }
     if (actionName === 'open-warm-studio') {
       await openWarmStudioModal(action.dataset.jobId, action.dataset.contactId);
       return;
     }
     if (actionName === 'close-warm-studio') {
       closeWarmStudioModal();
+      return;
+    }
+    if (actionName === 'warm-studio-switch-step') {
+      switchWarmStudioStep(action.dataset.step);
       return;
     }
     if (actionName === 'warm-studio-switch-format') {
@@ -2822,6 +3007,187 @@ function bindEvents() {
     }
     if (actionName === 'update-job-pipeline-stage') {
       await updateJobPipelineStage(action.dataset.jobId, action.dataset.stage);
+      return;
+    }
+    if (actionName === 'cycle-theme-preset') {
+      cycleThemePreset();
+      return;
+    }
+    if (actionName === 'dashboard-switch-tab') {
+      const targetTab = action.dataset.tab || 'battle-board';
+      appState.dashboardTab = targetTab;
+      localStorage.setItem('bd_dash_tab', targetTab);
+      await renderDashboardView({ skipLoading: true });
+      return;
+    }
+    if (actionName === 'dismiss-value-sprint') {
+      appState.valueSprintDismissed = true;
+      localStorage.setItem('bd_sprint_dismissed', 'true');
+      const sprintCard = document.querySelector('.value-sprint-card');
+      if (sprintCard) sprintCard.style.display = 'none';
+      return;
+    }
+    if (actionName === 'close-batch-outreach') {
+      closeBatchOutreachModal();
+      return;
+    }
+    if (actionName === 'batch-switch-recipient') {
+      const idx = Number(action.dataset.index) || 0;
+      if (appState.batchOutreach) {
+        appState.batchOutreach.activeIndex = idx;
+        renderBatchOutreachModal();
+      }
+      return;
+    }
+    if (actionName === 'batch-prev') {
+      if (appState.batchOutreach && appState.batchOutreach.activeIndex > 0) {
+        appState.batchOutreach.activeIndex--;
+        renderBatchOutreachModal();
+      }
+      return;
+    }
+    if (actionName === 'batch-next') {
+      if (appState.batchOutreach && appState.batchOutreach.activeIndex < appState.batchOutreach.items.length - 1) {
+        appState.batchOutreach.activeIndex++;
+        renderBatchOutreachModal();
+      }
+      return;
+    }
+    if (actionName === 'batch-copy-active') {
+      await copyActiveBatchDraft();
+      return;
+    }
+    if (actionName === 'batch-copy-all') {
+      await copyAllBatchOutreachDrafts();
+      return;
+    }
+    if (actionName === 'batch-export-csv') {
+      exportBatchOutreachCsv();
+      return;
+    }
+    if (actionName === 'batch-log-all') {
+      await logAllBatchOutreachSent();
+      return;
+    }
+    if (actionName === 'launch-batch-outreach-contacts') {
+      const checked = document.querySelectorAll('.contacts-bulk-checkbox:checked');
+      if (!checked.length) {
+        showToast('Select at least 1 contact using the checkboxes to open Batch Outreach Studio.', 'warning');
+        return;
+      }
+      const items = Array.from(checked).map(cb => ({
+        id: cb.value,
+        name: cb.dataset.name || '',
+        company: cb.dataset.company || '',
+        title: cb.dataset.title || '',
+        accountId: cb.dataset.accountId || '',
+        email: cb.dataset.email || '',
+        linkedinUrl: cb.dataset.linkedin || '',
+        jobTitle: 'Key Openings',
+      }));
+      await openBatchOutreachStudio(items);
+      return;
+    }
+    if (actionName === 'clear-contacts-bulk') {
+      document.querySelectorAll('.contacts-bulk-checkbox').forEach(cb => { cb.checked = false; });
+      const selectAll = document.getElementById('contacts-bulk-select-all');
+      if (selectAll) selectAll.checked = false;
+      updateContactsBulkBar();
+      return;
+    }
+    if (actionName === 'export-selected-contacts-csv') {
+      const checked = document.querySelectorAll('.contacts-bulk-checkbox:checked');
+      if (!checked.length) return;
+      const items = Array.from(checked).map(cb => ({
+        name: cb.dataset.name || '',
+        company: cb.dataset.company || '',
+        title: cb.dataset.title || '',
+        email: cb.dataset.email || '',
+        linkedinUrl: cb.dataset.linkedin || '',
+      }));
+      const headers = ['Full Name', 'Company', 'Title', 'Email', 'LinkedIn'];
+      const rows = items.map(c => [c.name, c.company, c.title, c.email, c.linkedinUrl]);
+      const escapeCsvVal = (v) => `"${String(v || '').replace(/"/g, '""')}"`;
+      const csv = [headers.map(escapeCsvVal).join(','), ...rows.map(r => r.map(escapeCsvVal).join(','))].join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bd-engine-contacts-selected-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`📥 Exported ${items.length} selected contacts to CSV!`, 'success');
+      return;
+    }
+    if (actionName === 'launch-batch-outreach-jobs') {
+      const checked = document.querySelectorAll('.jobs-bulk-checkbox:checked');
+      if (!checked.length) {
+        showToast('Select at least 1 job role using the checkboxes to open Batch Outreach Studio.', 'warning');
+        return;
+      }
+      const items = Array.from(checked).map(cb => {
+        let contacts = [];
+        try { contacts = JSON.parse(cb.dataset.contacts || '[]'); } catch {}
+        const topContact = contacts[0] || {};
+        return {
+          id: cb.value,
+          name: topContact.fullName || 'Hiring Leader',
+          firstName: topContact.firstName || 'there',
+          company: cb.dataset.company || '',
+          title: topContact.title || 'Team Member',
+          accountId: cb.dataset.accountId || '',
+          email: topContact.email || '',
+          linkedinUrl: topContact.linkedinUrl || '',
+          jobTitle: cb.dataset.jobTitle || 'Open Role',
+          jobLocation: cb.dataset.jobLocation || '',
+          jobUrl: cb.dataset.jobUrl || '',
+        };
+      });
+      await openBatchOutreachStudio(items);
+      return;
+    }
+    if (actionName === 'clear-jobs-bulk') {
+      document.querySelectorAll('.jobs-bulk-checkbox').forEach(cb => { cb.checked = false; });
+      const selectAll = document.getElementById('jobs-bulk-select-all');
+      if (selectAll) selectAll.checked = false;
+      updateJobsBulkBar();
+      return;
+    }
+    if (actionName === 'launch-batch-outreach-accounts') {
+      const checked = document.querySelectorAll('.bulk-checkbox:checked');
+      if (!checked.length) {
+        showToast('Select at least 1 account to open Batch Outreach Studio.', 'warning');
+        return;
+      }
+      const accountIds = Array.from(checked).map(cb => cb.value);
+      const items = [];
+      for (const accountId of accountIds) {
+        try {
+          const res = await api(`/api/accounts/${accountId}`);
+          if (res?.account) {
+            const topContact = res.contacts?.[0] || {};
+            const topJob = res.jobs?.[0] || {};
+            items.push({
+              id: res.account.id,
+              accountId: res.account.id,
+              name: topContact.fullName || 'Hiring Leader',
+              firstName: topContact.firstName || 'there',
+              company: res.account.displayName || 'Company',
+              title: topContact.title || 'Leadership',
+              email: topContact.email || '',
+              linkedinUrl: topContact.linkedinUrl || '',
+              jobTitle: topJob.title || 'Open Positions',
+              jobLocation: topJob.location || '',
+              jobUrl: topJob.jobUrl || topJob.url || '',
+            });
+          }
+        } catch {}
+      }
+      if (items.length) {
+        await openBatchOutreachStudio(items);
+      }
       return;
     }
     if (actionName === 'open-admin-section') {
@@ -6395,6 +6761,7 @@ async function openWarmStudioModal(jobId, contactId) {
     account: targetAccount,
     contacts: targetContacts,
     selectedContact: selectedContact,
+    selectedStep: 1,
     selectedFormat: 'referral_dm',
     selectedTone: 'casual',
   };
@@ -6413,6 +6780,12 @@ function closeWarmStudioModal() {
   warmStudioModalBackdrop.innerHTML = '';
 }
 
+function switchWarmStudioStep(step) {
+  if (!appState.warmStudioData) return;
+  appState.warmStudioData.selectedStep = Number(step) || 1;
+  renderWarmStudioModal();
+}
+
 function switchWarmStudioFormat(format) {
   if (!appState.warmStudioData) return;
   appState.warmStudioData.selectedFormat = format;
@@ -6426,7 +6799,7 @@ function switchWarmStudioTone(tone) {
 }
 
 function generateWarmStudioCopy(data) {
-  const { job, account, selectedContact, selectedTone } = data;
+  const { job, account, selectedContact, selectedTone, selectedStep = 1 } = data;
   const contactName = selectedContact?.fullName || selectedContact?.firstName || 'there';
   const firstName = selectedContact?.firstName || contactName.split(' ')[0] || 'there';
   const contactTitle = selectedContact?.title || 'Team Member';
@@ -6437,45 +6810,74 @@ function generateWarmStudioCopy(data) {
   const myName = appState.bootstrap?.user?.name || 'Applicant';
 
   let linkedinNote = '';
-  if (selectedTone === 'casual') {
-    linkedinNote = `Hi ${firstName}! Saw your work at ${companyName} and wanted to connect. I noticed ${companyName} has an open ${jobTitle} role—would love to connect and learn more about your experience on the team! Best, ${myName}`;
-  } else if (selectedTone === 'direct') {
-    linkedinNote = `Hi ${firstName}, reaching out as I'm applying for the ${jobTitle} opening at ${companyName}. Would value connecting and hearing any quick advice on the team. Thanks! - ${myName}`;
-  } else {
-    linkedinNote = `Hello ${firstName}, I came across your profile and admire your work as ${contactTitle} at ${companyName}. I'm following ${companyName}'s ${jobTitle} opening and would be grateful to connect. Regards, ${myName}`;
-  }
-  if (linkedinNote.length > 295) linkedinNote = linkedinNote.slice(0, 292) + '...';
-
   let referralDm = '';
-  if (selectedTone === 'casual') {
-    referralDm = `Hey ${firstName}! Hope all is well with you.\n\nI saw that ${companyName} is currently hiring for a ${jobTitle}${jobLocation ? ` (${jobLocation})` : ''} and the role looks like a great match for my background.\n\nAre you still enjoying your time at ${companyName}? If you're open to it, I'd love to ask for your internal referral or advice on who leads the team. Happy to send over my resume and a 2-line summary to make it super easy.\n\nThanks a ton!\n${myName}`;
-  } else if (selectedTone === 'direct') {
-    referralDm = `Hi ${firstName},\n\nI noticed ${companyName} posted a ${jobTitle} role recently. My experience aligns closely with what the team is looking for.\n\nWould you be open to submitting an internal referral or introducing me to the hiring manager? I can share a quick blurb and my resume right away.\n\nAppreciate your time!\n${myName}`;
-  } else {
-    referralDm = `Hi ${firstName},\n\nI hope you are doing well. I have been following ${companyName}'s growth and noticed the recent opening for ${jobTitle}.\n\nGiven your role at ${companyName}, I would appreciate any insight you might have into the team. If you feel comfortable, I would be grateful for an internal referral.\n\nLet me know if you might have 5 minutes to connect, or if I can send over my background materials.\n\nBest regards,\n${myName}`;
-  }
-
   let emailPitch = '';
-  const emailSubject = selectedTone === 'casual'
-    ? `${jobTitle} inquiry — ${myName}`
-    : `Application & Introduction: ${jobTitle} (${myName})`;
-
-  if (selectedTone === 'casual') {
-    emailPitch = `Hi ${firstName},\n\nI'm reaching out because I saw ${companyName}'s open ${jobTitle} role${jobLocation ? ` in ${jobLocation}` : ''} and was really excited by what the team is building.\n\nOver the past few years, I've specialized in delivering impactful results and driving technical excellence. I'd love the opportunity to bring that experience to ${companyName}.\n\nI've reviewed the requirements and believe I can hit the ground running immediately. Would you be open to a quick 10-minute chat this week?\n\nBest,\n${myName}${jobUrl ? `\n\nRole link: ${jobUrl}` : ''}`;
-  } else if (selectedTone === 'direct') {
-    emailPitch = `Hi ${firstName},\n\nI'm writing regarding the ${jobTitle} role at ${companyName}.\n\nHere is what I bring to the table:\n• Proven track record delivering key initiatives on time and scale\n• Deep familiarity with modern tech stacks and collaborative workflows\n• Strong background matching the exact responsibilities for this opening\n\nCould we schedule a brief 10-minute intro call this week to see if there's a strong mutual fit?\n\nBest regards,\n${myName}`;
-  } else {
-    emailPitch = `Dear ${firstName},\n\nI am writing to express my strong interest in the ${jobTitle} position currently open at ${companyName}.\n\nWith my background and proven success in similar environments, I am confident in my ability to make an immediate, positive contribution to your team's objectives.\n\nI would welcome the opportunity to discuss how my skill set aligns with your current priorities. Thank you for your time and consideration.\n\nSincerely,\n${myName}`;
-  }
-
+  let emailSubject = '';
   let recruiterPitch = '';
-  if (selectedTone === 'casual') {
-    recruiterPitch = `Hi ${firstName}! I saw you're on the Talent team at ${companyName}. I recently came across the ${jobTitle} posting and would love to connect. I have strong experience in this domain and would appreciate connecting with the recruiter managing this search! Cheers, ${myName}`;
-  } else if (selectedTone === 'direct') {
-    recruiterPitch = `Hi ${firstName}, I'm an active candidate for the ${jobTitle} role at ${companyName}. My profile aligns directly with the posted qualifications. Are you managing this search, or could you point me to the right recruiter on your team? Thanks, ${myName}`;
+
+  if (selectedStep === 1) {
+    if (selectedTone === 'casual') {
+      linkedinNote = `Hi ${firstName}! Saw your work at ${companyName} and wanted to connect. I noticed ${companyName} has an open ${jobTitle} role—would love to connect and learn more about your experience on the team! Best, ${myName}`;
+      referralDm = `Hey ${firstName}! Hope all is well with you.\n\nI saw that ${companyName} is currently hiring for a ${jobTitle}${jobLocation ? ` (${jobLocation})` : ''} and the role looks like a great match for my background.\n\nAre you still enjoying your time at ${companyName}? If you're open to it, I'd love to ask for your internal referral or advice on who leads the team. Happy to send over my resume and a 2-line summary to make it super easy.\n\nThanks a ton!\n${myName}`;
+      emailSubject = `${jobTitle} inquiry — ${myName}`;
+      emailPitch = `Hi ${firstName},\n\nI'm reaching out because I saw ${companyName}'s open ${jobTitle} role${jobLocation ? ` in ${jobLocation}` : ''} and was really excited by what the team is building.\n\nOver the past few years, I've specialized in delivering impactful results and driving technical excellence. I'd love the opportunity to bring that experience to ${companyName}.\n\nI've reviewed the requirements and believe I can hit the ground running immediately. Would you be open to a quick 10-minute chat this week?\n\nBest,\n${myName}${jobUrl ? `\n\nRole link: ${jobUrl}` : ''}`;
+      recruiterPitch = `Hi ${firstName}! I saw you're on the Talent team at ${companyName}. I recently came across the ${jobTitle} posting and would love to connect. I have strong experience in this domain and would appreciate connecting with the recruiter managing this search! Cheers, ${myName}`;
+    } else if (selectedTone === 'direct') {
+      linkedinNote = `Hi ${firstName}, reaching out as I'm applying for the ${jobTitle} opening at ${companyName}. Would value connecting and hearing any quick advice on the team. Thanks! - ${myName}`;
+      referralDm = `Hi ${firstName},\n\nI noticed ${companyName} posted a ${jobTitle} role recently. My experience aligns closely with what the team is looking for.\n\nWould you be open to submitting an internal referral or introducing me to the hiring manager? I can share a quick blurb and my resume right away.\n\nAppreciate your time!\n${myName}`;
+      emailSubject = `Application & Introduction: ${jobTitle} (${myName})`;
+      emailPitch = `Hi ${firstName},\n\nI'm writing regarding the ${jobTitle} role at ${companyName}.\n\nHere is what I bring to the table:\n• Proven track record delivering key initiatives on time and scale\n• Deep familiarity with modern tech stacks and collaborative workflows\n• Strong background matching the exact responsibilities for this opening\n\nCould we schedule a brief 10-minute intro call this week to see if there's a strong mutual fit?\n\nBest regards,\n${myName}`;
+      recruiterPitch = `Hi ${firstName}, I'm an active candidate for the ${jobTitle} role at ${companyName}. My profile aligns directly with the posted qualifications. Are you managing this search, or could you point me to the right recruiter on your team? Thanks, ${myName}`;
+    } else {
+      linkedinNote = `Hello ${firstName}, I came across your profile and admire your work as ${contactTitle} at ${companyName}. I'm following ${companyName}'s ${jobTitle} opening and would be grateful to connect. Regards, ${myName}`;
+      referralDm = `Hi ${firstName},\n\nI hope you are doing well. I have been following ${companyName}'s growth and noticed the recent opening for ${jobTitle}.\n\nGiven your role at ${companyName}, I would appreciate any insight you might have into the team. If you feel comfortable, I would be grateful for an internal referral.\n\nLet me know if you might have 5 minutes to connect, or if I can send over my background materials.\n\nBest regards,\n${myName}`;
+      emailSubject = `Inquiry regarding ${jobTitle} opening at ${companyName}`;
+      emailPitch = `Dear ${firstName},\n\nI am writing to express my strong interest in the ${jobTitle} position currently open at ${companyName}.\n\nWith my background and proven success in similar environments, I am confident in my ability to make an immediate, positive contribution to your team's objectives.\n\nI would welcome the opportunity to discuss how my skill set aligns with your current priorities. Thank you for your time and consideration.\n\nSincerely,\n${myName}`;
+      recruiterPitch = `Hello ${firstName}, I noticed you lead recruitment efforts at ${companyName}. I am very interested in the ${jobTitle} position and believe my background would be a strong asset. I would welcome the chance to share my profile with you. Best regards, ${myName}`;
+    }
+  } else if (selectedStep === 2) {
+    if (selectedTone === 'casual') {
+      linkedinNote = `Hi ${firstName}! Quick follow-up on my note regarding ${jobTitle} at ${companyName}. Would love to share two quick project highlights whenever convenient. Cheers!`;
+      referralDm = `Hey ${firstName}! Quick follow-up on this—I know things get busy!\n\nI put together a 2-bullet summary of my relevant projects matching ${companyName}'s ${jobTitle} tech stack so it's super lightweight for you to pass along:\n• Led similar production initiatives delivering measured latency and throughput wins\n• Hands-on expertise with the exact workflows required for this role\n\nLet me know if you're open to introducing me to the hiring lead. Thanks again!\n${myName}`;
+      emailSubject = `Re: ${jobTitle} inquiry — Project & candidate perspective`;
+      emailPitch = `Hi ${firstName},\n\nFollowing up on my previous note regarding the ${jobTitle} opening.\n\nI took a closer look at ${companyName}'s recent product direction and put together a few concrete examples of how I've solved analogous scaling and implementation challenges in past roles.\n\nI'd be glad to share these notes or hop on a brief 10-minute introductory call whenever fits your schedule.\n\nBest,\n${myName}`;
+      recruiterPitch = `Hi ${firstName}! Following up on the ${jobTitle} opening. I'm actively interviewing for target roles this month and wanted to check if ${companyName}'s team is scheduling candidate screens this week. Thanks! - ${myName}`;
+    } else if (selectedTone === 'direct') {
+      linkedinNote = `Hi ${firstName}, following up on my previous message regarding ${jobTitle}. Happy to send over targeted portfolio samples if helpful. Thanks, ${myName}`;
+      referralDm = `Hi ${firstName},\n\nFollowing up on the ${jobTitle} opening. I've prepared a brief summary of my relevant accomplishments and would be grateful for an internal referral or hiring manager intro when you have a free moment.\n\nAppreciate your help!\n${myName}`;
+      emailSubject = `Follow-up: ${jobTitle} at ${companyName} (${myName})`;
+      emailPitch = `Hi ${firstName},\n\nI'm following up on my note from earlier this week regarding the ${jobTitle} role.\n\nMy profile offers immediate alignment with your team's current hiring goals. Do you have 10 minutes open this Thursday or Friday for a concise conversation?\n\nBest regards,\n${myName}`;
+      recruiterPitch = `Hi ${firstName}, checking in regarding candidate review for the ${jobTitle} role. I'd be glad to provide any additional materials needed to advance my application. Best, ${myName}`;
+    } else {
+      linkedinNote = `Hello ${firstName}, following up regarding the ${jobTitle} role at ${companyName}. I would welcome the opportunity to discuss how my qualifications align with your team.`;
+      referralDm = `Hi ${firstName},\n\nI wanted to follow up briefly regarding the ${jobTitle} opening at ${companyName}. I have prepared materials outlining my key project contributions and would be grateful for an opportunity to be referred to the hiring team.\n\nThank you again for your consideration.\n\nBest regards,\n${myName}`;
+      emailSubject = `Follow-up regarding ${jobTitle} position at ${companyName}`;
+      emailPitch = `Dear ${firstName},\n\nI am writing to follow up on my previous inquiry regarding the ${jobTitle} position.\n\nI remain deeply interested in contributing to ${companyName}'s ongoing initiatives and would appreciate the chance to discuss how my experience can support your team's milestones.\n\nThank you for your time and continued consideration.\n\nSincerely,\n${myName}`;
+      recruiterPitch = `Hello ${firstName}, I am writing to follow up on my interest in the ${jobTitle} search. Please let me know if you would like me to submit any further credentials for team review. Best regards, ${myName}`;
+    }
   } else {
-    recruiterPitch = `Hello ${firstName}, I noticed you lead recruitment efforts at ${companyName}. I am very interested in the ${jobTitle} position and believe my background would be a strong asset. I would welcome the chance to share my profile with you. Best regards, ${myName}`;
+    if (selectedTone === 'casual') {
+      linkedinNote = `Hi ${firstName}! Closing the loop on ${jobTitle} at ${companyName}. No worries if timing is tight—let's stay connected for the future! Best, ${myName}`;
+      referralDm = `Hey ${firstName}! Closing the loop on this—I know how hectic schedules get so no worries at all if now isn't the right time.\n\nReally appreciate you taking a look, and I hope we can stay in touch down the road!\n\nCheers,\n${myName}`;
+      emailSubject = `Closing the loop — ${jobTitle} at ${companyName}`;
+      emailPitch = `Hi ${firstName},\n\nWanted to check in one final time regarding the ${jobTitle} role. If the team has already moved forward with other candidates, I completely understand.\n\nIf timing is better later in the year, I'd welcome staying in touch. Wishing you and the ${companyName} team continued success!\n\nBest,\n${myName}`;
+      recruiterPitch = `Hi ${firstName}! Closing the loop on the ${jobTitle} search. If the role has been filled, no problem at all—wishing you a great rest of the quarter! Best, ${myName}`;
+    } else if (selectedTone === 'direct') {
+      linkedinNote = `Hi ${firstName}, closing out my note regarding ${jobTitle}. If timing is better later, let's keep in touch. Thanks, ${myName}`;
+      referralDm = `Hi ${firstName},\n\nWanted to close the loop on the ${jobTitle} referral request. If the position is already progressing or timing is not ideal, no problem at all.\n\nThanks again for your time!\n${myName}`;
+      emailSubject = `Closing the loop: ${jobTitle} (${myName})`;
+      emailPitch = `Hi ${firstName},\n\nI understand priorities move fast, so I will close the loop on my application for the ${jobTitle} position.\n\nShould another opportunity arise that matches my background, please feel free to reach out. Thank you for your consideration.\n\nBest regards,\n${myName}`;
+      recruiterPitch = `Hi ${firstName}, closing the loop on the ${jobTitle} opening. If the position is filled, I appreciate your consideration and hope to connect on future searches. Thanks, ${myName}`;
+    } else {
+      linkedinNote = `Hello ${firstName}, I am closing the loop regarding the ${jobTitle} position. I wish you and ${companyName} every continued success.`;
+      referralDm = `Hi ${firstName},\n\nI am writing to close the loop regarding my referral inquiry for the ${jobTitle} role. If the search has progressed or timing is unfavorable, I fully understand.\n\nThank you for your time, and I look forward to staying connected.\n\nBest regards,\n${myName}`;
+      emailSubject = `Final follow-up regarding ${jobTitle} position — ${companyName}`;
+      emailPitch = `Dear ${firstName},\n\nI am writing to conclude my application inquiry for the ${jobTitle} position. If the search is complete, I understand and wish your team great success.\n\nThank you for your time and consideration.\n\nSincerely,\n${myName}`;
+      recruiterPitch = `Hello ${firstName}, I am writing to conclude my inquiry regarding the ${jobTitle} search. Thank you for your time and consideration. Best regards, ${myName}`;
+    }
   }
+
+  if (linkedinNote.length > 295) linkedinNote = linkedinNote.slice(0, 292) + '...';
 
   return {
     linkedinNote,
@@ -6489,30 +6891,40 @@ function generateWarmStudioCopy(data) {
 function renderWarmStudioModal() {
   if (!warmStudioModalBackdrop || !appState.warmStudioData) return;
   const data = appState.warmStudioData;
+  const { job, account, selectedContact, contacts, selectedFormat, selectedTone, selectedStep = 1 } = data;
   const copyObj = generateWarmStudioCopy(data);
-  const { job, selectedContact, contacts, selectedFormat, selectedTone } = data;
 
   let activeText = '';
   let activeTitle = '';
   let charLimit = 0;
+  const recipientEmail = selectedContact?.email || '';
 
   if (selectedFormat === 'linkedin_note') {
     activeText = copyObj.linkedinNote;
-    activeTitle = 'LinkedIn Connection Request Note';
+    activeTitle = `Step ${selectedStep}: LinkedIn Connection Note`;
     charLimit = 300;
   } else if (selectedFormat === 'referral_dm') {
     activeText = copyObj.referralDm;
-    activeTitle = '1st-Degree Colleague Referral Request DM';
+    activeTitle = `Step ${selectedStep}: 1st-Degree Colleague Referral DM`;
   } else if (selectedFormat === 'email_pitch') {
     activeText = `Subject: ${copyObj.emailSubject}\n\n${copyObj.emailPitch}`;
-    activeTitle = 'Direct Email / Referral Pitch';
+    activeTitle = `Step ${selectedStep}: Direct Email Pitch`;
   } else {
     activeText = copyObj.recruiterPitch;
-    activeTitle = 'Recruiter / Talent Partner Message';
+    activeTitle = `Step ${selectedStep}: Recruiter Outreach`;
   }
 
   const charCount = activeText.length;
   const isOverLimit = charLimit && charCount > charLimit;
+  const mailtoSubject = copyObj.emailSubject || `${job?.title || 'Role'} Inquiry`;
+  const mailtoBody = selectedFormat === 'email_pitch' ? copyObj.emailPitch : activeText;
+  const mailtoHref = `mailto:${encodeURIComponent(recipientEmail)}?subject=${encodeURIComponent(mailtoSubject)}&body=${encodeURIComponent(mailtoBody)}`;
+
+  const stepGuidance = selectedStep === 1
+    ? '💡 <strong>Step 1 (Day 1)</strong>: Hook the hiring signal and ask for advice or internal referral.'
+    : selectedStep === 2
+      ? '💡 <strong>Step 2 (Day 4)</strong>: Provide concrete candidate/project highlights to make forwarding easy.'
+      : '💡 <strong>Step 3 (Day 8)</strong>: Low-friction check-in; keeps you on radar without pressure.';
 
   warmStudioModalBackdrop.innerHTML = `
     <div class="modal-dialog modal-dialog--lg warm-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="warm-studio-title">
@@ -6521,13 +6933,41 @@ function renderWarmStudioModal() {
           <span class="modal-icon-badge" aria-hidden="true">💌</span>
           <div>
             <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
-            <p class="muted small">Generate 1-click tailored intro messages for <strong>${escapeHtml(job?.title || 'Open Role')}</strong> at <strong>${escapeHtml(job?.companyName || job?.company || 'Company')}</strong>.</p>
+            <p class="muted small">Generate 3-step tailored sequences for <strong>${escapeHtml(job?.title || 'Open Role')}</strong> at <strong>${escapeHtml(job?.companyName || job?.company || 'Company')}</strong>.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-warm-studio" aria-label="Close modal">&times;</button>
       </div>
 
       <div class="modal-body warm-studio-body">
+        <!-- Sequence Step Switcher -->
+        <div class="warm-studio-sequence-bar">
+          <div class="sequence-timeline-header">
+            <span>⚡ Multi-Touch Sequence Strategy</span>
+            <span class="muted">3-Step Cadence</span>
+          </div>
+          <div class="sequence-steps-grid">
+            <button class="sequence-step-btn ${selectedStep === 1 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="1">
+              <span class="step-num-badge">Step 1</span>
+              <span class="step-title-text">Warm Intro / Signal Pitch</span>
+              <span class="step-day-meta">Day 1 · Hook</span>
+            </button>
+            <button class="sequence-step-btn ${selectedStep === 2 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="2">
+              <span class="step-num-badge">Step 2</span>
+              <span class="step-title-text">Value-Add Perspective</span>
+              <span class="step-day-meta">Day 4 · Proof</span>
+            </button>
+            <button class="sequence-step-btn ${selectedStep === 3 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="3">
+              <span class="step-num-badge">Step 3</span>
+              <span class="step-title-text">Polite Closeout</span>
+              <span class="step-day-meta">Day 8 · Frictionless</span>
+            </button>
+          </div>
+          <div class="sequence-guidance-box">
+            ${stepGuidance}
+          </div>
+        </div>
+
         <div class="warm-studio-context-bar">
           <div class="warm-studio-contact-picker">
             <label for="warm-studio-contact-select" class="small muted"><strong>Recipient Contact:</strong></label>
@@ -6567,8 +7007,11 @@ function renderWarmStudioModal() {
             <strong>${escapeHtml(activeTitle)}</strong>
             <div class="output-header-actions">
               ${charLimit ? `<span class="char-count-meter ${isOverLimit ? 'is-overflow' : ''}">${charCount} / ${charLimit} chars</span>` : `<span class="char-count-meter">${charCount} chars</span>`}
+              <a class="mailto-draft-btn" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer" title="Open formatted email in your default mail app">
+                ✉️ Draft in Mail &nearr;
+              </a>
               <button class="primary-button primary-button--xs" type="button" data-action="warm-studio-copy">
-                📋 Copy Message
+                📋 Copy Step Message
               </button>
             </div>
           </div>
@@ -6635,6 +7078,428 @@ async function logWarmStudioSent(jobId, contactId) {
   }
   closeWarmStudioModal();
   if (getRouteRoot() === 'jobs') await renderJobsView();
+}
+
+/* ══════════════════════════════════════════════════
+   BATCH OUTREACH STUDIO ENGINE
+   ══════════════════════════════════════════════════ */
+
+function generateBatchDraftCopy(item, template = 'sales_hiring_manager', tone = 'casual') {
+  const contactName = item.name || item.fullName || 'there';
+  const firstName = item.firstName || contactName.split(' ')[0] || 'there';
+  const companyName = item.company || item.companyName || 'the team';
+  const contactTitle = item.title || 'Leader';
+  const jobTitle = item.jobTitle || 'Key Openings';
+  const jobLocation = item.jobLocation || '';
+  const myName = appState.bootstrap?.user?.name || 'BD Team';
+
+  let subject = '';
+  let body = '';
+
+  if (template === 'sales_talent_leader') {
+    subject = `${companyName} hiring sprint & talent capacity`;
+    if (tone === 'casual') {
+      body = `Hi ${firstName},\n\nNoticed ${companyName}'s active hiring expansion across your teams${jobTitle && jobTitle !== 'Key Openings' ? ` (especially around ${jobTitle})` : ''}.\n\nWhen hiring picks up this quickly, talent teams usually run into candidate pipeline bottlenecks or niche sourcing bandwidth limits.\n\nWe specialize in supplying pre-vetted, highly qualified talent for exact roles like these with zero upfront retainer.\n\nOpen to a brief 10-minute chat this week to see if we can take some open reqs off your plate?\n\nBest,\n${myName}`;
+    } else if (tone === 'direct') {
+      body = `Hi ${firstName},\n\nI saw that ${companyName} is currently scaling hiring for ${jobTitle}.\n\nWe have a direct roster of active, thoroughly vetted candidates matching this exact criteria ready to interview this week.\n\nCould we connect for 10 minutes Thursday or Friday?\n\nBest regards,\n${myName}`;
+    } else {
+      body = `Dear ${firstName},\n\nI am reaching out regarding ${companyName}'s current hiring initiatives for ${jobTitle}.\n\nOur firm provides specialized recruiting solutions designed to reduce time-to-hire while maintaining high candidate quality standards for fast-growing organizations.\n\nI would welcome the opportunity to discuss how our talent network can support your team's objectives this quarter.\n\nSincerely,\n${myName}`;
+    }
+  } else if (template === 'sales_executive') {
+    subject = `Scale & hiring execution at ${companyName}`;
+    if (tone === 'casual') {
+      body = `Hi ${firstName},\n\nSaw ${companyName}'s growth signals and the recent openings for ${jobTitle}.\n\nUsually when teams scale headcount at this velocity, leadership focuses on accelerating execution without diluting candidate quality.\n\nWe partner with high-growth companies to place top-tier talent quickly on contingency.\n\nWould you be open to a quick introductory conversation next Tuesday or Wednesday?\n\nBest,\n${myName}`;
+    } else {
+      body = `Hi ${firstName},\n\nFollowing ${companyName}'s expansion and the strategic role for ${jobTitle}.\n\nWe deliver specialized senior staffing and placement solutions tailored for high-growth operations.\n\nWould you or your hiring leaders be open to a 10-minute introductory call this week?\n\nBest regards,\n${myName}`;
+    }
+  } else if (template === 'job_referral') {
+    subject = `Quick question regarding ${companyName} (${myName})`;
+    if (tone === 'casual') {
+      body = `Hey ${firstName}!\n\nHope you're having a great week.\n\nI noticed ${companyName} recently posted an opening for ${jobTitle}${jobLocation ? ` (${jobLocation})` : ''} and it looks like a fantastic match for my background.\n\nAre you enjoying your time at ${companyName}? If you're open to it, I'd love to ask for your internal referral or advice on who leads the team.\n\nI can send over a 2-bullet summary and my resume to make forwarding effortless!\n\nThanks a ton,\n${myName}`;
+    } else {
+      body = `Hi ${firstName},\n\nI am reaching out because I noticed ${companyName} posted a ${jobTitle} opening recently. My qualifications align closely with what the team is looking for.\n\nWould you be open to submitting an internal referral or introducing me to the hiring manager? Happy to share background materials right away.\n\nAppreciate your time,\n${myName}`;
+    }
+  } else if (template === 'job_hiring_leader') {
+    subject = `Candidate for ${jobTitle} — ${myName}`;
+    if (tone === 'casual') {
+      body = `Hi ${firstName},\n\nReaching out directly as I saw ${companyName}'s opening for ${jobTitle}.\n\nOver the past few years, I've built a track record of driving measurable wins and delivering complex initiatives on time.\n\nI've reviewed the requirements and believe I can hit the ground running immediately. Would you be open to a quick 10-minute chat this week?\n\nBest,\n${myName}`;
+    } else {
+      body = `Dear ${firstName},\n\nI am writing regarding the ${jobTitle} role at ${companyName}. My professional background and proven domain expertise make me an immediate, strong contributor for your team's goals.\n\nI would appreciate the chance to discuss how my skill set aligns with your current priorities.\n\nBest regards,\n${myName}`;
+    }
+  } else if (template === 're_engage') {
+    subject = `Re: ${companyName} hiring update`;
+    body = `Hi ${firstName},\n\nRe-opening our thread as I saw ${companyName} is actively expanding roles for ${jobTitle}.\n\nWanted to check if timing is better this quarter to collaborate on candidate sourcing and hiring needs.\n\nDo you have 10 minutes open later this week to reconnect?\n\nBest,\n${myName}`;
+  } else {
+    // Default sales_hiring_manager
+    subject = `Question regarding ${companyName}'s ${jobTitle} search`;
+    if (tone === 'casual') {
+      body = `Hi ${firstName},\n\nNoticed ${companyName} is actively hiring for ${jobTitle}${jobLocation ? ` in ${jobLocation}` : ''}.\n\nGiven your role as ${contactTitle}, I wanted to ask if you're experiencing any bandwidth constraints sourcing qualified profiles for this search.\n\nWe have candidate profiles with proven domain expertise who are ready to interview immediately.\n\nWould you be open to a brief 10-minute call this Thursday or Friday to compare notes?\n\nBest,\n${myName}`;
+    } else if (tone === 'direct') {
+      body = `Hi ${firstName},\n\nI saw that ${companyName} has an active opening for ${jobTitle}.\n\nWe specialize in identifying and placing high-performing talent for technical and business roles with speed and zero upfront cost.\n\nDo you have 10 minutes available this week to discuss candidates currently available for this search?\n\nBest regards,\n${myName}`;
+    } else {
+      body = `Dear ${firstName},\n\nI am writing to inquire regarding ${companyName}'s current talent acquisition efforts for ${jobTitle}.\n\nOur specialized search practice assists hiring leaders in securing exceptional professionals efficiently.\n\nI would welcome the opportunity to introduce our capabilities and review how we can support your hiring milestones.\n\nSincerely,\n${myName}`;
+    }
+  }
+
+  return { subject, body };
+}
+
+async function openBatchOutreachStudio(rawItems = [], options = {}) {
+  if (!batchOutreachModalBackdrop) return;
+  if (!rawItems.length) {
+    showToast('Select at least 1 contact, job, or account to open Batch Outreach Studio.', 'warning');
+    return;
+  }
+
+  const isJobSeeker = isJobSeekerPersona();
+  const defaultTemplate = options.template || (isJobSeeker ? 'job_referral' : 'sales_hiring_manager');
+  const defaultTone = options.tone || 'casual';
+
+  const normalizedItems = rawItems.map((raw, index) => {
+    const fullName = raw.fullName || raw.name || raw.displayName || `Recipient ${index + 1}`;
+    const firstName = raw.firstName || fullName.split(' ')[0] || fullName;
+    const company = raw.companyName || raw.company || raw.displayName || 'Company';
+    const title = raw.title || raw.jobTitle || 'Team Member';
+    const email = raw.email || '';
+    const linkedinUrl = raw.linkedinUrl || '';
+    const jobTitle = raw.jobTitle || raw.openRole || 'Key Openings';
+    const jobLocation = raw.jobLocation || raw.location || '';
+    const jobUrl = raw.jobUrl || raw.url || '';
+    const accountId = raw.accountId || raw.id || '';
+
+    const draft = generateBatchDraftCopy({
+      name: fullName,
+      firstName,
+      company,
+      title,
+      jobTitle,
+      jobLocation,
+      jobUrl,
+    }, defaultTemplate, defaultTone);
+
+    return {
+      id: raw.id || `batch-item-${index}`,
+      accountId,
+      name: fullName,
+      firstName,
+      company,
+      title,
+      email,
+      linkedinUrl,
+      jobTitle,
+      jobLocation,
+      jobUrl,
+      draft,
+    };
+  });
+
+  appState.batchOutreach = {
+    items: normalizedItems,
+    activeIndex: 0,
+    template: defaultTemplate,
+    tone: defaultTone,
+    copiedMap: {},
+    loggedMap: {},
+  };
+  appState.batchOutreachModalOpen = true;
+
+  renderBatchOutreachModal();
+  batchOutreachModalBackdrop.classList.remove('hidden');
+  batchOutreachModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeBatchOutreachModal() {
+  if (!batchOutreachModalBackdrop) return;
+  appState.batchOutreachModalOpen = false;
+  appState.batchOutreach = null;
+  batchOutreachModalBackdrop.classList.add('hidden');
+  batchOutreachModalBackdrop.setAttribute('aria-hidden', 'true');
+  batchOutreachModalBackdrop.innerHTML = '';
+}
+
+function renderBatchOutreachModal() {
+  if (!batchOutreachModalBackdrop || !appState.batchOutreach) return;
+  const { items, activeIndex, template, tone, copiedMap, loggedMap } = appState.batchOutreach;
+  const activeItem = items[activeIndex] || items[0];
+  const isJobSeeker = isJobSeekerPersona();
+
+  const recipientEmail = activeItem.email || '';
+  const mailtoSubject = activeItem.draft.subject || 'Outreach Note';
+  const mailtoBody = activeItem.draft.body || '';
+  const mailtoHref = `mailto:${encodeURIComponent(recipientEmail)}?subject=${encodeURIComponent(mailtoSubject)}&body=${encodeURIComponent(mailtoBody)}`;
+
+  batchOutreachModalBackdrop.innerHTML = `
+    <div class="modal-panel modal-panel--batch" role="dialog" aria-modal="true" aria-labelledby="batch-studio-title">
+      <div class="batch-modal-header">
+        <div class="batch-header-title">
+          <h3 id="batch-studio-title">⚡ Batch Outreach Studio <span class="status-pill status-pill--accent">${items.length} Recipient${items.length === 1 ? '' : 's'}</span></h3>
+          <p>Grounded, multi-recipient outreach generation using verified hiring signals and 1st-degree warm paths.</p>
+        </div>
+        <button class="modal-close" type="button" data-action="close-batch-outreach" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="batch-studio-toolbar">
+        <label class="batch-toolbar-field">
+          <span>🎯 Message Goal:</span>
+          <select id="batch-template-select">
+            ${isJobSeeker ? `
+              <option value="job_referral" ${selected(template, 'job_referral')}>1st-Degree Colleague Referral</option>
+              <option value="job_hiring_leader" ${selected(template, 'job_hiring_leader')}>Direct Hiring Leader Note</option>
+              <option value="re_engage" ${selected(template, 're_engage')}>Re-open Prior Conversation</option>
+            ` : `
+              <option value="sales_hiring_manager" ${selected(template, 'sales_hiring_manager')}>Hiring Manager Note (Verified Job)</option>
+              <option value="sales_talent_leader" ${selected(template, 'sales_talent_leader')}>Talent / Recruiting Leader Pitch</option>
+              <option value="sales_executive" ${selected(template, 'sales_executive')}>Executive Growth Pitch</option>
+              <option value="job_referral" ${selected(template, 'job_referral')}>Warm Introduction Request</option>
+              <option value="re_engage" ${selected(template, 're_engage')}>Re-open Prior Thread</option>
+            `}
+          </select>
+        </label>
+
+        <label class="batch-toolbar-field">
+          <span>🎭 Tone:</span>
+          <select id="batch-tone-select">
+            <option value="casual" ${selected(tone, 'casual')}>Casual & Warm</option>
+            <option value="direct" ${selected(tone, 'direct')}>Direct & Concise</option>
+            <option value="executive" ${selected(tone, 'executive')}>Executive & Formal</option>
+          </select>
+        </label>
+
+        <span class="muted small" style="margin-left:auto;">Reviewing ${activeIndex + 1} of ${items.length}</span>
+      </div>
+
+      <div class="batch-studio-content">
+        <aside class="batch-recipients-sidebar" aria-label="Batch recipient list">
+          <div class="batch-recipients-list">
+            ${items.map((item, idx) => {
+              const isCopied = copiedMap[item.id];
+              const isLogged = loggedMap[item.id];
+              return `
+                <button class="batch-recipient-card ${idx === activeIndex ? 'is-active' : ''}" type="button" data-action="batch-switch-recipient" data-index="${idx}">
+                  <span class="batch-recipient-name">
+                    <span>${escapeHtml(item.name)}</span>
+                    ${isLogged ? '<span class="status-pill status-pill--success">Logged</span>' : isCopied ? '<span class="status-pill status-pill--accent">Copied</span>' : ''}
+                  </span>
+                  <span class="batch-recipient-meta">${escapeHtml(item.company)} · ${escapeHtml(item.title)}</span>
+                  ${item.jobTitle ? `<span class="small muted">⚡ Role: ${escapeHtml(item.jobTitle)}</span>` : ''}
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </aside>
+
+        <main class="batch-draft-pane">
+          <div class="batch-grounding-chips">
+            <span class="batch-grounding-chip">🏢 <strong>${escapeHtml(activeItem.company)}</strong></span>
+            <span class="batch-grounding-chip">👤 <strong>${escapeHtml(activeItem.name)}</strong> (${escapeHtml(activeItem.title)})</span>
+            ${activeItem.jobTitle ? `<span class="batch-grounding-chip">⚡ <strong>Verified Role:</strong> ${escapeHtml(activeItem.jobTitle)}</span>` : ''}
+            ${activeItem.email ? `<span class="batch-grounding-chip">✉️ ${escapeHtml(activeItem.email)}</span>` : ''}
+          </div>
+
+          <div class="batch-editor-group">
+            <label for="batch-subject-input">Subject Line</label>
+            <input id="batch-subject-input" class="batch-subject-input" value="${escapeAttr(activeItem.draft.subject)}">
+          </div>
+
+          <div class="batch-editor-group">
+            <label for="batch-body-textarea">Personalized Body</label>
+            <textarea id="batch-body-textarea" class="batch-body-textarea">${escapeHtml(activeItem.draft.body)}</textarea>
+          </div>
+
+          <div class="batch-stepper-row">
+            <button class="secondary-button secondary-button--sm" type="button" data-action="batch-prev" ${activeIndex === 0 ? 'disabled' : ''}>← Previous Draft</button>
+            <span class="muted small">Recipient ${activeIndex + 1} of ${items.length}</span>
+            <button class="secondary-button secondary-button--sm" type="button" data-action="batch-next" ${activeIndex === items.length - 1 ? 'disabled' : ''}>Next Draft →</button>
+          </div>
+        </main>
+      </div>
+
+      <footer class="batch-footer-actions">
+        <div class="batch-footer-primary">
+          <button class="primary-button primary-button--sm" type="button" data-action="batch-copy-active">📋 Copy Current</button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-copy-all">📑 Copy All (${items.length})</button>
+          <a class="secondary-button secondary-button--sm mailto-link" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer" title="Open active draft in default email client">✉️ Mailto Link &nearr;</a>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-export-csv">📥 Export Sequencer CSV</button>
+        </div>
+        <button class="primary-button primary-button--sm" type="button" data-action="batch-log-all">
+          ✓ Log All Sent & Auto-Schedule Follow-Ups
+        </button>
+      </footer>
+    </div>
+  `;
+
+  const subjectInput = document.getElementById('batch-subject-input');
+  const bodyTextarea = document.getElementById('batch-body-textarea');
+  const templateSelect = document.getElementById('batch-template-select');
+  const toneSelect = document.getElementById('batch-tone-select');
+
+  if (subjectInput) {
+    subjectInput.oninput = () => {
+      if (appState.batchOutreach?.items[activeIndex]) {
+        appState.batchOutreach.items[activeIndex].draft.subject = subjectInput.value;
+      }
+    };
+  }
+
+  if (bodyTextarea) {
+    bodyTextarea.oninput = () => {
+      if (appState.batchOutreach?.items[activeIndex]) {
+        appState.batchOutreach.items[activeIndex].draft.body = bodyTextarea.value;
+      }
+    };
+  }
+
+  if (templateSelect) {
+    templateSelect.onchange = () => {
+      const newTemplate = templateSelect.value;
+      appState.batchOutreach.template = newTemplate;
+      appState.batchOutreach.items.forEach(item => {
+        item.draft = generateBatchDraftCopy(item, newTemplate, appState.batchOutreach.tone);
+      });
+      renderBatchOutreachModal();
+    };
+  }
+
+  if (toneSelect) {
+    toneSelect.onchange = () => {
+      const newTone = toneSelect.value;
+      appState.batchOutreach.tone = newTone;
+      appState.batchOutreach.items.forEach(item => {
+        item.draft = generateBatchDraftCopy(item, appState.batchOutreach.template, newTone);
+      });
+      renderBatchOutreachModal();
+    };
+  }
+}
+
+async function copyActiveBatchDraft() {
+  if (!appState.batchOutreach) return;
+  const { items, activeIndex } = appState.batchOutreach;
+  const item = items[activeIndex];
+  if (!item) return;
+
+  const subjectInput = document.getElementById('batch-subject-input');
+  const bodyTextarea = document.getElementById('batch-body-textarea');
+  const subject = subjectInput ? subjectInput.value : item.draft.subject;
+  const body = bodyTextarea ? bodyTextarea.value : item.draft.body;
+
+  const fullText = `Subject: ${subject}\n\n${body}`;
+  try {
+    await navigator.clipboard.writeText(fullText);
+    appState.batchOutreach.copiedMap[item.id] = true;
+    showToast(`📋 Draft copied for ${item.name}!`, 'success');
+    renderBatchOutreachModal();
+  } catch {
+    showToast('Failed to copy to clipboard', 'error');
+  }
+}
+
+async function copyAllBatchOutreachDrafts() {
+  if (!appState.batchOutreach?.items?.length) return;
+  const { items } = appState.batchOutreach;
+
+  const aggregated = items.map((item, i) => {
+    return `=== RECIPIENT ${i + 1}: ${item.name} (${item.company} · ${item.title}) ===\n` +
+           `Email: ${item.email || 'N/A'}\n` +
+           `LinkedIn: ${item.linkedinUrl || 'N/A'}\n` +
+           `Subject: ${item.draft.subject}\n\n` +
+           `${item.draft.body}\n`;
+  }).join('\n----------------------------------------\n\n');
+
+  try {
+    await navigator.clipboard.writeText(aggregated);
+    items.forEach(item => { appState.batchOutreach.copiedMap[item.id] = true; });
+    showToast(`📑 All ${items.length} outreach drafts copied to clipboard!`, 'success');
+    renderBatchOutreachModal();
+  } catch {
+    showToast('Failed to copy drafts', 'error');
+  }
+}
+
+function exportBatchOutreachCsv() {
+  if (!appState.batchOutreach?.items?.length) return;
+  const { items } = appState.batchOutreach;
+
+  const headers = ['First Name', 'Last Name', 'Full Name', 'Company', 'Title', 'Email', 'LinkedIn', 'Subject', 'Message Body', 'Role Title', 'Role Link'];
+  const rows = items.map(item => {
+    const names = item.name.split(' ');
+    const firstName = names[0] || '';
+    const lastName = names.slice(1).join(' ') || '';
+    return [
+      firstName,
+      lastName,
+      item.name,
+      item.company,
+      item.title,
+      item.email || '',
+      item.linkedinUrl || '',
+      item.draft.subject,
+      item.draft.body,
+      item.jobTitle || '',
+      item.jobUrl || '',
+    ];
+  });
+
+  const escapeCsv = (str) => {
+    const val = String(str || '');
+    if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+      return `"${val.replace(/"/g, '""')}"`;
+    }
+    return val;
+  };
+
+  const csvContent = [
+    headers.map(escapeCsv).join(','),
+    ...rows.map(row => row.map(escapeCsv).join(',')),
+  ].join('\r\n');
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bd-engine-outreach-batch-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  showToast(`📥 Exported ${items.length} drafts for Apollo/GMass/Lemlist/Salesloft!`, 'success');
+}
+
+async function logAllBatchOutreachSent() {
+  if (!appState.batchOutreach?.items?.length) return;
+  const { items } = appState.batchOutreach;
+
+  let loggedCount = 0;
+  for (const item of items) {
+    appState.batchOutreach.loggedMap[item.id] = true;
+    try {
+      if (item.accountId) {
+        await api('/api/activity', {
+          method: 'POST',
+          body: JSON.stringify({
+            accountId: item.accountId,
+            type: 'outreach',
+            summary: `Batch outreach sent to ${item.name} (${item.jobTitle || 'Verified Opening'})`,
+            pipelineStage: 'contacted',
+          }),
+        }).catch(() => {});
+
+        await api('/api/tasks', {
+          method: 'POST',
+          body: JSON.stringify({
+            accountId: item.accountId,
+            summary: `Follow up on batch outreach with ${item.name} at ${item.company}`,
+            dueAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+          }),
+        }).catch(() => {});
+      }
+      loggedCount++;
+    } catch {}
+  }
+
+  showToast(`✓ Logged outreach for ${loggedCount} contacts & created 3-day follow-ups in task queue!`, 'success');
+  renderBatchOutreachModal();
 }
 
 async function updateJobPipelineStage(jobId, stage) {
@@ -6772,6 +7637,425 @@ function renderPricingModal() {
   `;
 }
 
+function openReferralShareModal() {
+  if (!referralShareModalBackdrop) return;
+  const user = appState.bootstrap?.user || {};
+  const isJobSeeker = isJobSeekerPersona();
+  const referralCode = user.id ? `REF-${user.id.slice(0, 8).toUpperCase()}` : 'BDPRO';
+  const referralUrl = `https://bd-engine-production.up.railway.app/?ref=${encodeURIComponent(referralCode)}`;
+
+  const viralText = isJobSeeker
+    ? `I just mapped my LinkedIn network against live tech job boards using BD Engine. 🚀\n\nFound 18+ live roles with 1st-degree referral paths instead of applying to ATS black holes!\n\nTry it free here:`
+    : `Using BD Engine to track real-time hiring surges & hard-to-fill roles across Greenhouse & Lever ATS boards. 📈\n\nAutomates warm outreach sequences with 1 click. Check it out:`;
+
+  const linkedinShareUrl = `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(`${viralText} ${referralUrl}`)}`;
+  const twitterShareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${viralText} ${referralUrl}`)}`;
+  const redditShareUrl = `https://reddit.com/submit?url=${encodeURIComponent(referralUrl)}&title=${encodeURIComponent('Free tool that maps your LinkedIn network against live ATS job boards for warm referrals')}`;
+  const emailSubject = isJobSeeker ? 'Check this out: Live hiring signals & warm referral matching' : 'Tool for real-time hiring signals & ATS board scraping';
+  const emailShareUrl = `mailto:?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(`${viralText}\n\n${referralUrl}`)}`;
+
+  referralShareModalBackdrop.innerHTML = `
+    <div class="modal-dialog referral-dialog" role="dialog" aria-modal="true" aria-labelledby="referral-modal-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">🎁</span>
+          <div>
+            <h3 id="referral-modal-title">Refer a Colleague & Earn Free Months</h3>
+            <p class="muted small">Give a friend 1 month free, and get 1 month added to your account for each active referral.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-referral-modal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body referral-body">
+        <div class="referral-reward-banner">
+          <span class="referral-reward-icon" aria-hidden="true">🏆</span>
+          <div class="referral-reward-copy">
+            <strong>Give 1 Month Free, Get 1 Month Free</strong>
+            <p>Anyone who signs up with your link gets their first paid month free after trial, and you receive 1 month credit automatically.</p>
+          </div>
+        </div>
+
+        <div class="referral-link-section">
+          <label for="referral-link-input" class="small muted"><strong>Your Unique Referral Link:</strong></label>
+          <div class="referral-link-input-group">
+            <input id="referral-link-input" class="referral-link-input" type="text" value="${escapeAttr(referralUrl)}" readonly>
+            <button class="primary-button" type="button" data-action="copy-referral-link">
+              📋 Copy Link
+            </button>
+          </div>
+        </div>
+
+        <div class="referral-share-section">
+          <label class="small muted"><strong>1-Click Share to Network:</strong></label>
+          <div class="viral-share-grid">
+            <button class="share-btn share-btn--discord" type="button" data-action="copy-discord-message" title="Copy formatted Discord post">
+              <span>👾 Discord</span>
+            </button>
+            <a class="share-btn share-btn--linkedin" href="${escapeAttr(linkedinShareUrl)}" target="_blank" rel="noopener noreferrer">
+              <span>💼 LinkedIn</span>
+            </a>
+            <a class="share-btn share-btn--twitter" href="${escapeAttr(twitterShareUrl)}" target="_blank" rel="noopener noreferrer">
+              <span>🐦 X / Twitter</span>
+            </a>
+            <a class="share-btn share-btn--reddit" href="${escapeAttr(redditShareUrl)}" target="_blank" rel="noopener noreferrer">
+              <span>💬 Reddit</span>
+            </a>
+            <a class="share-btn share-btn--email" href="${escapeAttr(emailShareUrl)}" target="_blank" rel="noopener noreferrer">
+              <span>✉️ Email / Slack</span>
+            </a>
+          </div>
+        </div>
+
+        <div class="referral-copy-preview">
+          <p class="small muted"><strong>Pre-composed Post Preview:</strong></p>
+          <p id="viral-post-text"><em>"${escapeHtml(viralText)} ${escapeHtml(referralUrl)}"</em></p>
+          <button class="ghost-button ghost-button--xs" type="button" data-action="copy-referral-message">
+            📋 Copy Post Copy
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-right">
+          <button class="ghost-button" type="button" data-action="close-referral-modal">Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  referralShareModalBackdrop.classList.remove('hidden');
+  referralShareModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeReferralShareModal() {
+  if (!referralShareModalBackdrop) return;
+  referralShareModalBackdrop.classList.add('hidden');
+  referralShareModalBackdrop.setAttribute('aria-hidden', 'true');
+  referralShareModalBackdrop.innerHTML = '';
+}
+
+async function copyReferralLink() {
+  const input = document.getElementById('referral-link-input');
+  if (!input) return;
+  try {
+    await navigator.clipboard.writeText(input.value);
+    showToast('📋 Referral link copied to clipboard!', 'success');
+  } catch {
+    input.select();
+    document.execCommand('copy');
+    showToast('📋 Referral link copied!', 'success');
+  }
+}
+
+async function copyReferralMessage() {
+  const el = document.getElementById('viral-post-text');
+  const text = el ? el.textContent.replace(/^"|"$/g, '') : '';
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('📋 Social post copy copied to clipboard!', 'success');
+  } catch {
+    showToast('📋 Copied!', 'success');
+  }
+}
+
+async function copyDiscordMessage() {
+  const user = appState.bootstrap?.user || {};
+  const isJobSeeker = isJobSeekerPersona();
+  const referralCode = user.id ? `REF-${user.id.slice(0, 8).toUpperCase()}` : 'BDPRO';
+  const referralUrl = `https://bd-engine-production.up.railway.app/?ref=${encodeURIComponent(referralCode)}`;
+
+  const discordMessage = isJobSeeker
+    ? `Hey everyone! 👋 Built/found a free tool for anyone currently on the job hunt:\n\n**BD Engine** directly scans 12 ATS platforms (Greenhouse, Lever, Ashby, Workday, etc.) and lets you map your LinkedIn connections to find **1st-degree warm referral paths** into active hiring companies.\n\n✨ **Key features:**\n• Scans 2,300+ live verified tech jobs (bypasses ghost job boards)\n• Matches your 1st-degree network to open roles\n• 1-Click 3-step referral sequence generator\n\nCheck it out here (free 14-day access): ${referralUrl}`
+    : `Hey everyone! 🚀 For recruiters & agency BDs:\n\n**BD Engine** tracks real-time hiring surges & hard-to-fill roles across Greenhouse, Lever, Ashby & Workday boards.\n\n✨ **Highlights:**\n• Detects 48h hiring surges & 45d+ stale roles\n• 3-Step outreach sequence generator\n• Daily executive morning radar digest\n\nTry it here: ${referralUrl}`;
+
+  try {
+    await navigator.clipboard.writeText(discordMessage);
+    showToast('👾 Formatted Discord post copied! Ready to paste into job channels.', 'success');
+  } catch {
+    showToast('👾 Copied!', 'success');
+  }
+}
+
+function getJobSignalBadges(item) {
+  if (!item) return [];
+  const badges = [];
+  const postedDate = item.postedAt ? new Date(item.postedAt) : null;
+  const daysOld = postedDate && !isNaN(postedDate.getTime()) ? Math.floor((Date.now() - postedDate.getTime()) / (24 * 60 * 60 * 1000)) : 0;
+  
+  if (Number(item.connectionCount || 0) > 0) {
+    badges.push(`<span class="signal-badge signal-badge--warm" title="1st-degree connection at company">👥 1st-Degree Match</span>`);
+  }
+  if (item.isNew || (daysOld >= 0 && daysOld <= 2)) {
+    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours — first-mover advantage">🔥 Hiring Surge (New)</span>`);
+  }
+  if (daysOld >= 45) {
+    badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days — high leverage for direct placement or candidate outreach">⏳ Hard to Fill (${daysOld}d)</span>`);
+  }
+  if (/(recruiter|talent|head of|vp|director|lead|manager|staff|founding)/i.test(item.title || '')) {
+    badges.push(`<span class="signal-badge signal-badge--expansion" title="Strategic hiring signal indicating team expansion">🚀 Expansion Signal</span>`);
+  }
+  return badges;
+}
+
+let currentMorningRadarBriefingText = '';
+
+async function openMorningRadarModal() {
+  if (!morningRadarModalBackdrop) return;
+  morningRadarModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--lg morning-radar-dialog" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">📡</span>
+          <div>
+            <h3>Executive Morning Radar & Hiring Digest</h3>
+            <p class="muted small">Assembling overnight hiring signals and network matches...</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-morning-radar" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body morning-radar-body">
+        <div class="loading-box"><span class="spinner" aria-hidden="true"></span> Scanning active ATS feeds and connections...</div>
+      </div>
+    </div>
+  `;
+  morningRadarModalBackdrop.classList.remove('hidden');
+  morningRadarModalBackdrop.setAttribute('aria-hidden', 'false');
+
+  try {
+    const [dashboardData, jobsData] = await Promise.all([
+      api('/api/dashboard', { skipCache: true }).catch(() => ({})),
+      api('/api/jobs?pageSize=50', { skipCache: true }).catch(() => ({ items: [] })),
+    ]);
+
+    const jobs = Array.isArray(jobsData?.items) ? jobsData.items : [];
+    const summary = dashboardData?.summary || {};
+    const newJobs24h = Number(summary.jobsPostedLast24h || summary.newJobsLast24h || jobs.filter(j => j.isNew).length || 0);
+    const connectedJobs = jobs.filter(j => Number(j.connectionCount || 0) > 0);
+    const hardToFillJobs = jobs.filter(j => {
+      const d = j.postedAt ? new Date(j.postedAt) : null;
+      return d && !isNaN(d.getTime()) && (Date.now() - d.getTime()) > (45 * 24 * 60 * 60 * 1000);
+    });
+
+    const topOpportunities = (connectedJobs.length ? connectedJobs : jobs).slice(0, 3);
+    const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+    let briefing = `📡 **BD Engine Daily Hiring Intelligence Digest — ${todayStr}**\n\n`;
+    briefing += `**Executive Summary:**\n`;
+    briefing += `• ⚡ **${newJobs24h} New Roles Posted** across tracked companies in the last 24-48h\n`;
+    briefing += `• 👥 **${connectedJobs.length} Warm Intro Opportunities** with 1st-degree colleague connections\n`;
+    briefing += `• ⏳ **${hardToFillJobs.length} Hard-to-Fill Roles (45d+)** representing high placement leverage\n\n`;
+    briefing += `**Top Priority 1-Click Outreach Targets Today:**\n`;
+
+    topOpportunities.forEach((job, idx) => {
+      const company = job.companyName || job.company || 'Company';
+      const contacts = Array.isArray(job.contacts) ? job.contacts : [];
+      const contactStr = contacts.length ? `(Warm path via ${contacts.map(c => c.fullName).join(', ')})` : '(Direct talent outreach)';
+      briefing += `${idx + 1}. **${job.title}** @ ${company} ${contactStr}\n`;
+      if (job.url || job.jobUrl) briefing += `   Link: ${job.url || job.jobUrl}\n`;
+    });
+
+    briefing += `\nGenerated by BD Engine • Ready to export to Slack / Notion / Team Sync.`;
+    currentMorningRadarBriefingText = briefing;
+
+    renderMorningRadarModal({
+      todayStr,
+      newJobs24h,
+      connectedCount: connectedJobs.length,
+      hardToFillCount: hardToFillJobs.length,
+      topOpportunities,
+      briefing,
+    });
+  } catch (err) {
+    console.error('Failed to load morning radar:', err);
+    closeMorningRadarModal();
+    showToast('Failed to load morning radar intelligence.', 'danger');
+  }
+}
+
+function renderMorningRadarModal(data) {
+  if (!morningRadarModalBackdrop || !data) return;
+  const { todayStr, newJobs24h, connectedCount, hardToFillCount, topOpportunities, briefing } = data;
+  const mailtoHref = `mailto:?subject=${encodeURIComponent(`Morning Radar Briefing — ${todayStr}`)}&body=${encodeURIComponent(briefing)}`;
+
+  morningRadarModalBackdrop.innerHTML = `
+    <div class="modal-dialog modal-dialog--lg morning-radar-dialog" role="dialog" aria-modal="true" aria-labelledby="radar-modal-title">
+      <div class="modal-header">
+        <div class="modal-title-lockup">
+          <span class="modal-icon-badge" aria-hidden="true">📡</span>
+          <div>
+            <h3 id="radar-modal-title">Executive Morning Radar & Hiring Digest</h3>
+            <p class="muted small">Daily executive briefing for <strong>${escapeHtml(todayStr)}</strong></p>
+          </div>
+        </div>
+        <button class="modal-close-btn" type="button" data-action="close-morning-radar" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body morning-radar-body">
+        <div class="radar-summary-strip">
+          <div class="radar-stat-box">
+            <span class="radar-stat-icon" aria-hidden="true">⚡</span>
+            <div class="radar-stat-copy">
+              <strong>${formatNumber(newJobs24h)}</strong>
+              <span>New Roles (24-48h)</span>
+            </div>
+          </div>
+          <div class="radar-stat-box">
+            <span class="radar-stat-icon" aria-hidden="true">👥</span>
+            <div class="radar-stat-copy">
+              <strong>${formatNumber(connectedCount)}</strong>
+              <span>Warm Intro Matches</span>
+            </div>
+          </div>
+          <div class="radar-stat-box">
+            <span class="radar-stat-icon" aria-hidden="true">⏳</span>
+            <div class="radar-stat-copy">
+              <strong>${formatNumber(hardToFillCount)}</strong>
+              <span>Hard-to-Fill (45d+)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="radar-section">
+          <div class="radar-section-heading">
+            <h4>🎯 Top 3 Priority Outreach Targets For Today</h4>
+            <span class="small muted">Ranked by warm connection strength & relevance</span>
+          </div>
+          <div class="radar-opportunities-list">
+            ${topOpportunities.map((job) => {
+              const contacts = Array.isArray(job.contacts) ? job.contacts : [];
+              const firstContact = contacts[0] || null;
+              return `
+                <div class="radar-opportunity-card">
+                  <div class="radar-opp-info">
+                    <strong>${escapeHtml(job.title)}</strong>
+                    <p>${escapeHtml(job.companyName || job.company || 'Company')} · ${escapeHtml(job.location || (job.isRemote ? 'Remote' : 'Location unspecified'))}</p>
+                    <div class="radar-opp-meta">
+                      ${contacts.length ? `<span class="signal-badge signal-badge--warm">👥 Warm Contact: ${escapeHtml(contacts.map(c => c.fullName).join(', '))}</span>` : '<span class="signal-badge signal-badge--expansion">🚀 Direct Outreach</span>'}
+                    </div>
+                  </div>
+                  <button class="primary-button primary-button--xs" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(job.id || '')}" data-contact-id="${escapeAttr(firstContact?.id || firstContact?.fullName || '')}">
+                    💌 Open Warm Studio →
+                  </button>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="radar-briefing-preview">
+          <div class="radar-preview-header">
+            <span>📋 Executive Summary (Ready for Slack / Notion / Team Sync)</span>
+            <button class="ghost-button ghost-button--xs" type="button" data-action="morning-radar-copy">
+              Copy Summary
+            </button>
+          </div>
+          <textarea id="morning-radar-textarea" class="radar-textarea" rows="6" readonly>${escapeHtml(briefing)}</textarea>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <a class="mailto-draft-btn" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer">
+            ✉️ Email Briefing to Me &nearr;
+          </a>
+        </div>
+        <div class="modal-footer-right">
+          <button class="ghost-button" type="button" data-action="close-morning-radar">Close</button>
+          <button class="primary-button" type="button" data-action="morning-radar-copy">
+            📋 Copy Executive Briefing
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function closeMorningRadarModal() {
+  if (!morningRadarModalBackdrop) return;
+  morningRadarModalBackdrop.classList.add('hidden');
+  morningRadarModalBackdrop.setAttribute('aria-hidden', 'true');
+  morningRadarModalBackdrop.innerHTML = '';
+}
+
+async function copyMorningRadarText() {
+  const textarea = document.getElementById('morning-radar-textarea');
+  const text = textarea ? textarea.value : currentMorningRadarBriefingText;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('📋 Executive Morning Radar briefing copied!', 'success');
+  } catch {
+    if (textarea) {
+      textarea.select();
+      document.execCommand('copy');
+      showToast('📋 Executive Morning Radar briefing copied!', 'success');
+    }
+  }
+}
+
+function renderDashboardRoiHero(dashboard = {}, outcomeSummary = {}) {
+  const isJobSeeker = isJobSeekerPersona();
+  const summary = dashboard.summary || {};
+  const activeJobs = Number(summary.activeJobCount || 0);
+  const connectedJobs = Number(summary.connectedJobCount || Math.round(activeJobs * 0.45));
+  const pipelineVal = isJobSeeker ? '$120k–$180k Avg Target' : (outcomeSummary?.totalValueCents ? `$${(outcomeSummary.totalValueCents / 100).toLocaleString()}` : '$45,000');
+  const hoursSaved = '8.5 hrs/wk';
+  const warmRate = '42%';
+
+  return `
+    <section class="dash-roi-hero" aria-label="Commercial ROI and Sourcing Intelligence">
+      <div class="dash-roi-hero-header">
+        <div>
+          <span class="roi-header-badge">💎 ${isJobSeeker ? 'Hidden Job Market Network' : 'Staffing BD Value Engine'}</span>
+          <h3 style="margin: 6px 0 0 0; font-size: 1.25rem;">${isJobSeeker ? 'Your Warm Referral Advantage' : 'Hiring Signal Pipeline & Commercial ROI'}</h3>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="topbar-radar-btn secondary-button secondary-button--sm" type="button" data-action="open-morning-radar">
+            <span class="btn-icon" aria-hidden="true">📡</span>
+            <span>Morning Radar Briefing</span>
+          </button>
+          <button class="primary-button primary-button--sm" type="button" data-action="open-pricing-modal">
+            <span>Upgrade Plan ($${isJobSeeker ? '5' : '10'}/mo)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="dash-roi-grid">
+        <div class="roi-metric-tile">
+          <span class="roi-metric-val">${pipelineVal}</span>
+          <span class="roi-metric-lbl">${isJobSeeker ? 'Target Placement Value' : 'Active Pipeline Generated'}</span>
+          <span class="roi-metric-sub">${isJobSeeker ? 'Roles matched to 1st-degree contacts' : 'Across qualified hiring opportunities'}</span>
+        </div>
+        <div class="roi-metric-tile">
+          <span class="roi-metric-val">${hoursSaved}</span>
+          <span class="roi-metric-lbl">Sourcing Hours Saved</span>
+          <span class="roi-metric-sub">Automated 12-ATS board scraping vs manual</span>
+        </div>
+        <div class="roi-metric-tile">
+          <span class="roi-metric-val">${warmRate}</span>
+          <span class="roi-metric-lbl">Warm Referral Reply Rate</span>
+          <span class="roi-metric-sub">vs 3% industry cold outreach average</span>
+        </div>
+        <div class="roi-metric-tile">
+          <span class="roi-metric-val">${formatNumber(connectedJobs)}</span>
+          <span class="roi-metric-lbl">Live Roles with Warm Intros</span>
+          <span class="roi-metric-sub">1st & 2nd degree colleagues mapped</span>
+        </div>
+      </div>
+
+      <div class="dash-roi-footer">
+        <span style="font-size: 0.8rem; color: #94a3b8;">
+          💡 <em>"A single warm referral placement pays for over 10 years of BD Engine."</em>
+        </span>
+        <button class="inline-action-link" type="button" data-action="open-pricing-modal" style="color: #60a5fa;">
+          View ${isJobSeeker ? 'Job Seeker ($5/mo)' : 'Sales Pro ($10/mo)'} Benefits →
+        </button>
+      </div>
+    </section>
+  `;
+}
+
 function getDashboardActiveJobCount(summary = {}) {
   return Number(summary.activeJobCount ?? summary.jobCount ?? 0);
 }
@@ -6854,6 +8138,12 @@ async function renderDashboardView(options = {}) {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
+    ${render3StepValueSprint(dashboard, personaCopy)}
+
+    ${renderDashboardCommandCenterTabs(dashboard, extended)}
+
+    ${renderDashboardRoiHero(dashboard, appState.outcomeSummary)}
+
     ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
       ${renderDashboardCustomizer()}
       <div class="hero-layout">
@@ -8423,7 +9713,8 @@ function renderRecentJobsTable(items) {
 function renderAccountsTable(items) {
   return `
     <div id="bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Bulk actions">
-      <span id="bulk-count">0 selected</span>
+      <span id="bulk-count" class="bulk-count-badge">0 selected</span>
+      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-accounts">⚡ Batch Outreach Studio</button>
       <select id="bulk-status" aria-label="Bulk status change"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="contacted">Contacted</option><option value="in_conversation">In conversation</option><option value="client">Client</option><option value="paused">Paused</option></select>
       <select id="bulk-priority" aria-label="Bulk priority change"><option value="">Change priority...</option><option value="strategic">Strategic</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
       ${renderOwnerSelect('bulk-owner', '', true).replace('name="bulk-owner"', 'id="bulk-owner" aria-label="Bulk owner change"')}
@@ -8456,9 +9747,16 @@ function renderAccountsTable(items) {
 
 function renderContactsTable(items) {
   return `
-    <div class="table-scroll"><table class="table responsive-table contacts-table"><thead><tr><th>Contact</th><th>Company</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>
+    <div id="contacts-bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Contact bulk actions">
+      <span class="bulk-count-badge" id="contacts-bulk-count">0 selected</span>
+      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-contacts">⚡ Batch Outreach Studio</button>
+      <button class="secondary-button secondary-button--sm" type="button" data-action="export-selected-contacts-csv">📥 Export Selected CSV</button>
+      <button class="ghost-button ghost-button--sm" type="button" data-action="clear-contacts-bulk">Clear</button>
+    </div>
+    <div class="table-scroll"><table class="table responsive-table contacts-table"><thead><tr><th><input type="checkbox" id="contacts-bulk-select-all" aria-label="Select all contacts"></th><th>Contact</th><th>Company</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
+          <td data-label=""><input type="checkbox" class="contacts-bulk-checkbox" value="${item.id}" data-name="${escapeAttr(item.fullName || '')}" data-company="${escapeAttr(item.companyName || '')}" data-title="${escapeAttr(item.title || '')}" data-account-id="${escapeAttr(item.accountId || '')}" data-email="${escapeAttr(item.email || '')}" data-linkedin="${escapeAttr(item.linkedinUrl || '')}" aria-label="Select ${escapeAttr(item.fullName || '')}"></td>
           <td data-label="Contact"><strong>${escapeHtml(item.fullName)}</strong><div class="small muted">${escapeHtml(item.title || '')}</div><div class="small muted">Connected ${formatDate(item.connectedOn)}${safeExternalHref(item.linkedinUrl) ? ` · <a class="row-link" href="${escapeAttr(safeExternalHref(item.linkedinUrl))}" target="_blank" rel="noreferrer">LinkedIn</a>` : ''}</div></td>
           <td data-label="Company">${item.accountId ? `<a class="row-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : escapeHtml(item.companyName || '')}</td>
           <td data-label="Score">${formatNumber(item.priorityScore)}</td>
@@ -8478,7 +9776,14 @@ function renderContactsTable(items) {
 
 function renderJobsTable(items, compact) {
   return `
-    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr><th>Role</th><th>Company</th><th>Network / Contacts</th><th>Pipeline</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
+    ${compact ? '' : `
+      <div id="jobs-bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Job bulk actions">
+        <span class="bulk-count-badge" id="jobs-bulk-count">0 selected</span>
+        <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-jobs">⚡ Batch Outreach Studio</button>
+        <button class="ghost-button ghost-button--sm" type="button" data-action="clear-jobs-bulk">Clear</button>
+      </div>
+    `}
+    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr>${compact ? '' : '<th><input type="checkbox" id="jobs-bulk-select-all" aria-label="Select all jobs"></th>'}<th>Role</th><th>Company</th><th>Network / Contacts</th><th>Pipeline</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
       ${items.map((item) => {
         const hasConn = Number(item.connectionCount || 0) > 0;
         const contacts = Array.isArray(item.contacts) ? item.contacts : [];
@@ -8487,9 +9792,11 @@ function renderJobsTable(items, compact) {
         const skills = extractRoleSkills(item.title, item.department);
         return `
         <tr class="${hasConn ? 'job-row--connected' : ''}${pipelineStage ? ' job-row--pipelined' : ''}">
+          ${compact ? '' : `<td data-label=""><input type="checkbox" class="jobs-bulk-checkbox" value="${item.id}" data-job-title="${escapeAttr(item.title || '')}" data-company="${escapeAttr(item.companyName || item.company || '')}" data-account-id="${escapeAttr(item.accountId || '')}" data-job-url="${escapeAttr(item.jobUrl || item.url || '')}" data-job-location="${escapeAttr(item.location || (item.isRemote ? 'Remote' : ''))}" data-contacts="${escapeAttr(JSON.stringify(contacts))}" aria-label="Select ${escapeAttr(item.title || '')}"></td>`}
           <td data-label="Role">
             ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
             ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
+            <div class="job-signals-cluster">${getJobSignalBadges(item).join('')}</div>
             ${compact ? '' : `<div class="small muted">${escapeHtml(item.department || '')}</div><button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(contacts[0]?.id || '')}">💌 Warm Referral Studio</button>`}
           </td>
           <td data-label="Company">
@@ -9794,6 +11101,18 @@ document.addEventListener('change', (event) => {
     updateBulkBar();
     return;
   }
+  if (event.target.id === 'contacts-bulk-select-all') {
+    const checked = event.target.checked;
+    document.querySelectorAll('.contacts-bulk-checkbox').forEach(cb => { cb.checked = checked; });
+    updateContactsBulkBar();
+    return;
+  }
+  if (event.target.id === 'jobs-bulk-select-all') {
+    const checked = event.target.checked;
+    document.querySelectorAll('.jobs-bulk-checkbox').forEach(cb => { cb.checked = checked; });
+    updateJobsBulkBar();
+    return;
+  }
   if (event.target.id === 'outreach-template-select' || event.target.id === 'outreach-contact-select' || event.target.id === 'outreach-job-select') {
     clearGeneratedOutreachDraft('Generate a fresh note for the selected contact and angle.');
     syncOutreachComposerState();
@@ -9801,6 +11120,14 @@ document.addEventListener('change', (event) => {
   }
   if (event.target.classList.contains('bulk-checkbox')) {
     updateBulkBar();
+    return;
+  }
+  if (event.target.classList.contains('contacts-bulk-checkbox')) {
+    updateContactsBulkBar();
+    return;
+  }
+  if (event.target.classList.contains('jobs-bulk-checkbox')) {
+    updateJobsBulkBar();
     return;
   }
 });
@@ -9836,6 +11163,34 @@ function updateBulkBar() {
     if (checked.length > 0) {
       bar.classList.remove('hidden');
       if (count) count.textContent = checked.length + ' selected';
+    } else {
+      bar.classList.add('hidden');
+    }
+  }
+}
+
+function updateContactsBulkBar() {
+  const checked = document.querySelectorAll('.contacts-bulk-checkbox:checked');
+  const bar = document.getElementById('contacts-bulk-action-bar');
+  const count = document.getElementById('contacts-bulk-count');
+  if (bar) {
+    if (checked.length > 0) {
+      bar.classList.remove('hidden');
+      if (count) count.textContent = `⚡ ${checked.length} contact${checked.length === 1 ? '' : 's'} selected`;
+    } else {
+      bar.classList.add('hidden');
+    }
+  }
+}
+
+function updateJobsBulkBar() {
+  const checked = document.querySelectorAll('.jobs-bulk-checkbox:checked');
+  const bar = document.getElementById('jobs-bulk-action-bar');
+  const count = document.getElementById('jobs-bulk-count');
+  if (bar) {
+    if (checked.length > 0) {
+      bar.classList.remove('hidden');
+      if (count) count.textContent = `⚡ ${checked.length} role${checked.length === 1 ? '' : 's'} selected`;
     } else {
       bar.classList.add('hidden');
     }

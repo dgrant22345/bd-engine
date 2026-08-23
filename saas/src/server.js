@@ -2500,6 +2500,7 @@ async function handleStartDemo(req, res) {
     persona: 'bd',
   }) || { ...tenant, name: PUBLIC_DEMO_WORKSPACE, slug: PUBLIC_DEMO_SLUG, plan: 'sales', status: 'active', persona: 'bd' };
 
+  await persistUserWorkspace(user, tenant);
   store.ensureTenant(tenant, user);
   store.setPersona(tenant.id, 'bd');
   await store.loadSampleWorkspace(tenant.id, {
@@ -2512,7 +2513,6 @@ async function handleStartDemo(req, res) {
       owners: [{ displayName: PUBLIC_DEMO_USER_NAME, email: PUBLIC_DEMO_EMAIL, role: 'Demo' }],
     },
   });
-  await persistUserWorkspace(user, tenant);
 
   const { cookie } = await createSession(user.id, tenant.id, { demo: true, readOnly: true });
   setSessionCookie(res, cookie);

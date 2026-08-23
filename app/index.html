@@ -8,8 +8,8 @@
   <meta name="theme-color" content="#f8fafc">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Hiring Signals for Staffing BD</title>
-  <link rel="stylesheet" href="/styles.css?v=20260821-sapphire-slate-13">
-  <link rel="stylesheet" href="/palette.css?v=20260821-sapphire-slate-13">
+  <link rel="stylesheet" href="/styles.css?v=20260823-executive-batch-01">
+  <link rel="stylesheet" href="/palette.css?v=20260823-executive-batch-01">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -59,6 +59,10 @@
           <h2 id="view-title" tabindex="-1">Dashboard</h2>
         </div>
         <div class="topbar-tools">
+          <button class="topbar-radar-btn secondary-button secondary-button--sm" id="topbar-radar-btn" type="button" data-action="open-morning-radar" title="Executive Morning Radar & Daily Digest">
+            <span class="btn-icon" aria-hidden="true">📡</span>
+            <span>Morning Radar</span>
+          </button>
           <button class="topbar-network-btn primary-button primary-button--sm" id="topbar-import-network-btn" type="button" data-action="open-network-import-modal" title="Upload LinkedIn Connections CSV">
             <span class="btn-icon" aria-hidden="true">⚡</span>
             <span>Import Network</span>
@@ -78,11 +82,23 @@
             <div class="topbar-overflow-menu">
               <button class="menu-action" id="theme-toggle" type="button">
                 <span class="theme-toggle-icon menu-action-icon" id="theme-icon" aria-hidden="true">&#9789;</span>
-                <span><strong id="theme-label">Dark</strong><small>Change appearance</small></span>
+                <span><strong id="theme-label">Dark</strong><small>Toggle light / dark</small></span>
+              </button>
+              <button class="menu-action" id="theme-preset-btn" type="button" data-action="cycle-theme-preset">
+                <span class="menu-action-icon" aria-hidden="true">🎨</span>
+                <span><strong id="theme-preset-label">Obsidian</strong><small>Cycle color theme preset</small></span>
+              </button>
+              <button class="menu-action" id="morning-radar-menu-btn" type="button" data-action="open-morning-radar">
+                <span class="menu-action-icon" aria-hidden="true">📡</span>
+                <span><strong>Morning Radar</strong><small>Daily hiring intelligence digest</small></span>
               </button>
               <button class="menu-action" id="linkedin-guide-btn" type="button" data-action="open-linkedin-guide">
                 <span class="menu-action-icon" aria-hidden="true">📥</span>
                 <span><strong>Export guide</strong><small>How to get LinkedIn CSV</small></span>
+              </button>
+              <button class="menu-action" id="menu-referral-btn" type="button" data-action="open-referral-modal">
+                <span class="menu-action-icon" aria-hidden="true">🎁</span>
+                <span><strong>Refer Colleagues</strong><small>Give 1 month, get 1 month</small></span>
               </button>
               <button class="menu-action" id="menu-pricing-btn" type="button" data-action="open-pricing-modal">
                 <span class="menu-action-icon" aria-hidden="true">💎</span>
@@ -109,11 +125,14 @@
   <div id="network-import-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="linkedin-guide-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="warm-studio-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+  <div id="batch-outreach-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="pricing-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+  <div id="morning-radar-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+  <div id="referral-share-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/local-api.js?v=20260821-sapphire-slate-13"></script>
-  <script src="/app.js?v=20260821-sapphire-slate-13"></script>
+  <script src="/local-api.js?v=20260823-executive-batch-01"></script>
+  <script src="/app.js?v=20260823-executive-batch-01"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});

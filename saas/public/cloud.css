@@ -3197,3 +3197,196 @@ a:hover { text-decoration: underline; }
 .auth-consent a:hover {
   text-decoration-color: currentColor;
 }
+
+/* ── Marketing & Social Proof Bar ── */
+.social-proof-bar {
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.04), rgba(15, 23, 42, 0.07));
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 24px 20px;
+  margin: 40px 0;
+}
+
+.social-proof-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-around;
+  gap: 20px;
+}
+
+.proof-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+
+.proof-item strong {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.proof-item span {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 200px;
+}
+
+.proof-divider {
+  width: 1px;
+  height: 36px;
+  background: var(--border-subtle);
+}
+
+@media (max-width: 768px) {
+  .proof-divider {
+    display: none;
+  }
+}
+
+/* ── Landing Page Signal Pills ── */
+.preview-signal-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 12px 0;
+}
+
+.landing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.landing-pill--surge {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.landing-pill--warm {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.landing-pill--stale {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.preview-interactive-cta {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Interactive ATS Quick Scanner on Landing ── */
+.interactive-ats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  margin: 16px 0;
+  box-shadow: var(--shadow-sm);
+  max-width: 480px;
+}
+
+.ats-quick-input {
+  flex: 1;
+  min-width: 200px;
+  border: none;
+  background: transparent;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.ats-quick-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* ── Conversion FAQ Accordion ── */
+.landing-faq {
+  max-width: 900px;
+  margin: 60px auto;
+  padding: 0 20px;
+}
+
+.faq-accordion-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.faq-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.faq-item:hover {
+  border-color: var(--accent);
+}
+
+.faq-item[open] {
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.08);
+}
+
+.faq-question {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.faq-question::-webkit-details-marker {
+  display: none;
+}
+
+.faq-question::after {
+  content: '+';
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--text-muted);
+  transition: transform 150ms ease;
+}
+
+.faq-item[open] .faq-question::after {
+  content: '−';
+  color: var(--accent);
+}
+
+.faq-answer {
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+

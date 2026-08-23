@@ -3141,7 +3141,7 @@ export function createStore() {
             currency: 'USD',
             lostReason: stage === 'lost' ? notes : '',
             notes,
-            source: 'sample_workspace',
+            source: 'import',
             occurredAt,
             createdByUserId: 'system',
             createdAt: occurredAt,
