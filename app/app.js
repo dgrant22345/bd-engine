@@ -142,8 +142,8 @@ const appState = {
   outreachModalTrigger: null,
   statusPillsExpanded: false,
   previousScores: {},
-  theme: localStorage.getItem('bd_theme') || 'system',
-  themePreset: localStorage.getItem('bd_theme_preset') || 'obsidian',
+  theme: localStorage.getItem('bd_theme') || 'light',
+  themePreset: localStorage.getItem('bd_theme_preset') || 'slate',
   dashboardTab: localStorage.getItem('bd_dash_tab') || 'battle-board',
   selectedContacts: new Set(),
   selectedJobs: new Set(),
@@ -440,13 +440,13 @@ function cycleTheme() {
 
 function applyThemePreset(preset) {
   const allowed = ['obsidian', 'slate', 'emerald', 'indigo'];
-  const effective = allowed.includes(preset) ? preset : 'obsidian';
+  const effective = allowed.includes(preset) ? preset : 'slate';
   appState.themePreset = effective;
   localStorage.setItem('bd_theme_preset', effective);
   document.documentElement.setAttribute('data-theme-preset', effective);
   if (themePresetLabel) {
     const labels = { obsidian: 'Obsidian', slate: 'Slate', emerald: 'Emerald', indigo: 'Indigo' };
-    themePresetLabel.textContent = labels[effective] || 'Obsidian';
+    themePresetLabel.textContent = labels[effective] || 'Slate';
   }
 }
 
