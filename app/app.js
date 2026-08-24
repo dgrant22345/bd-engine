@@ -425,6 +425,9 @@ function applyTheme(mode) {
   }
   document.documentElement.setAttribute('data-theme', effective);
   document.documentElement.style.colorScheme = effective;
+  if (effective === 'light' && (!appState.themePreset || appState.themePreset === 'obsidian')) {
+    applyThemePreset('slate');
+  }
   const themeBackground = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#0b1120' : '#f8fafc'));
   if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';

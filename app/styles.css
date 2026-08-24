@@ -6147,11 +6147,11 @@ body.print-mode .main { margin: 0 !important; padding: 10px !important; max-widt
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 0 rgba(15, 23, 42, 0.03);
   --shadow-md: 0 10px 24px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 22px 48px rgba(15, 23, 42, 0.11);
-  --sidebar-bg: #101827;
-  --sidebar-panel: rgba(255, 255, 255, 0.055);
-  --sidebar-line: rgba(255, 255, 255, 0.1);
-  --sidebar-text: #eef2f7;
-  --sidebar-muted: #9aa6b6;
+  --sidebar-bg: #ffffff;
+  --sidebar-panel: rgba(15, 23, 42, 0.04);
+  --sidebar-line: rgba(15, 23, 42, 0.08);
+  --sidebar-text: #0f172a;
+  --sidebar-muted: #64748b;
 }
 
 body {

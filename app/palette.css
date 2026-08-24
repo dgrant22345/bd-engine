@@ -50,11 +50,11 @@
   --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-md: 0 10px 28px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.04);
   --shadow-lg: 0 24px 54px -8px rgba(15, 23, 42, 0.12), 0 8px 24px -4px rgba(15, 23, 42, 0.06);
-  --sidebar-bg: #070b14;
-  --sidebar-panel: rgba(255, 255, 255, 0.05);
-  --sidebar-line: rgba(255, 255, 255, 0.08);
-  --sidebar-text: #f8fafc;
-  --sidebar-muted: #94a3b8;
+  --sidebar-bg: #ffffff;
+  --sidebar-panel: rgba(15, 23, 42, 0.04);
+  --sidebar-line: rgba(15, 23, 42, 0.08);
+  --sidebar-text: #0f172a;
+  --sidebar-muted: #64748b;
 }
 
 [data-theme="dark"] {
