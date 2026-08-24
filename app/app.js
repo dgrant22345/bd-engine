@@ -6653,6 +6653,7 @@ function parseCsvPreviewLocal(text) {
     seniorCount,
     talentCount,
     topCompanies: sortedCompanies.slice(0, 6),
+    allCompanyNames: sortedCompanies.map((c) => c.name),
     sampleContacts,
   };
 }
@@ -6736,8 +6737,8 @@ function renderNetworkModalPreview() {
     return `
       <div class="network-import-success-card">
         <div class="success-icon-banner">🎉</div>
-        <h4>Network Successfully Imported & Matched!</h4>
-        <p class="muted small">${formatNumber(stats.totalContacts)} contacts processed across ${formatNumber(stats.uniqueCompanies)} companies.</p>
+        <h4>Network Successfully Imported & Tracked!</h4>
+        <p class="muted small">${formatNumber(stats.totalContacts)} contacts processed across ${formatNumber(stats.uniqueCompanies)} companies with active targeting enabled.</p>
         <div class="network-success-metrics">
           <div class="success-metric-box">
             <strong>${formatNumber(stats.totalContacts)}</strong>
@@ -6745,55 +6746,37 @@ function renderNetworkModalPreview() {
           </div>
           <div class="success-metric-box">
             <strong>${formatNumber(stats.uniqueCompanies)}</strong>
-            <span>Companies Added</span>
+            <span>Companies Tracked</span>
           </div>
           <div class="success-metric-box">
             <strong>${formatNumber(stats.seniorCount)}</strong>
-            <span>Leadership Contacts</span>
+            <span>Decision Makers</span>
           </div>
-        </div>
-        <div class="network-success-actions">
-          <a class="primary-button" href="#/jobs?hasContacts=true&workStyle=local_remote" data-action="close-network-import-modal">View Matched Jobs & Warm Paths →</a>
-          <a class="secondary-button" href="#/contacts" data-action="close-network-import-modal">Explore Network Contacts →</a>
         </div>
       </div>
     `;
   }
 
   return `
-    <div class="network-preview-panel">
-      <div class="network-preview-summary-grid">
-        <div class="preview-metric-tile">
+    <div class="network-parsed-preview">
+      <div class="network-stats-grid">
+        <div class="network-stat-card">
           <strong>${formatNumber(stats.totalContacts)}</strong>
-          <span>Connections Found</span>
+          <span>Total Connections</span>
         </div>
-        <div class="preview-metric-tile">
+        <div class="network-stat-card">
           <strong>${formatNumber(stats.uniqueCompanies)}</strong>
-          <span>Target Companies</span>
+          <span>Companies in Network</span>
         </div>
-        <div class="preview-metric-tile">
+        <div class="network-stat-card">
           <strong>${formatNumber(stats.seniorCount)}</strong>
-          <span>VP / Directors / Heads</span>
+          <span>Leaders & VPs</span>
         </div>
-        <div class="preview-metric-tile">
+        <div class="network-stat-card">
           <strong>${formatNumber(stats.talentCount)}</strong>
           <span>Talent & Recruiters</span>
         </div>
       </div>
-
-      ${stats.topCompanies && stats.topCompanies.length ? `
-        <div class="network-preview-companies">
-          <span class="preview-subheading">Top Represented Companies in Your Network:</span>
-          <div class="preview-company-chips">
-            ${stats.topCompanies.map((c) => `
-              <span class="preview-company-chip">
-                <span class="company-chip-name">${escapeHtml(c.name)}</span>
-                <span class="company-chip-badge">⚡ ${formatNumber(c.count)}</span>
-              </span>
-            `).join('')}
-          </div>
-        </div>
-      ` : ''}
     </div>
   `;
 }
@@ -6810,7 +6793,7 @@ function renderNetworkImportModal() {
           <span class="modal-icon-badge" aria-hidden="true">⚡</span>
           <div>
             <h3 id="network-import-title">Import LinkedIn Connections</h3>
-            <p class="muted small">Match people you know to companies with active job openings & warm paths.</p>
+            <p class="muted small">Automatically target all companies you have connections at and pull in their open jobs.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-network-import-modal" aria-label="Close modal">&times;</button>
@@ -6837,7 +6820,7 @@ function renderNetworkImportModal() {
         ${appState.modalImportBusy ? `
           <div class="modal-progress-strip">
             <div class="spinner-inline" aria-hidden="true"></div>
-            <span>${escapeHtml(appState.modalImportMessage || 'Importing connections and matching companies...')}</span>
+            <span>${escapeHtml(appState.modalImportMessage || 'Importing connections, tracking network companies, and pulling jobs...')}</span>
           </div>
         ` : ''}
       </div>
@@ -6851,7 +6834,7 @@ function renderNetworkImportModal() {
           <button class="ghost-button" type="button" data-action="close-network-import-modal">${isDone ? 'Close' : 'Cancel'}</button>
           ${hasFile && !isDone ? `
             <button class="primary-button" type="button" data-action="network-modal-run-import" ${appState.modalImportBusy ? 'disabled' : ''}>
-              ${appState.modalImportBusy ? 'Importing...' : 'Import & Match Network'}
+              ${appState.modalImportBusy ? 'Importing...' : 'Target Companies & Pull Jobs'}
             </button>
           ` : ''}
         </div>
@@ -6919,8 +6902,7 @@ function renderLinkedInGuideModal() {
       </div>
 
       <div class="modal-footer">
-        <button class="ghost-button" type="button" data-action="close-linkedin-guide">Close</button>
-        <button class="primary-button" type="button" data-action="open-network-import-modal">I Have My CSV Ready &rarr;</button>
+        <button class="primary-button" type="button" data-action="close-linkedin-guide">Got It</button>
       </div>
     </div>
   `;
@@ -6932,21 +6914,27 @@ async function runNetworkModalImport() {
     return;
   }
   appState.modalImportBusy = true;
-  appState.modalImportMessage = 'Importing contacts, matching companies, and tracking boards...';
+  appState.modalImportMessage = 'Importing contacts, tracking all network companies, and pulling jobs...';
   renderNetworkImportModal();
 
   try {
     const file = appState.modalCsvFile;
+    const allTracked = appState.modalCsvParsedStats?.allCompanyNames || [];
     const run = await postConnectionsCsvFile(file, {
       dryRun: false,
       useEmptyState: false,
       fileName: appState.modalCsvFileName || file.name || 'Connections.csv',
+      trackedCompanies: allTracked,
     });
 
+    if (run.jobId) {
+      await watchSetupImportJob(run.jobId);
+    }
     appState.modalImportResult = run;
     invalidateAppData();
     await loadBootstrap(true);
-    showToast('⚡ Network successfully imported and matched!', 'success');
+    playActionChime('success');
+    showToast(`⚡ Network imported! Tracked ${formatNumber(allTracked.length || appState.modalCsvParsedStats?.uniqueCompanies || 0)} companies with connections and pulled live jobs!`, 'success');
   } catch (error) {
     showToast(`Import failed: ${error.message || error}`, 'error', 8000);
   } finally {
