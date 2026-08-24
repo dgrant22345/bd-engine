@@ -4580,6 +4580,21 @@ async function applyJobPreset(presetId) {
       page: 1,
     };
     showToast('Showing all jobs.', 'info');
+  } else if (presetId === 'target_roles') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      sortBy: 'relevance',
+      minRelevance: '40',
+      page: 1,
+    };
+    showToast('🎯 Filtered strictly to your target job titles & search focus.', 'success');
+  } else if (presetId === 'canada') {
+    appState.jobQuery = {
+      ...appState.jobQuery,
+      geography: 'canada',
+      page: 1,
+    };
+    showToast('🇨🇦 Filtered to Canadian jobs (Toronto, Vancouver, Montreal, Ottawa, Waterloo, etc.).', 'info');
   } else if (presetId === 'local_remote') {
     appState.jobQuery = {
       ...appState.jobQuery,
@@ -11550,12 +11565,14 @@ async function renderJobsView() {
       </div>
       <div class="job-preset-strip" role="group" aria-label="Job quick filters">
         <span class="job-preset-label">Quick filters:</span>
-        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.geography && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${appState.jobQuery.minRelevance === '40' || (focusConfigured && appState.jobQuery.sortBy === 'relevance' && appState.jobQuery.minRelevance) ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
+        <button class="job-preset-chip${appState.jobQuery.geography === 'canada' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
         <button class="job-preset-chip${appState.jobQuery.workStyle === 'local_remote' || appState.jobQuery.geography === 'local_remote' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="local_remote">🏡 Local or Remote</button>
         <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
         <button class="job-preset-chip${appState.jobQuery.sortBy === 'connections' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="most_connected">⚡ Most Connected</button>
         <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">🎯 In Pipeline (${Object.keys(appState.jobPipelineStages || {}).length})</button>
-        <button class="job-preset-chip${appState.jobQuery.minRelevance === '45' || appState.jobQuery.sortBy === 'relevance' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="best_fit">🌟 Best Fit</button>
+        <button class="job-preset-chip${appState.jobQuery.minRelevance === '45' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="best_fit">🌟 Best Fit</button>
         <button class="job-preset-chip${appState.jobQuery.recencyDays === '7' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="recent">⏱️ Past 7 Days</button>
       </div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">

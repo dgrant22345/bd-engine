@@ -6000,20 +6000,22 @@ function accountPriority(item = {}) {
 }
 
 function accountMatchesGeography(item = {}, geography = '') {
-  const location = String(item.location || '').trim();
+  const location = String(item.location || item.geography || '').trim();
   if (!location) return false;
   const lower = location.toLowerCase();
 
-  const isUsState = /(?:^|,\s*)(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(location);
-  const isUsCountry = /\b(united states|usa|u\.s\.)\b/i.test(lower) || (/\bus\b/i.test(lower) && !/\b(on-site|onsite|contact us|about us)\b/i.test(lower));
-  const us = isUsCountry || (isUsState && !/\b(toronto|gta|ontario|canada)\b/i.test(lower));
+  const isCanadaCountry = /\b(canada|canadian)\b/i.test(lower);
+  const isCanadaProvince = /(?:^|,\s*|-|\()(?:\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe|pei|ontario|quebec|québec|alberta|british columbia|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland)\b/i.test(lower) && !/\b(on-site|onsite)\b/i.test(lower);
+  const isCanadaCity = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|richmond|surrey|victoria|kelowna|halifax|winnipeg|regina|saskatoon|london|guelph|barrie|windsor|kingston|cambridge|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean)\b/i.test(lower);
+  const canada = isCanadaCountry || isCanadaProvince || isCanadaCity || (/\bremote\b/i.test(lower) && /\b(canada|canadian|on|bc|ab|qc)\b/i.test(lower));
 
-  const isCanadaProvince = /(?:^|,\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe|ontario|quebec|alberta|british columbia)\b/i.test(lower) && !/\b(on-site|onsite)\b/i.test(lower);
-  const canada = /\b(canada|toronto|gta|mississauga|brampton|vancouver|montreal|calgary|ottawa)\b/i.test(lower) || isCanadaProvince;
+  const isUsCountry = /\b(united states|usa|u\.s\.a?)\b/i.test(lower) || (/\bus\b/i.test(lower) && !/\b(on-site|onsite|contact us|about us)\b/i.test(lower));
+  const isUsState = /(?:^|,\s*)(al|ak|az|ar|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(location) || (/(?:^|,\s*)ca(?:\s|,|$)/i.test(location) && !canada);
+  const us = isUsCountry || (isUsState && !canada);
 
   const requested = normalizeKey(geography);
   if (requested === 'gta') return isGtaLocation(location);
-  if (requested === 'canada') return canada && !us;
+  if (requested === 'canada') return canada;
   if (requested === 'us') return us;
   if (requested === 'canada_us') return canada || us;
   return true;
@@ -8798,11 +8800,11 @@ const CANADA_COUNTRY_RE = /\b(canada|canadian)\b/i;
 const US_COUNTRY_RE = /\b(us|usa|u\.s\.a?|united states(?: of america)?)\b/i;
 const NORTH_AMERICA_REGION_RE = /\bnorth america\b/i;
 const OTHER_REGION_RE = /\b(emea|europe|european union|uk|united kingdom|england|scotland|wales|ireland|netherlands|germany|france|spain|italy|poland|sweden|norway|denmark|finland|switzerland|austria|portugal|belgium|australia|new zealand|india|singapore|japan|china|hong kong|latin america|latam|apac|asia|africa|middle east)\b/i;
-const CANADA_PROVINCE_RE = /\b(ontario|british columbia|alberta|quebec|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland(?: and labrador)?|prince edward island|yukon|northwest territories|nunavut)\b/i;
+const CANADA_PROVINCE_RE = /\b(ontario|british columbia|alberta|quebec|québec|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland(?: and labrador)?|prince edward island|pei|yukon|northwest territories|nunavut)\b/i;
 const US_STATE_RE = /\b(california|new york|texas|washington|massachusetts|florida|illinois|georgia|colorado|arizona|virginia|pennsylvania|north carolina|ohio|michigan|new jersey|maryland|oregon|minnesota|tennessee|utah|district of columbia)\b/i;
-const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montr\u00e9al|quebec city|halifax|winnipeg|regina|saskatoon|st\.? john'?s)\b/i;
+const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|richmond|surrey|victoria|kelowna|quebec city|halifax|winnipeg|regina|saskatoon|london|guelph|barrie|windsor|kingston|cambridge|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean|st\.? john'?s)\b/i;
 const US_CITY_RE = /\b(seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles|new york city|miami|dallas|houston|phoenix|portland|philadelphia|detroit|minneapolis|nashville|salt lake city)\b/i;
-const CANADA_CODE_RE = /,\s*(on|bc|ab|qc|ns|mb|sk|nb|pe|pei|yt|nt|nu)(?=\s*(?:,|\/|\||\)|$))/i;
+const CANADA_CODE_RE = /(?:,\s*|\s*-\s*|\(\s*)(on|bc|ab|qc|ns|mb|sk|nb|pe|pei|yt|nt|nu)(?=\s*(?:,|\/|\||\)|$))/i;
 const US_CODE_RE = /,\s*(ca|ny|tx|wa|ma|fl|il|ga|co|az|va|pa|nc|oh|mi|nj|md|or|mn|tn|ut|dc)(?=\s*(?:,|\/|\||\)|$))/i;
 const OTHER_COUNTRY_CODE_RE = /,\s*(nl|gb|uk|ie|de|fr|es|it|pl|se|no|dk|fi|ch|at|pt|be|au|nz|in|sg|jp|cn|hk)(?=\s*(?:,|\/|\||\)|$))/i;
 const NEWFOUNDLAND_CODE_RE = /\b(st\.? john'?s|corner brook|gander|newfoundland),\s*nl\b/i;
