@@ -138,7 +138,7 @@ export const PLANS = {
     stripePriceId: process.env.STRIPE_PRICE_JOBSEEKER || 'price_placeholder_jobseeker',
     trialDays: 0,
     limits: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
-    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts'],
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'jobseeker_mode'],
   },
   sales: {
     id: 'sales',
@@ -150,7 +150,7 @@ export const PLANS = {
     stripePriceId: process.env.STRIPE_PRICE_SALES || 'price_placeholder_sales',
     trialDays: 0,
     limits: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 },
-    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export'],
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export', 'jobseeker_mode', 'bd_mode', 'all_modes'],
   },
   owner: {
     id: 'owner',
@@ -160,7 +160,7 @@ export const PLANS = {
     interval: null,
     trialDays: 0,
     limits: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
-    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export'],
+    features: ['dashboard', 'accounts', 'contacts', 'jobs', 'csv_import', 'outreach_drafts', 'enrichment', 'export', 'jobseeker_mode', 'bd_mode', 'all_modes'],
   },
 };
 

@@ -4357,6 +4357,15 @@ function applyPersonaChrome() {
 async function togglePersonaMode() {
   const current = isJobSeekerPersona();
   const next = current ? 'bd' : 'jobseeker';
+  const planId = appState.bootstrap?.session?.plan?.id;
+
+  // $5/mo Job Seeker plan is dedicated to Job Seeker mode; $10/mo Sales Pro grants access to BOTH modes
+  if (current && next === 'bd' && planId === 'jobseeker') {
+    openPricingModal();
+    showToast('💼 Business Development mode requires the $10/mo Pro plan (which includes access to BOTH modes).', 'info', 6000);
+    return;
+  }
+
   appState.persona = next;
   localStorage.setItem('bd_persona', next);
   applyPersonaChrome();
@@ -10041,8 +10050,8 @@ function renderPricingModal() {
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">💎</span>
           <div>
-            <h3 id="pricing-modal-title">Simple, Value-Packed Pricing</h3>
-            <p class="muted small">Turn your LinkedIn network into interviews and clients. Cancel anytime.</p>
+            <h3 id="pricing-modal-title">Transparent, Recurring Monthly Plans</h3>
+            <p class="muted small">All plans recur monthly. Cancel anytime with 1 click in your Stripe Customer Portal.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-pricing-modal" aria-label="Close modal">&times;</button>
@@ -10052,50 +10061,56 @@ function renderPricingModal() {
         <div class="pricing-cards-grid">
           <!-- Job Seeker Plan ($5/mo) -->
           <div class="pricing-card ${currentPlan === 'jobseeker' ? 'is-current' : 'is-popular'}">
-            <div class="pricing-badge-popular">MOST POPULAR FOR JOB HUNTING</div>
+            <div class="pricing-badge-popular">MOST POPULAR FOR CANDIDATES</div>
             <div class="pricing-card-header">
-              <h4>Job Seeker</h4>
-              <p class="muted small">Land warm referrals and skip cold job application queues.</p>
+              <h4>🎯 Job Seeker</h4>
+              <p class="muted small">Dedicated job search workspace to skip ATS queues & land warm referrals.</p>
               <div class="pricing-price-tag">
                 <span class="price-currency">$</span>
                 <span class="price-amount">5</span>
-                <span class="price-period">/ month</span>
+                <span class="price-period">/ month (recurring)</span>
               </div>
             </div>
             <ul class="pricing-feature-list">
+              <li>✓ <strong>Full Access to Job Seeker Mode</strong></li>
               <li>✓ <strong>Unlimited LinkedIn Connections CSV Imports</strong></li>
-              <li>✓ <strong>Live Matching to 50+ ATS Boards</strong> (Greenhouse, Lever, Ashby, Workday)</li>
-              <li>✓ <strong>1-Click Warm Referral & Intro Generator</strong> (LinkedIn notes & DMs)</li>
-              <li>✓ <strong>Local GTA & Remote Work-Style Filters</strong></li>
+              <li>✓ <strong>Auto-Target All Network Employers</strong> (Greenhouse, Lever, Ashby, Workday)</li>
+              <li>✓ <strong>1-Click Warm Referral Intro Request Generator</strong></li>
+              <li>✓ <strong>Recruiter & Hiring Manager Screen Teleprompter</strong></li>
+              <li>✓ <strong>Daily Career Radar & Target Company Dossier</strong></li>
+              <li>✓ <strong>Job Application & Interview Pipeline Board</strong></li>
               <li>✓ <strong>Up to 1,000 Network Contacts & 200 Tracked Companies</strong></li>
-              <li>✓ <strong>Job Application Pipeline Tracker</strong></li>
+              <li style="opacity:0.75;font-size:0.8rem;margin-top:6px;">⚠️ <em>Includes Job Seeker Mode only</em></li>
             </ul>
             <a class="primary-button pricing-cta-btn" href="#/admin" data-action="close-pricing-modal">
-              ${currentPlan === 'jobseeker' ? 'Current Plan' : 'Get Job Seeker — $5/mo'}
+              ${currentPlan === 'jobseeker' ? 'Current Plan' : 'Subscribe to Job Seeker — $5/mo'}
             </a>
           </div>
 
           <!-- Sales / Staffing Pro Plan ($10/mo) -->
           <div class="pricing-card ${currentPlan === 'sales' ? 'is-current' : ''}">
+            <div class="pricing-badge-popular" style="background:#3b82f6;">FULL DUAL-MODE ACCESS</div>
             <div class="pricing-card-header">
-              <h4>Sales & Staffing Pro</h4>
-              <p class="muted small">For recruiters, staffing BD reps, and agency founders.</p>
+              <h4>💼 Sales & Staffing Pro</h4>
+              <p class="muted small">Complete dual-mode access for recruiters, staffing BD reps, and founders.</p>
               <div class="pricing-price-tag">
                 <span class="price-currency">$</span>
                 <span class="price-amount">10</span>
-                <span class="price-period">/ month</span>
+                <span class="price-period">/ month (recurring)</span>
               </div>
             </div>
             <ul class="pricing-feature-list">
-              <li>✓ <strong>Everything in Job Seeker</strong></li>
-              <li>✓ <strong>10,000 Contacts & 1,000 Accounts</strong></li>
-              <li>✓ <strong>Unlimited ATS Job Boards Monitoring</strong></li>
-              <li>✓ <strong>Hiring Velocity & Lead Scoring Engine</strong></li>
-              <li>✓ <strong>Multi-Channel Outreach Sequences</strong></li>
-              <li>✓ <strong>Full CSV & CRM Contact Export</strong></li>
+              <li>💎 <strong>Full Access to BOTH Modes (Job Seeker + Staffing BD)</strong></li>
+              <li>✓ <strong>Deal Flow & Executive Revenue Pipeline Board</strong></li>
+              <li>✓ <strong>10-Second Pattern Interrupt Cold Call Teleprompter</strong></li>
+              <li>✓ <strong>3-Touch B2B Prospecting & Search Sequencer</strong></li>
+              <li>✓ <strong>Client Talent Presentation Decks & Candidate Slates</strong></li>
+              <li>✓ <strong>10,000 Contacts & 1,000 Accounts Capacity</strong></li>
+              <li>✓ <strong>Unlimited Live ATS Board Monitoring & Refresh</strong></li>
+              <li>✓ <strong>Full CRM & Contact CSV Export</strong></li>
             </ul>
             <a class="secondary-button pricing-cta-btn" href="#/admin" data-action="close-pricing-modal">
-              ${currentPlan === 'sales' ? 'Current Plan' : 'Upgrade to Pro — $10/mo'}
+              ${currentPlan === 'sales' ? 'Current Plan' : 'Subscribe to Pro (Both Modes) — $10/mo'}
             </a>
           </div>
         </div>
