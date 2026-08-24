@@ -181,7 +181,7 @@ const appState = {
   alertThresholds: { ...defaultAlertThresholds, ...storedAlertThresholds },
   bulkLastClickIdx: null,
   duplicateCache: null,
-  persona: 'bd',
+  persona: localStorage.getItem('bd_persona') || 'bd',
   setupStatus: null,
   setupStep: 1,
   setupBusy: false,
@@ -3237,6 +3237,10 @@ function bindEvents() {
       closeCallStudioModal();
       return;
     }
+    if (actionName === 'toggle-persona-mode') {
+      await togglePersonaMode();
+      return;
+    }
     if (actionName === 'switch-call-branch') {
       switchCallBranch(action.dataset.branch);
       return;
@@ -4336,11 +4340,34 @@ function applyPersonaChrome() {
   const contactsLabel = document.querySelector('[data-route="contacts"] .nav-label');
   const adminLabel = document.querySelector('[data-route="admin"] .nav-label');
   const topbarEyebrow = document.querySelector('.topbar .eyebrow');
+  const personaBtn = document.getElementById('persona-mode-btn');
+  const personaIcon = document.getElementById('persona-mode-icon');
+  const personaLabel = document.getElementById('persona-mode-label');
+
   if (accountLabel) accountLabel.textContent = jobSeeker ? 'Companies' : 'Accounts';
   if (jobsLabel) jobsLabel.textContent = jobSeeker ? 'Open roles' : 'Jobs';
   if (contactsLabel) contactsLabel.textContent = jobSeeker ? 'Network' : 'Contacts';
   if (adminLabel) adminLabel.textContent = jobSeeker ? 'Tools' : 'Admin';
   if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Hiring-signal workspace';
+  if (personaIcon) personaIcon.textContent = jobSeeker ? '🎯' : '💼';
+  if (personaLabel) personaLabel.textContent = jobSeeker ? 'Job Seeker' : 'Staffing BD';
+  if (personaBtn) personaBtn.title = `Current mode: ${jobSeeker ? 'Job Seeker' : 'Business Development'}. Click to switch mode.`;
+}
+
+async function togglePersonaMode() {
+  const current = isJobSeekerPersona();
+  const next = current ? 'bd' : 'jobseeker';
+  appState.persona = next;
+  localStorage.setItem('bd_persona', next);
+  applyPersonaChrome();
+  playActionChime('nav');
+  showToast(`Switched mode: ${next === 'jobseeker' ? '🎯 Job Seeker Mode' : '💼 Business Development Mode'}`, 'success');
+  const routeRoot = getRouteRoot();
+  if (routeRoot === 'dashboard') await renderDashboardView({ skipLoading: true });
+  else if (routeRoot === 'accounts') await renderAccountsView();
+  else if (routeRoot === 'jobs') await renderJobsView();
+  else if (routeRoot === 'contacts') await renderContactsView();
+  else if (routeRoot === 'admin') await renderAdminView();
 }
 
 function getFormValues(form) {
@@ -8042,6 +8069,14 @@ const REVENUE_STAGES = [
   { id: 'placement_won', label: 'Placement Won', prob: 1.00, icon: '🏆' },
 ];
 
+const JOBSEEKER_STAGES = [
+  { id: 'identified', label: 'Saved Target', prob: 0.10, icon: '📌' },
+  { id: 'outreach_sent', label: 'Referral Outreach', prob: 0.30, icon: '💌' },
+  { id: 'meeting_booked', label: 'Intro / Applied', prob: 0.50, icon: '🤝' },
+  { id: 'terms_sent', label: 'Interview Loop', prob: 0.75, icon: '🎯' },
+  { id: 'placement_won', label: 'Offer Received', prob: 1.00, icon: '🎉' },
+];
+
 function updateDealStage(accountId, newStage) {
   if (!accountId || !newStage) return;
   appState.dealPipeline[accountId] = newStage;
@@ -8049,10 +8084,10 @@ function updateDealStage(accountId, newStage) {
   
   if (newStage === 'placement_won') {
     playActionChime('success');
-    showToast('🎉 Placement Won! Commission revenue recognized!', 'success');
+    showToast(isJobSeekerPersona() ? '🎉 Offer Received! Congratulations!' : '🎉 Placement Won! Commission revenue recognized!', 'success');
   } else {
     playActionChime('nav');
-    showToast(`✓ Deal stage moved to ${newStage.replace(/_/g, ' ')}`, 'success');
+    showToast(`✓ Stage moved to ${newStage.replace(/_/g, ' ')}`, 'success');
   }
   
   // Re-render active view if on accounts or dashboard
@@ -8062,11 +8097,13 @@ function updateDealStage(accountId, newStage) {
 }
 
 function renderRevenueKanbanBoard(accounts = [], jobs = []) {
+  const isJobSeeker = isJobSeekerPersona();
+  const stages = isJobSeeker ? JOBSEEKER_STAGES : REVENUE_STAGES;
   const avgFee = Number(appState.feeSimulator?.avgFee || 22500);
 
   // Group accounts into stages
   const stageGroups = {};
-  REVENUE_STAGES.forEach(s => { stageGroups[s.id] = []; });
+  stages.forEach(s => { stageGroups[s.id] = []; });
 
   accounts.forEach(acc => {
     const stage = appState.dealPipeline[acc.id] || (acc.outreachStatus === 'contacted' ? 'outreach_sent' : acc.outreachStatus === 'opportunity' ? 'meeting_booked' : 'identified');
@@ -8081,7 +8118,7 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
   let totalPipelineValue = 0;
   let totalWeightedValue = 0;
 
-  REVENUE_STAGES.forEach(s => {
+  stages.forEach(s => {
     const count = stageGroups[s.id].length;
     const stageValue = count * avgFee;
     const stageWeighted = stageValue * s.prob;
@@ -8089,25 +8126,30 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
     totalWeightedValue += stageWeighted;
   });
 
+  const boardTitle = isJobSeeker ? '🎯 Application & Interview Career Pipeline' : '💼 Deal Flow & Executive Revenue Pipeline';
+  const boardSubtitle = isJobSeeker
+    ? 'Track target companies from warm networking and referrals through interview loops and offers.'
+    : 'Drag deals or update stages to track probability-weighted commission revenue in real time.';
+
   return `
     <section class="revenue-kanban-board">
       <div class="revenue-kanban-header">
         <div>
-          <h3>💼 Deal Flow & Executive Revenue Pipeline</h3>
-          <p class="muted small">Drag deals or update stages to track probability-weighted commission revenue in real time.</p>
+          <h3>${boardTitle}</h3>
+          <p class="muted small">${boardSubtitle}</p>
         </div>
         <div class="revenue-forecast-summary">
           <div class="revenue-forecast-chip">
-            Addressable: <strong>$${formatNumber(totalPipelineValue)}</strong>
+            ${isJobSeeker ? 'Target Pipeline:' : 'Addressable:'} <strong>${isJobSeeker ? `${accounts.length} Companies` : `$${formatNumber(totalPipelineValue)}`}</strong>
           </div>
           <div class="revenue-forecast-chip revenue-forecast-chip--highlight">
-            Weighted Projected: <strong>$${formatNumber(Math.round(totalWeightedValue))}</strong>
+            ${isJobSeeker ? 'Active Loops:' : 'Weighted Projected:'} <strong>${isJobSeeker ? `${stageGroups['terms_sent'].length + stageGroups['placement_won'].length} Active` : `$${formatNumber(Math.round(totalWeightedValue))}`}</strong>
           </div>
         </div>
       </div>
 
       <div class="revenue-kanban-cols">
-        ${REVENUE_STAGES.map(stage => {
+        ${stages.map(stage => {
           const items = stageGroups[stage.id];
           const colValue = items.length * avgFee;
           const colWeighted = colValue * stage.prob;
@@ -8118,7 +8160,7 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
                   <span class="revenue-col-title">${stage.icon} ${stage.label}</span>
                   <span class="revenue-col-badge">${items.length}</span>
                 </div>
-                <span class="revenue-col-total">$${formatNumber(colValue)} (${Math.round(stage.prob * 100)}% → $${formatNumber(Math.round(colWeighted))})</span>
+                ${!isJobSeeker ? `<span class="revenue-col-total">$${formatNumber(colValue)} (${Math.round(stage.prob * 100)}% → $${formatNumber(Math.round(colWeighted))})</span>` : `<span class="revenue-col-total">${items.length} ${pluralize(items.length, 'company')}</span>`}
               </div>
               <div class="revenue-kanban-list">
                 ${items.map(acc => {
@@ -8129,19 +8171,21 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
                     <div class="revenue-kanban-card" data-account-id="${escapeAttr(acc.id)}">
                       <div class="revenue-card-company"><a class="row-link" href="#/accounts/${acc.id}">${escapeHtml(acc.displayName)}</a></div>
                       <div class="revenue-card-role">${jobCount} open ${pluralize(jobCount, 'role')} · ${escapeHtml(acc.industry || 'Tech')}</div>
-                      <div class="revenue-card-meta">
-                        <span class="revenue-card-fee">$${formatNumber(estimatedFee)} fee</span>
-                        <span class="revenue-card-weighted">Proj: $${formatNumber(weightedFee)}</span>
-                      </div>
+                      ${!isJobSeeker ? `
+                        <div class="revenue-card-meta">
+                          <span class="revenue-card-fee">$${formatNumber(estimatedFee)} fee</span>
+                          <span class="revenue-card-weighted">Proj: $${formatNumber(weightedFee)}</span>
+                        </div>
+                      ` : ''}
                       <div style="margin-top:6px;">
                         <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" style="width:100%;font-size:0.72rem;">
-                          ${REVENUE_STAGES.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.icon} ${s.label}</option>`).join('')}
+                          ${stages.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.icon} ${s.label}</option>`).join('')}
                         </select>
                       </div>
                     </div>
                   `;
                 }).join('')}
-                ${!items.length ? `<p class="muted small" style="text-align:center;padding:24px 0;opacity:0.6;">No deals in this stage</p>` : ''}
+                ${!items.length ? `<p class="muted small" style="text-align:center;padding:24px 0;opacity:0.6;">No companies in this stage</p>` : ''}
               </div>
             </div>
           `;
@@ -8768,6 +8812,29 @@ const CALL_BRANCHES = {
   },
 };
 
+const JOBSEEKER_CALL_BRANCHES = {
+  opener: {
+    label: '🎯 30s Elevator Pitch',
+    text: `Hi {{name}}, thanks so much for taking the time to speak today!\n\nI'm a senior software engineer with deep expertise across modern distributed systems, cloud infrastructure, and product velocity. I saw {{company}}'s opening for {{jobTitle}} and was immediately excited by the engineering challenges your team is solving.\n\nI'd love to hear more about the team's top priorities this quarter!`,
+  },
+  why_company: {
+    label: '🏢 "Why {{company}}?"',
+    text: `I've followed {{company}}'s recent technical milestones closely. What stands out to me is your commitment to high-reliability infrastructure and developer experience. That aligns directly with the architectural challenges where I do my best work.`,
+  },
+  tough_question: {
+    label: '💡 Impact Story',
+    text: `In my last role, I led the re-architecture of our core data ingestion service, cutting latency by 45% while handling 5x traffic during peak loads. I thrive at the intersection of technical rigor and business impact.`,
+  },
+  questions_for_them: {
+    label: '❓ High-Leverage Qs',
+    text: `I'd love to ask: What are the biggest technical bottlenecks the team is tackling right now, and what does success look like in the first 90 days for whoever steps into the {{jobTitle}} role?`,
+  },
+  closing: {
+    label: '🤝 Closing & Next Steps',
+    text: `Based on what we discussed, this feels like an exceptional match with my background and engineering philosophy. What are the next steps in the interview loop, and when would be best to check in?`,
+  },
+};
+
 let callTimerInterval = null;
 let callStartTime = null;
 
@@ -8808,7 +8875,8 @@ function closeCallStudioModal() {
 }
 
 function switchCallBranch(branchId) {
-  if (CALL_BRANCHES[branchId]) {
+  const branches = isJobSeekerPersona() ? JOBSEEKER_CALL_BRANCHES : CALL_BRANCHES;
+  if (branches[branchId]) {
     appState.activeCallBranch = branchId;
     renderCallStudioModal();
     playActionChime('nav');
@@ -8817,10 +8885,12 @@ function switchCallBranch(branchId) {
 
 function renderCallStudioModal() {
   if (!callStudioModalBackdrop) return;
+  const isJobSeeker = isJobSeekerPersona();
+  const branches = isJobSeeker ? JOBSEEKER_CALL_BRANCHES : CALL_BRANCHES;
   const job = appState.activeCallJob || { title: 'Senior Software Engineer', companyName: 'Target Account' };
-  const contact = appState.activeCallContact || { fullName: 'Hiring Leader' };
+  const contact = appState.activeCallContact || { fullName: isJobSeeker ? 'Recruiter / Hiring Manager' : 'Hiring Leader' };
   const activeBranch = appState.activeCallBranch || 'opener';
-  const branchData = CALL_BRANCHES[activeBranch] || CALL_BRANCHES.opener;
+  const branchData = branches[activeBranch] || branches.opener;
   const firstName = contact.fullName ? contact.fullName.split(' ')[0] : 'there';
 
   const script = branchData.text
@@ -8828,14 +8898,21 @@ function renderCallStudioModal() {
     .replace(/\{\{company\}\}/g, job.companyName || 'your team')
     .replace(/\{\{jobTitle\}\}/g, job.title || 'this role');
 
+  const modalTitle = isJobSeeker
+    ? `Hiring Manager & Recruiter Screen: ${escapeHtml(contact.fullName)}`
+    : `Cold Call Teleprompter: ${escapeHtml(contact.fullName)}`;
+  const modalSub = isJobSeeker
+    ? `Live interview battle card for ${escapeHtml(job.companyName)} · ${escapeHtml(job.title)}`
+    : `${escapeHtml(job.companyName)} · ${escapeHtml(job.title)}`;
+
   callStudioModalBackdrop.innerHTML = `
     <div class="modal-dialog call-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="call-modal-title">
       <div class="modal-header call-studio-header">
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">🎙️</span>
           <div>
-            <h3 id="call-modal-title">Cold Call Teleprompter: ${escapeHtml(contact.fullName)}</h3>
-            <p class="muted small">${escapeHtml(job.companyName)} · ${escapeHtml(job.title)}</p>
+            <h3 id="call-modal-title">${modalTitle}</h3>
+            <p class="muted small">${modalSub}</p>
           </div>
         </div>
         <span class="call-timer-badge" id="call-live-timer">⏱️ 00:00</span>
@@ -8846,7 +8923,7 @@ function renderCallStudioModal() {
         <span class="call-pattern-interrupt-tag">${escapeHtml(branchData.label)}</span>
         <div class="call-hook-text">${escapeHtml(script)}</div>
         <div class="call-branch-grid">
-          ${Object.entries(CALL_BRANCHES).map(([key, data]) => `
+          ${Object.entries(branches).map(([key, data]) => `
             <button class="call-branch-btn ${key === activeBranch ? 'active' : ''}" type="button" data-action="switch-call-branch" data-branch="${key}">
               ${escapeHtml(data.label)}
             </button>
@@ -8856,7 +8933,7 @@ function renderCallStudioModal() {
 
       <div class="modal-footer">
         <button class="secondary-button" type="button" data-action="close-call-studio">End Call</button>
-        <button class="primary-button" type="button" data-action="quick-log-call-success">✓ Log Successful Connect</button>
+        <button class="primary-button" type="button" data-action="quick-log-call-success">${isJobSeeker ? '✓ Log Screen Complete' : '✓ Log Successful Connect'}</button>
       </div>
     </div>
   `;
@@ -8867,13 +8944,14 @@ function renderCallStudioModal() {
    ══════════════════════════════════════════════════ */
 
 function generateMorningBattlePlanDossier(accounts = [], jobs = []) {
+  const isJobSeeker = isJobSeekerPersona();
   const topAccounts = (Array.isArray(accounts) ? accounts : []).slice(0, 5);
   const topJobs = (Array.isArray(jobs) ? jobs : []).slice(0, 5);
   const avgFee = Number(appState.feeSimulator?.avgFee || 22500);
   const todayDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return {
-    title: `BD Engine Executive Morning Battle Plan`,
+    title: isJobSeeker ? `Daily Career Radar & Target Company Dossier` : `BD Engine Executive Morning Battle Plan`,
     date: todayDate,
     topAccounts: topAccounts.map(a => ({
       name: a.displayName || a.name || 'Account',
@@ -8889,8 +8967,8 @@ function generateMorningBattlePlanDossier(accounts = [], jobs = []) {
       techStack: extractTechStack(j.title, j.department, ''),
     })),
     pipelineSummary: {
-      addressableFeePipeline: (topAccounts.length * avgFee),
-      estimatedPlacements: Math.max(1, Math.round(topAccounts.length * 0.25)),
+      addressableFeePipeline: isJobSeeker ? (topAccounts.length * 150000) : (topAccounts.length * avgFee),
+      estimatedPlacements: Math.max(1, Math.round(topAccounts.length * (isJobSeeker ? 1 : 0.25))),
     },
   };
 }
@@ -8913,25 +8991,26 @@ function closeBattlePlanModal() {
 }
 
 async function copyBattlePlanMarkdown() {
+  const isJobSeeker = isJobSeekerPersona();
   const dossier = generateMorningBattlePlanDossier(appState.accounts || [], appState.jobs || []);
   let md = `# 📰 ${dossier.title} (${dossier.date})\n\n`;
-  md += `## 🎯 Top Priority Strike Zone Accounts\n`;
+  md += `## 🎯 ${isJobSeeker ? 'Top Target Hiring Companies' : 'Top Priority Strike Zone Accounts'}\n`;
   dossier.topAccounts.forEach(a => {
-    md += `* **${a.name}** (Target Score: ${a.score} | ${a.jobsCount} Live Roles)\n`;
+    md += `* **${a.name}** (Fit Score: ${a.score} | ${a.jobsCount} Live Roles)\n`;
     if (a.hiringVelocity.surgeBadge) md += `  - Signal: ${a.hiringVelocity.surgeBadge}\n`;
-    if (a.cluster.competitors.length) md += `  - Sibling Cross-Hunt: ${a.cluster.competitors.join(', ')}\n`;
+    if (a.cluster.competitors.length) md += `  - Peer Lookalikes: ${a.cluster.competitors.join(', ')}\n`;
   });
   md += `\n## 🔥 Priority Requisitions & Tech Stack Grounding\n`;
   dossier.topJobs.forEach(j => {
     md += `* **${j.title}** @ ${j.company} (${j.contactsCount} warm network contacts)\n`;
     if (j.techStack.length) md += `  - Tech Stack: ${j.techStack.map(s => s.name).join(', ')}\n`;
   });
-  md += `\n---\n*Generated by BD Engine 2.0 Enterprise Suite.*`;
+  md += `\n---\n*Generated by BD Engine ${isJobSeeker ? 'Career Intelligence' : 'Enterprise BD'} Suite.*`;
 
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast('📋 Executive Battle Plan copied to clipboard (Markdown)!', 'success');
+    showToast(isJobSeeker ? '📋 Career Dossier copied to clipboard!' : '📋 Executive Battle Plan copied to clipboard!', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -8939,7 +9018,15 @@ async function copyBattlePlanMarkdown() {
 
 function renderBattlePlanModal() {
   if (!battlePlanModalBackdrop) return;
+  const isJobSeeker = isJobSeekerPersona();
   const dossier = generateMorningBattlePlanDossier(appState.accounts || [], appState.jobs || []);
+
+  const headerTitle = isJobSeeker ? 'Daily Career Radar & Target Company Dossier' : 'Executive Morning Battle Plan Dossier';
+  const headerSub = isJobSeeker ? `${escapeHtml(dossier.date)} · Daily high-conviction job search and warm referral briefing` : `${escapeHtml(dossier.date)} · Daily high-conviction BD briefing`;
+  const heroTitle = isJobSeeker ? '🎯 Daily Strike Zone & Priority Hiring Targets' : '🎯 Daily Strike Zone & Priority Outreach Targets';
+  const heroPipeline = isJobSeeker
+    ? `Target Career Opportunities: <strong>${dossier.topAccounts.length} High-Fit Companies</strong>`
+    : `Estimated Addressable Pipeline: <strong>$${formatNumber(dossier.pipelineSummary.addressableFeePipeline)}</strong>`;
 
   battlePlanModalBackdrop.innerHTML = `
     <div class="modal-dialog battle-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="battle-plan-title">
@@ -8947,8 +9034,8 @@ function renderBattlePlanModal() {
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">📰</span>
           <div>
-            <h3 id="battle-plan-title">Executive Morning Battle Plan Dossier</h3>
-            <p class="muted small">${escapeHtml(dossier.date)} · Daily high-conviction BD briefing</p>
+            <h3 id="battle-plan-title">${headerTitle}</h3>
+            <p class="muted small">${headerSub}</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-battle-plan-modal" aria-label="Close modal">&times;</button>
@@ -8956,25 +9043,25 @@ function renderBattlePlanModal() {
 
       <div class="battle-plan-dossier">
         <div class="battle-plan-hero">
-          <h2>🎯 Daily Strike Zone & Priority Outreach Targets</h2>
-          <div class="battle-plan-hero-sub">Estimated Addressable Pipeline: <strong>$${formatNumber(dossier.pipelineSummary.addressableFeePipeline)}</strong></div>
+          <h2>${heroTitle}</h2>
+          <div class="battle-plan-hero-sub">${heroPipeline}</div>
         </div>
 
         <div>
-          <div class="battle-plan-section-title">🏢 Top 5 High-Momentum Accounts</div>
+          <div class="battle-plan-section-title">🏢 ${isJobSeeker ? 'Top 5 High-Momentum Hiring Employers' : 'Top 5 High-Momentum Accounts'}</div>
           <div class="battle-plan-grid">
             ${dossier.topAccounts.map(a => `
               <div class="battle-plan-item">
                 <div class="battle-plan-item-title">${escapeHtml(a.name)} (Score: ${a.score})</div>
                 <div class="battle-plan-item-sub">${a.jobsCount} open roles · ${a.hiringVelocity.surgeBadge || 'Steady hiring'}</div>
-                ${a.cluster.competitors.length ? `<div class="small muted" style="margin-top:4px;">Cross-Hunt: ${escapeHtml(a.cluster.competitors.slice(0, 3).join(', '))}</div>` : ''}
+                ${a.cluster.competitors.length ? `<div class="small muted" style="margin-top:4px;">Peer Lookalikes: ${escapeHtml(a.cluster.competitors.slice(0, 3).join(', '))}</div>` : ''}
               </div>
             `).join('')}
           </div>
         </div>
 
         <div>
-          <div class="battle-plan-section-title">🔥 Priority Requisitions & Stack DNA</div>
+          <div class="battle-plan-section-title">🔥 ${isJobSeeker ? 'Priority Requisitions & Tech Stack Match' : 'Priority Requisitions & Stack DNA'}</div>
           <div class="battle-plan-grid">
             ${dossier.topJobs.map(j => `
               <div class="battle-plan-item">
@@ -9000,6 +9087,7 @@ function renderBattlePlanModal() {
    ══════════════════════════════════════════════════ */
 
 function renderLiveSignalTicker(accounts = [], jobs = []) {
+  const isJobSeeker = isJobSeekerPersona();
   const tStart = performance.now();
   const alerts = [];
 
@@ -9009,22 +9097,22 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     if (vel.surgeBadge) {
       alerts.push({
         type: 'surge',
-        badge: '🔥 HIRING SURGE',
-        text: `${a.displayName}: ${vel.surgeBadge}`,
+        badge: isJobSeeker ? '🔥 HIRING WAVE' : '🔥 HIRING SURGE',
+        text: isJobSeeker ? `${a.displayName}: Expanding tech team (${vel.surgeBadge})` : `${a.displayName}: ${vel.surgeBadge}`,
         company: a.displayName,
         accountId: a.id,
       });
     }
   });
 
-  // 2. Decision Maker in network alerts
+  // 2. Decision Maker / In-Network alerts
   (Array.isArray(jobs) ? jobs : []).slice(0, 10).forEach(j => {
     const hasConn = Number(j.connectionCount || 0) > 0;
     if (hasConn) {
       alerts.push({
         type: 'dm',
-        badge: '👑 DECISION MAKER',
-        text: `${j.companyName} (${j.title}): ${j.connectionCount} in network`,
+        badge: isJobSeeker ? '🤝 WARM CONNECTION' : '👑 DECISION MAKER',
+        text: isJobSeeker ? `${j.companyName} (${j.title}): ${j.connectionCount} colleagues in network` : `${j.companyName} (${j.title}): ${j.connectionCount} in network`,
         company: j.companyName,
         jobId: j.id,
         accountId: j.accountId,
@@ -9038,8 +9126,8 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     if (vel.hardToFillBadge) {
       alerts.push({
         type: 'stale',
-        badge: '⏳ HARD TO FILL',
-        text: `${a.displayName}: Requisitions open 45d+`,
+        badge: isJobSeeker ? '⚡ FAST-TRACK ROLE' : '⏳ HARD TO FILL',
+        text: isJobSeeker ? `${a.displayName}: Role open 45d+ (High response rate)` : `${a.displayName}: Requisitions open 45d+`,
         company: a.displayName,
         accountId: a.id,
       });
@@ -9050,7 +9138,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     alerts.push({
       type: 'surge',
       badge: '⚡ SIGNAL INTEL',
-      text: 'Monitoring live ATS feeds across 240+ target tech employers...',
+      text: isJobSeeker ? 'Monitoring live ATS boards across 240+ target tech employers...' : 'Monitoring live ATS feeds across 240+ target tech employers...',
     });
   }
 
@@ -9059,7 +9147,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
 
   return `
     <div class="intel-wire-ticker" role="region" aria-label="Real-time hiring signal intelligence ticker">
-      <span class="ticker-label">📡 Live Wire:</span>
+      <span class="ticker-label">${isJobSeeker ? '🎯 Job Radar Wire:' : '📡 Live Wire:'}</span>
       <div class="ticker-track">
         ${alerts.map(a => `
           <button class="ticker-pill ticker-pill--${a.type}" type="button" data-action="ticker-jump-action" data-company="${escapeAttr(a.company || '')}" data-account-id="${escapeAttr(a.accountId || '')}" data-job-id="${escapeAttr(a.jobId || '')}">
@@ -9077,6 +9165,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
    ══════════════════════════════════════════════════ */
 
 function generateAutopilotQueue(accounts = [], jobs = [], contacts = []) {
+  const isJobSeeker = isJobSeekerPersona();
   const tStart = performance.now();
   const queue = [];
 
@@ -9089,15 +9178,20 @@ function generateAutopilotQueue(accounts = [], jobs = [], contacts = []) {
     const topJob = accJobs[0] || { title: 'Senior Software Engineer', companyName: account.displayName };
     const accContacts = (Array.isArray(contacts) ? contacts : []).filter(c => c.accountId === account.id || c.companyName === account.displayName);
     const rankedContacts = rankContactsForJob(topJob, accContacts);
-    const topContact = rankedContacts[0] || { fullName: 'Hiring Leader', title: 'Engineering Director' };
+    const topContact = rankedContacts[0] || { fullName: isJobSeeker ? 'Engineering Leader' : 'Hiring Leader', title: 'Engineering Director' };
 
     const stack = extractTechStack(topJob.title, topJob.department, '');
-    const draft = generateBatchDraftCopy({
-      name: topContact.fullName,
-      title: topContact.title,
-      company: account.displayName,
-      jobTitle: topJob.title,
-    }, 'sales_hiring_manager', 'casual', 1);
+    const draft = isJobSeeker
+      ? {
+          subject: `Question about engineering at ${account.displayName}`,
+          body: `Hi ${topContact.fullName.split(' ')[0]}, hope all is well! I noticed ${account.displayName} has an opening for ${topJob.title}. Given your experience on the team, I'd love to ask a couple quick questions about the tech stack and engineering focus before applying. Thanks so much!`,
+        }
+      : generateBatchDraftCopy({
+          name: topContact.fullName,
+          title: topContact.title,
+          company: account.displayName,
+          jobTitle: topJob.title,
+        }, 'sales_hiring_manager', 'casual', 1);
 
     queue.push({
       account,
@@ -9135,13 +9229,25 @@ function closeAutopilotModal() {
 
 async function executeAutopilotQueue() {
   playActionChime('success');
-  showToast(`🚀 Autopilot executed ${appState.activeAutopilotQueue.length} multi-touch pipelines!`, 'success');
+  showToast(isJobSeekerPersona() ? `🚀 Career Co-Pilot launched ${appState.activeAutopilotQueue.length} warm referral intros!` : `🚀 Autopilot executed ${appState.activeAutopilotQueue.length} multi-touch pipelines!`, 'success');
   closeAutopilotModal();
 }
 
 function renderAutopilotModal() {
   if (!autopilotModalBackdrop) return;
+  const isJobSeeker = isJobSeekerPersona();
   const queue = appState.activeAutopilotQueue || [];
+
+  const modalTitle = isJobSeeker ? 'Autonomous Career Co-Pilot' : 'Autonomous Prospecting Co-Pilot';
+  const modalSub = isJobSeeker
+    ? '1-Click intelligent auto-run: Matches target companies, finds team connections, and drafts warm referral intro requests.'
+    : '1-Click intelligent auto-run: Scans workspace, pairs decision makers, and drafts 3-touch sequences.';
+  const heroTitle = isJobSeeker
+    ? `⚡ High-Conviction Career Pipeline Ready (${queue.length} Target Employers)`
+    : `⚡ High-Conviction Daily Pipeline Ready (${queue.length} Target Accounts)`;
+  const heroSub = isJobSeeker
+    ? 'All opportunities pre-grounded with verified stack DNA, hiring surge signals, and warm colleague routing.'
+    : 'All opportunities pre-grounded with verified stack DNA, hiring surge signals, and warm decision-maker routing.';
 
   autopilotModalBackdrop.innerHTML = `
     <div class="modal-dialog autopilot-dialog" role="dialog" aria-modal="true" aria-labelledby="autopilot-title">
@@ -9149,8 +9255,8 @@ function renderAutopilotModal() {
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">🤖</span>
           <div>
-            <h3 id="autopilot-title">Autonomous Prospecting Co-Pilot</h3>
-            <p class="muted small">1-Click intelligent auto-run: Scans workspace, pairs decision makers, and drafts 3-touch sequences.</p>
+            <h3 id="autopilot-title">${modalTitle}</h3>
+            <p class="muted small">${modalSub}</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-autopilot-modal" aria-label="Close modal">&times;</button>
@@ -9158,10 +9264,10 @@ function renderAutopilotModal() {
 
       <div class="autopilot-hero-banner">
         <div>
-          <h4 class="autopilot-hero-title">⚡ High-Conviction Daily Pipeline Ready (${queue.length} Target Accounts)</h4>
-          <div class="autopilot-hero-sub">All opportunities pre-grounded with verified stack DNA, hiring surge signals, and warm decision-maker routing.</div>
+          <h4 class="autopilot-hero-title">${heroTitle}</h4>
+          <div class="autopilot-hero-sub">${heroSub}</div>
         </div>
-        <button class="primary-button" type="button" data-action="execute-autopilot-queue">🚀 Approve & Execute All</button>
+        <button class="primary-button" type="button" data-action="execute-autopilot-queue">${isJobSeeker ? '🚀 Launch Career Outreach' : '🚀 Approve & Execute All'}</button>
       </div>
 
       <div class="autopilot-queue-grid">
@@ -9182,7 +9288,7 @@ function renderAutopilotModal() {
 
       <div class="modal-footer">
         <button class="ghost-button" type="button" data-action="close-autopilot-modal">Cancel</button>
-        <button class="primary-button" type="button" data-action="execute-autopilot-queue">🚀 Approve & Launch Pipeline</button>
+        <button class="primary-button" type="button" data-action="execute-autopilot-queue">${isJobSeeker ? '🚀 Launch Career Outreach' : '🚀 Approve & Launch Pipeline'}</button>
       </div>
     </div>
   `;
@@ -9193,25 +9299,26 @@ function renderAutopilotModal() {
    ══════════════════════════════════════════════════ */
 
 function renderScriptAnalyticsCockpit() {
+  const isJobSeeker = isJobSeekerPersona();
   return `
     <div class="analytics-cockpit-card">
-      <div class="analytics-cockpit-title">📊 Script Conversion & Deal Attribution Cockpit</div>
+      <div class="analytics-cockpit-title">${isJobSeeker ? '📊 Career Search & Referral Conversion Cockpit' : '📊 Script Conversion & Deal Attribution Cockpit'}</div>
       <div class="analytics-cockpit-grid">
         <div class="analytics-stat-box">
-          <div class="analytics-stat-num">42.8%</div>
-          <div class="analytics-stat-label">👑 Decision Maker Reply Rate</div>
+          <div class="analytics-stat-num">58.4%</div>
+          <div class="analytics-stat-label">${isJobSeeker ? '🤝 Warm Referral Reply Rate' : '👑 Decision Maker Reply Rate'}</div>
         </div>
         <div class="analytics-stat-box">
-          <div class="analytics-stat-num">58.4%</div>
-          <div class="analytics-stat-label">🤝 Warm Peer Referral Rate</div>
+          <div class="analytics-stat-num">42.8%</div>
+          <div class="analytics-stat-label">${isJobSeeker ? '🎯 Hiring Manager Response' : '🤝 Warm Peer Referral Rate'}</div>
         </div>
         <div class="analytics-stat-box">
           <div class="analytics-stat-num">68.2%</div>
-          <div class="analytics-stat-label">🛡️ Objection Buster Win-Rate</div>
+          <div class="analytics-stat-label">${isJobSeeker ? '🛡️ Recruiter Screen Pass Rate' : '🛡️ Objection Buster Win-Rate'}</div>
         </div>
         <div class="analytics-stat-box">
-          <div class="analytics-stat-num">$148,500</div>
-          <div class="analytics-stat-label">💼 Active Weighted Pipeline</div>
+          <div class="analytics-stat-num">${isJobSeeker ? '$165,000' : '$148,500'}</div>
+          <div class="analytics-stat-label">${isJobSeeker ? '💼 Target Role Comp Potential' : '💼 Active Weighted Pipeline'}</div>
         </div>
       </div>
     </div>
@@ -9223,12 +9330,14 @@ function renderScriptAnalyticsCockpit() {
    ══════════════════════════════════════════════════ */
 
 function generateClientPitchDeck(account = {}, jobs = []) {
+  const isJobSeeker = isJobSeekerPersona();
   const compName = account.displayName || account.name || 'Target Account';
   const accJobs = (Array.isArray(jobs) ? jobs : []).filter(j => j.accountId === account.id || j.companyName === compName);
   const slate = generateCandidateSlate({ companyName: compName, title: accJobs[0]?.title || 'Key Engineering Opening' });
   const stack = extractTechStack(accJobs[0]?.title || compName, account.industry || '', '');
 
   return {
+    isJobSeeker,
     companyName: compName,
     activeJobsCount: accJobs.length || 1,
     techStack: stack,
@@ -9256,22 +9365,23 @@ function closePitchDeckModal() {
 }
 
 async function copyPitchDeckMarkdown() {
+  const isJobSeeker = isJobSeekerPersona();
   const account = appState.activePitchDeckAccount || { displayName: 'Client' };
   const deck = generateClientPitchDeck(account, appState.jobs || []);
-  let md = `# 💎 BD Engine Talent Capability & Market Dossier: ${deck.companyName}\n\n`;
-  md += `## 🎯 Executive Summary\nPrepared exclusively for hiring leadership at **${deck.companyName}**.\n\n`;
+  let md = `# 💎 ${isJobSeeker ? 'Career Candidate Capability Dossier' : 'BD Engine Talent Capability & Market Dossier'}: ${deck.companyName}\n\n`;
+  md += `## 🎯 Executive Summary\nPrepared exclusively for leadership at **${deck.companyName}**.\n\n`;
   md += `## 🧠 Verified Tech Stack Grounding\n`;
   deck.techStack.forEach(s => { md += `* **${s.name}** (${s.category.toUpperCase()})\n`; });
   md += `\n## 📄 Pre-Screened Candidate Slate Specimen\n`;
   deck.candidateSlate.candidates.forEach(c => {
     md += `### ${c.specimenCode}\n- Role: ${c.title} (${c.experienceYears})\n- Compensation Band: ${c.salaryExpectation}\n`;
   });
-  md += `\n---\n*Confidential presentation by BD Engine Executive Search.*`;
+  md += `\n---\n*Confidential presentation.*`;
 
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast('💎 Client Pitch Deck copied to clipboard!', 'success');
+    showToast('💎 Presentation Dossier copied to clipboard!', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -9279,8 +9389,16 @@ async function copyPitchDeckMarkdown() {
 
 function renderPitchDeckModal() {
   if (!pitchDeckModalBackdrop) return;
+  const isJobSeeker = isJobSeekerPersona();
   const account = appState.activePitchDeckAccount || { displayName: 'Client' };
   const deck = generateClientPitchDeck(account, appState.jobs || []);
+
+  const modalTitle = isJobSeeker
+    ? `Target Role Alignment & Capability Deck: ${escapeHtml(deck.companyName)}`
+    : `Client-Ready Talent Presentation Deck: ${escapeHtml(deck.companyName)}`;
+  const modalSub = isJobSeeker
+    ? `Candidate capability summary and technical stack alignment for hiring leadership.`
+    : `White-glove executive talent capability deck formatted for hiring leaders.`;
 
   pitchDeckModalBackdrop.innerHTML = `
     <div class="modal-dialog pitch-deck-dialog" role="dialog" aria-modal="true" aria-labelledby="pitch-deck-title">
@@ -9288,8 +9406,8 @@ function renderPitchDeckModal() {
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">💎</span>
           <div>
-            <h3 id="pitch-deck-title">Client-Ready Talent Presentation Deck: ${escapeHtml(deck.companyName)}</h3>
-            <p class="muted small">White-glove executive talent capability deck formatted for hiring leaders.</p>
+            <h3 id="pitch-deck-title">${modalTitle}</h3>
+            <p class="muted small">${modalSub}</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-pitch-deck-modal" aria-label="Close modal">&times;</button>
@@ -9297,8 +9415,8 @@ function renderPitchDeckModal() {
 
       <div class="pitch-deck-slide">
         <div class="pitch-deck-hero">
-          <h2>Executive Talent Strategy & Market Sourcing Alignment</h2>
-          <div class="small muted">Prepared exclusively for leadership at <strong>${escapeHtml(deck.companyName)}</strong></div>
+          <h2>${isJobSeeker ? 'Technical Alignment & Candidate Capability Presentation' : 'Executive Talent Strategy & Market Sourcing Alignment'}</h2>
+          <div class="small muted">Prepared for leadership at <strong>${escapeHtml(deck.companyName)}</strong></div>
         </div>
 
         <div style="margin-bottom:16px;">
@@ -9309,7 +9427,7 @@ function renderPitchDeckModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">📄 Immediate Candidate Availability (2 Verified Specimen)</div>
+          <div class="battle-plan-section-title">📄 Verified Specimen Profiles</div>
           <div class="candidate-slate-grid">
             ${deck.candidateSlate.candidates.map(c => `
               <div class="candidate-slate-card">
