@@ -62,6 +62,8 @@ test('search focus scores, sorts, filters, and rescores imported jobs', async ()
       searchFocus: { targetRoles: 'product manager', workStyle: 'any', minimumRelevanceScore: 45 },
     });
     assert.equal(rescored.rescoredJobs, 3);
+    assert.equal(rescored.activeJobs, 3);
+    assert.equal(rescored.matchingJobs, 0);
     const after = await store.findJobs(tenantId, { minRelevance: 45, page: 1, pageSize: 20 });
     assert.equal(after.total, 0);
   } finally {
@@ -69,14 +71,14 @@ test('search focus scores, sorts, filters, and rescores imported jobs', async ()
   }
 });
 
-test('talent acquisition focus includes the recruiting role family', async () => {
+test('detailed talent acquisition titles include the recruiting role family', async () => {
   const store = createStore();
   const tenantId = 'tenant-talent-acquisition-focus';
   addTenant(store, tenantId, 'jobseeker');
   await store.patchSettings(tenantId, {
     geographyFocus: 'Canada',
     searchFocus: {
-      targetRoles: 'Talent Acquisition',
+      targetRoles: 'Talent Acquisition Manager, Talent Acquisition Partner, Recruitment Manager, Recruiting Operations Manager, Talent Operations',
       excludedRoles: '',
       targetIndustries: '',
       workStyle: 'any',
@@ -147,6 +149,70 @@ test('talent acquisition focus includes the recruiting role family', async () =>
   }
 });
 
+test('switching personas restores that persona search focus and rescored shortlist', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-persona-search-focus';
+  addTenant(store, tenantId, 'bd');
+  await store.patchSettings(tenantId, {
+    searchFocus: {
+      targetRoles: 'sales engineer',
+      excludedRoles: '',
+      targetIndustries: '',
+      workStyle: 'any',
+      minimumRelevanceScore: 45,
+    },
+  });
+  const account = await store.addAccount(tenantId, { displayName: 'Dual Mode Employer' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: account.displayName,
+    atsType: 'greenhouse',
+    boardId: 'dual-mode-employer',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const postedAt = new Date().toISOString();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ jobs: [
+    { id: 'sales', title: 'Sales Engineer', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/sales', updated_at: postedAt },
+    { id: 'recruiter', title: 'Senior Recruiter', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/recruiter', updated_at: postedAt },
+  ] });
+
+  try {
+    await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    let matches = await store.findJobs(tenantId, { minRelevance: 45, sortBy: 'relevance', page: 1, pageSize: 20 });
+    assert.deepEqual(matches.items.map((item) => item.title), ['Sales Engineer']);
+
+    await store.switchPersona(tenantId, 'jobseeker');
+    const jobSeekerSave = await store.patchSettings(tenantId, {
+      searchFocus: {
+        targetRoles: 'talent acquisition manager',
+        excludedRoles: '',
+        targetIndustries: '',
+        workStyle: 'any',
+        minimumRelevanceScore: 45,
+      },
+    });
+    assert.equal(jobSeekerSave.matchingJobs, 1);
+    matches = await store.findJobs(tenantId, { minRelevance: 45, sortBy: 'relevance', page: 1, pageSize: 20 });
+    assert.deepEqual(matches.items.map((item) => item.title), ['Senior Recruiter']);
+
+    const switchedBack = await store.switchPersona(tenantId, 'bd');
+    assert.equal(switchedBack.matchingJobs, 1);
+    matches = await store.findJobs(tenantId, { minRelevance: 45, sortBy: 'relevance', page: 1, pageSize: 20 });
+    assert.deepEqual(matches.items.map((item) => item.title), ['Sales Engineer']);
+
+    const bootstrap = await store.getBootstrap(tenantId);
+    assert.equal(bootstrap.persona, 'bd');
+    assert.equal(bootstrap.settings.searchFocusByPersona.bd.targetRoles, 'sales engineer');
+    assert.equal(bootstrap.settings.searchFocusByPersona.jobseeker.targetRoles, 'talent acquisition manager');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('target industries move the most relevant unresolved company to the front of discovery', async () => {
   const store = createStore();
   const tenantId = 'tenant-search-focus-discovery';
@@ -191,6 +257,60 @@ test('target industries move the most relevant unresolved company to the front o
     assert.equal(result.stats.checked, 1);
     assert.ok(requestedUrls.some((url) => url.includes('priority-manufacturing.example')));
     assert.equal(requestedUrls.some((url) => url.includes('other-software.example')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('target industries move the most relevant ready board into a limited refresh batch', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-search-focus-refresh';
+  addTenant(store, tenantId, 'jobseeker');
+  await store.patchSettings(tenantId, {
+    searchFocus: { targetIndustries: 'manufacturing', minimumRelevanceScore: 45 },
+  });
+  const target = await store.addAccount(tenantId, {
+    displayName: 'Priority Manufacturing',
+    industry: 'Advanced Manufacturing',
+  });
+  const other = await store.addAccount(tenantId, {
+    displayName: 'Other Software',
+    industry: 'Software',
+  });
+  store.addConfig(tenantId, {
+    accountId: target.id,
+    companyName: target.displayName,
+    atsType: 'greenhouse',
+    boardId: 'priority-manufacturing',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+  store.addConfig(tenantId, {
+    accountId: other.id,
+    companyName: other.displayName,
+    atsType: 'greenhouse',
+    boardId: 'other-software',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const requestedUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return Response.json({ jobs: [] });
+  };
+  try {
+    const result = await store.importLiveJobs(tenantId, {
+      plan: { displayName: 'One board', limits: { jobBoards: 1 } },
+      autoDiscover: false,
+      fetchConcurrency: 1,
+    });
+    assert.equal(result.stats.supportedConfigs, 1);
+    assert.equal(requestedUrls.length, 1);
+    assert.match(requestedUrls[0], /priority-manufacturing/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

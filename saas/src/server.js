@@ -1763,6 +1763,21 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, config);
   }
 
+  if (pathname === '/api/persona' && req.method === 'PATCH') {
+    const payload = await readJson(req);
+    const persona = String(payload.persona || '').trim().toLowerCase();
+    if (!['bd', 'jobseeker'].includes(persona)) {
+      return sendJson(res, 400, { error: 'Choose either Business Development or Job Seeker mode.' });
+    }
+    if (persona === 'bd' && getEffectivePlanId(tenant, user) === 'jobseeker') {
+      return sendJson(res, 403, { error: 'Business Development mode requires the Sales Professional plan.' });
+    }
+    tenant = updateTenant(tenant.id, { persona }) || { ...tenant, persona };
+    await persistUserWorkspace(user, tenant);
+    const result = await store.switchPersona(tenantId, persona);
+    return sendJson(res, 200, { ...result, tenant: getEffectiveTenant(tenant, user) });
+  }
+
   if (pathname === '/api/settings' && ['POST', 'PATCH'].includes(req.method)) {
     return sendJson(res, 200, await store.patchSettings(tenantId, await readJson(req)));
   }

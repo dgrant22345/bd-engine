@@ -4169,6 +4169,7 @@ function bindEvents() {
 
     if (form.id === 'settings-form') {
       const values = getFormValues(form);
+      const minimumRelevanceScore = Math.max(1, Math.min(100, Number(values.minimumRelevanceScore || 45)));
       const result = await api('/api/settings', {
         method: 'POST',
         body: JSON.stringify({
@@ -4177,13 +4178,18 @@ function bindEvents() {
             excludedRoles: values.excludedRoles,
             targetIndustries: values.targetIndustries,
             workStyle: values.workStyle,
-            minimumRelevanceScore: Number(values.minimumRelevanceScore || 45),
+            minimumRelevanceScore,
           },
         }),
       });
+      appState.jobQuery = {
+        ...defaultQueries.jobs,
+        minRelevance: String(minimumRelevanceScore),
+        sortBy: 'relevance',
+      };
       invalidateAppData();
-      await renderAdminView();
-      showToast(`Search focus saved. ${formatNumber(result.rescoredJobs || 0)} existing jobs rescored.`, 'success');
+      location.hash = '#/jobs';
+      showToast(`Search focus saved. Showing ${formatNumber(result.matchingJobs || 0)} of ${formatNumber(result.activeJobs || 0)} active jobs at ${formatNumber(minimumRelevanceScore)}+.`, 'success', 7000);
       return;
     }
 
@@ -4366,17 +4372,31 @@ async function togglePersonaMode() {
     return;
   }
 
-  appState.persona = next;
-  localStorage.setItem('bd_persona', next);
-  applyPersonaChrome();
-  playActionChime('nav');
-  showToast(`Switched mode: ${next === 'jobseeker' ? '🎯 Job Seeker Mode' : '💼 Business Development Mode'}`, 'success');
-  const routeRoot = getRouteRoot();
-  if (routeRoot === 'dashboard') await renderDashboardView({ skipLoading: true });
-  else if (routeRoot === 'accounts') await renderAccountsView();
-  else if (routeRoot === 'jobs') await renderJobsView();
-  else if (routeRoot === 'contacts') await renderContactsView();
-  else if (routeRoot === 'admin') await renderAdminView();
+  const personaButton = document.getElementById('persona-mode-btn');
+  if (personaButton) personaButton.disabled = true;
+  try {
+    const result = await api('/api/persona', {
+      method: 'PATCH',
+      body: JSON.stringify({ persona: next }),
+    });
+    appState.persona = normalizeAppPersona(result.persona);
+    localStorage.setItem('bd_persona', appState.persona);
+    appState.jobQuery = { ...defaultQueries.jobs };
+    invalidateAppData();
+    await loadBootstrap(true);
+    playActionChime('nav');
+    const routeRoot = getRouteRoot();
+    if (routeRoot === 'dashboard') await renderDashboardView({ skipLoading: true });
+    else if (routeRoot === 'accounts') await renderAccountsView();
+    else if (routeRoot === 'jobs') await renderJobsView();
+    else if (routeRoot === 'contacts') await renderContactsView();
+    else if (routeRoot === 'admin') await renderAdminView();
+    showToast(`Switched mode: ${appState.persona === 'jobseeker' ? '🎯 Job Seeker Mode' : '💼 Business Development Mode'}. ${formatNumber(result.rescoredJobs || 0)} jobs rescored.`, 'success');
+  } catch (error) {
+    showToast(`Could not switch mode: ${error.message || error}`, 'error');
+  } finally {
+    if (personaButton?.isConnected) personaButton.disabled = false;
+  }
 }
 
 function getFormValues(form) {
@@ -11843,14 +11863,14 @@ async function renderAdminView() {
   const searchFocusCopy = personaKey === 'jobseeker'
     ? {
         title: 'Your role search focus',
-        subtitle: 'Tell BD Engine what a good opportunity looks like. This changes job ranking and which company boards are checked first.',
+        subtitle: 'Tell BD Engine what a good opportunity looks like. Saving this focus immediately rescores imported jobs and opens the matching shortlist.',
         roleLabel: 'Roles you want',
         rolePlaceholder: 'Financial analyst, strategy manager, business operations',
         industryLabel: 'Preferred industries',
       }
     : {
         title: 'Your demand signal focus',
-        subtitle: 'Define the hiring signals that suggest a company may need what you sell. This changes job ranking and board-discovery priority.',
+        subtitle: 'Define the hiring signals that suggest a company may need what you sell. Saving this focus immediately rescores imported jobs and opens the matching shortlist.',
         roleLabel: 'Roles that signal demand',
         rolePlaceholder: 'Recruiter, sales engineer, implementation manager',
         industryLabel: 'Industries you sell into',
@@ -11969,12 +11989,12 @@ async function renderAdminView() {
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
           <form id="settings-form" class="settings-grid">
-            ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate role titles with commas. Specific phrases produce better rankings.')}
-            ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases are ranked at the bottom.')}
-            ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Used to prioritize limited board-discovery batches when company industry data is available.')}
-            ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`)}
-            ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="0" max="100" step="5" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, '45 is a useful starting point. Raise it for a tighter shortlist.')}
-            <div class="field field--action"><label>Update rankings</label><button class="primary-button" type="submit">Save focus and rescore jobs</button></div>
+            ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate titles with commas. Exact phrases rank highest; closely related title variants can also match.')}
+            ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases score at the bottom and stay out of the focused shortlist.')}
+            ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Adds relevance when company industry data is available and prioritizes limited board refresh or discovery batches.')}
+            ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`, 'Matching location signals increase relevance; a known different work style lowers it.')}
+            ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="1" max="100" step="1" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, 'Jobs at or above this score appear in the focused shortlist. Raise it for fewer, stronger matches.')}
+            <div class="field field--action"><label>Update shortlist</label><button class="primary-button" type="submit">Save focus and show matches</button></div>
           </form>
         ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}

@@ -1748,6 +1748,19 @@ export function createStore() {
       persistTenant(tenantId);
     },
 
+    async switchPersona(tenantId, persona) {
+      assertTenant(tenantId);
+      await ensureTenantSettingsLoaded(tenantId);
+      await ensureDataLoaded(tenantId, false);
+      const profile = getTenantProfile(tenantId);
+      profile.persona = normalizePersona(persona);
+      profile.settings.persona = profile.persona;
+      const focus = getSearchFocus(profile.settings, profile.persona);
+      const scoreSummary = rescoreTenantJobs(tenantId, focus);
+      persistTenant(tenantId);
+      return { ok: true, persona: profile.persona, ...scoreSummary };
+    },
+
     getPersona(tenantId) {
       const profile = getTenantProfile(tenantId);
       return normalizePersona(profile?.persona || profile?.settings?.persona);
@@ -3020,17 +3033,9 @@ export function createStore() {
         };
       }
       const focus = getSearchFocus(profile.settings, persona);
-      const tenantJobs = jobsForTenant(tenantId);
-      const accountMap = new Map(accountsForTenant(tenantId).map((item) => [item.id, item]));
-      let rescoredJobs = 0;
-      for (const item of tenantJobs) {
-        const relevance = scoreJobRelevance(item, accountMap.get(item.accountId), focus);
-        Object.assign(item, relevance, { relevanceUpdatedAt: now(), updatedAt: now() });
-        rescoredJobs++;
-      }
-      for (const item of accountMap.values()) refreshAccountHiringStats(item, tenantJobs, focus);
+      const scoreSummary = rescoreTenantJobs(tenantId, focus);
       persistTenant(tenantId);
-      return { ok: true, settings: { ...profile.settings }, rescoredJobs };
+      return { ok: true, settings: { ...profile.settings }, ...scoreSummary };
     },
 
     async getWorkspacePreferences(tenantId) {
@@ -4133,6 +4138,18 @@ export function createStore() {
         });
         importReadyConfigs = activeTenantConfigs.filter(isImportReadyConfig);
       }
+      const relevantJobsByAccount = new Map();
+      for (const item of tenantJobs) {
+        if (!item.accountId || item.active === false) continue;
+        if (Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
+        relevantJobsByAccount.set(item.accountId, (relevantJobsByAccount.get(item.accountId) || 0) + 1);
+      }
+      importReadyConfigs = prioritizeDiscoveryCandidates(
+        importReadyConfigs,
+        importAccountsById,
+        importAccountsByName,
+        { searchFocus, relevantJobsByAccount }
+      );
       let limitedImportConfigs = importReadyConfigs;
       if (jobBoardLimit !== -1 && limitedImportConfigs.length > jobBoardLimit) {
         limitedImportConfigs = limitedImportConfigs.slice(0, jobBoardLimit);
@@ -8645,7 +8662,7 @@ function sanitizeSearchFocus(value = {}, fallback = {}) {
     excludedRoles: sanitizeFocusText(value.excludedRoles ?? fallback.excludedRoles),
     targetIndustries: sanitizeFocusText(value.targetIndustries ?? fallback.targetIndustries),
     workStyle,
-    minimumRelevanceScore: Math.max(0, Math.min(100, Number.isFinite(minimum) ? Math.round(minimum) : 45)),
+    minimumRelevanceScore: Math.max(1, Math.min(100, Number.isFinite(minimum) ? Math.round(minimum) : 45)),
   };
 }
 
@@ -8701,16 +8718,32 @@ const ROLE_FAMILY_ALIASES = [
     'talent advisor',
     'head of talent',
     'staffing specialist',
+    'talent operations',
   ],
 ];
+
+const ROLE_MATCH_GENERIC_TERMS = new Set([
+  'associate',
+  'coordinator',
+  'director',
+  'head',
+  'junior',
+  'lead',
+  'manager',
+  'officer',
+  'principal',
+  'senior',
+  'specialist',
+  'staff',
+]);
 
 function roleFamilyAliasStrength(term, titleText) {
   const normalizedTerm = normalizeSearchText(term);
   const normalizedTitle = normalizeSearchText(titleText);
   if (!normalizedTerm || !normalizedTitle) return 0;
-  const family = ROLE_FAMILY_ALIASES.find((aliases) => aliases.includes(normalizedTerm));
+  const family = ROLE_FAMILY_ALIASES.find((aliases) => aliases.some((alias) => phraseMatchesText(alias, normalizedTerm)));
   if (!family) return 0;
-  return family.some((alias) => phraseMatchesText(alias, normalizedTitle)) ? 52 : 0;
+  return family.some((alias) => phraseMatchesText(alias, normalizedTitle)) ? 45 : 0;
 }
 
 function roleMatchStrength(term, titleText, detailText) {
@@ -8720,14 +8753,17 @@ function roleMatchStrength(term, titleText, detailText) {
   if (phraseMatchesText(normalizedTerm, detailText)) return 35;
   const familyStrength = roleFamilyAliasStrength(normalizedTerm, titleText);
   if (familyStrength) return familyStrength;
-  const words = normalizedTerm.split(' ').filter((word) => word.length > 2);
+  const words = normalizedTerm
+    .split(' ')
+    .filter((word) => word.length > 2 && !ROLE_MATCH_GENERIC_TERMS.has(word));
   if (!words.length) return 0;
   const titleTokens = new Set(normalizeSearchText(titleText).split(' ').filter(Boolean));
   const detailTokens = new Set(normalizeSearchText(detailText).split(' ').filter(Boolean));
-  const titleCoverage = words.filter((word) => titleTokens.has(word)).length / words.length;
+  const titleMatchCount = words.filter((word) => titleTokens.has(word)).length;
+  const titleCoverage = titleMatchCount / words.length;
   const detailCoverage = words.filter((word) => detailTokens.has(word)).length / words.length;
   if (titleCoverage === 1) return 52;
-  if (titleCoverage >= 0.5) return 30;
+  if (titleMatchCount >= 2 && titleCoverage >= 0.5) return 30;
   if (detailCoverage === 1) return 25;
   return 0;
 }
@@ -8806,6 +8842,26 @@ function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
     relevanceScore: score,
     relevanceBand: score >= 70 ? 'strong' : score >= focus.minimumRelevanceScore ? 'possible' : 'low',
     relevanceReasons: reasons.slice(0, 3),
+  };
+}
+
+function rescoreTenantJobs(tenantId, focusValue) {
+  const focus = sanitizeSearchFocus(focusValue);
+  const tenantJobs = jobsForTenant(tenantId);
+  const accountMap = new Map(accountsForTenant(tenantId).map((item) => [item.id, item]));
+  const timestamp = now();
+  for (const item of tenantJobs) {
+    Object.assign(item, scoreJobRelevance(item, accountMap.get(item.accountId), focus), {
+      relevanceUpdatedAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const item of accountMap.values()) refreshAccountHiringStats(item, tenantJobs, focus);
+  const activeJobs = tenantJobs.filter((item) => item.active !== false);
+  return {
+    rescoredJobs: tenantJobs.length,
+    activeJobs: activeJobs.length,
+    matchingJobs: activeJobs.filter((item) => Number(item.relevanceScore ?? -1) >= focus.minimumRelevanceScore).length,
   };
 }
 

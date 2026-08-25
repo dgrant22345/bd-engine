@@ -119,33 +119,50 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
-test('target-role quick filter uses the saved relevance threshold', async ({ page }) => {
+test('search focus form saves settings and opens the matching shortlist', async ({ page }) => {
   const { app } = await signup(page, { persona: 'jobseeker' });
   await completeSetup(page, app);
-  const saved = await page.evaluate(async () => {
-    const response = await fetch('/api/settings', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        searchFocus: {
-          targetRoles: 'Talent Acquisition',
-          excludedRoles: '',
-          targetIndustries: '',
-          workStyle: 'any',
-          minimumRelevanceScore: 35,
-        },
-      }),
-    });
-    return { ok: response.ok, status: response.status };
-  });
-  expect(saved).toEqual({ ok: true, status: 200 });
+  await gotoAppRoute(page, '#/admin');
+  const searchFocus = app.locator('[data-collapse-id="search-focus"]');
+  await expect(searchFocus).toBeVisible({ timeout: 10000 });
+  if (await searchFocus.getAttribute('aria-expanded') === 'false') await searchFocus.click();
+  const form = app.locator('#settings-form');
+  await form.locator('[name="targetRoles"]').fill('Talent Acquisition Manager, Recruitment Manager');
+  await form.locator('[name="excludedRoles"]').fill('intern, retail sales');
+  await form.locator('[name="targetIndustries"]').fill('technology, staffing');
+  await form.locator('[name="workStyle"]').selectOption('any');
+  await form.locator('[name="minimumRelevanceScore"]').fill('35');
+  await form.getByRole('button', { name: 'Save focus and show matches' }).click();
 
-  await gotoAppRoute(page, '#/jobs');
   await expect(app.getByRole('heading', { name: 'Open roles at target companies' })).toBeVisible({ timeout: 10000 });
-  await app.getByRole('button', { name: /My Target Roles Only/ }).click();
   const fit = app.locator('#jobs-filter-form select[name="minRelevance"]');
   await expect(fit).toHaveValue('35');
   await expect(fit.locator('option:checked')).toHaveText('Saved target threshold (35+)');
+
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/bootstrap');
+    return response.json();
+  });
+  expect(saved.persona).toBe('jobseeker');
+  expect(saved.settings.searchFocusByPersona.jobseeker).toMatchObject({
+    targetRoles: 'talent acquisition manager, recruitment manager',
+    excludedRoles: 'intern, retail sales',
+    targetIndustries: 'technology, staffing',
+    workStyle: 'any',
+    minimumRelevanceScore: 35,
+  });
+});
+
+test('persona mode switch survives a full page reload', async ({ page }) => {
+  const { app } = await signup(page, { persona: 'bd' });
+  await completeSetup(page, app);
+  await expect(app.locator('#persona-mode-label')).toHaveText('Staffing BD');
+  await app.locator('#persona-mode-btn').click();
+  await expect(app.locator('#persona-mode-label')).toHaveText('Job Seeker', { timeout: 10000 });
+
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
+  await expect(page.frameLocator('iframe.cloud-app-frame').locator('#persona-mode-label')).toHaveText('Job Seeker', { timeout: 15000 });
 });
 
 test('post-setup dashboard is usable and its optional tour is accessible', async ({ page }) => {
