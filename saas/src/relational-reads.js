@@ -1,5 +1,6 @@
 import { dbQuery, isDbReady } from './db.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
+import { buildCanadaJobLocationSql } from './job-geography.js';
 
 function rawOrRow(row) {
   return row?.raw && typeof row.raw === 'object' ? row.raw : row;
@@ -303,16 +304,7 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
         j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
       )`);
     } else if (query.geography === 'canada') {
-      clauses.push(`(
-        j.location ILIKE '%canada%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%quebec%' OR
-        j.location ILIKE '%alberta%' OR j.location ILIKE '%british columbia%' OR j.location ILIKE '%toronto%' OR
-        j.location ILIKE '%vancouver%' OR j.location ILIKE '%montreal%' OR j.location ILIKE '%calgary%' OR
-        j.location ILIKE '%ottawa%' OR j.location ILIKE '%, ON%' OR j.location ILIKE '%,ON%' OR
-        j.location ILIKE '%, BC%' OR j.location ILIKE '%,BC%' OR j.location ILIKE '%, QC%' OR j.location ILIKE '%,QC%'
-      ) AND NOT (
-        j.location ILIKE '%united states%' OR j.location ILIKE '%usa%' OR j.location ILIKE '%, CA%' OR
-        j.location ILIKE '%, NY%' OR j.location ILIKE '%, TX%' OR j.location ILIKE '%, MA%'
-      )`);
+      clauses.push(buildCanadaJobLocationSql('j.location'));
     } else if (query.geography === 'us') {
       clauses.push(`(
         j.location ILIKE '%united states%' OR j.location ILIKE '%usa%' OR j.location ILIKE '%u.s.%' OR

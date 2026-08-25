@@ -69,6 +69,84 @@ test('search focus scores, sorts, filters, and rescores imported jobs', async ()
   }
 });
 
+test('talent acquisition focus includes the recruiting role family', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-talent-acquisition-focus';
+  addTenant(store, tenantId, 'jobseeker');
+  await store.patchSettings(tenantId, {
+    geographyFocus: 'Canada',
+    searchFocus: {
+      targetRoles: 'Talent Acquisition',
+      excludedRoles: '',
+      targetIndustries: '',
+      workStyle: 'any',
+      minimumRelevanceScore: 40,
+    },
+  });
+  const account = await store.addAccount(tenantId, { displayName: 'Canadian Employer' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: account.displayName,
+    atsType: 'greenhouse',
+    boardId: 'canadian-employer',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const postedAt = new Date().toISOString();
+  const sourceJobs = [
+    ['ta-manager', 'Talent Acquisition Manager', 'Toronto, ON'],
+    ['recruiter', 'Senior Recruiter', 'Vancouver, BC'],
+    ['recruiting-lead', 'Recruiting Lead', 'Remote - Canada'],
+    ['sourcer', 'Talent Sourcer', 'Montreal, QC'],
+    ['talent-partner', 'Talent Partner', 'Calgary, AB'],
+    ['people-ops', 'People Operations Manager', 'Ottawa, ON'],
+    ['engineer', 'Software Engineer', 'Winnipeg, MB'],
+    ['us-ta', 'Talent Acquisition Partner', 'New York, NY'],
+  ];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ jobs: sourceJobs.map(([id, title, location]) => ({
+    id,
+    title,
+    location: { name: location },
+    absolute_url: `https://example.test/${id}`,
+    updated_at: postedAt,
+  })) });
+
+  try {
+    const imported = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    assert.equal(imported.stats.fetched, 8);
+    assert.equal(imported.stats.kept, 7);
+    assert.equal(imported.stats.filteredOutNonCanada, 1);
+    assert.equal(imported.stats.relevantJobs, 5);
+
+    const matches = await store.findJobs(tenantId, {
+      geography: 'canada',
+      minRelevance: 40,
+      sortBy: 'relevance',
+      page: 1,
+      pageSize: 20,
+    });
+    assert.equal(matches.total, 5);
+    assert.deepEqual(new Set(matches.items.map((item) => item.title)), new Set([
+      'Talent Acquisition Manager',
+      'Senior Recruiter',
+      'Recruiting Lead',
+      'Talent Sourcer',
+      'Talent Partner',
+    ]));
+    assert.ok(matches.items.find((item) => item.title === 'Senior Recruiter').relevanceScore >= 40);
+    assert.ok(matches.items.find((item) => item.title === 'Recruiting Lead').relevanceReasons.some((reason) => /role match/i.test(reason)));
+
+    const allCanada = await store.findJobs(tenantId, { geography: 'canada', page: 1, pageSize: 20 });
+    assert.equal(allCanada.total, 7);
+    assert.equal(allCanada.items.find((item) => item.title === 'People Operations Manager').relevanceBand, 'low');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('target industries move the most relevant unresolved company to the front of discovery', async () => {
   const store = createStore();
   const tenantId = 'tenant-search-focus-discovery';

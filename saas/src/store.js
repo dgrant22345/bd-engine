@@ -10,6 +10,7 @@ import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
+import { classifyJobRegion, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -6000,25 +6001,7 @@ function accountPriority(item = {}) {
 }
 
 function accountMatchesGeography(item = {}, geography = '') {
-  const location = String(item.location || item.geography || '').trim();
-  if (!location) return false;
-  const lower = location.toLowerCase();
-
-  const isCanadaCountry = /\b(canada|canadian)\b/i.test(lower);
-  const isCanadaProvince = /(?:^|,\s*|-|\()(?:\s*)(on|qc|ab|bc|mb|sk|ns|nb|nl|pe|pei|ontario|quebec|québec|alberta|british columbia|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland)\b/i.test(lower) && !/\b(on-site|onsite)\b/i.test(lower);
-  const isCanadaCity = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|richmond|surrey|victoria|kelowna|halifax|winnipeg|regina|saskatoon|london|guelph|barrie|windsor|kingston|cambridge|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean)\b/i.test(lower);
-  const canada = isCanadaCountry || isCanadaProvince || isCanadaCity || (/\bremote\b/i.test(lower) && /\b(canada|canadian|on|bc|ab|qc)\b/i.test(lower));
-
-  const isUsCountry = /\b(united states|usa|u\.s\.a?)\b/i.test(lower) || (/\bus\b/i.test(lower) && !/\b(on-site|onsite|contact us|about us)\b/i.test(lower));
-  const isUsState = /(?:^|,\s*)(al|ak|az|ar|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)(?:\s|,|$)/i.test(location) || (/(?:^|,\s*)ca(?:\s|,|$)/i.test(location) && !canada);
-  const us = isUsCountry || (isUsState && !canada);
-
-  const requested = normalizeKey(geography);
-  if (requested === 'gta') return isGtaLocation(location);
-  if (requested === 'canada') return canada;
-  if (requested === 'us') return us;
-  if (requested === 'canada_us') return canada || us;
-  return true;
+  return locationMatchesGeography(item, geography);
 }
 
 function sortAccountRows(items, sortBy = '') {
@@ -8702,11 +8685,41 @@ function phraseMatchesText(phrase, normalizedText) {
   return ` ${text} `.includes(` ${term} `) || text.includes(term);
 }
 
+const ROLE_FAMILY_ALIASES = [
+  [
+    'talent acquisition',
+    'recruiter',
+    'recruiting',
+    'recruitment',
+    'talent sourcer',
+    'sourcer',
+    'talent partner',
+    'recruiting partner',
+    'recruitment partner',
+    'recruiting coordinator',
+    'recruitment coordinator',
+    'talent advisor',
+    'head of talent',
+    'staffing specialist',
+  ],
+];
+
+function roleFamilyAliasStrength(term, titleText) {
+  const normalizedTerm = normalizeSearchText(term);
+  const normalizedTitle = normalizeSearchText(titleText);
+  if (!normalizedTerm || !normalizedTitle) return 0;
+  const family = ROLE_FAMILY_ALIASES.find((aliases) => aliases.includes(normalizedTerm));
+  if (!family) return 0;
+  return family.some((alias) => phraseMatchesText(alias, normalizedTitle)) ? 52 : 0;
+}
+
 function roleMatchStrength(term, titleText, detailText) {
   const normalizedTerm = normalizeSearchText(term);
   if (!normalizedTerm) return 0;
   if (phraseMatchesText(normalizedTerm, titleText)) return 60;
   if (phraseMatchesText(normalizedTerm, detailText)) return 35;
+  const familyStrength = roleFamilyAliasStrength(normalizedTerm, titleText);
+  if (familyStrength) return familyStrength;
   const words = normalizedTerm.split(' ').filter((word) => word.length > 2);
   if (!words.length) return 0;
   const titleTokens = new Set(normalizeSearchText(titleText).split(' ').filter(Boolean));
@@ -8794,94 +8807,6 @@ function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
     relevanceBand: score >= 70 ? 'strong' : score >= focus.minimumRelevanceScore ? 'possible' : 'low',
     relevanceReasons: reasons.slice(0, 3),
   };
-}
-
-const CANADA_COUNTRY_RE = /\b(canada|canadian)\b/i;
-const US_COUNTRY_RE = /\b(us|usa|u\.s\.a?|united states(?: of america)?)\b/i;
-const NORTH_AMERICA_REGION_RE = /\bnorth america\b/i;
-const OTHER_REGION_RE = /\b(emea|europe|european union|uk|united kingdom|england|scotland|wales|ireland|netherlands|germany|france|spain|italy|poland|sweden|norway|denmark|finland|switzerland|austria|portugal|belgium|australia|new zealand|india|singapore|japan|china|hong kong|latin america|latam|apac|asia|africa|middle east)\b/i;
-const CANADA_PROVINCE_RE = /\b(ontario|british columbia|alberta|quebec|québec|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland(?: and labrador)?|prince edward island|pei|yukon|northwest territories|nunavut)\b/i;
-const US_STATE_RE = /\b(california|new york|texas|washington|massachusetts|florida|illinois|georgia|colorado|arizona|virginia|pennsylvania|north carolina|ohio|michigan|new jersey|maryland|oregon|minnesota|tennessee|utah|district of columbia)\b/i;
-const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|richmond|surrey|victoria|kelowna|quebec city|halifax|winnipeg|regina|saskatoon|london|guelph|barrie|windsor|kingston|cambridge|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean|st\.? john'?s)\b/i;
-const US_CITY_RE = /\b(seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles|new york city|miami|dallas|houston|phoenix|portland|philadelphia|detroit|minneapolis|nashville|salt lake city)\b/i;
-const CANADA_CODE_RE = /(?:,\s*|\s*-\s*|\(\s*)(on|bc|ab|qc|ns|mb|sk|nb|pe|pei|yt|nt|nu)(?=\s*(?:,|\/|\||\)|$))/i;
-const US_CODE_RE = /,\s*(ca|ny|tx|wa|ma|fl|il|ga|co|az|va|pa|nc|oh|mi|nj|md|or|mn|tn|ut|dc)(?=\s*(?:,|\/|\||\)|$))/i;
-const OTHER_COUNTRY_CODE_RE = /,\s*(nl|gb|uk|ie|de|fr|es|it|pl|se|no|dk|fi|ch|at|pt|be|au|nz|in|sg|jp|cn|hk)(?=\s*(?:,|\/|\||\)|$))/i;
-const NEWFOUNDLAND_CODE_RE = /\b(st\.? john'?s|corner brook|gander|newfoundland),\s*nl\b/i;
-
-// The tenant's geographyFocus setting (e.g. "Canada + US", "Canada", "US",
-// "Global") controls which job locations survive import. Defaults to Canada+US
-// to match the seeded default; unrecognized values are treated as permissive so
-// we never silently drop everything.
-function parseGeographyFocus(geographyFocus) {
-  const g = String(geographyFocus || '').toLowerCase().trim();
-  if (!g) return { canada: true, us: true, other: false };
-  if (/global|anywhere|worldwide|international|\ball\b|every/.test(g)) {
-    return { canada: true, us: true, other: true };
-  }
-  const us = /\b(us|usa|u\.s\.a?|united states|america)\b/.test(g);
-  const canada = /canad/.test(g);
-  if (!us && !canada) return { canada: true, us: true, other: true };
-  return { canada, us, other: false };
-}
-
-function classifyJobRegion(item, accountItem = null) {
-  const text = [
-    item.location,
-    item.country,
-    item.region,
-    item.office,
-    !item.location && accountItem?.location,
-  ].filter(Boolean).join(' ').trim();
-  if (!text.trim()) return 'unknown';
-
-  const canadaCountry = CANADA_COUNTRY_RE.test(text);
-  const usCountry = US_COUNTRY_RE.test(text);
-  if (NORTH_AMERICA_REGION_RE.test(text)) return 'north_america';
-  if (canadaCountry && usCountry) return 'north_america';
-  if (canadaCountry) return 'canada';
-  if (usCountry) return 'us';
-
-  // Explicit regions take precedence over ambiguous city names and over
-  // generic remote wording, such as "Victoria, Australia" or "Remote EMEA".
-  if (NEWFOUNDLAND_CODE_RE.test(text)) return 'canada';
-  if (OTHER_REGION_RE.test(text) || OTHER_COUNTRY_CODE_RE.test(text)) return 'other';
-  if (CANADA_CODE_RE.test(text)) return 'canada';
-  if (US_CODE_RE.test(text)) return 'us';
-  if (CANADA_PROVINCE_RE.test(text)) return 'canada';
-  if (US_STATE_RE.test(text)) return 'us';
-  if (CANADA_CITY_RE.test(text)) return 'canada';
-  if (US_CITY_RE.test(text)) return 'us';
-  if (/remote/i.test(text)) return 'remote';
-  return 'other';
-}
-
-function jobMatchesGeography(item, accountItem, allow) {
-  const allowed = allow || { canada: true, us: true, other: false };
-  if (allowed.canada && allowed.us && allowed.other) return true;
-  switch (classifyJobRegion(item, accountItem)) {
-    case 'canada': return allowed.canada;
-    case 'us': return allowed.us;
-    case 'north_america': return allowed.canada || allowed.us;
-    case 'remote': return allowed.canada || allowed.us || allowed.other;
-    case 'other': return allowed.other;
-    case 'unknown': return true; // location unknown — keep rather than silently drop
-    default: return true;
-  }
-}
-
-function isGtaLocation(location) {
-  const str = String(location || '').trim();
-  if (!str) return false;
-  if (/\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|kitchener|waterloo|hamilton)\b/i.test(str)) {
-    return true;
-  }
-  if (/\b(canada|ontario)\b/i.test(str) || /(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i.test(str)) {
-    if (!/\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec|bc|ab|qc)\b/i.test(str)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {

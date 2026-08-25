@@ -4571,6 +4571,13 @@ async function applyAccountPreset(presetId, options = {}) {
   await renderAccountsView();
 }
 
+function getTargetRoleThreshold(searchFocus = null) {
+  const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+  const focus = searchFocus || appState.bootstrap?.settings?.searchFocusByPersona?.[personaKey] || {};
+  const minimum = Number(focus.minimumRelevanceScore);
+  return Math.max(1, Math.min(100, Number.isFinite(minimum) ? Math.round(minimum) : 40));
+}
+
 async function applyJobPreset(presetId) {
   if (presetId === 'all') {
     appState.jobQuery = {
@@ -4584,10 +4591,10 @@ async function applyJobPreset(presetId) {
     appState.jobQuery = {
       ...appState.jobQuery,
       sortBy: 'relevance',
-      minRelevance: '40',
+      minRelevance: String(getTargetRoleThreshold()),
       page: 1,
     };
-    showToast('🎯 Filtered strictly to your target job titles & search focus.', 'success');
+    showToast('🎯 Filtered to your target role family and saved search focus.', 'success');
   } else if (presetId === 'canada') {
     appState.jobQuery = {
       ...appState.jobQuery,
@@ -11530,6 +11537,7 @@ async function renderJobsView() {
   const jobSeeker = isJobSeekerPersona();
   const personaKey = jobSeeker ? 'jobseeker' : 'bd';
   const searchFocus = stateBootstrap.settings?.searchFocusByPersona?.[personaKey] || {};
+  const targetRoleThreshold = getTargetRoleThreshold(searchFocus);
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
   const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
@@ -11566,7 +11574,7 @@ async function renderJobsView() {
       <div class="job-preset-strip" role="group" aria-label="Job quick filters">
         <span class="job-preset-label">Quick filters:</span>
         <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.geography && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
-        <button class="job-preset-chip${appState.jobQuery.minRelevance === '40' || (focusConfigured && appState.jobQuery.sortBy === 'relevance' && appState.jobQuery.minRelevance) ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
+        <button class="job-preset-chip${appState.jobQuery.sortBy === 'relevance' && appState.jobQuery.minRelevance === String(targetRoleThreshold) ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
         <button class="job-preset-chip${appState.jobQuery.geography === 'canada' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
         <button class="job-preset-chip${appState.jobQuery.workStyle === 'local_remote' || appState.jobQuery.geography === 'local_remote' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="local_remote">🏡 Local or Remote</button>
         <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
@@ -11590,7 +11598,7 @@ async function renderJobsView() {
             ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
             ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
             ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
-            ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option><option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
+            ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option>${![45, 70].includes(targetRoleThreshold) ? `<option value="${escapeAttr(targetRoleThreshold)}" ${selected(appState.jobQuery.minRelevance, String(targetRoleThreshold))}>Saved target threshold (${escapeHtml(targetRoleThreshold)}+)</option>` : ''}<option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
             <div class="field field--action"><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button></div>
           </div>
         </details>

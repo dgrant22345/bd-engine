@@ -119,6 +119,35 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
+test('target-role quick filter uses the saved relevance threshold', async ({ page }) => {
+  const { app } = await signup(page, { persona: 'jobseeker' });
+  await completeSetup(page, app);
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        searchFocus: {
+          targetRoles: 'Talent Acquisition',
+          excludedRoles: '',
+          targetIndustries: '',
+          workStyle: 'any',
+          minimumRelevanceScore: 35,
+        },
+      }),
+    });
+    return { ok: response.ok, status: response.status };
+  });
+  expect(saved).toEqual({ ok: true, status: 200 });
+
+  await gotoAppRoute(page, '#/jobs');
+  await expect(app.getByRole('heading', { name: 'Open roles at target companies' })).toBeVisible({ timeout: 10000 });
+  await app.getByRole('button', { name: /My Target Roles Only/ }).click();
+  const fit = app.locator('#jobs-filter-form select[name="minRelevance"]');
+  await expect(fit).toHaveValue('35');
+  await expect(fit.locator('option:checked')).toHaveText('Saved target threshold (35+)');
+});
+
 test('post-setup dashboard is usable and its optional tour is accessible', async ({ page }) => {
   const { app } = await signup(page);
   const profile = app.locator('#setup-profile-form');
