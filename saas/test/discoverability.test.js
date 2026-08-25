@@ -19,6 +19,7 @@ test('landing page publishes canonical and social discovery metadata', async () 
   const landing = await readFile(landingPath, 'utf8');
 
   assert.match(landing, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/">/);
+  assert.match(landing, /<meta name="google-site-verification" content="5aFf-X2tZDhYBLDwDlN9G2wn1r6dLcsEtIBXqkHYqbo">/);
   assert.match(landing, /<meta property="og:title"/);
   assert.match(landing, /<meta property="og:image" content="https:\/\/bd-engine-production\.up\.railway\.app\/bd-engine-logo\.png">/);
   assert.match(landing, /<meta name="twitter:card" content="summary">/);
