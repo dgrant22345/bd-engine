@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assessProductionReadiness, isCommercialCheckoutReady } from '../src/production-readiness.js';
+import {
+  applyCommercialCheckoutReadiness,
+  assessProductionReadiness,
+  isCommercialCheckoutReady,
+} from '../src/production-readiness.js';
 
 const completeEnvironment = {
   DATABASE_URL: 'postgres://example.invalid/database',
@@ -84,4 +88,39 @@ test('production checkout stays closed until every commercial dependency is read
     ...completeEnvironment,
     RAILWAY_ENVIRONMENT: 'production',
   }), true);
+});
+
+test('billing status reflects the commercial gate without hiding Stripe configuration', () => {
+  const stripeStatus = {
+    configured: true,
+    ready: true,
+    checkoutReady: true,
+    commercialReady: true,
+    prices: { jobseeker: true, sales: true },
+  };
+
+  const incompleteProduction = applyCommercialCheckoutReadiness(stripeStatus, {
+    RAILWAY_ENVIRONMENT: 'production',
+  });
+  assert.equal(incompleteProduction.configured, true);
+  assert.equal(incompleteProduction.ready, true);
+  assert.equal(incompleteProduction.checkoutReady, false);
+  assert.equal(incompleteProduction.commercialReady, false);
+  assert.equal(incompleteProduction.commercialGateReady, false);
+  assert.deepEqual(incompleteProduction.prices, stripeStatus.prices);
+
+  const development = applyCommercialCheckoutReadiness(stripeStatus, {
+    NODE_ENV: 'development',
+  });
+  assert.equal(development.checkoutReady, true);
+  assert.equal(development.commercialReady, true);
+  assert.equal(development.commercialGateReady, true);
+
+  const completeProduction = applyCommercialCheckoutReadiness(stripeStatus, {
+    ...completeEnvironment,
+    RAILWAY_ENVIRONMENT: 'production',
+  });
+  assert.equal(completeProduction.checkoutReady, true);
+  assert.equal(completeProduction.commercialReady, true);
+  assert.equal(completeProduction.commercialGateReady, true);
 });

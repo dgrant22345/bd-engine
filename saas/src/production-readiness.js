@@ -133,3 +133,13 @@ export function isCommercialCheckoutReady(env = process.env) {
     || env.NODE_ENV === 'production';
   return !isProduction || assessProductionReadiness(env).ready;
 }
+
+export function applyCommercialCheckoutReadiness(stripeStatus = {}, env = process.env) {
+  const commercialGateReady = isCommercialCheckoutReady(env);
+  return {
+    ...stripeStatus,
+    checkoutReady: Boolean(stripeStatus.checkoutReady && commercialGateReady),
+    commercialReady: Boolean(stripeStatus.commercialReady && commercialGateReady),
+    commercialGateReady,
+  };
+}

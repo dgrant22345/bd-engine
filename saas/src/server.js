@@ -25,7 +25,7 @@ import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './commercial-outcomes.js';
-import { isCommercialCheckoutReady } from './production-readiness.js';
+import { applyCommercialCheckoutReadiness, isCommercialCheckoutReady } from './production-readiness.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -1242,7 +1242,7 @@ self.addEventListener('activate', (event) => {
       plan,
       trialDaysRemaining,
       usage,
-      stripe: getStripeConfigStatus(),
+      stripe: applyCommercialCheckoutReadiness(getStripeConfigStatus(), process.env),
       canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
       canChangeBilling: canManageBilling(session.membership.role),
       tenant: getBillingTenantPayload(tenant, user),
@@ -1437,7 +1437,7 @@ self.addEventListener('activate', (event) => {
         plan: getPlan(effectivePlanId),
         trialDaysRemaining: effectivePlanId === ownerPlanId ? null : getTrialDaysRemaining(tenant),
         usage: getUsageSummary(tenantId, effectivePlanId, tenantUsage),
-        stripe: getStripeConfigStatus(),
+        stripe: applyCommercialCheckoutReadiness(getStripeConfigStatus(), process.env),
         canManageBilling: Boolean(tenant.stripeCustomerId || tenant.stripe_customer_id),
         canChangeBilling: canManageBilling(session.membership.role),
         tenant: getBillingTenantPayload(tenant, user),
