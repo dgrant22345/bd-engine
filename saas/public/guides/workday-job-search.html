@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Understand how public Workday career sites differ from Greenhouse and Lever, how tenant-specific endpoints work, and why coverage still varies by employer.">
+  <meta name="author" content="BD Engine">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://bd-engine-production.up.railway.app/guides/workday-job-search">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="BD Engine Cloud">
+  <meta property="og:title" content="Why Workday Job Boards Need a Separate Adapter | BD Engine">
+  <meta property="og:description" content="A technical but practical guide to Workday tenant identifiers, career-site identifiers, pagination, and verification limits.">
+  <meta property="og:url" content="https://bd-engine-production.up.railway.app/guides/workday-job-search">
+  <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta property="og:image:alt" content="BD Engine logo">
+  <meta property="article:published_time" content="2026-08-24">
+  <meta property="article:modified_time" content="2026-08-24">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Why Workday Job Boards Need a Separate Adapter | BD Engine">
+  <meta name="twitter:description" content="Tenant-specific public endpoints make Workday a different integration problem from Greenhouse or Lever.">
+  <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta name="theme-color" content="#080d18">
+  <title>Why Workday Job Boards Need a Separate Adapter | BD Engine</title>
+  <link rel="stylesheet" href="/guides.css?v=20260824-guides-1">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "Why Workday Job Boards Need a Separate Adapter",
+    "description": "A technical but practical guide to Workday tenant identifiers, career-site identifiers, pagination, and verification limits.",
+    "datePublished": "2026-08-24",
+    "dateModified": "2026-08-24",
+    "mainEntityOfPage": "https://bd-engine-production.up.railway.app/guides/workday-job-search",
+    "image": "https://bd-engine-production.up.railway.app/bd-engine-logo.png",
+    "author": {
+      "@type": "Organization",
+      "name": "BD Engine",
+      "url": "https://bd-engine-production.up.railway.app/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "BD Engine",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://bd-engine-production.up.railway.app/bd-engine-logo.png"
+      }
+    }
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#article-main">Skip to guide</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="BD Engine home">
+      <img src="/bd-engine-logo.png" alt="" width="34" height="34">
+      <span>BD Engine</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="/guides">Guides</a>
+      <a href="/ats-checker">ATS audit</a>
+      <a class="header-cta" href="/job-search?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=workday_guide&amp;utm_content=header">Job-search workflow</a>
+    </nav>
+  </header>
+
+  <main id="article-main">
+    <article>
+      <header class="article-header">
+        <p class="eyebrow">Provider detail</p>
+        <h1>Why Workday job boards need a separate adapter</h1>
+        <p class="lede">Greenhouse and Lever often expose a board identifier through a predictable public URL. A supported Workday site usually needs both a tenant identifier and a career-site identifier before its public jobs endpoint can be queried.</p>
+        <div class="article-meta">
+          <span>Published by BD Engine</span>
+          <time datetime="2026-08-24">August 24, 2026</time>
+          <span>7 minute guide</span>
+        </div>
+      </header>
+
+      <div class="article-layout">
+        <div class="article-body">
+          <section aria-labelledby="different-problem">
+            <h2 id="different-problem">It is an employer-site problem, not only a provider problem</h2>
+            <p>A URL on <code>myworkdayjobs.com</code> identifies Workday as the likely platform, but that host match alone does not identify the employer's usable job feed. The hostname and path still need to resolve to the correct tenant and career site.</p>
+            <p>For a supported URL such as <code>example.wd10.myworkdayjobs.com/Example_Careers</code>, BD Engine derives:</p>
+            <ul>
+              <li>the tenant from the hostname,</li>
+              <li>the career-site identifier from the URL path, and</li>
+              <li>the public jobs endpoint under <code>/wday/cxs/{tenant}/{site}/jobs</code>.</li>
+            </ul>
+            <p class="note"><strong>Recognition is not retrieval.</strong> Seeing <code>myworkdayjobs.com</code> in a URL is enough to classify the likely ATS. It is not enough to promise that the tenant, site, endpoint, and every current role will resolve successfully.</p>
+          </section>
+
+          <section aria-labelledby="adapter-flow">
+            <h2 id="adapter-flow">What the adapter does</h2>
+            <ol>
+              <li><strong>Parse the public URL.</strong> The current adapter accepts the supported <code>{tenant}.wd{number}.myworkdayjobs.com</code> hostname pattern.</li>
+              <li><strong>Derive the career site.</strong> It reads the relevant path segment, including supported locale-prefixed paths and existing <code>/wday/cxs/</code> endpoints.</li>
+              <li><strong>Request jobs in pages.</strong> The adapter posts to the public jobs endpoint in batches, using the reported total to determine the remaining offsets within a bounded page limit.</li>
+              <li><strong>Normalize the records.</strong> Returned fields are mapped into a consistent title, location, source URL, and lifecycle shape used by the workspace.</li>
+              <li><strong>Retry specific transient failures.</strong> A temporary HTML or challenge response from a Workday host is treated as retryable rather than as valid job data.</li>
+            </ol>
+          </section>
+
+          <section aria-labelledby="failure-modes">
+            <h2 id="failure-modes">Why a Workday board can still fail</h2>
+            <ul>
+              <li><strong>Custom hostnames:</strong> An employer can place its career experience behind a domain that does not expose the standard Workday pattern.</li>
+              <li><strong>Renamed career sites:</strong> A tenant can have more than one site or change the path used by the public board.</li>
+              <li><strong>Transient challenges:</strong> A request can receive HTML, a waiting page, or another non-JSON response even when the endpoint normally works.</li>
+              <li><strong>Incomplete pagination:</strong> Later pages can fail after an initial response succeeds; a reliable workflow should surface that partial failure.</li>
+              <li><strong>Role lifecycle changes:</strong> A role can be removed or changed after it was retrieved. The employer's current posting remains the source of truth.</li>
+            </ul>
+          </section>
+
+          <section aria-labelledby="practical-checklist">
+            <h2 id="practical-checklist">A practical verification checklist</h2>
+            <ol>
+              <li>Keep the original employer career-site URL beside every imported role.</li>
+              <li>Confirm that the role still opens on the employer's site before applying or requesting a referral.</li>
+              <li>Record the last successful refresh instead of implying continuous freshness.</li>
+              <li>Keep unresolved sites visible for review rather than treating them as zero jobs.</li>
+              <li>Ask for the exact failing URL when troubleshooting; the tenant and career-site path matter.</li>
+            </ol>
+          </section>
+
+          <section class="guide-cta" aria-labelledby="workday-cta">
+            <h2 id="workday-cta">Check the URL before building the workflow</h2>
+            <p>Use the no-signup ATS audit to classify a public Workday URL, or open the job-seeker workflow to keep target employers, public roles, relationship context, and next actions together.</p>
+            <a class="button-link" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=workday_guide&amp;utm_content=article_cta">Audit a public career URL</a>
+          </section>
+        </div>
+
+        <aside class="article-aside" aria-labelledby="workday-summary">
+          <h2 id="workday-summary">Workday in one minute</h2>
+          <ul>
+            <li>Tenant-specific hostname</li>
+            <li>Career-site-specific path</li>
+            <li>Public paginated jobs endpoint</li>
+            <li>Transient HTML can occur</li>
+            <li>Employer posting remains source of truth</li>
+          </ul>
+        </aside>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <span>BD Engine Cloud</span>
+    <nav class="footer-links" aria-label="Related guides">
+      <a href="/guides">All guides</a>
+      <a href="/guides/ats-job-board-coverage">ATS coverage guide</a>
+      <a href="/guides/linkedin-connections-job-search">Connections guide</a>
+    </nav>
+  </footer>
+</body>
+</html>

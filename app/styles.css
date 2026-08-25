@@ -8027,6 +8027,22 @@ textarea:focus-visible {
     grid-template-columns: 40px minmax(0, 1fr) 40px;
   }
 
+  .topbar-network-btn {
+    width: 40px;
+    min-width: 40px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .topbar-network-btn > span:not(.btn-icon) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .topbar-tools .search-shell {
     grid-column: 1 / -1;
   }

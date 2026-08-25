@@ -2767,6 +2767,13 @@ async function handleCreateTenant(req, res, user) {
 
 // ── Static file serving ─────────────────────────────────────────────────────
 
+const PUBLIC_GUIDE_FILES = new Map([
+  ['/guides', 'guides/index.html'],
+  ['/guides/ats-job-board-coverage', 'guides/ats-job-board-coverage.html'],
+  ['/guides/workday-job-search', 'guides/workday-job-search.html'],
+  ['/guides/linkedin-connections-job-search', 'guides/linkedin-connections-job-search.html'],
+]);
+
 function serveStaticOrSPA(pathname, req, res) {
   // Handle /app/ prefix — the cloud shell loads the BD Engine app via iframe at /app/
   if (pathname === '/app' || pathname.startsWith('/app/')) {
@@ -2789,6 +2796,11 @@ function serveStaticOrSPA(pathname, req, res) {
   if (pathname === '/job-search' || pathname === '/job-search/') {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker'));
   }
+  const guidePath = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  const guideFile = PUBLIC_GUIDE_FILES.get(guidePath);
+  if (guideFile) {
+    return sendHtml(res, getGuideHtml(guideFile, res.bdScriptNonce));
+  }
   if (pathname === '/' || pathname === '/index.html') {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
   }
@@ -2810,6 +2822,7 @@ let cachedAppIndexHtml = null;
 let cachedCloudIndexHtml = null;
 let cachedJobSeekerIndexHtml = null;
 let cachedAtsCheckerHtml = null;
+const cachedGuideHtml = new Map();
 
 function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (!cachedCloudIndexHtml) {
@@ -2821,20 +2834,24 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
         'BD Engine ranks target companies using public hiring activity and your relationship context, then turns the strongest signal into a clear next action.',
         'BD Engine helps job seekers rank target companies and relevant public roles by role, location, keywords, and user-supplied network context.'
       )
-      .replace('rel="canonical" href="https://bd-engine-production.up.railway.app/"', 'rel="canonical" href="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('property="og:title" content="BD Engine | Know which account is worth your next move"', 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
       .replace(
-        'property="og:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
+        /<meta name="description" content="[^"]*">/,
+        '<meta name="description" content="Focus a job search around relevant public roles, target companies, warm contacts, and clear next actions.">'
+      )
+      .replace('rel="canonical" href="https://bd-engine-production.up.railway.app/"', 'rel="canonical" href="https://bd-engine-production.up.railway.app/job-search"')
+      .replace(/property="og:title" content="[^"]*"/, 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace(
+        /property="og:description" content="[^"]*"/,
         'property="og:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('property="og:url" content="https://bd-engine-production.up.railway.app/"', 'property="og:url" content="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('name="twitter:title" content="BD Engine | Know which account is worth your next move"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace(/name="twitter:title" content="[^"]*"/, 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
       .replace(
-        'name="twitter:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
+        /name="twitter:description" content="[^"]*"/,
         'name="twitter:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('"url": "https://bd-engine-production.up.railway.app/"', '"url": "https://bd-engine-production.up.railway.app/job-search"')
-      .replace('<title>BD Engine | Ranked Hiring Signals and Next Actions</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
+      .replace(/<title>[^<]*<\/title>/, '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
   }
   return injectScriptNonce(persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml, scriptNonce);
 }
@@ -2844,6 +2861,13 @@ function getAtsCheckerHtml(scriptNonce) {
     cachedAtsCheckerHtml = readFileSync(join(publicDir, 'ats-checker.html'), 'utf8');
   }
   return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
+}
+
+function getGuideHtml(filePath, scriptNonce) {
+  if (!cachedGuideHtml.has(filePath)) {
+    cachedGuideHtml.set(filePath, readFileSync(join(publicDir, filePath), 'utf8'));
+  }
+  return injectScriptNonce(cachedGuideHtml.get(filePath), scriptNonce);
 }
 
 function getAppIndexHtml(scriptNonce) {

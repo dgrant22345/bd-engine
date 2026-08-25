@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Learn how to audit ATS job-board coverage with a defined denominator, separate host recognition from retrieval, and verify role relevance before acting.">
+  <meta name="author" content="BD Engine">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://bd-engine-production.up.railway.app/guides/ats-job-board-coverage">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="BD Engine Cloud">
+  <meta property="og:title" content="How to Audit ATS Job-Board Coverage | BD Engine">
+  <meta property="og:description" content="A practical method for measuring target-list compatibility without confusing a recognized ATS host with complete job coverage.">
+  <meta property="og:url" content="https://bd-engine-production.up.railway.app/guides/ats-job-board-coverage">
+  <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta property="og:image:alt" content="BD Engine logo">
+  <meta property="article:published_time" content="2026-08-24">
+  <meta property="article:modified_time" content="2026-08-24">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="How to Audit ATS Job-Board Coverage | BD Engine">
+  <meta name="twitter:description" content="Define the denominator, recognize the host, test retrieval, and confirm relevance as separate steps.">
+  <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta name="theme-color" content="#080d18">
+  <title>How to Audit ATS Job-Board Coverage | BD Engine</title>
+  <link rel="stylesheet" href="/guides.css?v=20260824-guides-1">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "How to Audit ATS Job-Board Coverage for a Target List",
+    "description": "A practical method for measuring target-list compatibility without confusing a recognized ATS host with complete job coverage.",
+    "datePublished": "2026-08-24",
+    "dateModified": "2026-08-24",
+    "mainEntityOfPage": "https://bd-engine-production.up.railway.app/guides/ats-job-board-coverage",
+    "image": "https://bd-engine-production.up.railway.app/bd-engine-logo.png",
+    "author": {
+      "@type": "Organization",
+      "name": "BD Engine",
+      "url": "https://bd-engine-production.up.railway.app/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "BD Engine",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://bd-engine-production.up.railway.app/bd-engine-logo.png"
+      }
+    }
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#article-main">Skip to guide</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="BD Engine home">
+      <img src="/bd-engine-logo.png" alt="" width="34" height="34">
+      <span>BD Engine</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="/guides">Guides</a>
+      <a href="/job-search">Job search</a>
+      <a class="header-cta" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=ats_coverage_guide&amp;utm_content=header">Run free ATS audit</a>
+    </nav>
+  </header>
+
+  <main id="article-main">
+    <article>
+      <header class="article-header">
+        <p class="eyebrow">Target-list audit</p>
+        <h1>How to audit ATS job-board coverage for a target list</h1>
+        <p class="lede">A useful coverage number needs a denominator. It also needs to keep URL validity, ATS-host recognition, successful retrieval, role freshness, and role relevance as separate questions.</p>
+        <div class="article-meta">
+          <span>Published by BD Engine</span>
+          <time datetime="2026-08-24">August 24, 2026</time>
+          <span>8 minute guide</span>
+        </div>
+      </header>
+
+      <div class="article-layout">
+        <div class="article-body">
+          <section aria-labelledby="coverage-definition">
+            <h2 id="coverage-definition">Start by defining what coverage means</h2>
+            <p>"We support Workday" and "we found every relevant opening" are not equivalent claims. A target-list audit is more useful when it reports several smaller facts instead of collapsing them into one percentage.</p>
+            <ol>
+              <li><strong>URL validity:</strong> Is the submitted value a public HTTP or HTTPS URL?</li>
+              <li><strong>Host recognition:</strong> Does the URL match a public ATS pattern the workflow understands?</li>
+              <li><strong>Board resolution:</strong> Can the employer-specific board identifier be derived or confirmed?</li>
+              <li><strong>Job retrieval:</strong> Does the current public endpoint return a complete response?</li>
+              <li><strong>Role relevance:</strong> Are any current roles useful for this specific job search or staffing market?</li>
+            </ol>
+            <p class="note"><strong>Keep the denominator visible.</strong> If 40 URLs are valid and 26 match recognized ATS hosts, the recognized-host rate is 26 divided by 40. Invalid entries should be reported, but they should not quietly change that denominator.</p>
+          </section>
+
+          <section aria-labelledby="audit-steps">
+            <h2 id="audit-steps">A five-step target-list audit</h2>
+            <h3>1. Collect source URLs, not search-result links</h3>
+            <p>Use the employer's public career site or job-board URL. Avoid login pages, applicant portals, search-engine result URLs, and links copied from private systems.</p>
+            <h3>2. Normalize and deduplicate the list</h3>
+            <p>Remove exact duplicates and preserve the original employer association. A clean input list prevents repeated boards from inflating the apparent coverage rate.</p>
+            <h3>3. Classify the host</h3>
+            <p>BD Engine's browser-based audit recognizes public patterns for Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and Rippling. An ordinary company careers page can still be valid even when its ATS cannot be identified from the URL alone.</p>
+            <h3>4. Test retrieval separately</h3>
+            <p>A recognized host can still have a renamed board, custom configuration, transient challenge, or changed endpoint. Treat retrieval as a later operational check, not something host recognition has already proven.</p>
+            <h3>5. Review current roles against the target</h3>
+            <p>Coverage becomes useful only when the returned roles match the user's role family, location, seniority, and recency requirements. A large job board with no relevant role is not a qualified target.</p>
+          </section>
+
+          <section aria-labelledby="reading-results">
+            <h2 id="reading-results">How to read the result</h2>
+            <p class="note"><strong>Recognition is not retrieval.</strong> A recognized host identifies a likely integration path. It does not confirm that the employer-specific board currently resolves or returns every page successfully.</p>
+            <ul>
+              <li><strong>Recognized:</strong> The host matches a supported public ATS pattern. This is a compatibility signal.</li>
+              <li><strong>Needs discovery:</strong> The URL is public, but the ATS or employer-specific board cannot be confirmed from the submitted URL.</li>
+              <li><strong>Invalid:</strong> The value is not a usable public career-site URL and should be corrected or removed.</li>
+            </ul>
+            <p>Do not present the recognized rate as a guarantee of complete employer coverage, role count, role freshness, or scraping reliability. Those are separate measurements with different failure modes.</p>
+          </section>
+
+          <section class="guide-cta" aria-labelledby="audit-cta">
+            <h2 id="audit-cta">Audit a real target list</h2>
+            <p>The free BD Engine checker accepts up to 50 public career URLs, runs locally in the browser, reports the valid-URL denominator, and exports the classification as CSV. It does not fetch the submitted sites.</p>
+            <a class="button-link" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=ats_coverage_guide&amp;utm_content=article_cta">Run the free ATS audit</a>
+          </section>
+        </div>
+
+        <aside class="article-aside" aria-labelledby="quick-check">
+          <h2 id="quick-check">Quick audit checklist</h2>
+          <ul>
+            <li>Public source URL</li>
+            <li>Duplicates removed</li>
+            <li>Valid-URL denominator stated</li>
+            <li>Host recognition separated from retrieval</li>
+            <li>Current role relevance reviewed</li>
+            <li>Unknown sites kept visible</li>
+          </ul>
+        </aside>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <span>BD Engine Cloud</span>
+    <nav class="footer-links" aria-label="Related guides">
+      <a href="/guides">All guides</a>
+      <a href="/guides/workday-job-search">Workday guide</a>
+      <a href="/guides/linkedin-connections-job-search">Connections guide</a>
+    </nav>
+  </footer>
+</body>
+</html>

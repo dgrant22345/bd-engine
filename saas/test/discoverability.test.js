@@ -4,6 +4,12 @@ import { readFile } from 'node:fs/promises';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const checkerPath = new URL('../public/ats-checker.html', import.meta.url);
+const guideIndexPath = new URL('../public/guides/index.html', import.meta.url);
+const guideArticlePaths = [
+  new URL('../public/guides/ats-job-board-coverage.html', import.meta.url),
+  new URL('../public/guides/workday-job-search.html', import.meta.url),
+  new URL('../public/guides/linkedin-connections-job-search.html', import.meta.url),
+];
 const indexNowKeyPath = new URL('../public/9252ff32fcf3a7589799d0826f50459b.txt', import.meta.url);
 const robotsPath = new URL('../public/robots.txt', import.meta.url);
 const sitemapPath = new URL('../public/sitemap.xml', import.meta.url);
@@ -64,6 +70,47 @@ test('ATS checker is a crawlable no-signup utility with explicit caveats', async
   assert.doesNotMatch(checker, /password|credit card/i);
 });
 
+test('guide library publishes crawlable first-party articles with tracked product paths', async () => {
+  const [guideIndex, server, ...articles] = await Promise.all([
+    readFile(guideIndexPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+    ...guideArticlePaths.map((path) => readFile(path, 'utf8')),
+  ]);
+
+  assert.match(guideIndex, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/guides">/);
+  assert.match(guideIndex, /\/guides\/ats-job-board-coverage/);
+  assert.match(guideIndex, /\/guides\/workday-job-search/);
+  assert.match(guideIndex, /\/guides\/linkedin-connections-job-search/);
+  assert.match(server, /PUBLIC_GUIDE_FILES/);
+  assert.match(server, /getGuideHtml\(guideFile, res\.bdScriptNonce\)/);
+
+  for (const article of articles) {
+    assert.match(article, /<meta name="robots" content="index, follow, max-image-preview:large">/);
+    assert.match(article, /utm_source=organic_search&amp;utm_medium=guide/);
+    const match = article.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/);
+    assert.ok(match, 'Article JSON-LD was not found');
+    const schema = JSON.parse(match[1]);
+    assert.equal(schema['@type'], 'Article');
+    assert.equal(schema.author['@type'], 'Organization');
+    assert.equal(schema.author.name, 'BD Engine');
+    assert.equal(schema.datePublished, '2026-08-24');
+  }
+});
+
+test('guide claims keep compatibility, retrieval, relevance, and outreach consent distinct', async () => {
+  const [coverage, workday, connections] = await Promise.all(
+    guideArticlePaths.map((path) => readFile(path, 'utf8'))
+  );
+
+  assert.match(coverage, /Recognition is not retrieval/);
+  assert.match(coverage, /role freshness, or scraping reliability/);
+  assert.match(workday, /tenant identifier and a career-site identifier/);
+  assert.match(workday, /Employer posting remains source of truth/);
+  assert.match(connections, /Missing email is normal/);
+  assert.match(connections, /Send no mass referral requests/);
+  assert.match(connections, /linkedin\.com\/help\/linkedin\/answer\/a566336/);
+});
+
 test('landing attribution distinguishes campaigns and records acquisition actions', async () => {
   const [landing, server] = await Promise.all([
     readFile(landingPath, 'utf8'),
@@ -102,6 +149,10 @@ test('crawler files point to the canonical public origin and have explicit MIME 
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/job-search<\/loc>/);
   assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/guides<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/guides\/ats-job-board-coverage<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/guides\/workday-job-search<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/bd-engine-production\.up\.railway\.app\/guides\/linkedin-connections-job-search<\/loc>/);
   assert.match(server, /getAtsCheckerHtml/);
   assert.match(server, /'\.txt': 'text\/plain; charset=utf-8'/);
   assert.match(server, /'\.xml': 'application\/xml; charset=utf-8'/);

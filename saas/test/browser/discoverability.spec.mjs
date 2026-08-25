@@ -22,7 +22,7 @@ test('job-seeker campaign link replaces a mismatched staffing demo session', asy
 
   await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
   await expect(page.getByText(/role, location, and keyword focus/)).toBeVisible();
-  await expect(page.locator('#hero-signup')).toHaveText('Start job search');
+  await expect(page.locator('#hero-signup')).toHaveText('Find my next role');
   await expect(page.getByRole('link', { name: 'Audit career sites' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Explore live demo' })).toHaveCount(0);
   await expect(page.getByText('Read-only demo workspace')).toHaveCount(0);
@@ -73,6 +73,54 @@ test('clean job-search route publishes focused metadata and campaign attribution
       landingPath: '/job-search',
       persona: 'jobseeker',
     },
+  });
+});
+
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1440, height: 900 },
+]) {
+  test(`guide library stays crawlable and within the ${viewport.name} viewport`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const paths = [
+      '/guides',
+      '/guides/ats-job-board-coverage',
+      '/guides/workday-job-search',
+      '/guides/linkedin-connections-job-search',
+    ];
+
+    for (const path of paths) {
+      await page.goto(path);
+      await expect(page.locator('h1')).toBeVisible();
+      await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `https://bd-engine-production.up.railway.app${path}`);
+      const layout = await page.evaluate(() => ({
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        mainCount: document.querySelectorAll('main').length,
+      }));
+      expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+      expect(layout.mainCount).toBe(1);
+    }
+  });
+}
+
+test('connections guide hands tracked organic discovery into the job-search route', async ({ page }) => {
+  await page.goto('/guides/linkedin-connections-job-search');
+  await page.getByRole('link', { name: 'Explore the job-search workflow' }).click();
+
+  await expect(page).toHaveURL((url) => (
+    url.pathname === '/job-search'
+    && url.searchParams.get('utm_source') === 'organic_search'
+    && url.searchParams.get('utm_medium') === 'guide'
+    && url.searchParams.get('utm_campaign') === 'linkedin_connections_guide'
+  ));
+  const attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution.lastNonDirectTouch).toMatchObject({
+    source: 'organic_search',
+    medium: 'guide',
+    campaign: 'linkedin_connections_guide',
+    landingPath: '/job-search',
+    persona: 'jobseeker',
   });
 });
 
@@ -306,18 +354,16 @@ test('job-seeker route shows only its relevant paid offer and preserves plan int
   });
 });
 
-test('recruiter hero prioritizes the attributed ATS audit over the live demo', async ({ page }) => {
+test('recruiter hero keeps the trial, demo, and attributed ATS utility discoverable', async ({ page }) => {
   await page.goto('/');
 
-  const audit = page.locator('.hero-cta a.btn-primary', { hasText: 'Run free ATS audit' });
+  await expect(page.locator('.hero-cta #hero-signup')).toHaveText('Start free trial');
+  await expect(page.getByRole('button', { name: 'Explore live demo' })).toBeVisible();
+  const audit = page.getByRole('link', { name: 'Free ATS audit', exact: true });
   await expect(audit).toBeVisible();
   await expect(audit).toHaveAttribute('href', /utm_source=homepage/);
-  await expect(audit).toHaveAttribute('href', /utm_medium=product/);
+  await expect(audit).toHaveAttribute('href', /utm_medium=navigation/);
   await expect(audit).toHaveAttribute('href', /utm_campaign=coverage_audit/);
-  await expect(audit).toHaveAttribute('href', /utm_content=recruiter_hero_primary/);
-  await expect(page.locator('.hero-cta [data-demo-start]')).toHaveClass(/btn-ghost/);
-  await expect(page.locator('.hero-cta #hero-signup')).toHaveCount(0);
-  await expect(page.locator('#nav-signup')).toHaveText('Start free trial');
 });
 
 test('Terms review returns to the pricing decision instead of opening signup', async ({ page }) => {
