@@ -2818,23 +2818,23 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (persona === 'jobseeker' && !cachedJobSeekerIndexHtml) {
     cachedJobSeekerIndexHtml = cachedCloudIndexHtml
       .replace(
-        'BD Engine ranks target companies using public hiring activity and your relationship context, then turns the strongest signal into a clear next action.',
-        'BD Engine helps job seekers rank target companies and relevant public roles by role, location, keywords, and user-supplied network context.'
+        'Stop applying blind or cold calling. Real-time hiring intelligence and 1st-degree referral paths across 2,300+ live jobs on Greenhouse, Lever, Ashby, Workday & more.',
+        'Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions.'
       )
       .replace('rel="canonical" href="https://bd-engine-production.up.railway.app/"', 'rel="canonical" href="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('property="og:title" content="BD Engine | Know which account is worth your next move"', 'property="og:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace('property="og:title" content="BD Engine | Turn Live Hiring Signals & Warm Referral Paths Into Results"', 'property="og:title" content="BD Engine for Job Seekers | Focus Relevant Roles"')
       .replace(
-        'property="og:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
+        'property="og:description" content="Stop applying blind or cold calling. Real-time hiring intelligence and 1st-degree referral paths across 2,300+ live jobs on Greenhouse, Lever, Ashby, Workday & more."',
         'property="og:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('property="og:url" content="https://bd-engine-production.up.railway.app/"', 'property="og:url" content="https://bd-engine-production.up.railway.app/job-search"')
-      .replace('name="twitter:title" content="BD Engine | Know which account is worth your next move"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
+      .replace('name="twitter:title" content="BD Engine | Live Hiring Signals & Warm Referral Matching"', 'name="twitter:title" content="BD Engine for Job Seekers | Focus Relevant Roles"')
       .replace(
-        'name="twitter:description" content="Rank target companies using public hiring activity and your relationship context, then work the strongest next action."',
+        'name="twitter:description" content="Discover 2,300+ verified live jobs where you have warm 1st-degree intro paths. Automated multi-touch sequences & hiring surge alerts."',
         'name="twitter:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('"url": "https://bd-engine-production.up.railway.app/"', '"url": "https://bd-engine-production.up.railway.app/job-search"')
-      .replace('<title>BD Engine | Ranked Hiring Signals and Next Actions</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
+      .replace('<title>BD Engine | Live Hiring Signals, Warm Referral Paths & Actionable Intelligence</title>', '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
   }
   return injectScriptNonce(persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml, scriptNonce);
 }

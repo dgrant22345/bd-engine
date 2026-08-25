@@ -3271,19 +3271,19 @@ a:hover { text-decoration: underline; }
 
 .landing-pill--surge {
   background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  color: #b91c1c;
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 .landing-pill--warm {
   background: rgba(16, 185, 129, 0.12);
-  color: #059669;
+  color: #047857;
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .landing-pill--stale {
   background: rgba(245, 158, 11, 0.12);
-  color: #d97706;
+  color: #b45309;
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 

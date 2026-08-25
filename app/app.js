@@ -2072,7 +2072,7 @@ function wireDashboardCustomizer() {
 }
 
 const DASHBOARD_TAB_SECTIONS = {
-  'battle-board': new Set(['hero', 'value-sprint', 'command-tabs', 'playbook', 'alerts-bar', 'today-queue', 'follow-ups', 'action-plan', 'workflow']),
+  'battle-board': new Set(['hero', 'value-sprint', 'command-tabs', 'playbook', 'alerts-bar', 'queue', 'today-queue', 'follow-ups', 'action-plan', 'workflow', 'fee-simulator', 'icp-matrix']),
   'hiring-radar': new Set(['hero', 'value-sprint', 'command-tabs', 'network-radar', 'new-jobs', 'boards', 'velocity', 'heatmap', 'enrichment', 'readiness']),
   'pipeline': new Set(['hero', 'value-sprint', 'command-tabs', 'roi-hero', 'outcomes', 'sales-cycle', 'leaderboard', 'metrics', 'workflow', 'duplicates', 'data-quality']),
 };
@@ -8190,14 +8190,14 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
                         </div>
                       ` : ''}
                       <div style="margin-top:6px;">
-                        <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" style="width:100%;font-size:0.72rem;">
+                        <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" aria-label="Move deal stage for ${escapeAttr(acc.displayName || 'account')}" style="width:100%;font-size:0.72rem;">
                           ${stages.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.icon} ${s.label}</option>`).join('')}
                         </select>
                       </div>
                     </div>
                   `;
                 }).join('')}
-                ${!items.length ? `<p class="muted small" style="text-align:center;padding:24px 0;opacity:0.6;">No companies in this stage</p>` : ''}
+                ${!items.length ? `<p class="muted small" style="text-align:center;padding:24px 0;">No companies in this stage</p>` : ''}
               </div>
             </div>
           `;
@@ -11917,6 +11917,17 @@ async function renderAdminView() {
     </div>
 
     <section class="admin-grid">
+      ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
+        <form id="settings-form" class="settings-grid">
+          ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate role titles with commas. Specific phrases produce better rankings.')}
+          ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases are ranked at the bottom.')}
+          ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Used to prioritize limited board-discovery batches when company industry data is available.')}
+          ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`)}
+          ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="0" max="100" step="5" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, '45 is a useful starting point. Raise it for a tighter shortlist.')}
+          <div class="field field--action"><label>Update rankings</label><button class="primary-button" type="submit">Save focus and rescore jobs</button></div>
+        </form>
+      ${renderCollapsibleEnd()}
+
       <div class="two-column">
         ${renderCollapsibleStart('pipeline-ops', 'Refresh actions', 'Choose a full refresh or update one part of the workspace.')}
           <div class="actions-grid">
@@ -11959,19 +11970,7 @@ async function renderAdminView() {
             </div>
           </div>
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
-          <form id="settings-form" class="settings-grid">
-            ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate role titles with commas. Specific phrases produce better rankings.')}
-            ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases are ranked at the bottom.')}
-            ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Used to prioritize limited board-discovery batches when company industry data is available.')}
-            ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`)}
-            ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="0" max="100" step="5" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, '45 is a useful starting point. Raise it for a tighter shortlist.')}
-            <div class="field field--action"><label>Update rankings</label><button class="primary-button" type="submit">Save focus and rescore jobs</button></div>
-          </form>
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}
-          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
-        ${renderCollapsibleEnd()}
+
         ${renderCollapsibleStart('billing-subscription', 'Plan and billing', 'Manage your subscription.')}
           <div class="settings-grid">
             <div class="action-card">
@@ -12008,6 +12007,13 @@ async function renderAdminView() {
         ${renderCollapsibleStart('coverage-health', 'Job coverage health', 'See which companies can refresh jobs now, what is blocking the rest, and the next action to take.')}
           ${renderJobCoverageHealth(ingestionDiagnostics)}
         ${renderCollapsibleEnd()}
+
+        ${renderCollapsibleStart('background-jobs', 'Background work', 'Imports and refreshes continue here while you keep using the app.')}
+          <div id="background-jobs-panel" class="timeline timeline--jobs"></div>
+        ${renderCollapsibleEnd()}
+      </div>
+
+      <div class="two-column">
         ${renderCollapsibleStart('ats-config-records', 'Job board coverage', 'Board matches, manual overrides, and import readiness for tracked companies.')}
           <form id="configs-filter-form" class="filter-grid filter-grid--compact">
             ${renderField('Search', `<input name="q" value="${escapeAttr(appState.configQuery.q)}" placeholder="Company, board ID, URL">`)}
@@ -12021,75 +12027,7 @@ async function renderAdminView() {
           ${configs.items.length ? renderConfigsTable(configs.items) : renderEmptyState({ icon: 'Boards', title: 'No job boards match these filters', copy: 'Reset filters or run board discovery to create supported board matches.', action: '<button class="ghost-button" type="button" data-action="reset-filters" data-view="configs">Reset filters</button><button class="secondary-button" type="button" data-action="run-discovery">Find boards</button>' })}
           ${renderPagination('configs', configs.page, configs.pageSize, configs.total)}
         ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
-          <div class="panel-stack">
-            <div>
-              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
-              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : renderEmptyState({ icon: 'OK', title: 'Nothing needs review', copy: 'Medium-confidence board matches will land here before they are approved.', compact: true })}
-            </div>
-            <div>
-              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
-              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : renderEmptyState({ icon: 'OK', title: 'No unresolved companies waiting', copy: 'Companies missing a usable board will appear here with the reason they need help.', compact: true })}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-      </div>
 
-      ${siteAnalyticsSection}
-      <div class="two-column">
-        ${renderCollapsibleStart('runtime-status', 'App status', 'See whether background work is idle, queued, or running.')}
-          <div id="runtime-status-panel"></div>
-          <div class="action-card diagnostics-card">
-            <div>
-              <p class="eyebrow">Support</p>
-              <h4>Share a safe diagnostic summary</h4>
-              <p class="small muted">Copies refresh timing, job-source coverage, background status, and browser details. It excludes contacts, notes, outreach text, and account secrets.</p>
-            </div>
-            <button class="secondary-button" type="button" data-action="copy-diagnostics">Copy diagnostics</button>
-          </div>
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('enrichment-coverage', 'Company enrichment coverage', 'Canonical domains, careers pages, aliases, and identity confidence feeding the resolver.')}
-          <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Canonical domains', enrichmentSummary.canonicalDomainCount || 0, 'Companies with an official domain stored')}
-            ${renderMetricCard('Careers URLs', enrichmentSummary.careersUrlCount || 0, 'Companies with a verified careers endpoint')}
-            ${renderMetricCard('Aliases', enrichmentSummary.aliasesCount || 0, 'Companies with stored brand variants')}
-            ${renderMetricCard('Enriched companies', enrichmentSummary.enrichedCount || 0, `${formatNumber(enrichmentSummary.enrichmentCoveragePercent || 0)}% coverage`) }
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Confidence mix</p>
-              ${renderMiniStatList((enrichmentReport.byConfidence || []).map((item) => ({ label: humanize(item.confidence), value: formatNumber(item.count) })))}
-            </div>
-            <div>
-              <p class="eyebrow">Top unresolved reasons</p>
-              ${renderMiniStatList((enrichmentReport.topUnresolvedReasons || []).map((item) => ({ label: item.reason, value: formatNumber(item.count) })))}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('enrichment-queue', 'Enrichment review queue', `Sorted by target score, then hiring velocity, then engagement. ${formatNumber(enrichmentQueue.total || 0)} companies in queue.`)}
-          ${renderEnrichmentFilters()}
-          ${renderEnrichmentQueuePanel(enrichmentQueue)}
-        ${renderCollapsibleEnd()}
-        ${renderCollapsibleStart('resolver-coverage', 'Resolver coverage', 'Tracked-company readiness first, with the full imported history shown separately for context.')}
-          <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Actionable companies', operationalCompanyCount, `${formatNumber(operationalCoveragePercent)}% have resolved boards`)}
-            ${renderMetricCard('Need resolver work', operationalUnresolvedCount, 'Actionable companies still missing a resolved board')}
-            ${renderMetricCard('Resolver rows', summary.totalCompanies || 0, `${formatNumber(summary.networkSourcesExcluded || 0)} network-only sources excluded from automatic work`)}
-            ${renderMetricCard('Resolved rows', summary.resolvedCount || 0, `${formatNumber(summary.coveragePercent || 0)}% of total resolver rows`)}
-            ${renderMetricCard('Active imports', summary.activeCount || 0, 'High-confidence boards auto-enabled')}
-            ${renderMetricCard('Unresolved rows', summary.unresolvedCount || 0, 'Imported rows still missing strong ATS evidence')}
-          </div>
-          <div class="inline-split">
-            <div>
-              <p class="eyebrow">Confidence mix</p>
-              ${renderMiniStatList((resolverReport.byConfidenceBand || []).map((item) => ({ label: humanize(item.confidenceBand), value: formatNumber(item.count) })))}
-            </div>
-            <div>
-              <p class="eyebrow">Top failure reasons</p>
-              ${renderMiniStatList((resolverReport.topFailureReasons || []).map((item) => ({ label: item.failureReason, value: formatNumber(item.count) })))}
-            </div>
-          </div>
-        ${renderCollapsibleEnd()}
         ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit job board source' : 'Add job board source'}`, 'Paste a supported public job-board URL for live imports, or record an enterprise careers URL for manual tracking.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <div class="source-support-note" role="note">
@@ -12107,6 +12045,35 @@ async function renderAdminView() {
             <div class="field" style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes" rows="4"></textarea></div>
             <div><button class="primary-button" type="submit">${appState.configEditingId ? 'Save config' : 'Create config'}</button></div>
           </form>
+        ${renderCollapsibleEnd()}
+      </div>
+
+      ${siteAnalyticsSection}
+
+      <div class="two-column">
+        ${renderCollapsibleStart('review-queues', 'Review queues', 'Only high-confidence boards auto-activate. Medium-confidence results and unresolved companies land here for fast review.')}
+          <div class="panel-stack">
+            <div>
+              <div class="inline-header"><strong>Medium-confidence queue</strong><span class="small muted">${formatNumber(summary.mediumReviewQueueCount || 0)} pending</span></div>
+              ${mediumQueue.items.length ? renderResolverQueue(mediumQueue.items, 'medium') : renderEmptyState({ icon: 'OK', title: 'Nothing needs review', copy: 'Medium-confidence board matches will land here before they are approved.', compact: true })}
+            </div>
+            <div>
+              <div class="inline-header"><strong>Unresolved queue</strong><span class="small muted">${formatNumber(summary.unresolvedReviewQueueCount || 0)} pending</span></div>
+              ${unresolvedQueue.items.length ? renderResolverQueue(unresolvedQueue.items, 'unresolved') : renderEmptyState({ icon: 'OK', title: 'No unresolved companies waiting', copy: 'Companies missing a usable board will appear here with the reason they need help.', compact: true })}
+            </div>
+          </div>
+        ${renderCollapsibleEnd()}
+
+        ${renderCollapsibleStart('runtime-status', 'App status', 'See whether background work is idle, queued, or running.')}
+          <div id="runtime-status-panel"></div>
+          <div class="action-card diagnostics-card">
+            <div>
+              <p class="eyebrow">Support</p>
+              <h4>Share a safe diagnostic summary</h4>
+              <p class="small muted">Copies refresh timing, job-source coverage, background status, and browser details. It excludes contacts, notes, outreach text, and account secrets.</p>
+            </div>
+            <button class="secondary-button" type="button" data-action="copy-diagnostics">Copy diagnostics</button>
+          </div>
         ${renderCollapsibleEnd()}
       </div>
     </section>
@@ -14860,9 +14827,18 @@ function parseActivityDateInput(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
   const nowDate = new Date();
-  const timestamp = raw === formatLocalDateInput(nowDate)
-    ? nowDate
-    : new Date(`${raw}T12:00:00`);
+  const todayStr = formatLocalDateInput(nowDate);
+  let timestamp;
+  if (raw === todayStr) {
+    timestamp = nowDate;
+  } else {
+    const parsed = new Date(`${raw}T12:00:00`);
+    if (parsed.getTime() > nowDate.getTime()) {
+      timestamp = (raw <= todayStr) ? nowDate : parsed;
+    } else {
+      timestamp = parsed;
+    }
+  }
   if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() > nowDate.getTime() + 5 * 60 * 1000) return '';
   return timestamp.toISOString();
 }

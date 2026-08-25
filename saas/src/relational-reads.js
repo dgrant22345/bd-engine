@@ -307,11 +307,21 @@ export async function findTenantJobsRelational(tenantId, query = {}) {
         j.location ILIKE '%canada%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%quebec%' OR
         j.location ILIKE '%alberta%' OR j.location ILIKE '%british columbia%' OR j.location ILIKE '%toronto%' OR
         j.location ILIKE '%vancouver%' OR j.location ILIKE '%montreal%' OR j.location ILIKE '%calgary%' OR
-        j.location ILIKE '%ottawa%' OR j.location ILIKE '%, ON%' OR j.location ILIKE '%,ON%' OR
-        j.location ILIKE '%, BC%' OR j.location ILIKE '%,BC%' OR j.location ILIKE '%, QC%' OR j.location ILIKE '%,QC%'
+        j.location ILIKE '%ottawa%' OR j.location ILIKE '%waterloo%' OR j.location ILIKE '%kitchener%' OR
+        j.location ILIKE '%mississauga%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%brampton%' OR
+        j.location ILIKE '%vaughan%' OR j.location ILIKE '%oakville%' OR j.location ILIKE '%edmonton%' OR
+        j.location ILIKE '%halifax%' OR j.location ILIKE '%winnipeg%' OR j.location ILIKE '%victoria%' OR
+        j.location ILIKE '%kelowna%' OR j.location ILIKE '%london%' OR j.location ILIKE '%hamilton%' OR
+        j.location ILIKE '%guelph%' OR j.location ILIKE '%barrie%' OR j.location ILIKE '%windsor%' OR
+        j.location ILIKE '%, ON%' OR j.location ILIKE '%,ON%' OR j.location ILIKE '%, BC%' OR j.location ILIKE '%,BC%' OR
+        j.location ILIKE '%, QC%' OR j.location ILIKE '%,QC%' OR j.location ILIKE '%, AB%' OR j.location ILIKE '%,AB%' OR
+        j.location ILIKE '%, MB%' OR j.location ILIKE '%,MB%' OR j.location ILIKE '%, SK%' OR j.location ILIKE '%,SK%' OR
+        j.location ILIKE '%, NS%' OR j.location ILIKE '%,NS%' OR j.location ILIKE '%, NB%' OR j.location ILIKE '%,NB%' OR
+        j.location ILIKE '%, NL%' OR j.location ILIKE '%,NL%' OR j.location ILIKE '%, PE%' OR j.location ILIKE '%,PE%'
       ) AND NOT (
-        j.location ILIKE '%united states%' OR j.location ILIKE '%usa%' OR j.location ILIKE '%, CA%' OR
-        j.location ILIKE '%, NY%' OR j.location ILIKE '%, TX%' OR j.location ILIKE '%, MA%'
+        j.location ILIKE '%united states%' OR j.location ILIKE '%usa%' OR
+        j.location ILIKE '%, NY%' OR j.location ILIKE '%, TX%' OR j.location ILIKE '%, MA%' OR
+        j.location ILIKE '%, WA%' OR j.location ILIKE '%, IL%' OR j.location ILIKE '%, FL%'
       )`);
     } else if (query.geography === 'us') {
       clauses.push(`(

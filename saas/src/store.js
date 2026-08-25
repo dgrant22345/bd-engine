@@ -8702,20 +8702,76 @@ function phraseMatchesText(phrase, normalizedText) {
   return ` ${text} `.includes(` ${term} `) || text.includes(term);
 }
 
+const TITLE_MODIFIER_WORDS = new Set([
+  'senior', 'sr', 'junior', 'jr', 'lead', 'principal', 'staff', 'manager', 'director',
+  'vp', 'vice', 'president', 'head', 'chief', 'officer', 'executive', 'associate',
+  'specialist', 'analyst', 'coordinator', 'administrator', 'admin', 'assistant',
+  'consultant', 'representative', 'rep', 'practitioner', 'generalist', 'intern',
+  'internship', 'level', 'entry', 'intermediate', 'ii', 'iii', 'iv', 'v',
+]);
+
+function stemToken(token) {
+  const t = normalizeSearchText(token);
+  if (!t || t.length <= 3) return t;
+  if (t === 'recruitment' || t === 'recruiter' || t === 'recruiters' || t === 'recruiting') return 'recruit';
+  if (t === 'acquisition' || t === 'acquisitions') return 'acquisit';
+  if (t === 'operations' || t === 'operation' || t === 'ops') return 'operat';
+  if (t === 'financial' || t === 'finance' || t === 'financials') return 'financ';
+  if (t === 'engineering' || t === 'engineer' || t === 'engineers') return 'engin';
+  if (t === 'technical' || t === 'technologies' || t === 'technology' || t === 'tech') return 'tech';
+  if (t === 'management' || t === 'manager' || t === 'managers') return 'manag';
+  if (t === 'sourcing' || t === 'sourcer' || t === 'sources') return 'sourc';
+  if (t === 'strategic' || t === 'strategy' || t === 'strategist') return 'strateg';
+  if (t === 'development' || t === 'developer' || t === 'developers') return 'develop';
+  if (t === 'partnerships' || t === 'partnership' || t === 'partner' || t === 'partners') return 'partner';
+  if (t === 'consulting' || t === 'consultant' || t === 'consultants') return 'consult';
+  if (t === 'analytics' || t === 'analyst' || t === 'analysts' || t === 'analysis') return 'analys';
+  return t
+    .replace(/(?:ment|tion|tions|ance|ence|ship|ships)$/, '')
+    .replace(/(?:ers|er|ing|ies|es|ed|al|ic|ly|s)$/, '');
+}
+
 function roleMatchStrength(term, titleText, detailText) {
   const normalizedTerm = normalizeSearchText(term);
   if (!normalizedTerm) return 0;
   if (phraseMatchesText(normalizedTerm, titleText)) return 60;
   if (phraseMatchesText(normalizedTerm, detailText)) return 35;
-  const words = normalizedTerm.split(' ').filter((word) => word.length > 2);
+
+  const words = normalizedTerm.split(' ').filter((w) => w.length > 1);
   if (!words.length) return 0;
-  const titleTokens = new Set(normalizeSearchText(titleText).split(' ').filter(Boolean));
-  const detailTokens = new Set(normalizeSearchText(detailText).split(' ').filter(Boolean));
-  const titleCoverage = words.filter((word) => titleTokens.has(word)).length / words.length;
-  const detailCoverage = words.filter((word) => detailTokens.has(word)).length / words.length;
-  if (titleCoverage === 1) return 52;
-  if (titleCoverage >= 0.5) return 30;
-  if (detailCoverage === 1) return 25;
+
+  const domainWords = words.filter((w) => !TITLE_MODIFIER_WORDS.has(w));
+  const modifierWords = words.filter((w) => TITLE_MODIFIER_WORDS.has(w));
+
+  const titleTokens = normalizeSearchText(titleText).split(' ').filter(Boolean);
+  const titleStemSet = new Set(titleTokens.map(stemToken));
+  const titleTokenSet = new Set(titleTokens);
+
+  const detailTokens = normalizeSearchText(detailText).split(' ').filter(Boolean);
+  const detailStemSet = new Set(detailTokens.map(stemToken));
+  const detailTokenSet = new Set(detailTokens);
+
+  const isMatched = (w, tokenSet, stemSet) => tokenSet.has(w) || stemSet.has(stemToken(w));
+
+  if (domainWords.length > 0) {
+    const domainMatches = domainWords.filter((w) => isMatched(w, titleTokenSet, titleStemSet)).length;
+    const domainCoverage = domainMatches / domainWords.length;
+    const modifierMatches = modifierWords.filter((w) => isMatched(w, titleTokenSet, titleStemSet)).length;
+    const modifierCoverage = modifierWords.length ? modifierMatches / modifierWords.length : 1;
+
+    if (domainCoverage === 1 && modifierCoverage === 1) return 52;
+    if (domainCoverage === 1) return 45;
+    if (domainCoverage >= 0.67) return 30;
+
+    const detailDomainMatches = domainWords.filter((w) => isMatched(w, detailTokenSet, detailStemSet)).length;
+    if (detailDomainMatches === domainWords.length) return 25;
+    return 0;
+  }
+
+  const allMatches = words.filter((w) => isMatched(w, titleTokenSet, titleStemSet)).length;
+  const coverage = allMatches / words.length;
+  if (coverage === 1) return 52;
+  if (coverage >= 0.67) return 30;
   return 0;
 }
 
@@ -8847,7 +8903,16 @@ function classifyJobRegion(item, accountItem = null) {
   if (NEWFOUNDLAND_CODE_RE.test(text)) return 'canada';
   if (OTHER_REGION_RE.test(text) || OTHER_COUNTRY_CODE_RE.test(text)) return 'other';
   if (CANADA_CODE_RE.test(text)) return 'canada';
-  if (US_CODE_RE.test(text)) return 'us';
+
+  const usCodeMatch = text.match(US_CODE_RE);
+  if (usCodeMatch) {
+    const code = usCodeMatch[1].toLowerCase();
+    if (code === 'ca' && CANADA_CITY_RE.test(text)) {
+      return 'canada';
+    }
+    return 'us';
+  }
+
   if (CANADA_PROVINCE_RE.test(text)) return 'canada';
   if (US_STATE_RE.test(text)) return 'us';
   if (CANADA_CITY_RE.test(text)) return 'canada';

@@ -54,7 +54,7 @@
   --sidebar-panel: rgba(15, 23, 42, 0.04);
   --sidebar-line: rgba(15, 23, 42, 0.08);
   --sidebar-text: #0f172a;
-  --sidebar-muted: #64748b;
+  --sidebar-muted: #475569;
 }
 
 [data-theme="dark"] {

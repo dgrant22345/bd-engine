@@ -1159,10 +1159,10 @@
                 <p class="hero-subtitle">${landingCopy.subtitle}</p>
                 <div class="hero-cta">
                   ${isJobSeekerLanding
-                    ? `<button class="btn btn-primary btn-lg" id="hero-signup">Find my next role</button>
+                    ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
                        <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
-                    : `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
-                       <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : '⚡ Explore live demo'}</button>`}
+                    : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
+                       <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
                 </div>
                 <p class="hero-note">No credit card required &middot; 14-day free trial &middot; 100% money-back guarantee</p>
               </div>

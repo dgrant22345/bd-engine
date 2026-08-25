@@ -150,9 +150,9 @@ test('✍️ Pillar 3: 3-Touch Sequence Generation & LinkedIn 300-char Meter', (
     const jobTitle = item.jobTitle || 'Staff Infrastructure Engineer';
     const myName = 'BD Team';
 
-    let subject = '';
-    let body = '';
-    let linkedinNote = '';
+    let subject;
+    let body;
+    let linkedinNote;
 
     if (sequenceTouch === 1) {
       subject = `Pre-vetted candidates for ${companyName}'s ${jobTitle} opening`;
