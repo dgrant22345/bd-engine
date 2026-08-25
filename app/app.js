@@ -2072,9 +2072,9 @@ function wireDashboardCustomizer() {
 }
 
 const DASHBOARD_TAB_SECTIONS = {
-  'battle-board': new Set(['hero', 'value-sprint', 'command-tabs', 'playbook', 'alerts-bar', 'today-queue', 'follow-ups', 'action-plan', 'workflow']),
-  'hiring-radar': new Set(['hero', 'value-sprint', 'command-tabs', 'network-radar', 'new-jobs', 'boards', 'velocity', 'heatmap', 'enrichment', 'readiness']),
-  'pipeline': new Set(['hero', 'value-sprint', 'command-tabs', 'roi-hero', 'outcomes', 'sales-cycle', 'leaderboard', 'metrics', 'workflow', 'duplicates', 'data-quality']),
+  'battle-board': new Set(['hero', 'playbook', 'alerts-bar', 'queue', 'action-plan', 'workflow', 'smart-alerts']),
+  'hiring-radar': new Set(['hero', 'network-radar', 'jobs-activity', 'boards', 'velocity', 'heatmap', 'enrichment', 'readiness']),
+  'pipeline': new Set(['hero', 'fee-simulator', 'icp-matrix', 'outcomes', 'sales-cycle', 'leaderboard', 'metrics', 'workflow', 'duplicates', 'data-quality', 'charts']),
 };
 
 function dashSection(id, html) {
@@ -2991,9 +2991,7 @@ function bindEvents() {
     }
     if (actionName === 'setup-open-dashboard') {
       invalidateAppData();
-      await loadBootstrap(true, { includeFilters: true });
       location.hash = '#/dashboard';
-      await renderRoute();
       return;
     }
     if (actionName === 'paginate') {
@@ -8217,14 +8215,14 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
                         </div>
                       ` : ''}
                       <div style="margin-top:6px;">
-                        <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" style="width:100%;font-size:0.72rem;">
+                        <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" aria-label="Move ${escapeAttr(acc.displayName)} to another pipeline stage" style="width:100%;font-size:0.72rem;">
                           ${stages.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.icon} ${s.label}</option>`).join('')}
                         </select>
                       </div>
                     </div>
                   `;
                 }).join('')}
-                ${!items.length ? `<p class="muted small" style="text-align:center;padding:24px 0;opacity:0.6;">No companies in this stage</p>` : ''}
+                ${!items.length ? '<p class="small revenue-kanban-empty">No companies in this stage</p>' : ''}
               </div>
             </div>
           `;

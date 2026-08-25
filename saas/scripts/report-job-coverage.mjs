@@ -1,4 +1,5 @@
 import { initDb, dbQuery, closeDb } from '../src/db.js';
+import { locationMatchesGeography } from '../src/job-geography.js';
 
 function arg(name) {
   const index = process.argv.indexOf(name);
@@ -11,9 +12,62 @@ async function aggregate(query, tenantId) {
 }
 
 async function main() {
-  const tenantId = String(arg('--tenant') || '').trim();
-  if (!tenantId) throw new Error('Provide --tenant <tenant-id>. This report never prints customer records.');
+  let tenantId = String(arg('--tenant') || '').trim();
+  const email = String(arg('--email') || '').trim().toLowerCase();
+  const auditAll = process.argv.includes('--all');
+  const populatedOnly = process.argv.includes('--populated');
+  if (!tenantId && !email && !auditAll) {
+    throw new Error('Provide --tenant <tenant-id>, --email <owner-email>, or --all. This report never prints customer records.');
+  }
   if (!await initDb({ migrate: false, readOnly: true })) throw new Error('DATABASE_URL is required.');
+
+  let tenantIds;
+  if (auditAll) {
+    const result = await dbQuery('SELECT id FROM tenants ORDER BY created_at, id');
+    tenantIds = (result?.rows || []).map((row) => row.id);
+  } else if (!tenantId) {
+    const result = await dbQuery(`
+      SELECT m.tenant_id
+      FROM memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE lower(u.email) = $1
+      ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.created_at
+    `, [email]);
+    if (!result?.rows?.length) throw new Error('No workspace was found for that email.');
+    if (result.rows.length > 1) throw new Error('That email belongs to multiple workspaces. Use --tenant to select one.');
+    tenantId = result.rows[0].tenant_id;
+    tenantIds = [tenantId];
+  } else {
+    tenantIds = [tenantId];
+  }
+
+  const workspaces = [];
+  for (const [index, id] of tenantIds.entries()) workspaces.push(await auditWorkspace(id, index));
+  const reported = populatedOnly
+    ? workspaces.filter((item) => item.account.hasSubscription || item.counts.accounts || item.counts.configs || item.counts.jobs)
+    : workspaces;
+  console.log(JSON.stringify({ workspaceCount: workspaces.length, reportedCount: reported.length, workspaces: reported }, null, 2));
+}
+
+async function auditWorkspace(tenantId, index) {
+  const workspaceResult = await dbQuery(`
+    SELECT t.persona, t.plan, t.status, td.settings,
+      (t.stripe_subscription_id <> '') AS has_subscription,
+      (SELECT count(*)::int FROM memberships m WHERE m.tenant_id = t.id) AS members,
+      (SELECT count(*)::int
+       FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.tenant_id = t.id AND u.email_verified_at <> '') AS verified_members
+    FROM tenants t
+    LEFT JOIN tenant_data td ON td.tenant_id = t.id
+    WHERE t.id = $1
+  `, [tenantId]);
+  const workspace = workspaceResult?.rows?.[0];
+  if (!workspace) throw new Error('Workspace not found.');
+  const settings = workspace.settings && typeof workspace.settings === 'object' ? workspace.settings : {};
+  const persona = String(workspace.persona || settings.persona || 'bd').toLowerCase();
+  const focus = settings.searchFocusByPersona?.[persona] || {};
+  const minimumRelevanceScore = Math.max(1, Math.min(100, Number(focus.minimumRelevanceScore) || 45));
 
   const [counts] = await aggregate(`
     SELECT
@@ -51,8 +105,64 @@ async function main() {
     FROM accounts WHERE tenant_id = $1
     GROUP BY value ORDER BY accounts DESC
   `, tenantId);
+  const activeJobRows = await aggregate(`
+    SELECT j.location, j.raw, a.location AS account_location
+    FROM jobs j
+    LEFT JOIN accounts a ON a.id = j.account_id AND a.tenant_id = j.tenant_id
+    WHERE j.tenant_id = $1 AND j.active
+  `, tenantId);
 
-  console.log(JSON.stringify({ workspaceCount: 1, counts, boards, statuses, providers, activeJobSources, targetFlags }, null, 2));
+  const activeJobs = activeJobRows.map((row) => ({
+    ...(row.raw && typeof row.raw === 'object' ? row.raw : {}),
+    location: row.location || row.raw?.location || '',
+    accountLocation: row.account_location || '',
+  }));
+  const scoredJobs = activeJobs.filter((job) => Number.isFinite(Number(job.relevanceScore)));
+  const matchingJobs = scoredJobs.filter((job) => Number(job.relevanceScore) >= minimumRelevanceScore);
+  const canadaJobs = activeJobs.filter((job) => locationMatchesGeography(job, 'canada'));
+  const canadaMatchingJobs = canadaJobs.filter((job) => Number(job.relevanceScore) >= minimumRelevanceScore);
+  const focusSummary = {
+    configured: Boolean(termCount(focus.targetRoles)
+      || termCount(focus.excludedRoles)
+      || termCount(focus.targetIndustries)
+      || (focus.workStyle && focus.workStyle !== 'any')),
+    targetRoleTerms: termCount(focus.targetRoles),
+    excludedRoleTerms: termCount(focus.excludedRoles),
+    targetIndustryTerms: termCount(focus.targetIndustries),
+    workStyle: focus.workStyle || 'any',
+    minimumRelevanceScore,
+  };
+
+  return {
+    workspace: index + 1,
+    account: {
+      persona,
+      plan: workspace.plan,
+      status: workspace.status,
+      hasSubscription: Boolean(workspace.has_subscription),
+      members: Number(workspace.members || 0),
+      verifiedMembers: Number(workspace.verified_members || 0),
+    },
+    focus: focusSummary,
+    counts,
+    matching: {
+      active: activeJobs.length,
+      scored: scoredJobs.length,
+      atOrAboveThreshold: matchingJobs.length,
+      canada: canadaJobs.length,
+      canadaAtOrAboveThreshold: canadaMatchingJobs.length,
+    },
+    boards,
+    statuses,
+    providers,
+    activeJobSources,
+    targetFlags,
+  };
+}
+
+function termCount(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[,;\n]+/);
+  return new Set(source.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)).size;
 }
 
 main()

@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260824-search-focus-01';
+const ASSET_VERSION = '20260824-production-audit-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

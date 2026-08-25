@@ -149,6 +149,81 @@ test('detailed talent acquisition titles include the recruiting role family', as
   }
 });
 
+test('combined Canada and target-role filters count every match before pagination', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-search-focus-pagination';
+  addTenant(store, tenantId, 'jobseeker');
+  await store.patchSettings(tenantId, {
+    geographyFocus: 'Canada',
+    searchFocus: {
+      targetRoles: 'talent acquisition manager',
+      workStyle: 'any',
+      minimumRelevanceScore: 45,
+    },
+  });
+  const account = await store.addAccount(tenantId, { displayName: 'Pagination Employer' });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: account.displayName,
+    atsType: 'greenhouse',
+    boardId: 'pagination-employer',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const postedAt = new Date().toISOString();
+  const jobs = [
+    ...Array.from({ length: 35 }, (_, index) => ({
+      id: `canada-recruiter-${index}`,
+      title: `Senior Recruiter ${index + 1}`,
+      location: { name: index % 2 ? 'Toronto, ON' : 'Remote - Canada' },
+    })),
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `canada-engineer-${index}`,
+      title: `Software Engineer ${index + 1}`,
+      location: { name: 'Vancouver, BC' },
+    })),
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `us-recruiter-${index}`,
+      title: `Senior Recruiter US ${index + 1}`,
+      location: { name: 'New York, NY' },
+    })),
+  ];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ jobs: jobs.map((job) => ({
+    ...job,
+    absolute_url: `https://example.test/${job.id}`,
+    updated_at: postedAt,
+  })) });
+
+  try {
+    await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    const firstPage = await store.findJobs(tenantId, {
+      geography: 'canada',
+      minRelevance: 45,
+      sortBy: 'relevance',
+      page: 1,
+      pageSize: 10,
+    });
+    const secondPage = await store.findJobs(tenantId, {
+      geography: 'canada',
+      minRelevance: 45,
+      sortBy: 'relevance',
+      page: 2,
+      pageSize: 10,
+    });
+
+    assert.equal(firstPage.total, 35);
+    assert.equal(firstPage.items.length, 10);
+    assert.equal(secondPage.total, 35);
+    assert.equal(secondPage.items.length, 10);
+    assert.equal(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size, 20);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('switching personas restores that persona search focus and rescored shortlist', async () => {
   const store = createStore();
   const tenantId = 'tenant-persona-search-focus';

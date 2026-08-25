@@ -4,6 +4,12 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Fixed dashboard tab visibility, post-setup navigation races, mobile header
+  overflow, wide Accounts layouts, and several customer-facing accessibility
+  failures found during the production audit.
+- Added a production-readiness gate for new paid checkout, anonymous aggregate
+  job-coverage diagnostics, and regression coverage proving Canada plus target
+  role filtering counts matches before pagination.
 - Activated the production and ATS scheduled checks through default-branch
   schedulers that delegate to the Railway deployment branch.
 - Pinned delegated scheduler checkouts to the Railway deployment branch so

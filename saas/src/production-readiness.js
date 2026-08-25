@@ -126,3 +126,10 @@ export function assessProductionReadiness(env = process.env) {
 
   return { ready: errors.length === 0, errors, warnings };
 }
+
+export function isCommercialCheckoutReady(env = process.env) {
+  const isProduction = Boolean(env.RAILWAY_ENVIRONMENT)
+    || env.BD_CLOUD_ENV === 'production'
+    || env.NODE_ENV === 'production';
+  return !isProduction || assessProductionReadiness(env).ready;
+}

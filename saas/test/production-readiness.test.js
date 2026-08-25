@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assessProductionReadiness } from '../src/production-readiness.js';
+import { assessProductionReadiness, isCommercialCheckoutReady } from '../src/production-readiness.js';
 
 const completeEnvironment = {
   DATABASE_URL: 'postgres://example.invalid/database',
@@ -75,4 +75,13 @@ test('commercial configuration rejects placeholders and unsafe service destinati
 test('complete production configuration passes without exposing values', () => {
   const result = assessProductionReadiness(completeEnvironment);
   assert.deepEqual(result, { ready: true, errors: [], warnings: [] });
+});
+
+test('production checkout stays closed until every commercial dependency is ready', () => {
+  assert.equal(isCommercialCheckoutReady({ NODE_ENV: 'development' }), true);
+  assert.equal(isCommercialCheckoutReady({ RAILWAY_ENVIRONMENT: 'production' }), false);
+  assert.equal(isCommercialCheckoutReady({
+    ...completeEnvironment,
+    RAILWAY_ENVIRONMENT: 'production',
+  }), true);
 });

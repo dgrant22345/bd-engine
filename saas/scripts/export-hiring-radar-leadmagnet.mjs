@@ -19,7 +19,7 @@ async function generateHiringRadarLeadMagnet() {
     jobsByCompany[comp].push(j);
   }
 
-  const companies = (accounts.items || []).map(acc => {
+  let companies = (accounts.items || []).map(acc => {
     const compJobs = jobsByCompany[acc.displayName] || [];
     return {
       company: acc.displayName,

@@ -297,6 +297,8 @@ a {
 }
 
 #workspace-name {
+  color: var(--sidebar-text);
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -12144,6 +12146,12 @@ body.global-dragover::after {
   overflow-y: auto;
 }
 
+.revenue-kanban-empty {
+  padding: 24px 0;
+  color: var(--text);
+  text-align: center;
+}
+
 .revenue-kanban-card {
   background: var(--surface-card);
   border: 1px solid var(--card-border);
@@ -13027,6 +13035,58 @@ body.global-dragover::after {
 @media (max-width: 768px) {
   .pitch-deck-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Production audit: keep intrinsic grid content inside the workspace viewport. */
+.view-root > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.topbar-mobile-action {
+  display: none;
+}
+
+.topbar-tools {
+  min-width: 0;
+}
+
+@media (max-width: 820px) {
+  .main .topbar {
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    grid-template-rows: 40px 40px;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+  }
+
+  .topbar-tools {
+    display: contents;
+  }
+
+  .topbar-tools > .persona-mode-toggle,
+  .topbar-tools > .topbar-radar-btn,
+  .topbar-tools > .topbar-network-btn,
+  .topbar-tools > .topbar-upgrade-btn {
+    display: none;
+  }
+
+  .topbar-tools .search-shell {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  .topbar-tools .topbar-overflow {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .topbar-mobile-action {
+    display: flex;
   }
 }
 

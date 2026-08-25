@@ -25,6 +25,7 @@ import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './commercial-outcomes.js';
+import { isCommercialCheckoutReady } from './production-readiness.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -1253,6 +1254,12 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/billing/checkout' && req.method === 'POST') {
     if (!canManageBilling(session.membership.role)) {
       return sendJson(res, 403, { error: 'Workspace owner or admin access is required to change billing.' });
+    }
+    if (!isCommercialCheckoutReady(process.env)) {
+      return sendJson(res, 503, {
+        error: 'New subscriptions are temporarily unavailable while a production readiness check is completed. No payment was taken.',
+        code: 'billing_unavailable',
+      });
     }
     const body = await readJson(req);
     const planId = body.planId;
