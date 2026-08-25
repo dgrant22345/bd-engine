@@ -1,10 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Turn real-time hiring signals & LinkedIn warm referral paths into closed deals & job offers. Discover 2,300+ live roles across Greenhouse, Lever, Ashby, Workday & more.">
-  <meta name="keywords" content="hiring signals, ATS tracker, warm referrals, job search, staffing business development, greenhouse, lever, ashby, workday">
+  <meta name="description"
+    content="Turn real-time hiring signals & LinkedIn warm referral paths into closed deals & job offers. Discover 2,300+ live roles across Greenhouse, Lever, Ashby, Workday & more.">
+  <meta name="keywords"
+    content="hiring signals, ATS tracker, warm referrals, job search, staffing business development, greenhouse, lever, ashby, workday">
   <meta name="application-name" content="BD Engine Cloud">
   <meta name="directree-verify" content="directree-verify=c17596082a68264ad1241c610b4725d2">
   <meta name="theme-color" content="#f8fafc">
@@ -13,13 +16,15 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="BD Engine">
   <meta property="og:title" content="BD Engine | Turn Live Hiring Signals & Warm Referral Paths Into Results">
-  <meta property="og:description" content="Stop applying blind or cold calling. Real-time hiring intelligence and 1st-degree referral paths across 2,300+ live jobs on Greenhouse, Lever, Ashby, Workday & more.">
+  <meta property="og:description"
+    content="Stop applying blind or cold calling. Real-time hiring intelligence and 1st-degree referral paths across 2,300+ live jobs on Greenhouse, Lever, Ashby, Workday & more.">
   <meta property="og:url" content="https://bd-engine-production.up.railway.app/">
   <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
   <meta property="og:image:alt" content="BD Engine - Hiring Signals & Warm Referral Studio">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="BD Engine | Live Hiring Signals & Warm Referral Matching">
-  <meta name="twitter:description" content="Discover 2,300+ verified live jobs where you have warm 1st-degree intro paths. Automated multi-touch sequences & hiring surge alerts.">
+  <meta name="twitter:description"
+    content="Discover 2,300+ verified live jobs where you have warm 1st-degree intro paths. Automated multi-touch sequences & hiring surge alerts.">
   <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
   <title>BD Engine | Live Hiring Signals, Warm Referral Paths & Actionable Intelligence</title>
   <script type="application/ld+json">
@@ -62,1073 +67,1075 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="/cloud.css?v=20260823-executive-batch-01">
 </head>
+
 <body>
   <div id="cloud-root"></div>
 
   <script>
-  (() => {
-    const root = document.getElementById('cloud-root');
-    const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
-    const ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:`;
-    const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:v2:`;
-    const ONBOARDING_SCOPE_FALLBACK_MAP_KEY = 'bd_onboarding_scope_map_v2';
-    const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-    const ONBOARDING_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
-    const ACQUISITION_STORAGE_KEY = 'bd_acquisition';
-    const ACQUISITION_STORAGE_VERSION = 2;
-    const PUBLIC_ACQUISITION_PATHS = new Set(['/', '/job-search', '/ats-checker']);
-    const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
-    let anonymousOnboardingHandoffExplicit = false;
+    (() => {
+      const root = document.getElementById('cloud-root');
+      const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
+      const ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:`;
+      const ONBOARDING_INTENT_SCOPED_PREFIX = `${ONBOARDING_INTENT_STORAGE_KEY}:v2:`;
+      const ONBOARDING_SCOPE_FALLBACK_MAP_KEY = 'bd_onboarding_scope_map_v2';
+      const ONBOARDING_INTENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+      const ONBOARDING_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+      const ACQUISITION_STORAGE_KEY = 'bd_acquisition';
+      const ACQUISITION_STORAGE_VERSION = 2;
+      const PUBLIC_ACQUISITION_PATHS = new Set(['/', '/job-search', '/ats-checker']);
+      const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
+      let anonymousOnboardingHandoffExplicit = false;
 
-    // ── State ─────────────────────────────────────────────────────────────
-    let state = {
-      view: 'loading', // loading | landing | login | signup | forgot | reset | app | trust | privacy | terms | security | status
-      user: null,
-      tenant: null,
-      tenants: [],
-      plan: null,
-      trialDaysRemaining: null,
-      referral: null,
-      demo: false,
-      readOnly: false,
-      error: '',
-      busy: false,
-      referralCode: getInitialReferralCode(),
-      resetToken: getInitialResetToken(),
-      resetMessage: '',
-      verificationToken: getInitialVerificationToken(),
-      verificationMessage: '',
-      accountClosedMessage: '',
-      emailVerificationAvailable: false,
-      canManageSupport: false,
-      canManageWorkspace: false,
-      persona: 'bd',
-      signupPersona: getInitialSignupPersona(),
-      authDraft: {
-        loginEmail: '',
-        signupName: '',
-        signupEmail: '',
-        signupWorkspace: '',
-        signupLegalAccepted: false,
-      },
-      onboardingIntent: getInitialOnboardingIntent(),
-      onboardingIntentScope: '',
-      acquisition: getInitialAcquisition(),
-    };
-
-    function getInitialReferralCode() {
-      const fromUrl = new URLSearchParams(window.location.search).get('ref') || '';
-      const normalized = String(fromUrl || localStorage.getItem('bd_referral_code') || '')
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '')
-        .slice(0, 24);
-      if (normalized) localStorage.setItem('bd_referral_code', normalized);
-      return normalized;
-    }
-
-    function getInitialResetToken() {
-      return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
-    }
-
-    function getInitialVerificationToken() {
-      return String(new URLSearchParams(window.location.search).get('verify') || '').trim();
-    }
-
-    function getInitialSignupPersona() {
-      const requestedPersona = new URLSearchParams(window.location.search).get('persona');
-      return window.location.pathname === '/job-search' || requestedPersona === 'jobseeker' ? 'jobseeker' : 'bd';
-    }
-
-    function normalizeOnboardingPersona(value) {
-      return value === 'jobseeker' ? 'jobseeker' : 'bd';
-    }
-
-    function normalizeOnboardingPlan(value) {
-      return ['trial', 'sales', 'jobseeker'].includes(value) ? value : '';
-    }
-
-    function normalizeOnboardingIntent(value) {
-      return ['monitor-audited-career-sites', 'monitor-career-sites', 'start-trial'].includes(value) ? value : '';
-    }
-
-    function sanitizeOnboardingCareerUrls(values) {
-      if (!Array.isArray(values)) return [];
-      const unique = new Set();
-      for (const value of values) {
-        try {
-          const parsed = new URL(String(value || '').trim());
-          if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue;
-          unique.add(parsed.href);
-        } catch {}
-        if (unique.size >= 50) break;
-      }
-      return [...unique];
-    }
-
-    function sanitizeOnboardingTargetSites(values) {
-      if (!Array.isArray(values)) return [];
-      const unique = new Set();
-      for (const value of values) {
-        const normalized = String(value || '').trim().slice(0, 500);
-        if (normalized) unique.add(normalized);
-        if (unique.size >= 50) break;
-      }
-      return [...unique];
-    }
-
-    function normalizePendingTargetReason(value) {
-      return ['capacity', 'skipped'].includes(value) ? value : '';
-    }
-
-    function normalizeStoredOnboardingIntent(stored) {
-      const updatedAt = Date.parse(stored?.updatedAt || '');
-      const age = Date.now() - updatedAt;
-      const isFresh = stored?.version === 1
-        && Number.isFinite(updatedAt)
-        && age >= -ONBOARDING_INTENT_CLOCK_SKEW_MS
-        && age <= ONBOARDING_INTENT_MAX_AGE_MS;
-      if (!isFresh) return null;
-
-      const persona = normalizeOnboardingPersona(stored?.persona);
-      const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
-      const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
-      return {
-        version: 1,
-        source: ['ats-checker', 'setup-deferred', 'setup-skipped'].includes(stored?.source) ? stored.source : 'pricing',
-        persona,
-        intent: normalizeOnboardingIntent(stored?.intent)
-          || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
-        planIntent: normalizeOnboardingPlan(stored?.planIntent)
-          || (persona === 'jobseeker' ? 'jobseeker' : 'trial'),
-        careerUrls,
-        pendingTargetSites,
-        pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
-        audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
-        updatedAt: stored.updatedAt,
+      // ── State ─────────────────────────────────────────────────────────────
+      let state = {
+        view: 'loading', // loading | landing | login | signup | forgot | reset | app | trust | privacy | terms | security | status
+        user: null,
+        tenant: null,
+        tenants: [],
+        plan: null,
+        trialDaysRemaining: null,
+        referral: null,
+        demo: false,
+        readOnly: false,
+        error: '',
+        busy: false,
+        referralCode: getInitialReferralCode(),
+        resetToken: getInitialResetToken(),
+        resetMessage: '',
+        verificationToken: getInitialVerificationToken(),
+        verificationMessage: '',
+        accountClosedMessage: '',
+        emailVerificationAvailable: false,
+        canManageSupport: false,
+        canManageWorkspace: false,
+        persona: 'bd',
+        signupPersona: getInitialSignupPersona(),
+        authDraft: {
+          loginEmail: '',
+          signupName: '',
+          signupEmail: '',
+          signupWorkspace: '',
+          signupLegalAccepted: false,
+        },
+        onboardingIntent: getInitialOnboardingIntent(),
+        onboardingIntentScope: '',
+        acquisition: getInitialAcquisition(),
       };
-    }
 
-    function readStoredOnboardingIntent(storage, storageKey) {
-      let raw = null;
-      try { raw = storage.getItem(storageKey); } catch {}
-      if (!raw) return null;
-      let stored = null;
-      try {
-        stored = JSON.parse(raw);
-      } catch {
-        try { storage.removeItem(storageKey); } catch {}
-        return null;
+      function getInitialReferralCode() {
+        const fromUrl = new URLSearchParams(window.location.search).get('ref') || '';
+        const normalized = String(fromUrl || localStorage.getItem('bd_referral_code') || '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 24);
+        if (normalized) localStorage.setItem('bd_referral_code', normalized);
+        return normalized;
       }
-      const normalized = normalizeStoredOnboardingIntent(stored);
-      if (!normalized) {
-        try { storage.removeItem(storageKey); } catch {}
+
+      function getInitialResetToken() {
+        return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
       }
-      return normalized;
-    }
 
-    function writeAnonymousOnboardingIntent(intent) {
-      try { sessionStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch {}
-      anonymousOnboardingHandoffExplicit = true;
-      // Anonymous handoffs are tab-scoped. Never revive the legacy global copy.
-      try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
-    }
-
-    function sweepStoredOnboardingIntents() {
-      try {
-        const scopedKeys = Object.keys(localStorage)
-          .filter((key) => key.startsWith(ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX));
-        for (const storageKey of scopedKeys) readStoredOnboardingIntent(localStorage, storageKey);
-      } catch {}
-    }
-
-    function hasExplicitOnboardingHandoff(params = new URLSearchParams(window.location.search)) {
-      return params.get('signup') === '1'
-        || Boolean(normalizeOnboardingIntent(params.get('intent')) || normalizeOnboardingPlan(params.get('plan')));
-    }
-
-    function isSafeAnonymousOnboardingIntent(intent) {
-      return Boolean(intent && ['ats-checker', 'pricing'].includes(intent.source));
-    }
-
-    function getInitialOnboardingIntent() {
-      const params = new URLSearchParams(window.location.search);
-      const queryIntent = normalizeOnboardingIntent(params.get('intent'));
-      const queryPlan = normalizeOnboardingPlan(params.get('plan'));
-      const hasExplicitHandoff = hasExplicitOnboardingHandoff(params);
-      sweepStoredOnboardingIntents();
-
-      // Legacy localStorage was shared by every account in the browser. It has
-      // no trustworthy owner, so discard it instead of attaching it to a user.
-      try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
-
-      let stored = hasExplicitHandoff
-        ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
-        : null;
-      if (!isSafeAnonymousOnboardingIntent(stored)) {
-        stored = null;
-        try { sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch {}
+      function getInitialVerificationToken() {
+        return String(new URLSearchParams(window.location.search).get('verify') || '').trim();
       }
-      anonymousOnboardingHandoffExplicit = hasExplicitHandoff;
-      if (!stored && !hasExplicitHandoff) return null;
 
-      const persona = normalizeOnboardingPersona(params.get('persona') || stored?.persona);
-      const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
-      const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
-      const intent = queryIntent
-        || normalizeOnboardingIntent(stored?.intent)
-        || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial');
-      const planIntent = queryPlan
-        || normalizeOnboardingPlan(stored?.planIntent)
-        || (persona === 'jobseeker' ? 'jobseeker' : 'trial');
-      const next = {
-        version: 1,
-        source: stored?.source === 'ats-checker' || params.get('utm_source') === 'ats-checker' ? 'ats-checker' : 'pricing',
-        persona,
-        intent,
-        planIntent,
-        careerUrls,
-        pendingTargetSites,
-        pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
-        audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
-        updatedAt: hasExplicitHandoff ? new Date().toISOString() : stored?.updatedAt || new Date().toISOString(),
-      };
-      writeAnonymousOnboardingIntent(next);
-      return next;
-    }
-
-    function normalizeOnboardingIntentScopePart(value) {
-      return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
-    }
-
-    function getLegacyAuthenticatedOnboardingIntentStorageKey(user = state.user, tenant = state.tenant) {
-      const tenantId = normalizeOnboardingIntentScopePart(tenant?.id);
-      const userId = normalizeOnboardingIntentScopePart(user?.id);
-      return tenantId && userId ? `${ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX}${tenantId}:${userId}` : '';
-    }
-
-    function readFallbackOnboardingScopeMap() {
-      try {
-        const parsed = JSON.parse(localStorage.getItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY) || '{}');
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-      } catch {
-        try { localStorage.removeItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY); } catch {}
-        return {};
+      function getInitialSignupPersona() {
+        const requestedPersona = new URLSearchParams(window.location.search).get('persona');
+        return window.location.pathname === '/job-search' || requestedPersona === 'jobseeker' ? 'jobseeker' : 'bd';
       }
-    }
 
-    function getFallbackOpaqueOnboardingScope(identity) {
-      const scopeMap = readFallbackOnboardingScopeMap();
-      const existing = String(scopeMap[identity] || '');
-      if (/^[a-zA-Z0-9_-]{20,86}$/.test(existing)) return existing;
-      const randomPart = globalThis.crypto?.randomUUID?.().replace(/-/g, '')
-        || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
-      const scope = `scope_${randomPart}`.slice(0, 86);
-      scopeMap[identity] = scope;
-      try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(scopeMap)); } catch {}
-      return scope;
-    }
+      function normalizeOnboardingPersona(value) {
+        return value === 'jobseeker' ? 'jobseeker' : 'bd';
+      }
 
-    async function deriveOpaqueOnboardingIntentScope(user = state.user, tenant = state.tenant) {
-      const tenantId = String(tenant?.id || '').trim();
-      const userId = String(user?.id || '').trim();
-      if (!tenantId || !userId) return '';
-      const identity = `${tenantId}\n${userId}`;
-      if (globalThis.crypto?.subtle && globalThis.TextEncoder && globalThis.btoa) {
+      function normalizeOnboardingPlan(value) {
+        return ['trial', 'sales', 'jobseeker'].includes(value) ? value : '';
+      }
+
+      function normalizeOnboardingIntent(value) {
+        return ['monitor-audited-career-sites', 'monitor-career-sites', 'start-trial'].includes(value) ? value : '';
+      }
+
+      function sanitizeOnboardingCareerUrls(values) {
+        if (!Array.isArray(values)) return [];
+        const unique = new Set();
+        for (const value of values) {
+          try {
+            const parsed = new URL(String(value || '').trim());
+            if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue;
+            unique.add(parsed.href);
+          } catch { }
+          if (unique.size >= 50) break;
+        }
+        return [...unique];
+      }
+
+      function sanitizeOnboardingTargetSites(values) {
+        if (!Array.isArray(values)) return [];
+        const unique = new Set();
+        for (const value of values) {
+          const normalized = String(value || '').trim().slice(0, 500);
+          if (normalized) unique.add(normalized);
+          if (unique.size >= 50) break;
+        }
+        return [...unique];
+      }
+
+      function normalizePendingTargetReason(value) {
+        return ['capacity', 'skipped'].includes(value) ? value : '';
+      }
+
+      function normalizeStoredOnboardingIntent(stored) {
+        const updatedAt = Date.parse(stored?.updatedAt || '');
+        const age = Date.now() - updatedAt;
+        const isFresh = stored?.version === 1
+          && Number.isFinite(updatedAt)
+          && age >= -ONBOARDING_INTENT_CLOCK_SKEW_MS
+          && age <= ONBOARDING_INTENT_MAX_AGE_MS;
+        if (!isFresh) return null;
+
+        const persona = normalizeOnboardingPersona(stored?.persona);
+        const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
+        const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
+        return {
+          version: 1,
+          source: ['ats-checker', 'setup-deferred', 'setup-skipped'].includes(stored?.source) ? stored.source : 'pricing',
+          persona,
+          intent: normalizeOnboardingIntent(stored?.intent)
+            || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
+          planIntent: normalizeOnboardingPlan(stored?.planIntent)
+            || (persona === 'jobseeker' ? 'jobseeker' : 'trial'),
+          careerUrls,
+          pendingTargetSites,
+          pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
+          audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
+          updatedAt: stored.updatedAt,
+        };
+      }
+
+      function readStoredOnboardingIntent(storage, storageKey) {
+        let raw = null;
+        try { raw = storage.getItem(storageKey); } catch { }
+        if (!raw) return null;
+        let stored = null;
         try {
-          const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
-          const binary = String.fromCharCode(...new Uint8Array(digest));
-          return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+          stored = JSON.parse(raw);
         } catch {
-          // Older embedded browsers may expose Web Crypto without supporting
-          // digest. Keep the public scope opaque with a persisted random token.
+          try { storage.removeItem(storageKey); } catch { }
+          return null;
         }
-      }
-      return getFallbackOpaqueOnboardingScope(identity);
-    }
-
-    function getAuthenticatedOnboardingIntentScope() {
-      return String(state.onboardingIntentScope || '');
-    }
-
-    function getAuthenticatedOnboardingIntentStorageKey() {
-      const scope = getAuthenticatedOnboardingIntentScope();
-      return scope ? `${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}` : '';
-    }
-
-    async function clearAuthenticatedOnboardingIntentsForUser(user, tenants = []) {
-      const userId = String(user?.id || '').trim();
-      if (!userId) return;
-      const uniqueTenants = [...new Map(
-        [state.tenant, ...(Array.isArray(tenants) ? tenants : [])]
-          .filter((tenant) => tenant?.id)
-          .map((tenant) => [tenant.id, tenant]),
-      ).values()];
-      for (const tenant of uniqueTenants) {
-        const scope = await deriveOpaqueOnboardingIntentScope(user, tenant);
-        if (scope) {
-          try { localStorage.removeItem(`${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}`); } catch {}
+        const normalized = normalizeStoredOnboardingIntent(stored);
+        if (!normalized) {
+          try { storage.removeItem(storageKey); } catch { }
         }
-        const legacyKey = getLegacyAuthenticatedOnboardingIntentStorageKey(user, tenant);
-        if (legacyKey) {
-          try { localStorage.removeItem(legacyKey); } catch {}
-        }
-      }
-      const fallbackMap = readFallbackOnboardingScopeMap();
-      let fallbackChanged = false;
-      for (const identity of Object.keys(fallbackMap)) {
-        if (identity.endsWith(`\n${userId}`)) {
-          delete fallbackMap[identity];
-          fallbackChanged = true;
-        }
-      }
-      if (fallbackChanged) {
-        try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(fallbackMap)); } catch {}
-      }
-      try {
-        sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-        localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-      } catch {}
-    }
-
-    function clearOnboardingHandoffQuery() {
-      if (!window.history?.replaceState) return;
-      const cleanUrl = new URL(window.location.href);
-      ['signup', 'intent', 'plan', 'persona'].forEach((key) => cleanUrl.searchParams.delete(key));
-      window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
-    }
-
-    async function activateAuthenticatedOnboardingIntent() {
-      state.onboardingIntentScope = await deriveOpaqueOnboardingIntentScope();
-      const scopedKey = getAuthenticatedOnboardingIntentStorageKey();
-      if (!scopedKey) {
-        state.onboardingIntent = null;
-        return '';
+        return normalized;
       }
 
-      sweepStoredOnboardingIntents();
-      const anonymousIntent = anonymousOnboardingHandoffExplicit
-        ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
-        : null;
-      let activeIntent = readStoredOnboardingIntent(localStorage, scopedKey);
-      const legacyScopedKey = getLegacyAuthenticatedOnboardingIntentStorageKey();
-      const legacyScopedIntent = legacyScopedKey
-        ? readStoredOnboardingIntent(localStorage, legacyScopedKey)
-        : null;
-      if (!activeIntent && legacyScopedIntent) {
+      function writeAnonymousOnboardingIntent(intent) {
+        try { sessionStorage.setItem(ONBOARDING_INTENT_STORAGE_KEY, JSON.stringify(intent)); } catch { }
+        anonymousOnboardingHandoffExplicit = true;
+        // Anonymous handoffs are tab-scoped. Never revive the legacy global copy.
+        try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch { }
+      }
+
+      function sweepStoredOnboardingIntents() {
         try {
-          localStorage.setItem(scopedKey, JSON.stringify(legacyScopedIntent));
-          activeIntent = legacyScopedIntent;
-        } catch {}
+          const scopedKeys = Object.keys(localStorage)
+            .filter((key) => key.startsWith(ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX));
+          for (const storageKey of scopedKeys) readStoredOnboardingIntent(localStorage, storageKey);
+        } catch { }
       }
-      if (legacyScopedKey) {
-        try { localStorage.removeItem(legacyScopedKey); } catch {}
-      }
-      if (isSafeAnonymousOnboardingIntent(anonymousIntent)) {
-        const migratedIntent = { ...anonymousIntent, updatedAt: new Date().toISOString() };
-        try {
-          localStorage.setItem(scopedKey, JSON.stringify(migratedIntent));
-          activeIntent = migratedIntent;
-          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-        } catch {}
-      } else {
-        try {
-          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-        } catch {}
-      }
-      anonymousOnboardingHandoffExplicit = false;
-      state.onboardingIntent = activeIntent;
-      clearOnboardingHandoffQuery();
-      return state.onboardingIntentScope;
-    }
 
-    function persistOnboardingIntent(patch = {}) {
-      const current = state.onboardingIntent || {};
-      const persona = normalizeOnboardingPersona(patch.persona || current.persona || state.signupPersona);
-      const careerUrls = sanitizeOnboardingCareerUrls(
-        Object.prototype.hasOwnProperty.call(patch, 'careerUrls') ? patch.careerUrls : current.careerUrls,
-      );
-      const pendingTargetSites = sanitizeOnboardingTargetSites(
-        Object.prototype.hasOwnProperty.call(patch, 'pendingTargetSites') ? patch.pendingTargetSites : current.pendingTargetSites,
-      );
-      const requestedPlan = normalizeOnboardingPlan(patch.planIntent);
-      let planIntent = requestedPlan || normalizeOnboardingPlan(current.planIntent);
-      if (!planIntent || (persona === 'jobseeker' && planIntent !== 'jobseeker')) {
-        planIntent = persona === 'jobseeker' ? 'jobseeker' : 'trial';
-      } else if (persona === 'bd' && planIntent === 'jobseeker') {
-        planIntent = 'trial';
+      function hasExplicitOnboardingHandoff(params = new URLSearchParams(window.location.search)) {
+        return params.get('signup') === '1'
+          || Boolean(normalizeOnboardingIntent(params.get('intent')) || normalizeOnboardingPlan(params.get('plan')));
       }
-      const retainsAuditSource = careerUrls.length > 0 && current.source === 'ats-checker';
-      const retainedSetupSource = ['setup-deferred', 'setup-skipped'].includes(current.source) ? current.source : '';
-      const next = {
-        version: 1,
-        source: retainsAuditSource
-          ? 'ats-checker'
-          : (['ats-checker', 'setup-deferred', 'setup-skipped'].includes(patch.source) ? patch.source : retainedSetupSource || 'pricing'),
-        persona,
-        intent: normalizeOnboardingIntent(patch.intent)
-          || normalizeOnboardingIntent(current.intent)
-          || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
-        planIntent,
-        careerUrls,
-        pendingTargetSites,
-        pendingTargetReason: normalizePendingTargetReason(
-          Object.prototype.hasOwnProperty.call(patch, 'pendingTargetReason') ? patch.pendingTargetReason : current.pendingTargetReason,
-        ),
-        audit: patch.audit || current.audit,
-        updatedAt: new Date().toISOString(),
-      };
-      state.onboardingIntent = next;
-      const scopedKey = state.user && !state.demo ? getAuthenticatedOnboardingIntentStorageKey() : '';
-      if (scopedKey) {
-        try { localStorage.setItem(scopedKey, JSON.stringify(next)); } catch {}
-      } else {
+
+      function isSafeAnonymousOnboardingIntent(intent) {
+        return Boolean(intent && ['ats-checker', 'pricing'].includes(intent.source));
+      }
+
+      function getInitialOnboardingIntent() {
+        const params = new URLSearchParams(window.location.search);
+        const queryIntent = normalizeOnboardingIntent(params.get('intent'));
+        const queryPlan = normalizeOnboardingPlan(params.get('plan'));
+        const hasExplicitHandoff = hasExplicitOnboardingHandoff(params);
+        sweepStoredOnboardingIntents();
+
+        // Legacy localStorage was shared by every account in the browser. It has
+        // no trustworthy owner, so discard it instead of attaching it to a user.
+        try { localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch { }
+
+        let stored = hasExplicitHandoff
+          ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
+          : null;
+        if (!isSafeAnonymousOnboardingIntent(stored)) {
+          stored = null;
+          try { sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY); } catch { }
+        }
+        anonymousOnboardingHandoffExplicit = hasExplicitHandoff;
+        if (!stored && !hasExplicitHandoff) return null;
+
+        const persona = normalizeOnboardingPersona(params.get('persona') || stored?.persona);
+        const careerUrls = sanitizeOnboardingCareerUrls(stored?.careerUrls);
+        const pendingTargetSites = sanitizeOnboardingTargetSites(stored?.pendingTargetSites);
+        const intent = queryIntent
+          || normalizeOnboardingIntent(stored?.intent)
+          || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial');
+        const planIntent = queryPlan
+          || normalizeOnboardingPlan(stored?.planIntent)
+          || (persona === 'jobseeker' ? 'jobseeker' : 'trial');
+        const next = {
+          version: 1,
+          source: stored?.source === 'ats-checker' || params.get('utm_source') === 'ats-checker' ? 'ats-checker' : 'pricing',
+          persona,
+          intent,
+          planIntent,
+          careerUrls,
+          pendingTargetSites,
+          pendingTargetReason: normalizePendingTargetReason(stored?.pendingTargetReason),
+          audit: stored?.audit && typeof stored.audit === 'object' ? stored.audit : undefined,
+          updatedAt: hasExplicitHandoff ? new Date().toISOString() : stored?.updatedAt || new Date().toISOString(),
+        };
         writeAnonymousOnboardingIntent(next);
-      }
-      return next;
-    }
-
-    function getInitialAcquisition() {
-      const params = new URLSearchParams(window.location.search);
-      const hasTaggedTouch = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content']
-        .some((key) => Boolean(params.get(key))) || Boolean(params.get('ref'));
-      const hasExternalReferrer = (() => {
-        if (!document.referrer) return false;
-        try { return new URL(document.referrer).origin !== window.location.origin; } catch { return false; }
-      })();
-      const taggedSource = normalizeAcquisitionToken(params.get('utm_source'));
-      const source = taggedSource
-        || (params.get('ref') ? 'referral' : '')
-        || (hasTaggedTouch ? 'campaign' : '')
-        || (hasExternalReferrer ? 'referrer' : 'direct');
-      const currentTouch = normalizeAcquisitionTouch({
-        source,
-        medium: normalizeAcquisitionToken(params.get('utm_medium')),
-        campaign: normalizeAcquisitionToken(params.get('utm_campaign')),
-        content: normalizeAcquisitionToken(params.get('utm_content')),
-        landingPath: window.location.pathname,
-        persona: window.location.pathname === '/job-search' || params.get('persona') === 'jobseeker'
-          ? 'jobseeker'
-          : 'bd',
-      });
-      if (!currentTouch.medium && ['referral', 'referrer'].includes(currentTouch.source)) {
-        currentTouch.medium = 'referral';
+        return next;
       }
 
-      let stored = {};
-      try {
-        stored = JSON.parse(localStorage.getItem(ACQUISITION_STORAGE_KEY) || '{}');
-      } catch {}
-
-      const storedLegacyTouch = normalizeAcquisitionTouch(stored);
-      let firstTouch = normalizeAcquisitionTouch(stored?.firstTouch || storedLegacyTouch);
-      if (!firstTouch.source) firstTouch = { ...currentTouch };
-      if (!firstTouch.landingPath) firstTouch.landingPath = currentTouch.landingPath;
-      if (!firstTouch.persona) firstTouch.persona = currentTouch.persona;
-
-      let lastNonDirectTouch = normalizeAcquisitionTouch(
-        stored?.lastNonDirectTouch
-          || (storedLegacyTouch.source && storedLegacyTouch.source !== 'direct' ? storedLegacyTouch : {}),
-      );
-      if (currentTouch.source && currentTouch.source !== 'direct') {
-        lastNonDirectTouch = { ...currentTouch };
+      function normalizeOnboardingIntentScopePart(value) {
+        return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
       }
 
-      const acquisition = {
-        version: ACQUISITION_STORAGE_VERSION,
-        firstTouch,
-        lastNonDirectTouch,
-      };
-      try { localStorage.setItem(ACQUISITION_STORAGE_KEY, JSON.stringify(acquisition)); } catch {}
-      return acquisition;
-    }
-
-    function normalizeAcquisitionTouch(value = {}) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-      const touch = {
-        source: normalizeAcquisitionToken(value.source),
-        medium: normalizeAcquisitionToken(value.medium),
-        campaign: normalizeAcquisitionToken(value.campaign),
-        content: normalizeAcquisitionToken(value.content),
-        landingPath: normalizeAcquisitionLandingPath(value.landingPath),
-        persona: value.persona === 'jobseeker' ? 'jobseeker' : (value.persona === 'bd' ? 'bd' : ''),
-      };
-      return Object.fromEntries(Object.entries(touch).filter(([, item]) => item));
-    }
-
-    function normalizeAcquisitionLandingPath(value) {
-      const raw = String(value || '').trim();
-      if (!raw) return '';
-      try {
-        const pathname = new URL(raw, window.location.origin).pathname.replace(/\/+$/, '') || '/';
-        return PUBLIC_ACQUISITION_PATHS.has(pathname) ? pathname : '';
-      } catch {
-        return '';
+      function getLegacyAuthenticatedOnboardingIntentStorageKey(user = state.user, tenant = state.tenant) {
+        const tenantId = normalizeOnboardingIntentScopePart(tenant?.id);
+        const userId = normalizeOnboardingIntentScopePart(user?.id);
+        return tenantId && userId ? `${ONBOARDING_INTENT_LEGACY_SCOPED_PREFIX}${tenantId}:${userId}` : '';
       }
-    }
 
-    function normalizeAcquisitionToken(value) {
-      const raw = String(value || '').trim();
-      if (raw.includes('@') || /(?:[a-z]+:\/\/|[\\/?#])/i.test(raw)) return '';
-      return raw
-        .toLowerCase()
-        .replace(/[^a-z0-9_.-]/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^[.-]+|[.-]+$/g, '')
-        .slice(0, 32);
-    }
-
-    function getAcquisitionSource() {
-      const touch = state.acquisition?.lastNonDirectTouch?.source
-        ? state.acquisition.lastNonDirectTouch
-        : state.acquisition?.firstTouch;
-      const source = normalizeAcquisitionToken(touch?.source) || 'direct';
-      const campaign = normalizeAcquisitionToken(touch?.campaign);
-      return (campaign && campaign !== source ? `${source}.${campaign}` : source).slice(0, 48);
-    }
-
-    // ── API helper ────────────────────────────────────────────────────────
-    async function api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        ...options,
-      });
-      const data = res.status === 204 ? null : await res.json();
-      if (!res.ok) {
-        const error = new Error(data?.error || `Request failed: ${res.status}`);
-        error.code = data?.code || '';
-        error.status = res.status;
-        error.details = data;
-        throw error;
-      }
-      return data;
-    }
-
-    function getVisitorId() {
-      const key = 'bd_visitor_id';
-      let visitorId = localStorage.getItem(key);
-      if (!visitorId) {
-        visitorId = crypto.randomUUID ? crypto.randomUUID() : `visitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        localStorage.setItem(key, visitorId);
-      }
-      return visitorId;
-    }
-
-    async function trackAcquisitionEvent(eventType = 'pageview') {
-      const payload = {
-        visitorId: getVisitorId(),
-        eventType,
-        path: `${window.location.pathname}${window.location.hash || ''}`,
-        referrer: document.referrer || '',
-        source: getAcquisitionSource(),
-      };
-      const body = JSON.stringify(payload);
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/analytics/visit', new Blob([body], { type: 'application/json' }));
-        return;
-      }
-      await fetch('/api/analytics/visit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body,
-        keepalive: true,
-      });
-    }
-
-    async function trackPageVisit() {
-      return trackAcquisitionEvent('pageview');
-    }
-
-    // ── Check auth status on load ─────────────────────────────────────────
-    async function checkAuth() {
-      cleanupServiceWorkers();
-      trackPageVisit().catch(() => {});
-      const requestedLegalView = new URLSearchParams(window.location.search).get('legal');
-      if (requestedLegalView === 'terms' || requestedLegalView === 'privacy') {
-        state.view = requestedLegalView;
-        render();
-        return;
-      }
-      if (state.verificationToken) {
+      function readFallbackOnboardingScopeMap() {
         try {
-          const verification = await api('/api/auth/email-verification/confirm', {
-            method: 'POST',
-            body: JSON.stringify({ token: state.verificationToken }),
-          });
-          state.verificationMessage = verification.message || 'Email verified.';
-        } catch (error) {
-          state.verificationMessage = error.message || 'This verification link is invalid or expired.';
-        } finally {
-          state.verificationToken = '';
-          const cleanUrl = new URL(window.location.href);
-          cleanUrl.searchParams.delete('verify');
-          window.history?.replaceState?.({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+          const parsed = JSON.parse(localStorage.getItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY) || '{}');
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          try { localStorage.removeItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY); } catch { }
+          return {};
         }
       }
-      try {
-        const data = await api('/api/auth/me');
-        if (data.authenticated) {
+
+      function getFallbackOpaqueOnboardingScope(identity) {
+        const scopeMap = readFallbackOnboardingScopeMap();
+        const existing = String(scopeMap[identity] || '');
+        if (/^[a-zA-Z0-9_-]{20,86}$/.test(existing)) return existing;
+        const randomPart = globalThis.crypto?.randomUUID?.().replace(/-/g, '')
+          || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+        const scope = `scope_${randomPart}`.slice(0, 86);
+        scopeMap[identity] = scope;
+        try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(scopeMap)); } catch { }
+        return scope;
+      }
+
+      async function deriveOpaqueOnboardingIntentScope(user = state.user, tenant = state.tenant) {
+        const tenantId = String(tenant?.id || '').trim();
+        const userId = String(user?.id || '').trim();
+        if (!tenantId || !userId) return '';
+        const identity = `${tenantId}\n${userId}`;
+        if (globalThis.crypto?.subtle && globalThis.TextEncoder && globalThis.btoa) {
+          try {
+            const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+            const binary = String.fromCharCode(...new Uint8Array(digest));
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+          } catch {
+            // Older embedded browsers may expose Web Crypto without supporting
+            // digest. Keep the public scope opaque with a persisted random token.
+          }
+        }
+        return getFallbackOpaqueOnboardingScope(identity);
+      }
+
+      function getAuthenticatedOnboardingIntentScope() {
+        return String(state.onboardingIntentScope || '');
+      }
+
+      function getAuthenticatedOnboardingIntentStorageKey() {
+        const scope = getAuthenticatedOnboardingIntentScope();
+        return scope ? `${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}` : '';
+      }
+
+      async function clearAuthenticatedOnboardingIntentsForUser(user, tenants = []) {
+        const userId = String(user?.id || '').trim();
+        if (!userId) return;
+        const uniqueTenants = [...new Map(
+          [state.tenant, ...(Array.isArray(tenants) ? tenants : [])]
+            .filter((tenant) => tenant?.id)
+            .map((tenant) => [tenant.id, tenant]),
+        ).values()];
+        for (const tenant of uniqueTenants) {
+          const scope = await deriveOpaqueOnboardingIntentScope(user, tenant);
+          if (scope) {
+            try { localStorage.removeItem(`${ONBOARDING_INTENT_SCOPED_PREFIX}${scope}`); } catch { }
+          }
+          const legacyKey = getLegacyAuthenticatedOnboardingIntentStorageKey(user, tenant);
+          if (legacyKey) {
+            try { localStorage.removeItem(legacyKey); } catch { }
+          }
+        }
+        const fallbackMap = readFallbackOnboardingScopeMap();
+        let fallbackChanged = false;
+        for (const identity of Object.keys(fallbackMap)) {
+          if (identity.endsWith(`\n${userId}`)) {
+            delete fallbackMap[identity];
+            fallbackChanged = true;
+          }
+        }
+        if (fallbackChanged) {
+          try { localStorage.setItem(ONBOARDING_SCOPE_FALLBACK_MAP_KEY, JSON.stringify(fallbackMap)); } catch { }
+        }
+        try {
+          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        } catch { }
+      }
+
+      function clearOnboardingHandoffQuery() {
+        if (!window.history?.replaceState) return;
+        const cleanUrl = new URL(window.location.href);
+        ['signup', 'intent', 'plan', 'persona'].forEach((key) => cleanUrl.searchParams.delete(key));
+        window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+      }
+
+      async function activateAuthenticatedOnboardingIntent() {
+        state.onboardingIntentScope = await deriveOpaqueOnboardingIntentScope();
+        const scopedKey = getAuthenticatedOnboardingIntentStorageKey();
+        if (!scopedKey) {
+          state.onboardingIntent = null;
+          return '';
+        }
+
+        sweepStoredOnboardingIntents();
+        const anonymousIntent = anonymousOnboardingHandoffExplicit
+          ? readStoredOnboardingIntent(sessionStorage, ONBOARDING_INTENT_STORAGE_KEY)
+          : null;
+        let activeIntent = readStoredOnboardingIntent(localStorage, scopedKey);
+        const legacyScopedKey = getLegacyAuthenticatedOnboardingIntentStorageKey();
+        const legacyScopedIntent = legacyScopedKey
+          ? readStoredOnboardingIntent(localStorage, legacyScopedKey)
+          : null;
+        if (!activeIntent && legacyScopedIntent) {
+          try {
+            localStorage.setItem(scopedKey, JSON.stringify(legacyScopedIntent));
+            activeIntent = legacyScopedIntent;
+          } catch { }
+        }
+        if (legacyScopedKey) {
+          try { localStorage.removeItem(legacyScopedKey); } catch { }
+        }
+        if (isSafeAnonymousOnboardingIntent(anonymousIntent)) {
+          const migratedIntent = { ...anonymousIntent, updatedAt: new Date().toISOString() };
+          try {
+            localStorage.setItem(scopedKey, JSON.stringify(migratedIntent));
+            activeIntent = migratedIntent;
+            sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+            localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          } catch { }
+        } else {
+          try {
+            sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+            localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          } catch { }
+        }
+        anonymousOnboardingHandoffExplicit = false;
+        state.onboardingIntent = activeIntent;
+        clearOnboardingHandoffQuery();
+        return state.onboardingIntentScope;
+      }
+
+      function persistOnboardingIntent(patch = {}) {
+        const current = state.onboardingIntent || {};
+        const persona = normalizeOnboardingPersona(patch.persona || current.persona || state.signupPersona);
+        const careerUrls = sanitizeOnboardingCareerUrls(
+          Object.prototype.hasOwnProperty.call(patch, 'careerUrls') ? patch.careerUrls : current.careerUrls,
+        );
+        const pendingTargetSites = sanitizeOnboardingTargetSites(
+          Object.prototype.hasOwnProperty.call(patch, 'pendingTargetSites') ? patch.pendingTargetSites : current.pendingTargetSites,
+        );
+        const requestedPlan = normalizeOnboardingPlan(patch.planIntent);
+        let planIntent = requestedPlan || normalizeOnboardingPlan(current.planIntent);
+        if (!planIntent || (persona === 'jobseeker' && planIntent !== 'jobseeker')) {
+          planIntent = persona === 'jobseeker' ? 'jobseeker' : 'trial';
+        } else if (persona === 'bd' && planIntent === 'jobseeker') {
+          planIntent = 'trial';
+        }
+        const retainsAuditSource = careerUrls.length > 0 && current.source === 'ats-checker';
+        const retainedSetupSource = ['setup-deferred', 'setup-skipped'].includes(current.source) ? current.source : '';
+        const next = {
+          version: 1,
+          source: retainsAuditSource
+            ? 'ats-checker'
+            : (['ats-checker', 'setup-deferred', 'setup-skipped'].includes(patch.source) ? patch.source : retainedSetupSource || 'pricing'),
+          persona,
+          intent: normalizeOnboardingIntent(patch.intent)
+            || normalizeOnboardingIntent(current.intent)
+            || (careerUrls.length || pendingTargetSites.length ? 'monitor-career-sites' : 'start-trial'),
+          planIntent,
+          careerUrls,
+          pendingTargetSites,
+          pendingTargetReason: normalizePendingTargetReason(
+            Object.prototype.hasOwnProperty.call(patch, 'pendingTargetReason') ? patch.pendingTargetReason : current.pendingTargetReason,
+          ),
+          audit: patch.audit || current.audit,
+          updatedAt: new Date().toISOString(),
+        };
+        state.onboardingIntent = next;
+        const scopedKey = state.user && !state.demo ? getAuthenticatedOnboardingIntentStorageKey() : '';
+        if (scopedKey) {
+          try { localStorage.setItem(scopedKey, JSON.stringify(next)); } catch { }
+        } else {
+          writeAnonymousOnboardingIntent(next);
+        }
+        return next;
+      }
+
+      function getInitialAcquisition() {
+        const params = new URLSearchParams(window.location.search);
+        const hasTaggedTouch = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content']
+          .some((key) => Boolean(params.get(key))) || Boolean(params.get('ref'));
+        const hasExternalReferrer = (() => {
+          if (!document.referrer) return false;
+          try { return new URL(document.referrer).origin !== window.location.origin; } catch { return false; }
+        })();
+        const taggedSource = normalizeAcquisitionToken(params.get('utm_source'));
+        const source = taggedSource
+          || (params.get('ref') ? 'referral' : '')
+          || (hasTaggedTouch ? 'campaign' : '')
+          || (hasExternalReferrer ? 'referrer' : 'direct');
+        const currentTouch = normalizeAcquisitionTouch({
+          source,
+          medium: normalizeAcquisitionToken(params.get('utm_medium')),
+          campaign: normalizeAcquisitionToken(params.get('utm_campaign')),
+          content: normalizeAcquisitionToken(params.get('utm_content')),
+          landingPath: window.location.pathname,
+          persona: window.location.pathname === '/job-search' || params.get('persona') === 'jobseeker'
+            ? 'jobseeker'
+            : 'bd',
+        });
+        if (!currentTouch.medium && ['referral', 'referrer'].includes(currentTouch.source)) {
+          currentTouch.medium = 'referral';
+        }
+
+        let stored = {};
+        try {
+          stored = JSON.parse(localStorage.getItem(ACQUISITION_STORAGE_KEY) || '{}');
+        } catch { }
+
+        const storedLegacyTouch = normalizeAcquisitionTouch(stored);
+        let firstTouch = normalizeAcquisitionTouch(stored?.firstTouch || storedLegacyTouch);
+        if (!firstTouch.source) firstTouch = { ...currentTouch };
+        if (!firstTouch.landingPath) firstTouch.landingPath = currentTouch.landingPath;
+        if (!firstTouch.persona) firstTouch.persona = currentTouch.persona;
+
+        let lastNonDirectTouch = normalizeAcquisitionTouch(
+          stored?.lastNonDirectTouch
+          || (storedLegacyTouch.source && storedLegacyTouch.source !== 'direct' ? storedLegacyTouch : {}),
+        );
+        if (currentTouch.source && currentTouch.source !== 'direct') {
+          lastNonDirectTouch = { ...currentTouch };
+        }
+
+        const acquisition = {
+          version: ACQUISITION_STORAGE_VERSION,
+          firstTouch,
+          lastNonDirectTouch,
+        };
+        try { localStorage.setItem(ACQUISITION_STORAGE_KEY, JSON.stringify(acquisition)); } catch { }
+        return acquisition;
+      }
+
+      function normalizeAcquisitionTouch(value = {}) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+        const touch = {
+          source: normalizeAcquisitionToken(value.source),
+          medium: normalizeAcquisitionToken(value.medium),
+          campaign: normalizeAcquisitionToken(value.campaign),
+          content: normalizeAcquisitionToken(value.content),
+          landingPath: normalizeAcquisitionLandingPath(value.landingPath),
+          persona: value.persona === 'jobseeker' ? 'jobseeker' : (value.persona === 'bd' ? 'bd' : ''),
+        };
+        return Object.fromEntries(Object.entries(touch).filter(([, item]) => item));
+      }
+
+      function normalizeAcquisitionLandingPath(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        try {
+          const pathname = new URL(raw, window.location.origin).pathname.replace(/\/+$/, '') || '/';
+          return PUBLIC_ACQUISITION_PATHS.has(pathname) ? pathname : '';
+        } catch {
+          return '';
+        }
+      }
+
+      function normalizeAcquisitionToken(value) {
+        const raw = String(value || '').trim();
+        if (raw.includes('@') || /(?:[a-z]+:\/\/|[\\/?#])/i.test(raw)) return '';
+        return raw
+          .toLowerCase()
+          .replace(/[^a-z0-9_.-]/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^[.-]+|[.-]+$/g, '')
+          .slice(0, 32);
+      }
+
+      function getAcquisitionSource() {
+        const touch = state.acquisition?.lastNonDirectTouch?.source
+          ? state.acquisition.lastNonDirectTouch
+          : state.acquisition?.firstTouch;
+        const source = normalizeAcquisitionToken(touch?.source) || 'direct';
+        const campaign = normalizeAcquisitionToken(touch?.campaign);
+        return (campaign && campaign !== source ? `${source}.${campaign}` : source).slice(0, 48);
+      }
+
+      // ── API helper ────────────────────────────────────────────────────────
+      async function api(path, options = {}) {
+        const res = await fetch(path, {
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          ...options,
+        });
+        const data = res.status === 204 ? null : await res.json();
+        if (!res.ok) {
+          const error = new Error(data?.error || `Request failed: ${res.status}`);
+          error.code = data?.code || '';
+          error.status = res.status;
+          error.details = data;
+          throw error;
+        }
+        return data;
+      }
+
+      function getVisitorId() {
+        const key = 'bd_visitor_id';
+        let visitorId = localStorage.getItem(key);
+        if (!visitorId) {
+          visitorId = crypto.randomUUID ? crypto.randomUUID() : `visitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          localStorage.setItem(key, visitorId);
+        }
+        return visitorId;
+      }
+
+      async function trackAcquisitionEvent(eventType = 'pageview') {
+        const payload = {
+          visitorId: getVisitorId(),
+          eventType,
+          path: `${window.location.pathname}${window.location.hash || ''}`,
+          referrer: document.referrer || '',
+          source: getAcquisitionSource(),
+        };
+        const body = JSON.stringify(payload);
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/analytics/visit', new Blob([body], { type: 'application/json' }));
+          return;
+        }
+        await fetch('/api/analytics/visit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body,
+          keepalive: true,
+        });
+      }
+
+      async function trackPageVisit() {
+        return trackAcquisitionEvent('pageview');
+      }
+
+      // ── Check auth status on load ─────────────────────────────────────────
+      async function checkAuth() {
+        cleanupServiceWorkers();
+        trackPageVisit().catch(() => { });
+        const requestedLegalView = new URLSearchParams(window.location.search).get('legal');
+        if (requestedLegalView === 'terms' || requestedLegalView === 'privacy') {
+          state.view = requestedLegalView;
+          render();
+          return;
+        }
+        if (state.verificationToken) {
+          try {
+            const verification = await api('/api/auth/email-verification/confirm', {
+              method: 'POST',
+              body: JSON.stringify({ token: state.verificationToken }),
+            });
+            state.verificationMessage = verification.message || 'Email verified.';
+          } catch (error) {
+            state.verificationMessage = error.message || 'This verification link is invalid or expired.';
+          } finally {
+            state.verificationToken = '';
+            const cleanUrl = new URL(window.location.href);
+            cleanUrl.searchParams.delete('verify');
+            window.history?.replaceState?.({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+          }
+        }
+        try {
+          const data = await api('/api/auth/me');
+          if (data.authenticated) {
+            state.user = data.user;
+            state.tenant = data.tenant;
+            state.tenants = data.tenants || [];
+            state.plan = data.plan;
+            state.trialDaysRemaining = data.trialDaysRemaining;
+            state.referral = data.referral || null;
+            state.demo = Boolean(data.demo);
+            state.readOnly = Boolean(data.readOnly);
+            state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
+            state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+            state.canManageSupport = Boolean(data.canManageSupport);
+            state.canManageWorkspace = Boolean(data.canManageWorkspace);
+            const mismatchedJobSeekerDemo = state.demo
+              && state.signupPersona === 'jobseeker'
+              && state.persona !== 'jobseeker';
+            if (mismatchedJobSeekerDemo) {
+              await api('/api/auth/logout', { method: 'POST' }).catch(() => { });
+              state.user = null;
+              state.tenant = null;
+              state.tenants = [];
+              state.plan = null;
+              state.trialDaysRemaining = null;
+              state.referral = null;
+              state.demo = false;
+              state.readOnly = false;
+              state.emailVerificationAvailable = false;
+              state.canManageSupport = false;
+              state.canManageWorkspace = false;
+              state.persona = 'jobseeker';
+              state.view = 'landing';
+            } else {
+              if (!state.demo) await activateAuthenticatedOnboardingIntent();
+              state.view = 'app';
+            }
+          } else if (state.resetToken) {
+            state.view = 'reset';
+          } else {
+            const params = new URLSearchParams(window.location.search);
+            state.view = params.get('login') === '1'
+              ? 'login'
+              : params.get('signup') === '1'
+                ? 'signup'
+                : 'landing';
+          }
+        } catch {
+          const params = new URLSearchParams(window.location.search);
+          state.view = state.resetToken
+            ? 'reset'
+            : params.get('login') === '1'
+              ? 'login'
+              : params.get('signup') === '1'
+                ? 'signup'
+                : 'landing';
+        }
+        render();
+      }
+
+      async function cleanupServiceWorkers() {
+        if (!('serviceWorker' in navigator)) return;
+        try {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.map((registration) => registration.unregister()));
+        } catch {
+          // Service worker cleanup is best-effort only.
+        }
+      }
+
+      // ── Auth actions ──────────────────────────────────────────────────────
+      async function doLogin(email, password) {
+        state.authDraft.loginEmail = String(email || '');
+        state.busy = true;
+        state.error = '';
+        render();
+        try {
+          const data = await api('/api/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+          });
           state.user = data.user;
           state.tenant = data.tenant;
           state.tenants = data.tenants || [];
-          state.plan = data.plan;
-          state.trialDaysRemaining = data.trialDaysRemaining;
+          state.plan = data.plan || null;
+          state.trialDaysRemaining = data.trialDaysRemaining ?? null;
           state.referral = data.referral || null;
-          state.demo = Boolean(data.demo);
-          state.readOnly = Boolean(data.readOnly);
+          state.demo = false;
+          state.readOnly = false;
           state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
           state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
           state.canManageSupport = Boolean(data.canManageSupport);
           state.canManageWorkspace = Boolean(data.canManageWorkspace);
-          const mismatchedJobSeekerDemo = state.demo
-            && state.signupPersona === 'jobseeker'
-            && state.persona !== 'jobseeker';
-          if (mismatchedJobSeekerDemo) {
-            await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-            state.user = null;
-            state.tenant = null;
-            state.tenants = [];
-            state.plan = null;
-            state.trialDaysRemaining = null;
-            state.referral = null;
-            state.demo = false;
-            state.readOnly = false;
-            state.emailVerificationAvailable = false;
-            state.canManageSupport = false;
-            state.canManageWorkspace = false;
-            state.persona = 'jobseeker';
-            state.view = 'landing';
-          } else {
-            if (!state.demo) await activateAuthenticatedOnboardingIntent();
-            state.view = 'app';
+          await activateAuthenticatedOnboardingIntent();
+          state.authDraft.loginEmail = '';
+          state.view = 'app';
+          state.error = '';
+        } catch (err) {
+          state.error = err.message;
+        } finally {
+          state.busy = false;
+          render();
+        }
+      }
+
+      function openSignup(persona = state.signupPersona, planIntent = '') {
+        state.signupPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
+        const normalizedPlan = normalizeOnboardingPlan(planIntent);
+        if (normalizedPlan || state.onboardingIntent) {
+          const hasCareerUrls = Boolean(state.onboardingIntent?.careerUrls?.length);
+          const hasPreparedTargets = hasCareerUrls || Boolean(state.onboardingIntent?.pendingTargetSites?.length);
+          const signupIntent = state.onboardingIntent?.source === 'ats-checker' && hasCareerUrls
+            ? 'monitor-audited-career-sites'
+            : hasPreparedTargets
+              ? 'monitor-career-sites'
+              : 'start-trial';
+          persistOnboardingIntent({
+            source: state.onboardingIntent?.source || 'pricing',
+            persona: state.signupPersona,
+            intent: signupIntent,
+            planIntent: normalizedPlan,
+          });
+        }
+        trackAcquisitionEvent('signup_started').catch(() => { });
+        state.view = 'signup';
+        render();
+      }
+
+      async function doSignup(email, password, name, workspaceName, persona) {
+        state.authDraft.signupName = String(name || '');
+        state.authDraft.signupEmail = String(email || '');
+        state.authDraft.signupWorkspace = String(workspaceName || '');
+        state.busy = true;
+        state.error = '';
+        render();
+        try {
+          const data = await api('/api/auth/signup', {
+            method: 'POST',
+            body: JSON.stringify({
+              email,
+              password,
+              name,
+              workspaceName,
+              persona: persona || 'bd',
+              referralCode: state.referralCode || '',
+              acquisition: state.acquisition,
+              legalAcceptance: {
+                accepted: true,
+                termsVersion: COMMERCIAL_LEGAL_VERSION,
+                privacyVersion: COMMERCIAL_LEGAL_VERSION,
+                acceptedAt: new Date().toISOString(),
+              },
+            }),
+          });
+          state.user = data.user;
+          state.tenant = data.tenant;
+          state.tenants = data.tenants || [];
+          state.plan = data.plan || null;
+          state.trialDaysRemaining = data.trialDaysRemaining ?? null;
+          state.referral = data.referral || null;
+          state.demo = false;
+          state.readOnly = false;
+          state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
+          state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
+          state.canManageSupport = Boolean(data.canManageSupport);
+          state.canManageWorkspace = Boolean(data.canManageWorkspace);
+          await activateAuthenticatedOnboardingIntent();
+          if (data.verificationEmailSent) {
+            state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
           }
-        } else if (state.resetToken) {
-          state.view = 'reset';
-        } else {
-          const params = new URLSearchParams(window.location.search);
-          state.view = params.get('login') === '1'
-            ? 'login'
-            : params.get('signup') === '1'
-              ? 'signup'
-              : 'landing';
+          state.authDraft.signupName = '';
+          state.authDraft.signupEmail = '';
+          state.authDraft.signupWorkspace = '';
+          state.authDraft.signupLegalAccepted = false;
+          state.view = 'app';
+          state.error = '';
+        } catch (err) {
+          state.error = err.message;
+        } finally {
+          state.busy = false;
+          render();
         }
-      } catch {
-        const params = new URLSearchParams(window.location.search);
-        state.view = state.resetToken
-          ? 'reset'
-          : params.get('login') === '1'
-            ? 'login'
-            : params.get('signup') === '1'
-              ? 'signup'
-              : 'landing';
       }
-      render();
-    }
 
-    async function cleanupServiceWorkers() {
-      if (!('serviceWorker' in navigator)) return;
-      try {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(registrations.map((registration) => registration.unregister()));
-      } catch {
-        // Service worker cleanup is best-effort only.
+      async function doRequestPasswordReset(email) {
+        state.busy = true;
+        state.error = '';
+        state.resetMessage = '';
+        render();
+        try {
+          const data = await api('/api/auth/password-reset/request', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+          });
+          state.resetMessage = data.message || (data.emailConfigured
+            ? 'If an account exists for that email, a reset link will be sent shortly.'
+            : 'Password reset email is temporarily unavailable. Contact dgfinance15@gmail.com for account recovery.');
+          if (data.resetToken) {
+            state.resetToken = data.resetToken;
+            state.view = 'reset';
+          }
+        } catch (err) {
+          state.error = err.message;
+        } finally {
+          state.busy = false;
+          render();
+        }
       }
-    }
 
-    // ── Auth actions ──────────────────────────────────────────────────────
-    async function doLogin(email, password) {
-      state.authDraft.loginEmail = String(email || '');
-      state.busy = true;
-      state.error = '';
-      render();
-      try {
-        const data = await api('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ email, password }),
-        });
-        state.user = data.user;
-        state.tenant = data.tenant;
-        state.tenants = data.tenants || [];
-        state.plan = data.plan || null;
-        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
-        state.referral = data.referral || null;
+      async function doConfirmPasswordReset(password) {
+        state.busy = true;
+        state.error = '';
+        state.resetMessage = '';
+        render();
+        try {
+          const data = await api('/api/auth/password-reset/confirm', {
+            method: 'POST',
+            body: JSON.stringify({ token: state.resetToken, password }),
+          });
+          state.resetMessage = data.message || 'Password reset. You can now log in.';
+          state.resetToken = '';
+          if (window.history?.replaceState) window.history.replaceState({}, document.title, window.location.pathname);
+          state.view = 'login';
+        } catch (err) {
+          state.error = err.message;
+        } finally {
+          state.busy = false;
+          render();
+        }
+      }
+
+      async function doStartDemo() {
+        state.busy = true;
+        state.error = '';
+        render();
+        try {
+          const data = await api('/api/demo/start', { method: 'POST', body: JSON.stringify({}) });
+          state.user = data.user;
+          state.tenant = data.tenant;
+          state.tenants = data.tenants || [];
+          state.plan = data.plan || null;
+          state.trialDaysRemaining = data.trialDaysRemaining ?? null;
+          state.referral = data.referral || null;
+          state.demo = true;
+          state.readOnly = true;
+          state.onboardingIntentScope = '';
+          state.canManageSupport = false;
+          state.canManageWorkspace = false;
+          state.view = 'app';
+          state.error = '';
+          trackAcquisitionEvent('demo_started').catch(() => { });
+        } catch (err) {
+          state.error = err.message;
+        } finally {
+          state.busy = false;
+          render();
+        }
+      }
+
+      async function doLogout() {
+        try { await api('/api/auth/logout', { method: 'POST' }); } catch { }
+        // Keep fresh account-scoped setup progress available for a later login,
+        // but remove invalid records and every anonymous handoff on sign-out.
+        sweepStoredOnboardingIntents();
+        try {
+          sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+          localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
+        } catch { }
+        anonymousOnboardingHandoffExplicit = false;
+        state.user = null;
+        state.tenant = null;
+        state.tenants = [];
+        state.plan = null;
+        state.trialDaysRemaining = null;
+        state.referral = null;
         state.demo = false;
         state.readOnly = false;
-        state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
-        state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
-        state.canManageSupport = Boolean(data.canManageSupport);
-        state.canManageWorkspace = Boolean(data.canManageWorkspace);
-        await activateAuthenticatedOnboardingIntent();
-        state.authDraft.loginEmail = '';
-        state.view = 'app';
-        state.error = '';
-      } catch (err) {
-        state.error = err.message;
-      } finally {
-        state.busy = false;
-        render();
-      }
-    }
-
-    function openSignup(persona = state.signupPersona, planIntent = '') {
-      state.signupPersona = persona === 'jobseeker' ? 'jobseeker' : 'bd';
-      const normalizedPlan = normalizeOnboardingPlan(planIntent);
-      if (normalizedPlan || state.onboardingIntent) {
-        const hasCareerUrls = Boolean(state.onboardingIntent?.careerUrls?.length);
-        const hasPreparedTargets = hasCareerUrls || Boolean(state.onboardingIntent?.pendingTargetSites?.length);
-        const signupIntent = state.onboardingIntent?.source === 'ats-checker' && hasCareerUrls
-          ? 'monitor-audited-career-sites'
-          : hasPreparedTargets
-            ? 'monitor-career-sites'
-            : 'start-trial';
-        persistOnboardingIntent({
-          source: state.onboardingIntent?.source || 'pricing',
-          persona: state.signupPersona,
-          intent: signupIntent,
-          planIntent: normalizedPlan,
-        });
-      }
-      trackAcquisitionEvent('signup_started').catch(() => {});
-      state.view = 'signup';
-      render();
-    }
-
-    async function doSignup(email, password, name, workspaceName, persona) {
-      state.authDraft.signupName = String(name || '');
-      state.authDraft.signupEmail = String(email || '');
-      state.authDraft.signupWorkspace = String(workspaceName || '');
-      state.busy = true;
-      state.error = '';
-      render();
-      try {
-        const data = await api('/api/auth/signup', {
-          method: 'POST',
-          body: JSON.stringify({
-            email,
-            password,
-            name,
-            workspaceName,
-            persona: persona || 'bd',
-            referralCode: state.referralCode || '',
-            acquisition: state.acquisition,
-            legalAcceptance: {
-              accepted: true,
-              termsVersion: COMMERCIAL_LEGAL_VERSION,
-              privacyVersion: COMMERCIAL_LEGAL_VERSION,
-              acceptedAt: new Date().toISOString(),
-            },
-          }),
-        });
-        state.user = data.user;
-        state.tenant = data.tenant;
-        state.tenants = data.tenants || [];
-        state.plan = data.plan || null;
-        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
-        state.referral = data.referral || null;
-        state.demo = false;
-        state.readOnly = false;
-        state.persona = data.persona === 'jobseeker' ? 'jobseeker' : 'bd';
-        state.emailVerificationAvailable = Boolean(data.emailVerificationAvailable);
-        state.canManageSupport = Boolean(data.canManageSupport);
-        state.canManageWorkspace = Boolean(data.canManageWorkspace);
-        await activateAuthenticatedOnboardingIntent();
-        if (data.verificationEmailSent) {
-          state.verificationMessage = `A verification link was sent to ${data.user?.email || email}.`;
-        }
-        state.authDraft.signupName = '';
-        state.authDraft.signupEmail = '';
-        state.authDraft.signupWorkspace = '';
-        state.authDraft.signupLegalAccepted = false;
-        state.view = 'app';
-        state.error = '';
-      } catch (err) {
-        state.error = err.message;
-      } finally {
-        state.busy = false;
-        render();
-      }
-    }
-
-    async function doRequestPasswordReset(email) {
-      state.busy = true;
-      state.error = '';
-      state.resetMessage = '';
-      render();
-      try {
-        const data = await api('/api/auth/password-reset/request', {
-          method: 'POST',
-          body: JSON.stringify({ email }),
-        });
-        state.resetMessage = data.message || (data.emailConfigured
-          ? 'If an account exists for that email, a reset link will be sent shortly.'
-          : 'Password reset email is temporarily unavailable. Contact dgfinance15@gmail.com for account recovery.');
-        if (data.resetToken) {
-          state.resetToken = data.resetToken;
-          state.view = 'reset';
-        }
-      } catch (err) {
-        state.error = err.message;
-      } finally {
-        state.busy = false;
-        render();
-      }
-    }
-
-    async function doConfirmPasswordReset(password) {
-      state.busy = true;
-      state.error = '';
-      state.resetMessage = '';
-      render();
-      try {
-        const data = await api('/api/auth/password-reset/confirm', {
-          method: 'POST',
-          body: JSON.stringify({ token: state.resetToken, password }),
-        });
-        state.resetMessage = data.message || 'Password reset. You can now log in.';
-        state.resetToken = '';
-        if (window.history?.replaceState) window.history.replaceState({}, document.title, window.location.pathname);
-        state.view = 'login';
-      } catch (err) {
-        state.error = err.message;
-      } finally {
-        state.busy = false;
-        render();
-      }
-    }
-
-    async function doStartDemo() {
-      state.busy = true;
-      state.error = '';
-      render();
-      try {
-        const data = await api('/api/demo/start', { method: 'POST', body: JSON.stringify({}) });
-        state.user = data.user;
-        state.tenant = data.tenant;
-        state.tenants = data.tenants || [];
-        state.plan = data.plan || null;
-        state.trialDaysRemaining = data.trialDaysRemaining ?? null;
-        state.referral = data.referral || null;
-        state.demo = true;
-        state.readOnly = true;
-        state.onboardingIntentScope = '';
+        state.emailVerificationAvailable = false;
         state.canManageSupport = false;
         state.canManageWorkspace = false;
-        state.view = 'app';
+        state.onboardingIntentScope = '';
+        state.onboardingIntent = getInitialOnboardingIntent();
+        state.view = 'landing';
         state.error = '';
-        trackAcquisitionEvent('demo_started').catch(() => {});
-      } catch (err) {
-        state.error = err.message;
-      } finally {
-        state.busy = false;
         render();
       }
-    }
 
-    async function doLogout() {
-      try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
-      // Keep fresh account-scoped setup progress available for a later login,
-      // but remove invalid records and every anonymous handoff on sign-out.
-      sweepStoredOnboardingIntents();
-      try {
-        sessionStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-        localStorage.removeItem(ONBOARDING_INTENT_STORAGE_KEY);
-      } catch {}
-      anonymousOnboardingHandoffExplicit = false;
-      state.user = null;
-      state.tenant = null;
-      state.tenants = [];
-      state.plan = null;
-      state.trialDaysRemaining = null;
-      state.referral = null;
-      state.demo = false;
-      state.readOnly = false;
-      state.emailVerificationAvailable = false;
-      state.canManageSupport = false;
-      state.canManageWorkspace = false;
-      state.onboardingIntentScope = '';
-      state.onboardingIntent = getInitialOnboardingIntent();
-      state.view = 'landing';
-      state.error = '';
-      render();
-    }
-
-    async function doRequestEmailVerification() {
-      state.busy = true;
-      state.verificationMessage = '';
-      render();
-      try {
-        const data = await api('/api/auth/email-verification/request', {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        state.verificationMessage = data.message || 'Verification email sent.';
-      } catch (error) {
-        state.verificationMessage = error.message || 'Verification email could not be sent.';
-      } finally {
-        state.busy = false;
+      async function doRequestEmailVerification() {
+        state.busy = true;
+        state.verificationMessage = '';
         render();
-      }
-    }
-
-    async function exitDemoToSignup() {
-      await doLogout();
-      state.error = '';
-      openSignup();
-    }
-
-    async function doExportData() {
-      try {
-        const response = await fetch('/api/privacy/export', { credentials: 'same-origin' });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data?.error || `Export failed: ${response.status}`);
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        const slug = String(state.tenant?.slug || state.tenant?.name || 'workspace').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'workspace';
-        link.href = url;
-        link.download = `bd-engine-${slug}-export.json`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-      } catch (err) {
-        state.error = err.message || 'Export failed.';
-        render();
-      }
-    }
-
-    const fallbackPlanLimits = {
-      trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
-      jobseeker: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
-      sales: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 },
-      owner: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
-    };
-
-    function isTrialPlan() {
-      const planId = state.plan?.id || state.tenant?.plan || 'trial';
-      return planId === 'trial';
-    }
-
-    function getPlanLimits(planId = state.plan?.id || state.tenant?.plan || 'trial') {
-      return state.plan?.limits || fallbackPlanLimits[planId] || fallbackPlanLimits.trial;
-    }
-
-    function formatLimit(value) {
-      if (value === -1) return 'Unlimited';
-      return new Intl.NumberFormat().format(Number(value || 0));
-    }
-
-    function openBillingPage() {
-      const frame = root.querySelector('.cloud-app-frame');
-      if (!frame) return;
-      // Navigate the SPA's hash in place rather than resetting src, which would
-      // force a full ~373KB reload of the app on every billing click. The iframe
-      // is same-origin, so hash navigation is allowed and the SPA's hashchange
-      // router handles it without reloading.
-      try {
-        const win = frame.contentWindow;
-        if (win && win.location && String(win.location.href).includes('/app/')) {
-          win.location.hash = '#/admin/billing';
-          return;
+        try {
+          const data = await api('/api/auth/email-verification/request', {
+            method: 'POST',
+            body: JSON.stringify({}),
+          });
+          state.verificationMessage = data.message || 'Verification email sent.';
+        } catch (error) {
+          state.verificationMessage = error.message || 'Verification email could not be sent.';
+        } finally {
+          state.busy = false;
+          render();
         }
-      } catch { /* cross-origin/not-ready — fall through to full navigation */ }
-      const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
-      frame.src = onboardingIntentScope
-        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/admin/billing`
-        : '/app/#/admin/billing';
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────
-    function render() {
-      switch (state.view) {
-        case 'loading': return renderLoading();
-        case 'landing': return renderLanding();
-        case 'login': return renderLogin();
-        case 'signup': return renderSignup();
-        case 'forgot': return renderForgotPassword();
-        case 'reset': return renderResetPassword();
-        case 'app': return renderApp();
-        case 'trust':
-        case 'privacy':
-        case 'terms':
-        case 'security':
-          return renderTrustSurface(state.view);
-        case 'status': return renderStatusPage();
       }
-    }
 
-    function renderLoading() {
-      root.innerHTML = `
+      async function exitDemoToSignup() {
+        await doLogout();
+        state.error = '';
+        openSignup();
+      }
+
+      async function doExportData() {
+        try {
+          const response = await fetch('/api/privacy/export', { credentials: 'same-origin' });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data?.error || `Export failed: ${response.status}`);
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          const slug = String(state.tenant?.slug || state.tenant?.name || 'workspace').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'workspace';
+          link.href = url;
+          link.download = `bd-engine-${slug}-export.json`;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          state.error = err.message || 'Export failed.';
+          render();
+        }
+      }
+
+      const fallbackPlanLimits = {
+        trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
+        jobseeker: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
+        sales: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 },
+        owner: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
+      };
+
+      function isTrialPlan() {
+        const planId = state.plan?.id || state.tenant?.plan || 'trial';
+        return planId === 'trial';
+      }
+
+      function getPlanLimits(planId = state.plan?.id || state.tenant?.plan || 'trial') {
+        return state.plan?.limits || fallbackPlanLimits[planId] || fallbackPlanLimits.trial;
+      }
+
+      function formatLimit(value) {
+        if (value === -1) return 'Unlimited';
+        return new Intl.NumberFormat().format(Number(value || 0));
+      }
+
+      function openBillingPage() {
+        const frame = root.querySelector('.cloud-app-frame');
+        if (!frame) return;
+        // Navigate the SPA's hash in place rather than resetting src, which would
+        // force a full ~373KB reload of the app on every billing click. The iframe
+        // is same-origin, so hash navigation is allowed and the SPA's hashchange
+        // router handles it without reloading.
+        try {
+          const win = frame.contentWindow;
+          if (win && win.location && String(win.location.href).includes('/app/')) {
+            win.location.hash = '#/admin/billing';
+            return;
+          }
+        } catch { /* cross-origin/not-ready — fall through to full navigation */ }
+        const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
+        frame.src = onboardingIntentScope
+          ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/admin/billing`
+          : '/app/#/admin/billing';
+      }
+
+      // ── Render ────────────────────────────────────────────────────────────
+      function render() {
+        switch (state.view) {
+          case 'loading': return renderLoading();
+          case 'landing': return renderLanding();
+          case 'login': return renderLogin();
+          case 'signup': return renderSignup();
+          case 'forgot': return renderForgotPassword();
+          case 'reset': return renderResetPassword();
+          case 'app': return renderApp();
+          case 'trust':
+          case 'privacy':
+          case 'terms':
+          case 'security':
+            return renderTrustSurface(state.view);
+          case 'status': return renderStatusPage();
+        }
+      }
+
+      function renderLoading() {
+        root.innerHTML = `
         <div class="cloud-loading">
           <div class="cloud-spinner"></div>
           <p>Loading BD Engine Cloud...</p>
         </div>`;
-    }
+      }
 
-    // ── Landing page ──────────────────────────────────────────────────────
-    function renderLanding() {
-      const landingStartedAt = performance.now();
-      const isJobSeekerLanding = state.signupPersona === 'jobseeker';
-      const landingCopy = isJobSeekerLanding ? {
-        badge: '⚡ Bypass the ATS Black Hole',
-        title: 'Know which employers are worth your next move.',
-        subtitle: 'Rank target companies and public roles by your role, location, and keyword focus. Add your network to see where a useful path may already exist.',
-        primaryCta: 'Start job search',
-        sectionTitle: 'From a broad search to one warm, high-response next action',
-        sectionIntro: 'BD Engine keeps 12 ATS boards, your 1st-degree network, and 3-step outreach sequences in one explainable daily view.',
-        footer: 'Built for focused staffing business development and high-conversion job searches.',
-        previewLabel: 'Best next move',
-        previewReason: 'Three relevant roles and a mapped talent contact make this the clearest company to work next.',
-        previewScore: '91',
-        previewStats: [['3', 'Relevant roles'], ['1', 'Network path'], ['2d', 'Freshest role']],
-        nextAction: 'Review the controls role, then prepare a warm introduction through Priya.',
-        workflowSteps: [
-          ['Set your focus', 'Choose target roles, locations, and keywords so every result has a clear reason to appear.'],
-          ['Check the market', 'Connect target employers to compatible public career sites and current roles.'],
-          ['Work the best path', 'Bring the strongest role, company context, and network contact into one next-action queue.'],
-        ],
-      } : {
-        badge: '🔥 Real-Time Hiring Signals & First-Mover Intel',
-        title: 'Know which target accounts are worth your next call.',
-        subtitle: 'Directly monitor 12 public ATS platforms (Greenhouse, Lever, Ashby, Workday, etc.). Detect hiring surges, hard-to-fill roles, and 1-click sequence outreach.',
-        primaryCta: 'Start free trial',
-        sectionTitle: 'From a target list to one revenue-generating next action',
-        sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
-        footer: 'Built for independent recruiters, staffing pros, and agency founders.',
-        previewLabel: 'Best account today',
-        previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
-        previewScore: '91',
-        previewStats: [['2', 'Active roles'], ['84', 'Hiring velocity'], ['1', 'Warm contact']],
-        nextAction: 'Follow up with Priya Shah using the two active controls roles as timely context.',
-        workflowSteps: [
-          ['Bring your target universe', 'Import companies and the contacts you already have instead of starting with another opaque database.'],
-          ['Resolve hiring demand', 'Connect accounts to compatible public ATS boards and send uncertain sites to a review queue.'],
-          ['Work the ranked list', 'See the score explanation, strongest contact, and recommended next move before you reach out.'],
-        ],
-      };
-      const pricingOffer = isJobSeekerLanding ? {
-        name: 'Job Seeker',
-        priceMarkup: '<span class="price-amount">$5</span><span class="price-period">USD / month after trial</span>',
-        fit: 'For an active search that needs a focused company list, relevant public roles, and warm-contact paths in one place.',
-        features: ['200 target companies', '1,000 network contacts', '50 ATS job boards', '3-Step Warm Referral Studio', 'Morning Radar Digest', '50 CSV imports'],
-        syncNote: 'Saved companies, notes, contacts, and action plans follow your signed-in account.',
-        trial: 'The free trial includes 25 companies, 100 contacts, 50 ATS boards, and 3 CSV imports. 14-day money-back guarantee.',
-      } : {
-        name: 'Sales Professional',
-        priceMarkup: '<span class="price-amount">$10</span><span class="price-period">USD / month after trial</span>',
-        fit: 'For an independent recruiter or agency founder using live hiring signals to prioritize measurable outreach.',
-        features: ['1 user', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', '3-Step Outreach Sequence Studio', 'Executive Morning Radar & Digest', 'Placement Pipeline ROI Tracker', 'Workspace sync across your devices', 'CSV export'],
-        syncNote: 'Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account.',
-        trial: 'The free trial includes 25 accounts, 100 contacts, 50 ATS boards, and 3 CSV imports. 14-day money-back guarantee.',
-      };
-      root.innerHTML = `
+      // ── Landing page ──────────────────────────────────────────────────────
+      function renderLanding() {
+        const landingStartedAt = performance.now();
+        const isJobSeekerLanding = state.signupPersona === 'jobseeker';
+        const landingCopy = isJobSeekerLanding ? {
+          badge: '⚡ Bypass the ATS Black Hole',
+          title: 'Know which employers are worth your next move.',
+          subtitle: 'Rank target companies and public roles by your role, location, and keyword focus. Add your network to see where a useful path may already exist.',
+          primaryCta: 'Start job search',
+          sectionTitle: 'From a broad search to one warm, high-response next action',
+          sectionIntro: 'BD Engine keeps 12 ATS boards, your 1st-degree network, and 3-step outreach sequences in one explainable daily view.',
+          footer: 'Built for focused staffing business development and high-conversion job searches.',
+          previewLabel: 'Best next move',
+          previewReason: 'Three relevant roles and a mapped talent contact make this the clearest company to work next.',
+          previewScore: '91',
+          previewStats: [['3', 'Relevant roles'], ['1', 'Network path'], ['2d', 'Freshest role']],
+          nextAction: 'Review the controls role, then prepare a warm introduction through Priya.',
+          workflowSteps: [
+            ['Set your focus', 'Choose target roles, locations, and keywords so every result has a clear reason to appear.'],
+            ['Check the market', 'Connect target employers to compatible public career sites and current roles.'],
+            ['Work the best path', 'Bring the strongest role, company context, and network contact into one next-action queue.'],
+          ],
+        } : {
+          badge: '🔥 Real-Time Hiring Signals & First-Mover Intel',
+          title: 'Know which target accounts are worth your next call.',
+          subtitle: 'Directly monitor 12 public ATS platforms (Greenhouse, Lever, Ashby, Workday, etc.). Detect hiring surges, hard-to-fill roles, and 1-click sequence outreach.',
+          primaryCta: 'Start free trial',
+          sectionTitle: 'From a target list to one revenue-generating next action',
+          sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
+          footer: 'Built for independent recruiters, staffing pros, and agency founders.',
+          previewLabel: 'Best account today',
+          previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
+          previewScore: '91',
+          previewStats: [['2', 'Active roles'], ['84', 'Hiring velocity'], ['1', 'Warm contact']],
+          nextAction: 'Follow up with Priya Shah using the two active controls roles as timely context.',
+          workflowSteps: [
+            ['Bring your target universe', 'Import companies and the contacts you already have instead of starting with another opaque database.'],
+            ['Resolve hiring demand', 'Connect accounts to compatible public ATS boards and send uncertain sites to a review queue.'],
+            ['Work the ranked list', 'See the score explanation, strongest contact, and recommended next move before you reach out.'],
+          ],
+        };
+        const pricingOffer = isJobSeekerLanding ? {
+          name: 'Job Seeker',
+          priceMarkup: '<span class="price-amount">$5</span><span class="price-period">USD / month after trial</span>',
+          fit: 'For an active search that needs a focused company list, relevant public roles, and warm-contact paths in one place.',
+          features: ['200 target companies', '1,000 network contacts', '50 ATS job boards', '3-Step Warm Referral Studio', 'Morning Radar Digest', '50 CSV imports'],
+          syncNote: 'Saved companies, notes, contacts, and action plans follow your signed-in account.',
+          trial: 'The free trial includes 25 companies, 100 contacts, 50 ATS boards, and 3 CSV imports. 14-day money-back guarantee.',
+        } : {
+          name: 'Sales Professional',
+          priceMarkup: '<span class="price-amount">$10</span><span class="price-period">USD / month after trial</span>',
+          fit: 'For an independent recruiter or agency founder using live hiring signals to prioritize measurable outreach.',
+          features: ['1 user', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', '3-Step Outreach Sequence Studio', 'Executive Morning Radar & Digest', 'Placement Pipeline ROI Tracker', 'Workspace sync across your devices', 'CSV export'],
+          syncNote: 'Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account.',
+          trial: 'The free trial includes 25 accounts, 100 contacts, 50 ATS boards, and 3 CSV imports. 14-day money-back guarantee.',
+        };
+        root.innerHTML = `
         <div class="landing">
           <a class="skip-link" href="#main-content">Skip to main content</a>
           <nav class="landing-nav">
@@ -1159,9 +1166,9 @@
                 <p class="hero-subtitle">${landingCopy.subtitle}</p>
                 <div class="hero-cta">
                   ${isJobSeekerLanding
-                    ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
+            ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
                        <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
-                    : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
+            : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
                        <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
                 </div>
                 <p class="hero-note">No credit card required &middot; 14-day free trial &middot; 100% money-back guarantee</p>
@@ -1278,8 +1285,8 @@
                   <p class="pricing-sync-note">${escapeHtml(pricingOffer.syncNote)}</p>
                   <p class="pricing-upgrade">${escapeHtml(pricingOffer.trial)}</p>
                   ${isJobSeekerLanding
-                    ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
-                    : '<button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Start 14-day trial</button>'}
+            ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
+            : '<button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Start 14-day trial</button>'}
                 </div>
               </div>
             </section>
@@ -1335,103 +1342,103 @@
           </footer>
         </div>`;
 
-      // Wire events
-      root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
-      root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
-      root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
-      root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker', btn.dataset.planIntent || '')));
-      root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
-      root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd', btn.dataset.planIntent || '')));
-      root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
-      root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
-      console.info(`BD Engine landing render: ${Math.round(performance.now() - landingStartedAt)}ms (${isJobSeekerLanding ? 'job seeker' : 'staffing'} workflow)`);
-    }
+        // Wire events
+        root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
+        root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
+        root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
+        root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker', btn.dataset.planIntent || '')));
+        root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
+        root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd', btn.dataset.planIntent || '')));
+        root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+        root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
+        console.info(`BD Engine landing render: ${Math.round(performance.now() - landingStartedAt)}ms (${isJobSeekerLanding ? 'job seeker' : 'staffing'} workflow)`);
+      }
 
-    function getTrustContent(kind) {
-      const updated = 'August 21, 2026';
-      const shared = {
-        updated,
-        version: COMMERCIAL_LEGAL_VERSION,
-        support: 'Support: dgfinance15@gmail.com',
-      };
-      const pages = {
-        trust: {
-          eyebrow: 'Trust center',
-          title: 'Built for responsible recruiting and BD workflows',
-          intro: 'BD Engine Cloud helps users organize account, contact, job, and outreach signals. These trust surfaces explain how the service handles customer data and operational responsibility.',
-          sections: [
-            ['Data use', 'The app stores workspace data you import or create, including company records, contacts, jobs, notes, activity, and settings. Use only data you have the right to process.'],
-            ['Payments', 'Paid plans are intended to run through Stripe Checkout. Billing credentials are handled by Stripe, not stored in BD Engine Cloud.'],
-            ['User control', 'Users can log out, manage workspace data inside the app, and request help through support. Cancellation and plan management should remain visible in Billing.'],
-            ['Operational health', 'The public status page reports service availability without exposing infrastructure details, secrets, or private workspace data.'],
-          ],
-          cta: 'Start free trial',
-        },
-        privacy: {
-          eyebrow: 'Privacy notice',
-          title: 'Plain-language privacy basics',
-          intro: 'This notice explains the practical data boundaries for BD Engine Cloud and the controls available to account holders.',
-          sections: [
-            ['Information collected', 'Account profile data, workspace names, imported company/contact data, job-board configuration, activity notes, and product usage needed to operate the app.'],
-            ['How it is used', 'To authenticate users, provide the workspace, rank accounts, show hiring and relationship signals, support imports, and manage subscriptions.'],
-            ['Processors', 'Railway hosts the app infrastructure. Stripe may process checkout and subscription billing when enabled.'],
-            ['Retention and deletion', 'Signed-in users can export workspace data from the account menu. Workspace data can be deleted after an explicit confirmation step, while account and billing records may be retained where legally required.'],
-          ],
-          cta: 'Create account',
-        },
-        terms: {
-          eyebrow: 'Terms of service',
-          title: 'Terms for early-access customers',
-          intro: 'These Terms govern access to BD Engine Cloud, including early-access trials and paid subscriptions.',
-          sections: [
-            ['Acceptable use', 'Do not use BD Engine Cloud for spam, unlawful outreach, scraping abuse, credential sharing, or processing data you are not allowed to use.'],
-            ['Customer responsibility', 'You are responsible for the legality, accuracy, and compliance of imported contacts, outreach, and job-signal use.'],
-            ['Subscription and cancellation', 'Paid access is month-to-month unless otherwise agreed. Current pricing, renewal status, and cancellation controls are presented in Billing when paid checkout is enabled.'],
-            ['Service changes', 'Early-access features may change as the product develops. Material changes to these Terms will be published with an updated version and effective date.'],
-            ['Data and privacy', 'You retain responsibility for data you submit. The Privacy notice describes how account and workspace data are handled and the export and deletion controls available to account holders.'],
-            ['Decision support', 'Hiring signals, scores, and drafts may be incomplete or wrong. Review source data and generated content before making outreach, hiring, or commercial decisions.'],
-            ['Suspension and termination', 'Access may be restricted for unlawful use, security threats, non-payment, or material violations of these Terms. Account holders can request account closure from the privacy controls.'],
-            ['Contact', 'Questions about these Terms can be sent to dgfinance15@gmail.com. Additional negotiated terms must be agreed in writing.'],
-          ],
-          cta: 'Review pricing',
-        },
-        security: {
-          eyebrow: 'Security basics',
-          title: 'Security controls for launch readiness',
-          intro: 'These are the core controls used to protect customer access, service configuration, and operational visibility.',
-          sections: [
-            ['Authentication', 'Sessions use secure HTTP-only cookies in production. Passwords are hashed before storage.'],
-            ['Secrets', 'Stripe and database secrets must live in Railway environment variables, never in the client bundle or repository.'],
-            ['Monitoring', 'The public health endpoint exposes only service availability. Detailed operational diagnostics require an authenticated account.'],
-            ['Incident contact', 'Security, privacy, or account concerns can be sent to dgfinance15@gmail.com.'],
-          ],
-          cta: 'Open status',
-        },
-      };
-      return { ...shared, ...pages[kind] };
-    }
+      function getTrustContent(kind) {
+        const updated = 'August 21, 2026';
+        const shared = {
+          updated,
+          version: COMMERCIAL_LEGAL_VERSION,
+          support: 'Support: dgfinance15@gmail.com',
+        };
+        const pages = {
+          trust: {
+            eyebrow: 'Trust center',
+            title: 'Built for responsible recruiting and BD workflows',
+            intro: 'BD Engine Cloud helps users organize account, contact, job, and outreach signals. These trust surfaces explain how the service handles customer data and operational responsibility.',
+            sections: [
+              ['Data use', 'The app stores workspace data you import or create, including company records, contacts, jobs, notes, activity, and settings. Use only data you have the right to process.'],
+              ['Payments', 'Paid plans are intended to run through Stripe Checkout. Billing credentials are handled by Stripe, not stored in BD Engine Cloud.'],
+              ['User control', 'Users can log out, manage workspace data inside the app, and request help through support. Cancellation and plan management should remain visible in Billing.'],
+              ['Operational health', 'The public status page reports service availability without exposing infrastructure details, secrets, or private workspace data.'],
+            ],
+            cta: 'Start free trial',
+          },
+          privacy: {
+            eyebrow: 'Privacy notice',
+            title: 'Plain-language privacy basics',
+            intro: 'This notice explains the practical data boundaries for BD Engine Cloud and the controls available to account holders.',
+            sections: [
+              ['Information collected', 'Account profile data, workspace names, imported company/contact data, job-board configuration, activity notes, and product usage needed to operate the app.'],
+              ['How it is used', 'To authenticate users, provide the workspace, rank accounts, show hiring and relationship signals, support imports, and manage subscriptions.'],
+              ['Processors', 'Railway hosts the app infrastructure. Stripe may process checkout and subscription billing when enabled.'],
+              ['Retention and deletion', 'Signed-in users can export workspace data from the account menu. Workspace data can be deleted after an explicit confirmation step, while account and billing records may be retained where legally required.'],
+            ],
+            cta: 'Create account',
+          },
+          terms: {
+            eyebrow: 'Terms of service',
+            title: 'Terms for early-access customers',
+            intro: 'These Terms govern access to BD Engine Cloud, including early-access trials and paid subscriptions.',
+            sections: [
+              ['Acceptable use', 'Do not use BD Engine Cloud for spam, unlawful outreach, scraping abuse, credential sharing, or processing data you are not allowed to use.'],
+              ['Customer responsibility', 'You are responsible for the legality, accuracy, and compliance of imported contacts, outreach, and job-signal use.'],
+              ['Subscription and cancellation', 'Paid access is month-to-month unless otherwise agreed. Current pricing, renewal status, and cancellation controls are presented in Billing when paid checkout is enabled.'],
+              ['Service changes', 'Early-access features may change as the product develops. Material changes to these Terms will be published with an updated version and effective date.'],
+              ['Data and privacy', 'You retain responsibility for data you submit. The Privacy notice describes how account and workspace data are handled and the export and deletion controls available to account holders.'],
+              ['Decision support', 'Hiring signals, scores, and drafts may be incomplete or wrong. Review source data and generated content before making outreach, hiring, or commercial decisions.'],
+              ['Suspension and termination', 'Access may be restricted for unlawful use, security threats, non-payment, or material violations of these Terms. Account holders can request account closure from the privacy controls.'],
+              ['Contact', 'Questions about these Terms can be sent to dgfinance15@gmail.com. Additional negotiated terms must be agreed in writing.'],
+            ],
+            cta: 'Review pricing',
+          },
+          security: {
+            eyebrow: 'Security basics',
+            title: 'Security controls for launch readiness',
+            intro: 'These are the core controls used to protect customer access, service configuration, and operational visibility.',
+            sections: [
+              ['Authentication', 'Sessions use secure HTTP-only cookies in production. Passwords are hashed before storage.'],
+              ['Secrets', 'Stripe and database secrets must live in Railway environment variables, never in the client bundle or repository.'],
+              ['Monitoring', 'The public health endpoint exposes only service availability. Detailed operational diagnostics require an authenticated account.'],
+              ['Incident contact', 'Security, privacy, or account concerns can be sent to dgfinance15@gmail.com.'],
+            ],
+            cta: 'Open status',
+          },
+        };
+        return { ...shared, ...pages[kind] };
+      }
 
-    function returnToPricing() {
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.delete('legal');
-      nextUrl.hash = 'pricing';
-      window.history?.replaceState?.({}, document.title, `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
-      state.view = 'landing';
-      render();
-      window.requestAnimationFrame(() => {
-        const pricing = document.getElementById('pricing');
-        const pricingTitle = document.getElementById('pricing-title');
-        pricingTitle?.focus({ preventScroll: true });
-        pricing?.scrollIntoView({
-          behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth',
-          block: 'start',
+      function returnToPricing() {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete('legal');
+        nextUrl.hash = 'pricing';
+        window.history?.replaceState?.({}, document.title, `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+        state.view = 'landing';
+        render();
+        window.requestAnimationFrame(() => {
+          const pricing = document.getElementById('pricing');
+          const pricingTitle = document.getElementById('pricing-title');
+          pricingTitle?.focus({ preventScroll: true });
+          pricing?.scrollIntoView({
+            behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth',
+            block: 'start',
+          });
         });
-      });
-    }
+      }
 
-    function renderTrustSurface(kind) {
-      const content = getTrustContent(kind);
-      root.innerHTML = `
+      function renderTrustSurface(kind) {
+        const content = getTrustContent(kind);
+        root.innerHTML = `
         <div class="trust-page">
           <nav class="landing-nav trust-nav">
             <div class="landing-nav-brand">
@@ -1463,24 +1470,24 @@
           </main>
         </div>`;
 
-      root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
-      root.querySelector('[data-trust-cta]')?.addEventListener('click', () => {
-        if (kind === 'security') {
-          state.view = 'status';
-          render();
-          return;
-        }
-        if (kind === 'terms') {
-          returnToPricing();
-          return;
-        }
-        openSignup();
-      });
-      root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
-    }
+        root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
+        root.querySelector('[data-trust-cta]')?.addEventListener('click', () => {
+          if (kind === 'security') {
+            state.view = 'status';
+            render();
+            return;
+          }
+          if (kind === 'terms') {
+            returnToPricing();
+            return;
+          }
+          openSignup();
+        });
+        root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
+      }
 
-    async function renderStatusPage() {
-      root.innerHTML = `
+      async function renderStatusPage() {
+        root.innerHTML = `
         <div class="trust-page">
           <nav class="landing-nav trust-nav">
             <div class="landing-nav-brand"><span class="brand-text">BD Engine <span class="brand-cloud">Cloud</span></span></div>
@@ -1493,46 +1500,46 @@
             <div id="status-panel" class="status-panel">Checking status...</div>
           </main>
         </div>`;
-      root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
-      try {
-        // CG-016: the public health surface is availability-only; operator
-        // configuration detail lives behind sign-in on /api/status.
-        const status = await api('/health');
-        const operational = status.ok === true && status.status === 'operational';
-        const panel = root.querySelector('#status-panel');
-        if (!panel) return;
-        panel.innerHTML = `
+        root.querySelector('[data-back-home]')?.addEventListener('click', () => { state.view = 'landing'; render(); });
+        try {
+          // CG-016: the public health surface is availability-only; operator
+          // configuration detail lives behind sign-in on /api/status.
+          const status = await api('/health');
+          const operational = status.ok === true && status.status === 'operational';
+          const panel = root.querySelector('#status-panel');
+          if (!panel) return;
+          panel.innerHTML = `
           <div class="status-grid">
             ${renderStatusCheck('BD Engine Cloud', operational, operational ? 'All systems operational' : 'Service is degraded — we are working on it')}
           </div>
         `;
-      } catch (err) {
-        const panel = root.querySelector('#status-panel');
-        if (panel) panel.innerHTML = '<div class="auth-error">We could not reach the service just now. Please try again shortly or email dgfinance15@gmail.com.</div>';
+        } catch (err) {
+          const panel = root.querySelector('#status-panel');
+          if (panel) panel.innerHTML = '<div class="auth-error">We could not reach the service just now. Please try again shortly or email dgfinance15@gmail.com.</div>';
+        }
       }
-    }
 
-    function renderStatusCheck(label, ok, detail) {
-      return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'Operational' : 'Degraded'}</span><small>${escapeHtml(detail || '')}</small></article>`;
-    }
+      function renderStatusCheck(label, ok, detail) {
+        return `<article class="status-check ${ok ? 'status-check--ok' : 'status-check--warn'}"><strong>${escapeHtml(label)}</strong><span>${ok ? 'Operational' : 'Degraded'}</span><small>${escapeHtml(detail || '')}</small></article>`;
+      }
 
-    function wirePasswordToggles(scope = root) {
-      scope.querySelectorAll('[data-password-toggle]').forEach((button) => {
-        button.addEventListener('click', () => {
-          const input = scope.querySelector(`#${CSS.escape(button.dataset.passwordToggle || '')}`);
-          if (!(input instanceof HTMLInputElement)) return;
-          const reveal = input.type === 'password';
-          input.type = reveal ? 'text' : 'password';
-          button.textContent = reveal ? 'Hide' : 'Show';
-          button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} password`);
-          button.setAttribute('aria-pressed', reveal ? 'true' : 'false');
+      function wirePasswordToggles(scope = root) {
+        scope.querySelectorAll('[data-password-toggle]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const input = scope.querySelector(`#${CSS.escape(button.dataset.passwordToggle || '')}`);
+            if (!(input instanceof HTMLInputElement)) return;
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            button.textContent = reveal ? 'Hide' : 'Show';
+            button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} password`);
+            button.setAttribute('aria-pressed', reveal ? 'true' : 'false');
+          });
         });
-      });
-    }
+      }
 
-    // ── Login page ────────────────────────────────────────────────────────
-    function renderLogin() {
-      root.innerHTML = `
+      // ── Login page ────────────────────────────────────────────────────────
+      function renderLogin() {
+        root.innerHTML = `
         <div class="auth-page">
           <div class="auth-card">
             <div class="auth-header">
@@ -1569,22 +1576,22 @@
           </div>
         </div>`;
 
-      wirePasswordToggles();
-      root.querySelector('#login-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const email = root.querySelector('#login-email').value;
-        const password = root.querySelector('#login-password').value;
-        doLogin(email, password);
-      });
-      root.querySelector('#goto-forgot')?.addEventListener('click', () => { state.view = 'forgot'; state.error = ''; state.resetMessage = ''; render(); });
-      root.querySelector('#goto-signup')?.addEventListener('click', () => { state.error = ''; openSignup(); });
-      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
-      root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
-    }
+        wirePasswordToggles();
+        root.querySelector('#login-form')?.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const email = root.querySelector('#login-email').value;
+          const password = root.querySelector('#login-password').value;
+          doLogin(email, password);
+        });
+        root.querySelector('#goto-forgot')?.addEventListener('click', () => { state.view = 'forgot'; state.error = ''; state.resetMessage = ''; render(); });
+        root.querySelector('#goto-signup')?.addEventListener('click', () => { state.error = ''; openSignup(); });
+        root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+        root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
+      }
 
-    // ── Signup page ───────────────────────────────────────────────────────
-    function renderForgotPassword() {
-      root.innerHTML = `
+      // ── Signup page ───────────────────────────────────────────────────────
+      function renderForgotPassword() {
+        root.innerHTML = `
         <div class="auth-page">
           <div class="auth-card">
             <div class="auth-header">
@@ -1612,16 +1619,16 @@
           </div>
         </div>`;
 
-      root.querySelector('#forgot-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        doRequestPasswordReset(root.querySelector('#forgot-email').value);
-      });
-      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
-      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
-    }
+        root.querySelector('#forgot-form')?.addEventListener('submit', (e) => {
+          e.preventDefault();
+          doRequestPasswordReset(root.querySelector('#forgot-email').value);
+        });
+        root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+        root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+      }
 
-    function renderResetPassword() {
-      root.innerHTML = `
+      function renderResetPassword() {
+        root.innerHTML = `
         <div class="auth-page">
           <div class="auth-card">
             <div class="auth-header">
@@ -1651,45 +1658,45 @@
           </div>
         </div>`;
 
-      wirePasswordToggles();
-      root.querySelector('#reset-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        doConfirmPasswordReset(root.querySelector('#reset-password').value);
-      });
-      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
-    }
+        wirePasswordToggles();
+        root.querySelector('#reset-form')?.addEventListener('submit', (e) => {
+          e.preventDefault();
+          doConfirmPasswordReset(root.querySelector('#reset-password').value);
+        });
+        root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+      }
 
-    function renderSignupOnboardingSummary() {
-      const intent = state.onboardingIntent || {};
-      const onboardingUrlCount = intent.careerUrls?.length || 0;
-      const pendingTargetCount = intent.pendingTargetSites?.length || 0;
-      const preparedTargetCount = Math.max(onboardingUrlCount, pendingTargetCount);
-      const selectedPlanLabel = {
-        sales: 'Sales Professional',
-        jobseeker: 'Job Seeker',
-      }[intent.planIntent] || '';
-      if (intent.source === 'ats-checker' && onboardingUrlCount) {
-        return `<div class="auth-error auth-notice--intent" role="status"><strong>Your audit is ready.</strong> ${onboardingUrlCount} ${onboardingUrlCount === 1 ? 'career site' : 'career sites'} will be ready to add during setup.</div>`;
+      function renderSignupOnboardingSummary() {
+        const intent = state.onboardingIntent || {};
+        const onboardingUrlCount = intent.careerUrls?.length || 0;
+        const pendingTargetCount = intent.pendingTargetSites?.length || 0;
+        const preparedTargetCount = Math.max(onboardingUrlCount, pendingTargetCount);
+        const selectedPlanLabel = {
+          sales: 'Sales Professional',
+          jobseeker: 'Job Seeker',
+        }[intent.planIntent] || '';
+        if (intent.source === 'ats-checker' && onboardingUrlCount) {
+          return `<div class="auth-error auth-notice--intent" role="status"><strong>Your audit is ready.</strong> ${onboardingUrlCount} ${onboardingUrlCount === 1 ? 'career site' : 'career sites'} will be ready to add during setup.</div>`;
+        }
+        if (['setup-deferred', 'setup-skipped'].includes(intent.source) && preparedTargetCount) {
+          const targetLabel = preparedTargetCount === 1 ? 'target' : 'targets';
+          const reason = intent.pendingTargetReason === 'capacity'
+            ? 'They were held because setup reached an account limit. The active workspace plan will determine how many can be added.'
+            : 'They were saved when setup was skipped and remain available to add later.';
+          return `<div class="auth-error auth-notice--intent" role="status"><strong>${preparedTargetCount} saved ${targetLabel} found.</strong> ${reason}</div>`;
+        }
+        if (preparedTargetCount) {
+          const targetLabel = preparedTargetCount === 1 ? 'target site' : 'target sites';
+          return `<div class="auth-error auth-notice--intent" role="status"><strong>Your target list is ready.</strong> ${preparedTargetCount} ${targetLabel} will be available during setup.</div>`;
+        }
+        return selectedPlanLabel
+          ? `<div class="auth-error auth-notice--intent" role="status"><strong>${selectedPlanLabel} selected.</strong> Your no-card trial starts first; you can confirm billing later.</div>`
+          : '';
       }
-      if (['setup-deferred', 'setup-skipped'].includes(intent.source) && preparedTargetCount) {
-        const targetLabel = preparedTargetCount === 1 ? 'target' : 'targets';
-        const reason = intent.pendingTargetReason === 'capacity'
-          ? 'They were held because setup reached an account limit. The active workspace plan will determine how many can be added.'
-          : 'They were saved when setup was skipped and remain available to add later.';
-        return `<div class="auth-error auth-notice--intent" role="status"><strong>${preparedTargetCount} saved ${targetLabel} found.</strong> ${reason}</div>`;
-      }
-      if (preparedTargetCount) {
-        const targetLabel = preparedTargetCount === 1 ? 'target site' : 'target sites';
-        return `<div class="auth-error auth-notice--intent" role="status"><strong>Your target list is ready.</strong> ${preparedTargetCount} ${targetLabel} will be available during setup.</div>`;
-      }
-      return selectedPlanLabel
-        ? `<div class="auth-error auth-notice--intent" role="status"><strong>${selectedPlanLabel} selected.</strong> Your no-card trial starts first; you can confirm billing later.</div>`
-        : '';
-    }
 
-    function renderSignup() {
-      const onboardingSummary = renderSignupOnboardingSummary();
-      root.innerHTML = `
+      function renderSignup() {
+        const onboardingSummary = renderSignupOnboardingSummary();
+        root.innerHTML = `
         <main class="auth-page" aria-labelledby="signup-title">
           <div class="auth-card">
             <div class="auth-header">
@@ -1749,68 +1756,68 @@
           </div>
         </main>`;
 
-      const personaSelect = root.querySelector('#signup-persona');
-      const workspaceLabel = root.querySelector('#workspace-label');
-      const workspaceInput = root.querySelector('#signup-workspace');
-      const applySignupPersona = () => {
-        state.signupPersona = personaSelect?.value === 'jobseeker' ? 'jobseeker' : 'bd';
-        if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name (optional)' : 'Workspace name (optional)';
-        if (workspaceInput) workspaceInput.placeholder = state.signupPersona === 'jobseeker' ? 'My Job Search' : 'My Company';
-        if (state.onboardingIntent) {
-          persistOnboardingIntent({
-            persona: state.signupPersona,
-            planIntent: state.signupPersona === 'jobseeker'
-              ? 'jobseeker'
-              : state.onboardingIntent.planIntent === 'jobseeker'
-                ? 'trial'
-                : state.onboardingIntent.planIntent,
-          });
-        }
+        const personaSelect = root.querySelector('#signup-persona');
+        const workspaceLabel = root.querySelector('#workspace-label');
+        const workspaceInput = root.querySelector('#signup-workspace');
+        const applySignupPersona = () => {
+          state.signupPersona = personaSelect?.value === 'jobseeker' ? 'jobseeker' : 'bd';
+          if (workspaceLabel) workspaceLabel.textContent = state.signupPersona === 'jobseeker' ? 'Job-search workspace name (optional)' : 'Workspace name (optional)';
+          if (workspaceInput) workspaceInput.placeholder = state.signupPersona === 'jobseeker' ? 'My Job Search' : 'My Company';
+          if (state.onboardingIntent) {
+            persistOnboardingIntent({
+              persona: state.signupPersona,
+              planIntent: state.signupPersona === 'jobseeker'
+                ? 'jobseeker'
+                : state.onboardingIntent.planIntent === 'jobseeker'
+                  ? 'trial'
+                  : state.onboardingIntent.planIntent,
+            });
+          }
+        };
+        personaSelect?.addEventListener('change', applySignupPersona);
+        applySignupPersona();
+        wirePasswordToggles();
+        if (!state.error) root.querySelector('#signup-title')?.focus();
+
+        root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const name = root.querySelector('#signup-name').value;
+          const email = root.querySelector('#signup-email').value;
+          const password = root.querySelector('#signup-password').value;
+          const workspace = root.querySelector('#signup-workspace').value;
+          state.authDraft.signupLegalAccepted = Boolean(root.querySelector('#signup-legal-consent')?.checked);
+          doSignup(email, password, name, workspace, state.signupPersona);
+        });
+        root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
+        root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
+      }
+
+      const supportStatusLabels = {
+        new: 'New',
+        open: 'In progress',
+        waiting_on_customer: 'Waiting for you',
+        resolved: 'Resolved',
+        closed: 'Closed',
       };
-      personaSelect?.addEventListener('change', applySignupPersona);
-      applySignupPersona();
-      wirePasswordToggles();
-      if (!state.error) root.querySelector('#signup-title')?.focus();
 
-      root.querySelector('#signup-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const name = root.querySelector('#signup-name').value;
-        const email = root.querySelector('#signup-email').value;
-        const password = root.querySelector('#signup-password').value;
-        const workspace = root.querySelector('#signup-workspace').value;
-        state.authDraft.signupLegalAccepted = Boolean(root.querySelector('#signup-legal-consent')?.checked);
-        doSignup(email, password, name, workspace, state.signupPersona);
-      });
-      root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
-      root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
-    }
+      const supportCategoryLabels = {
+        job_discovery: 'Job and ATS discovery',
+        data_import: 'Import or data issue',
+        outreach: 'Outreach drafts',
+        billing: 'Billing or subscription',
+        account: 'Account access',
+        feedback: 'Product feedback',
+        other: 'Something else',
+      };
 
-    const supportStatusLabels = {
-      new: 'New',
-      open: 'In progress',
-      waiting_on_customer: 'Waiting for you',
-      resolved: 'Resolved',
-      closed: 'Closed',
-    };
+      function formatSupportDate(value) {
+        const date = new Date(value || '');
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      }
 
-    const supportCategoryLabels = {
-      job_discovery: 'Job and ATS discovery',
-      data_import: 'Import or data issue',
-      outreach: 'Outreach drafts',
-      billing: 'Billing or subscription',
-      account: 'Account access',
-      feedback: 'Product feedback',
-      other: 'Something else',
-    };
-
-    function formatSupportDate(value) {
-      const date = new Date(value || '');
-      if (Number.isNaN(date.getTime())) return '';
-      return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    }
-
-    function supportMessagesHtml(messages = []) {
-      return messages.map((message) => `
+      function supportMessagesHtml(messages = []) {
+        return messages.map((message) => `
         <div class="support-message ${message.authorType === 'support' ? 'is-support' : ''} ${message.internal ? 'is-internal' : ''}">
           <div class="support-message-meta">
             <strong>${message.internal ? 'Internal note' : (message.authorType === 'support' ? 'BD Engine support' : 'You')}</strong>
@@ -1818,15 +1825,15 @@
           </div>
           <p>${escapeHtml(message.body).replace(/\n/g, '<br>')}</p>
         </div>`).join('');
-    }
+      }
 
-    function supportTicketHtml(ticket, { operator = false, open = false } = {}) {
-      const status = supportStatusLabels[ticket.status] || ticket.status || 'New';
-      const category = supportCategoryLabels[ticket.category] || 'Support request';
-      const requester = operator
-        ? `<span>${escapeHtml(ticket.requester?.email || ticket.createdByUserId || 'Unknown requester')} · ${escapeHtml(ticket.workspaceName || ticket.tenantId || '')}</span>`
-        : `<span>${escapeHtml(category)} · Updated ${escapeHtml(formatSupportDate(ticket.updatedAt))}</span>`;
-      const operatorControls = operator ? `
+      function supportTicketHtml(ticket, { operator = false, open = false } = {}) {
+        const status = supportStatusLabels[ticket.status] || ticket.status || 'New';
+        const category = supportCategoryLabels[ticket.category] || 'Support request';
+        const requester = operator
+          ? `<span>${escapeHtml(ticket.requester?.email || ticket.createdByUserId || 'Unknown requester')} · ${escapeHtml(ticket.workspaceName || ticket.tenantId || '')}</span>`
+          : `<span>${escapeHtml(category)} · Updated ${escapeHtml(formatSupportDate(ticket.updatedAt))}</span>`;
+        const operatorControls = operator ? `
         <div class="support-triage-controls">
           <label>Status
             <select data-ticket-status>
@@ -1840,7 +1847,7 @@
           </label>
           <button class="btn btn-secondary btn-sm" type="button" data-support-save="${escapeHtml(ticket.id)}">Save</button>
         </div>` : '';
-      const replyControls = operator ? `
+        const replyControls = operator ? `
         <form class="support-reply-form" data-support-operator-reply="${escapeHtml(ticket.id)}">
           <label for="operator-reply-${escapeHtml(ticket.id)}">Reply or internal note</label>
           <textarea id="operator-reply-${escapeHtml(ticket.id)}" name="body" rows="3" maxlength="5000" placeholder="Write a clear next step..." required></textarea>
@@ -1855,7 +1862,7 @@
           <textarea id="support-reply-${escapeHtml(ticket.id)}" name="body" rows="3" maxlength="5000" placeholder="Add any details that may help..." required></textarea>
           <div class="support-form-actions"><button class="btn btn-primary btn-sm" type="submit">Send reply</button></div>
         </form>`;
-      return `
+        return `
         <details class="support-ticket" data-support-ticket="${escapeHtml(ticket.id)}" ${open ? 'open' : ''}>
           <summary>
             <span class="support-ticket-title"><strong>${escapeHtml(ticket.subject)}</strong>${requester}</span>
@@ -1867,11 +1874,11 @@
             ${replyControls}
           </div>
         </details>`;
-    }
+      }
 
-    function openSupportCenter({ operator = false } = {}) {
-      root.querySelector('.support-backdrop')?.remove();
-      root.insertAdjacentHTML('beforeend', `
+      function openSupportCenter({ operator = false } = {}) {
+        root.querySelector('.support-backdrop')?.remove();
+        root.insertAdjacentHTML('beforeend', `
         <div class="support-backdrop" data-support-close-backdrop>
           <section class="support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
             <header class="support-modal-header">
@@ -1885,34 +1892,34 @@
             <div class="support-modal-body" data-support-body><div class="support-loading"><span class="btn-spinner"></span> Loading support requests...</div></div>
           </section>
         </div>`);
-      const backdrop = root.querySelector('.support-backdrop');
-      const onKeydown = (event) => { if (event.key === 'Escape') close(); };
-      const close = () => {
-        document.removeEventListener('keydown', onKeydown);
-        backdrop?.remove();
-      };
-      backdrop.querySelector('[data-support-close]')?.addEventListener('click', close);
-      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
-      document.addEventListener('keydown', onKeydown);
-      backdrop.querySelector('[data-support-close]')?.focus();
-      backdrop.querySelector('[data-support-tab="customer"]')?.addEventListener('click', () => loadCustomerSupport(backdrop));
-      backdrop.querySelector('[data-support-tab="operator"]')?.addEventListener('click', () => loadOperatorSupport(backdrop));
-      if (operator && state.canManageSupport) loadOperatorSupport(backdrop);
-      else loadCustomerSupport(backdrop);
-    }
+        const backdrop = root.querySelector('.support-backdrop');
+        const onKeydown = (event) => { if (event.key === 'Escape') close(); };
+        const close = () => {
+          document.removeEventListener('keydown', onKeydown);
+          backdrop?.remove();
+        };
+        backdrop.querySelector('[data-support-close]')?.addEventListener('click', close);
+        backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+        document.addEventListener('keydown', onKeydown);
+        backdrop.querySelector('[data-support-close]')?.focus();
+        backdrop.querySelector('[data-support-tab="customer"]')?.addEventListener('click', () => loadCustomerSupport(backdrop));
+        backdrop.querySelector('[data-support-tab="operator"]')?.addEventListener('click', () => loadOperatorSupport(backdrop));
+        if (operator && state.canManageSupport) loadOperatorSupport(backdrop);
+        else loadCustomerSupport(backdrop);
+      }
 
-    function setSupportTab(backdrop, tab) {
-      backdrop.querySelectorAll('[data-support-tab]').forEach((button) => button.classList.toggle('is-active', button.dataset.supportTab === tab));
-    }
+      function setSupportTab(backdrop, tab) {
+        backdrop.querySelectorAll('[data-support-tab]').forEach((button) => button.classList.toggle('is-active', button.dataset.supportTab === tab));
+      }
 
-    async function loadCustomerSupport(backdrop, notice = '') {
-      setSupportTab(backdrop, 'customer');
-      const body = backdrop.querySelector('[data-support-body]');
-      body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading your requests...</div>';
-      try {
-        const data = await api('/api/support/tickets');
-        const tickets = data.tickets || [];
-        body.innerHTML = `
+      async function loadCustomerSupport(backdrop, notice = '') {
+        setSupportTab(backdrop, 'customer');
+        const body = backdrop.querySelector('[data-support-body]');
+        body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading your requests...</div>';
+        try {
+          const data = await api('/api/support/tickets');
+          const tickets = data.tickets || [];
+          body.innerHTML = `
           ${notice ? `<div class="support-notice" role="status">${escapeHtml(notice)}</div>` : ''}
           <div class="support-customer-layout">
             <form class="support-compose" data-support-create>
@@ -1932,16 +1939,16 @@
                 <div class="support-empty"><strong>No support requests yet</strong><p>Use the form when you hit a blocker, have a billing question, or want to share feedback.</p></div>`}
             </section>
           </div>`;
-        wireCustomerSupportForms(backdrop);
-      } catch (error) {
-        body.innerHTML = `<div class="support-error" role="alert"><strong>Support requests could not load.</strong><p>${escapeHtml(error.message)}</p><a href="mailto:dgfinance15@gmail.com?subject=BD%20Engine%20support">Email support instead</a></div>`;
+          wireCustomerSupportForms(backdrop);
+        } catch (error) {
+          body.innerHTML = `<div class="support-error" role="alert"><strong>Support requests could not load.</strong><p>${escapeHtml(error.message)}</p><a href="mailto:dgfinance15@gmail.com?subject=BD%20Engine%20support">Email support instead</a></div>`;
+        }
       }
-    }
 
-    function openPrivacyCenter() {
-      root.querySelector('.support-backdrop')?.remove();
-      const expected = `DELETE ${state.tenant?.name || 'Workspace'}`;
-      const deletionPanel = state.canManageWorkspace ? `
+      function openPrivacyCenter() {
+        root.querySelector('.support-backdrop')?.remove();
+        const expected = `DELETE ${state.tenant?.name || 'Workspace'}`;
+        const deletionPanel = state.canManageWorkspace ? `
         <form class="support-compose" data-privacy-delete>
           <div><h3>Delete workspace data</h3><p>Permanently removes accounts, contacts, jobs, boards, tasks, and activity. Your login and empty workspace remain available.</p></div>
           <label for="privacy-delete-password">Current password</label>
@@ -1956,7 +1963,7 @@
           <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-privacy-support>Contact support</button></div>
         </section>`;
 
-      root.insertAdjacentHTML('beforeend', `
+        root.insertAdjacentHTML('beforeend', `
         <div class="support-backdrop" data-privacy-backdrop>
           <section class="support-modal" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
             <header class="support-modal-header">
@@ -1979,77 +1986,77 @@
           </section>
         </div>`);
 
-      const backdrop = root.querySelector('[data-privacy-backdrop]');
-      const onKeydown = (event) => { if (event.key === 'Escape') close(); };
-      const close = () => {
-        document.removeEventListener('keydown', onKeydown);
-        backdrop?.remove();
-      };
-      backdrop.querySelector('[data-privacy-close]')?.addEventListener('click', close);
-      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
-      document.addEventListener('keydown', onKeydown);
-      backdrop.querySelector('[data-privacy-close]')?.focus();
-      backdrop.querySelector('[data-privacy-export]')?.addEventListener('click', () => {
-        doExportData();
-      });
-      backdrop.querySelector('[data-privacy-support]')?.addEventListener('click', () => {
-        close();
-        openSupportCenter();
-      });
-
-      const form = backdrop.querySelector('[data-privacy-delete]');
-      const input = form?.elements.confirm;
-      const passwordInput = form?.elements.password;
-      const submit = form?.querySelector('button[type="submit"]');
-      const syncDeleteSubmit = () => {
-        submit.disabled = input.value.trim() !== expected || !passwordInput.value;
-      };
-      input?.addEventListener('input', syncDeleteSubmit);
-      passwordInput?.addEventListener('input', syncDeleteSubmit);
-      form?.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        submit.disabled = true;
-        submit.textContent = 'Deleting...';
-        try {
-          const data = await api('/api/privacy/delete-workspace', {
-            method: 'POST',
-            body: JSON.stringify({ confirm: input.value.trim(), password: passwordInput.value }),
-          });
+        const backdrop = root.querySelector('[data-privacy-backdrop]');
+        const onKeydown = (event) => { if (event.key === 'Escape') close(); };
+        const close = () => {
+          document.removeEventListener('keydown', onKeydown);
+          backdrop?.remove();
+        };
+        backdrop.querySelector('[data-privacy-close]')?.addEventListener('click', close);
+        backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+        document.addEventListener('keydown', onKeydown);
+        backdrop.querySelector('[data-privacy-close]')?.focus();
+        backdrop.querySelector('[data-privacy-export]')?.addEventListener('click', () => {
+          doExportData();
+        });
+        backdrop.querySelector('[data-privacy-support]')?.addEventListener('click', () => {
           close();
-          state.verificationMessage = data.message || 'Workspace data deleted.';
-          render();
-        } catch (error) {
-          submit.textContent = 'Delete workspace data';
-          syncDeleteSubmit();
-          form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
-        }
-      });
-      loadAccountClosure(backdrop);
-    }
+          openSupportCenter();
+        });
 
-    async function loadAccountClosure(backdrop) {
-      const panel = backdrop.querySelector('[data-account-closure]');
-      if (!panel) return;
-      try {
-        const data = await api('/api/privacy/account-closure');
-        if (!data.eligible) {
-          panel.innerHTML = `
+        const form = backdrop.querySelector('[data-privacy-delete]');
+        const input = form?.elements.confirm;
+        const passwordInput = form?.elements.password;
+        const submit = form?.querySelector('button[type="submit"]');
+        const syncDeleteSubmit = () => {
+          submit.disabled = input.value.trim() !== expected || !passwordInput.value;
+        };
+        input?.addEventListener('input', syncDeleteSubmit);
+        passwordInput?.addEventListener('input', syncDeleteSubmit);
+        form?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          submit.disabled = true;
+          submit.textContent = 'Deleting...';
+          try {
+            const data = await api('/api/privacy/delete-workspace', {
+              method: 'POST',
+              body: JSON.stringify({ confirm: input.value.trim(), password: passwordInput.value }),
+            });
+            close();
+            state.verificationMessage = data.message || 'Workspace data deleted.';
+            render();
+          } catch (error) {
+            submit.textContent = 'Delete workspace data';
+            syncDeleteSubmit();
+            form.querySelector('[data-privacy-result]').innerHTML = `<div class="support-error" role="alert"><strong>Data was not deleted.</strong><p>${escapeHtml(error.message)}</p></div>`;
+          }
+        });
+        loadAccountClosure(backdrop);
+      }
+
+      async function loadAccountClosure(backdrop) {
+        const panel = backdrop.querySelector('[data-account-closure]');
+        if (!panel) return;
+        try {
+          const data = await api('/api/privacy/account-closure');
+          if (!data.eligible) {
+            panel.innerHTML = `
             <div><h3>Close account</h3><p>Your account cannot be closed automatically because doing so would leave a shared workspace without an owner.</p></div>
             <div class="support-error" role="status"><strong>Ownership transfer required</strong><ul>${(data.blockers || []).map((item) => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul></div>
             <div class="support-form-actions"><button class="btn btn-ghost" type="button" data-closure-support>Contact support</button></div>`;
-          panel.querySelector('[data-closure-support]')?.addEventListener('click', () => {
-            backdrop.remove();
-            openSupportCenter();
-          });
-          return;
-        }
+            panel.querySelector('[data-closure-support]')?.addEventListener('click', () => {
+              backdrop.remove();
+              openSupportCenter();
+            });
+            return;
+          }
 
-        const consequences = [
-          ...(data.deleteWorkspaces || []).map((item) => `Delete workspace: ${item.name}`),
-          ...(data.leaveWorkspaces || []).map((item) => `Leave workspace: ${item.name}`),
-          ...(data.subscriptionsToCancel ? [`Cancel ${data.subscriptionsToCancel} active subscription${data.subscriptionsToCancel === 1 ? '' : 's'}`] : []),
-        ];
-        panel.innerHTML = `
+          const consequences = [
+            ...(data.deleteWorkspaces || []).map((item) => `Delete workspace: ${item.name}`),
+            ...(data.leaveWorkspaces || []).map((item) => `Leave workspace: ${item.name}`),
+            ...(data.subscriptionsToCancel ? [`Cancel ${data.subscriptionsToCancel} active subscription${data.subscriptionsToCancel === 1 ? '' : 's'}`] : []),
+          ];
+          panel.innerHTML = `
           <form class="support-compose account-closure-form" data-account-closure-form>
             <div><h3>Close account</h3><p>Permanently removes your login and personal identifiers. Sole-user workspaces are deleted, shared workspaces with another owner remain available, and attached subscriptions are canceled first.</p></div>
             ${consequences.length ? `<ul class="account-closure-effects">${consequences.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<p>No workspaces or subscriptions are attached to this login.</p>'}
@@ -2072,143 +2079,143 @@
             <div data-account-closure-result aria-live="polite"></div>
           </form>`;
 
-        const form = panel.querySelector('[data-account-closure-form]');
-        const submit = form.querySelector('button[type="submit"]');
-        const syncSubmit = () => {
-          submit.disabled = !form.elements.password.value
-            || form.elements.confirm.value.trim() !== data.expectedConfirmation
-            || !form.elements.exportAcknowledged.checked;
-        };
-        form.addEventListener('input', syncSubmit);
-        form.addEventListener('change', syncSubmit);
-        form.addEventListener('submit', async (event) => {
+          const form = panel.querySelector('[data-account-closure-form]');
+          const submit = form.querySelector('button[type="submit"]');
+          const syncSubmit = () => {
+            submit.disabled = !form.elements.password.value
+              || form.elements.confirm.value.trim() !== data.expectedConfirmation
+              || !form.elements.exportAcknowledged.checked;
+          };
+          form.addEventListener('input', syncSubmit);
+          form.addEventListener('change', syncSubmit);
+          form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            submit.disabled = true;
+            submit.textContent = 'Closing account...';
+            try {
+              const result = await api('/api/privacy/account-closure', {
+                method: 'POST',
+                body: JSON.stringify({
+                  password: form.elements.password.value,
+                  confirm: form.elements.confirm.value.trim(),
+                  exportAcknowledged: form.elements.exportAcknowledged.checked,
+                  reason: form.elements.reason.value,
+                }),
+              });
+              backdrop.remove();
+              await clearAuthenticatedOnboardingIntentsForUser(state.user, state.tenants);
+              state.user = null;
+              state.tenant = null;
+              state.tenants = [];
+              state.plan = null;
+              state.trialDaysRemaining = null;
+              state.referral = null;
+              state.demo = false;
+              state.readOnly = false;
+              state.emailVerificationAvailable = false;
+              state.canManageSupport = false;
+              state.canManageWorkspace = false;
+              state.onboardingIntent = null;
+              state.onboardingIntentScope = '';
+              state.accountClosedMessage = result.message || 'Your account has been closed.';
+              state.view = 'landing';
+              render();
+            } catch (error) {
+              submit.textContent = 'Close account permanently';
+              syncSubmit();
+              form.querySelector('[data-account-closure-result]').innerHTML = `<div class="support-error" role="alert"><strong>Account was not closed.</strong><p>${escapeHtml(error.message)}</p></div>`;
+            }
+          });
+        } catch (error) {
+          panel.innerHTML = `<div class="support-error" role="alert"><strong>Closure requirements could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
+        }
+      }
+
+      function getSanitizedSupportPageUrl(frame) {
+        let candidate = window.location.href;
+        try {
+          candidate = frame?.contentWindow?.location?.href || frame?.src || candidate;
+        } catch {
+          candidate = window.location.href;
+        }
+        let page;
+        try {
+          page = new URL(candidate, window.location.origin);
+        } catch {
+          page = new URL(window.location.pathname, window.location.origin);
+        }
+        if (page.origin !== window.location.origin) {
+          page = new URL(window.location.pathname, window.location.origin);
+        }
+        // Query parameters can contain the opaque workspace scope or auth-flow
+        // tokens. The route hash is enough context for support triage.
+        page.search = '';
+        let pageUrl = `${page.origin}${page.pathname}${page.hash}`;
+        for (const rawId of [state.tenant?.id, state.user?.id]) {
+          const normalizedId = String(rawId || '').trim();
+          if (!normalizedId) continue;
+          for (const representation of [normalizedId, encodeURIComponent(normalizedId)]) {
+            pageUrl = pageUrl.split(representation).join('[redacted]');
+          }
+        }
+        return pageUrl.slice(0, 500);
+      }
+
+      function wireCustomerSupportForms(backdrop) {
+        backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
           event.preventDefault();
-          submit.disabled = true;
-          submit.textContent = 'Closing account...';
+          const form = event.currentTarget;
+          const button = form.querySelector('button[type="submit"]');
+          button.disabled = true;
+          button.textContent = 'Sending...';
           try {
-            const result = await api('/api/privacy/account-closure', {
+            const frame = root.querySelector('.cloud-app-frame');
+            const pageUrl = getSanitizedSupportPageUrl(frame);
+            const data = await api('/api/support/tickets', {
               method: 'POST',
               body: JSON.stringify({
-                password: form.elements.password.value,
-                confirm: form.elements.confirm.value.trim(),
-                exportAcknowledged: form.elements.exportAcknowledged.checked,
-                reason: form.elements.reason.value,
+                category: form.elements.category.value,
+                subject: form.elements.subject.value,
+                body: form.elements.body.value,
+                pageUrl,
               }),
             });
-            backdrop.remove();
-            await clearAuthenticatedOnboardingIntentsForUser(state.user, state.tenants);
-            state.user = null;
-            state.tenant = null;
-            state.tenants = [];
-            state.plan = null;
-            state.trialDaysRemaining = null;
-            state.referral = null;
-            state.demo = false;
-            state.readOnly = false;
-            state.emailVerificationAvailable = false;
-            state.canManageSupport = false;
-            state.canManageWorkspace = false;
-            state.onboardingIntent = null;
-            state.onboardingIntentScope = '';
-            state.accountClosedMessage = result.message || 'Your account has been closed.';
-            state.view = 'landing';
-            render();
+            await loadCustomerSupport(backdrop, data.message || 'Your request was sent.');
           } catch (error) {
-            submit.textContent = 'Close account permanently';
-            syncSubmit();
-            form.querySelector('[data-account-closure-result]').innerHTML = `<div class="support-error" role="alert"><strong>Account was not closed.</strong><p>${escapeHtml(error.message)}</p></div>`;
+            button.disabled = false;
+            button.textContent = 'Send request';
+            form.querySelector('.support-inline-error')?.remove();
+            form.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
           }
         });
-      } catch (error) {
-        panel.innerHTML = `<div class="support-error" role="alert"><strong>Closure requirements could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
+        backdrop.querySelectorAll('[data-support-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const ticketId = event.currentTarget.dataset.supportReply;
+          const button = event.currentTarget.querySelector('button[type="submit"]');
+          button.disabled = true;
+          button.textContent = 'Sending...';
+          try {
+            const data = await api(`/api/support/tickets/${ticketId}/messages`, {
+              method: 'POST', body: JSON.stringify({ body: event.currentTarget.elements.body.value }),
+            });
+            await loadCustomerSupport(backdrop, data.message || 'Reply sent.');
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = 'Send reply';
+            event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+          }
+        }));
       }
-    }
 
-    function getSanitizedSupportPageUrl(frame) {
-      let candidate = window.location.href;
-      try {
-        candidate = frame?.contentWindow?.location?.href || frame?.src || candidate;
-      } catch {
-        candidate = window.location.href;
-      }
-      let page;
-      try {
-        page = new URL(candidate, window.location.origin);
-      } catch {
-        page = new URL(window.location.pathname, window.location.origin);
-      }
-      if (page.origin !== window.location.origin) {
-        page = new URL(window.location.pathname, window.location.origin);
-      }
-      // Query parameters can contain the opaque workspace scope or auth-flow
-      // tokens. The route hash is enough context for support triage.
-      page.search = '';
-      let pageUrl = `${page.origin}${page.pathname}${page.hash}`;
-      for (const rawId of [state.tenant?.id, state.user?.id]) {
-        const normalizedId = String(rawId || '').trim();
-        if (!normalizedId) continue;
-        for (const representation of [normalizedId, encodeURIComponent(normalizedId)]) {
-          pageUrl = pageUrl.split(representation).join('[redacted]');
-        }
-      }
-      return pageUrl.slice(0, 500);
-    }
-
-    function wireCustomerSupportForms(backdrop) {
-      backdrop.querySelector('[data-support-create]')?.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const form = event.currentTarget;
-        const button = form.querySelector('button[type="submit"]');
-        button.disabled = true;
-        button.textContent = 'Sending...';
+      async function loadOperatorSupport(backdrop, requestedStatus = '', notice = '') {
+        setSupportTab(backdrop, 'operator');
+        const body = backdrop.querySelector('[data-support-body]');
+        body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading support inbox...</div>';
         try {
-          const frame = root.querySelector('.cloud-app-frame');
-          const pageUrl = getSanitizedSupportPageUrl(frame);
-          const data = await api('/api/support/tickets', {
-            method: 'POST',
-            body: JSON.stringify({
-              category: form.elements.category.value,
-              subject: form.elements.subject.value,
-              body: form.elements.body.value,
-              pageUrl,
-            }),
-          });
-          await loadCustomerSupport(backdrop, data.message || 'Your request was sent.');
-        } catch (error) {
-          button.disabled = false;
-          button.textContent = 'Send request';
-          form.querySelector('.support-inline-error')?.remove();
-          form.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
-        }
-      });
-      backdrop.querySelectorAll('[data-support-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const ticketId = event.currentTarget.dataset.supportReply;
-        const button = event.currentTarget.querySelector('button[type="submit"]');
-        button.disabled = true;
-        button.textContent = 'Sending...';
-        try {
-          const data = await api(`/api/support/tickets/${ticketId}/messages`, {
-            method: 'POST', body: JSON.stringify({ body: event.currentTarget.elements.body.value }),
-          });
-          await loadCustomerSupport(backdrop, data.message || 'Reply sent.');
-        } catch (error) {
-          button.disabled = false;
-          button.textContent = 'Send reply';
-          event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
-        }
-      }));
-    }
-
-    async function loadOperatorSupport(backdrop, requestedStatus = '', notice = '') {
-      setSupportTab(backdrop, 'operator');
-      const body = backdrop.querySelector('[data-support-body]');
-      body.innerHTML = '<div class="support-loading"><span class="btn-spinner"></span> Loading support inbox...</div>';
-      try {
-        const query = requestedStatus ? `?status=${encodeURIComponent(requestedStatus)}` : '';
-        const data = await api('/api/support/admin/tickets' + query);
-        const tickets = data.tickets || [];
-        body.innerHTML = `
+          const query = requestedStatus ? `?status=${encodeURIComponent(requestedStatus)}` : '';
+          const data = await api('/api/support/admin/tickets' + query);
+          const tickets = data.tickets || [];
+          body.innerHTML = `
           ${notice ? `<div class="support-notice" role="status">${escapeHtml(notice)}</div>` : ''}
           <section class="support-operator">
             <div class="support-section-heading">
@@ -2222,20 +2229,20 @@
             </div>
             ${tickets.length ? tickets.map((ticket, index) => supportTicketHtml(ticket, { operator: true, open: index === 0 })).join('') : '<div class="support-empty"><strong>Inbox clear</strong><p>No requests match this status.</p></div>'}
           </section>`;
-        wireOperatorSupportForms(backdrop, requestedStatus);
-      } catch (error) {
-        if (error.code === 'step_up_required') {
-          renderOperatorStepUp(backdrop, requestedStatus);
-          return;
+          wireOperatorSupportForms(backdrop, requestedStatus);
+        } catch (error) {
+          if (error.code === 'step_up_required') {
+            renderOperatorStepUp(backdrop, requestedStatus);
+            return;
+          }
+          body.innerHTML = `<div class="support-error" role="alert"><strong>Support inbox could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
         }
-        body.innerHTML = `<div class="support-error" role="alert"><strong>Support inbox could not load.</strong><p>${escapeHtml(error.message)}</p></div>`;
       }
-    }
 
-    function renderOperatorStepUp(backdrop, requestedStatus = '') {
-      setSupportTab(backdrop, 'operator');
-      const body = backdrop.querySelector('[data-support-body]');
-      body.innerHTML = `
+      function renderOperatorStepUp(backdrop, requestedStatus = '') {
+        setSupportTab(backdrop, 'operator');
+        const body = backdrop.querySelector('[data-support-body]');
+        body.innerHTML = `
         <form class="support-compose" data-operator-step-up>
           <div><h3>Confirm your identity</h3><p>The support inbox contains customer information. Enter your current password to continue.</p></div>
           <label for="operator-step-up-password">Current password</label>
@@ -2243,74 +2250,74 @@
           <div class="support-form-actions"><button class="btn btn-primary" type="submit">Continue to support inbox</button></div>
           <div data-operator-step-up-result aria-live="polite"></div>
         </form>`;
-      const form = body.querySelector('[data-operator-step-up]');
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const button = form.querySelector('button[type="submit"]');
-        button.disabled = true;
-        button.textContent = 'Confirming...';
-        try {
-          await api('/api/auth/step-up', {
-            method: 'POST',
-            body: JSON.stringify({ password: form.elements.password.value }),
-          });
-          await loadOperatorSupport(backdrop, requestedStatus, 'Identity confirmed.');
-        } catch (error) {
-          button.disabled = false;
-          button.textContent = 'Continue to support inbox';
-          form.querySelector('[data-operator-step-up-result]').innerHTML = `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`;
-        }
-      });
-      form.elements.password.focus();
-    }
+        const form = body.querySelector('[data-operator-step-up]');
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const button = form.querySelector('button[type="submit"]');
+          button.disabled = true;
+          button.textContent = 'Confirming...';
+          try {
+            await api('/api/auth/step-up', {
+              method: 'POST',
+              body: JSON.stringify({ password: form.elements.password.value }),
+            });
+            await loadOperatorSupport(backdrop, requestedStatus, 'Identity confirmed.');
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = 'Continue to support inbox';
+            form.querySelector('[data-operator-step-up-result]').innerHTML = `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`;
+          }
+        });
+        form.elements.password.focus();
+      }
 
-    function wireOperatorSupportForms(backdrop, requestedStatus) {
-      backdrop.querySelector('[data-support-filter]')?.addEventListener('change', (event) => loadOperatorSupport(backdrop, event.currentTarget.value));
-      backdrop.querySelectorAll('[data-support-save]').forEach((button) => button.addEventListener('click', async (event) => {
-        const ticket = event.currentTarget.closest('[data-support-ticket]');
-        event.currentTarget.disabled = true;
-        try {
-          const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportSave}`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-              status: ticket.querySelector('[data-ticket-status]').value,
-              priority: ticket.querySelector('[data-ticket-priority]').value,
-            }),
-          });
-          await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Request updated.');
-        } catch (error) {
-          event.currentTarget.disabled = false;
-          ticket.querySelector('.support-inline-error')?.remove();
-          ticket.querySelector('.support-ticket-detail').insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
-        }
-      }));
-      backdrop.querySelectorAll('[data-support-operator-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const button = event.currentTarget.querySelector('button[type="submit"]');
-        button.disabled = true;
-        try {
-          const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportOperatorReply}/messages`, {
-            method: 'POST',
-            body: JSON.stringify({ body: event.currentTarget.elements.body.value, internal: event.currentTarget.elements.internal.checked }),
-          });
-          await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Message added.');
-        } catch (error) {
-          button.disabled = false;
-          event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
-        }
-      }));
-    }
+      function wireOperatorSupportForms(backdrop, requestedStatus) {
+        backdrop.querySelector('[data-support-filter]')?.addEventListener('change', (event) => loadOperatorSupport(backdrop, event.currentTarget.value));
+        backdrop.querySelectorAll('[data-support-save]').forEach((button) => button.addEventListener('click', async (event) => {
+          const ticket = event.currentTarget.closest('[data-support-ticket]');
+          event.currentTarget.disabled = true;
+          try {
+            const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportSave}`, {
+              method: 'PATCH',
+              body: JSON.stringify({
+                status: ticket.querySelector('[data-ticket-status]').value,
+                priority: ticket.querySelector('[data-ticket-priority]').value,
+              }),
+            });
+            await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Request updated.');
+          } catch (error) {
+            event.currentTarget.disabled = false;
+            ticket.querySelector('.support-inline-error')?.remove();
+            ticket.querySelector('.support-ticket-detail').insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+          }
+        }));
+        backdrop.querySelectorAll('[data-support-operator-reply]').forEach((form) => form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const button = event.currentTarget.querySelector('button[type="submit"]');
+          button.disabled = true;
+          try {
+            const data = await api(`/api/support/admin/tickets/${event.currentTarget.dataset.supportOperatorReply}/messages`, {
+              method: 'POST',
+              body: JSON.stringify({ body: event.currentTarget.elements.body.value, internal: event.currentTarget.elements.internal.checked }),
+            });
+            await loadOperatorSupport(backdrop, requestedStatus, data.message || 'Message added.');
+          } catch (error) {
+            button.disabled = false;
+            event.currentTarget.insertAdjacentHTML('beforeend', `<p class="support-inline-error" role="alert">${escapeHtml(error.message)}</p>`);
+          }
+        }));
+      }
 
-    function renderTrialUpgradeBanner() {
-      if (!isTrialPlan()) return '';
-      const trialLimits = getPlanLimits('trial');
-      const daysCopy = state.trialDaysRemaining !== null
-        ? `${state.trialDaysRemaining} day${state.trialDaysRemaining === 1 ? '' : 's'} left`
-        : '14-day trial';
-      const accountLabel = state.persona === 'jobseeker' ? 'companies' : 'accounts';
-      const contactLabel = state.persona === 'jobseeker' ? 'network contacts' : 'contacts';
+      function renderTrialUpgradeBanner() {
+        if (!isTrialPlan()) return '';
+        const trialLimits = getPlanLimits('trial');
+        const daysCopy = state.trialDaysRemaining !== null
+          ? `${state.trialDaysRemaining} day${state.trialDaysRemaining === 1 ? '' : 's'} left`
+          : '14-day trial';
+        const accountLabel = state.persona === 'jobseeker' ? 'companies' : 'accounts';
+        const contactLabel = state.persona === 'jobseeker' ? 'network contacts' : 'contacts';
 
-      return `
+        return `
         <div class="cloud-trial-cta" role="region" aria-label="Free trial limits and upgrade options">
           <div class="cloud-trial-cta-copy">
             <span class="cloud-trial-cta-kicker">Free trial · ${escapeHtml(daysCopy)}</span>
@@ -2321,26 +2328,26 @@
             <button class="btn btn-primary btn-sm" id="cloud-upgrade-btn">Upgrade plan</button>
           </div>
         </div>`;
-    }
+      }
 
-    // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
-    function renderApp() {
-      const planBadge = state.demo ? 'Demo' : (state.plan ? state.plan.displayName : 'Trial');
-      const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
-      const appFrameSrc = onboardingIntentScope
-        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/dashboard`
-        : '/app/#/dashboard';
-      const trialNotice = !state.demo && state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
-        ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
-      const trialUpgradeBanner = state.demo
-        ? `<div class="cloud-demo-banner"><strong>Read-only demo workspace</strong><span>This uses synthetic data. Create a free trial to import your own LinkedIn connections and edit records.</span><button class="btn btn-primary btn-sm" data-demo-signup>Start free trial</button></div>`
-        : renderTrialUpgradeBanner();
-      const verificationNotice = state.verificationMessage
-        ? `<div class="cloud-account-notice" role="status"><span>${escapeHtml(state.verificationMessage)}</span><button class="cloud-notice-close" id="cloud-notice-close" type="button" aria-label="Dismiss message">Close</button></div>`
-        : '';
-      const emailVerified = Boolean(state.user?.emailVerifiedAt);
+      // ── App shell — cloud topbar plus the shared BD Engine frontend ──────────
+      function renderApp() {
+        const planBadge = state.demo ? 'Demo' : (state.plan ? state.plan.displayName : 'Trial');
+        const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
+        const appFrameSrc = onboardingIntentScope
+          ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/dashboard`
+          : '/app/#/dashboard';
+        const trialNotice = !state.demo && state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
+          ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
+        const trialUpgradeBanner = state.demo
+          ? `<div class="cloud-demo-banner"><strong>Read-only demo workspace</strong><span>This uses synthetic data. Create a free trial to import your own LinkedIn connections and edit records.</span><button class="btn btn-primary btn-sm" data-demo-signup>Start free trial</button></div>`
+          : renderTrialUpgradeBanner();
+        const verificationNotice = state.verificationMessage
+          ? `<div class="cloud-account-notice" role="status"><span>${escapeHtml(state.verificationMessage)}</span><button class="cloud-notice-close" id="cloud-notice-close" type="button" aria-label="Dismiss message">Close</button></div>`
+          : '';
+        const emailVerified = Boolean(state.user?.emailVerifiedAt);
 
-      root.innerHTML = `
+        root.innerHTML = `
         <div class="cloud-shell">
           <div class="cloud-topbar">
             <div class="cloud-topbar-left">
@@ -2382,62 +2389,63 @@
           </div>
         </div>`;
 
-      // Wire user menu
-      const avatarBtn = root.querySelector('#cloud-avatar-btn');
-      const dropdown = root.querySelector('#cloud-user-dropdown');
-      const setUserMenuOpen = (open) => {
-        dropdown?.classList.toggle('hidden', !open);
-        avatarBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
-      };
-      avatarBtn?.addEventListener('click', () => setUserMenuOpen(dropdown?.classList.contains('hidden')));
-      document.addEventListener('click', (e) => {
-        if (!e.target.closest('#cloud-user-menu')) setUserMenuOpen(false);
-      });
-      root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
-      root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
-        setUserMenuOpen(false);
-        openPrivacyCenter();
-      });
-      root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
-        setUserMenuOpen(false);
-        doRequestEmailVerification();
-      });
-      root.querySelector('#cloud-support-btn')?.addEventListener('click', () => {
-        setUserMenuOpen(false);
-        openSupportCenter();
-      });
-      root.querySelector('#cloud-support-inbox-btn')?.addEventListener('click', () => {
-        setUserMenuOpen(false);
-        openSupportCenter({ operator: true });
-      });
-      root.querySelector('#cloud-notice-close')?.addEventListener('click', () => {
-        state.verificationMessage = '';
-        render();
-      });
-      root.querySelector('[data-demo-signup]')?.addEventListener('click', exitDemoToSignup);
-      root.querySelector('#cloud-demo-signup-menu-btn')?.addEventListener('click', exitDemoToSignup);
-      root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
-        openBillingPage();
-        setUserMenuOpen(false);
-      });
-      root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
-    }
+        // Wire user menu
+        const avatarBtn = root.querySelector('#cloud-avatar-btn');
+        const dropdown = root.querySelector('#cloud-user-dropdown');
+        const setUserMenuOpen = (open) => {
+          dropdown?.classList.toggle('hidden', !open);
+          avatarBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        avatarBtn?.addEventListener('click', () => setUserMenuOpen(dropdown?.classList.contains('hidden')));
+        document.addEventListener('click', (e) => {
+          if (!e.target.closest('#cloud-user-menu')) setUserMenuOpen(false);
+        });
+        root.querySelector('#cloud-logout-btn')?.addEventListener('click', doLogout);
+        root.querySelector('#cloud-export-btn')?.addEventListener('click', () => {
+          setUserMenuOpen(false);
+          openPrivacyCenter();
+        });
+        root.querySelector('#cloud-verify-email-btn')?.addEventListener('click', () => {
+          setUserMenuOpen(false);
+          doRequestEmailVerification();
+        });
+        root.querySelector('#cloud-support-btn')?.addEventListener('click', () => {
+          setUserMenuOpen(false);
+          openSupportCenter();
+        });
+        root.querySelector('#cloud-support-inbox-btn')?.addEventListener('click', () => {
+          setUserMenuOpen(false);
+          openSupportCenter({ operator: true });
+        });
+        root.querySelector('#cloud-notice-close')?.addEventListener('click', () => {
+          state.verificationMessage = '';
+          render();
+        });
+        root.querySelector('[data-demo-signup]')?.addEventListener('click', exitDemoToSignup);
+        root.querySelector('#cloud-demo-signup-menu-btn')?.addEventListener('click', exitDemoToSignup);
+        root.querySelector('#cloud-billing-btn')?.addEventListener('click', () => {
+          openBillingPage();
+          setUserMenuOpen(false);
+        });
+        root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
+      }
 
-    // ── Utility ───────────────────────────────────────────────────────────
-    function escapeHtml(str) {
-      const div = document.createElement('div');
-      div.textContent = String(str || '');
-      return div.innerHTML;
-    }
+      // ── Utility ───────────────────────────────────────────────────────────
+      function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = String(str || '');
+        return div.innerHTML;
+      }
 
-    function escapeAttr(str) {
-      return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+      function escapeAttr(str) {
+        return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
 
-    // ── Init ──────────────────────────────────────────────────────────────
-    render();
-    checkAuth();
-  })();
+      // ── Init ──────────────────────────────────────────────────────────────
+      render();
+      checkAuth();
+    })();
   </script>
 </body>
+
 </html>

@@ -316,18 +316,18 @@ function renderResult(audit) {
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
     exportButton.className = 'export-action';
-    exportButton.textContent = 'Download CSV';
+    exportButton.textContent = '📥 Download CSV';
     exportButton.addEventListener('click', () => downloadCoverageCsv(audit));
     const staffingLink = document.createElement('a');
     staffingLink.href = buildWorkflowSignupHref('bd');
     staffingLink.className = 'primary-workflow';
-    staffingLink.textContent = 'Monitor these companies';
+    staffingLink.textContent = '⚡ Monitor in BD Engine (Start 14-Day Free Trial) →';
     staffingLink.addEventListener('click', () => persistAuditOnboardingIntent(audit, 'bd'));
     const jobSearchLink = document.createElement('a');
     jobSearchLink.href = buildWorkflowSignupHref('jobseeker');
-    jobSearchLink.textContent = 'Find relevant roles';
+    jobSearchLink.textContent = '🎯 Find Matching Roles (Job Search) →';
     jobSearchLink.addEventListener('click', () => persistAuditOnboardingIntent(audit, 'jobseeker'));
-    actions.append(exportButton, staffingLink, jobSearchLink);
+    actions.append(staffingLink, jobSearchLink, exportButton);
   }
 
   requestAnimationFrame(() => container.focus({ preventScroll: true }));
