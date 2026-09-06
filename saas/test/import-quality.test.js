@@ -100,7 +100,7 @@ test('a capped board is partial, preserves unseen jobs, and reports coverage', a
   let large = false;
   t.mock.method(globalThis, 'fetch', async (url) => {
     const offset = Number(new URL(url).searchParams.get('offset') || 0);
-    return Response.json({ totalFound: large ? 1200 : 1, content: large
+    return Response.json({ totalFound: large ? 5100 : 1, content: large
       ? Array.from({ length: 100 }, (_, index) => ({ id: `page-${offset + index}`, name: 'Recruiter', location: { city: 'Toronto', country: 'Canada' }, ref: `https://example.test/${offset + index}` }))
       : [{ id: 'unseen', name: 'Recruiter', location: { city: 'Toronto', country: 'Canada' }, ref: 'https://example.test/unseen' }] });
   });
@@ -112,8 +112,44 @@ test('a capped board is partial, preserves unseen jobs, and reports coverage', a
   assert.ok(result.warnings.some((w) => /partial|incomplete/i.test(w)));
   const config = (await store.findConfigs(id, {})).items[0];
   assert.equal(config.lastImportStatus, 'partial');
-  assert.equal(config.lastImportCoverage.reportedTotal, 1200);
+  assert.equal(config.lastImportCoverage.reportedTotal, 5100);
+  assert.equal(config.lastImportCoverage.fetched, 5000);
+  assert.equal(config.lastImportCoverage.pagination.pagesFetched, 50);
+  assert.deepEqual(config.lastImportCoverage.pagination.reasons, ['page_limit']);
 });
+
+for (const [atsType, total] of [['workday', 2615], ['smartrecruiters', 1201]]) {
+  test(`${atsType} imports beyond 1,000 jobs and only closes unseen jobs after complete coverage`, async (t) => {
+    const id = `quality-large-${atsType}`;
+    const store = await workspace(id, atsType, atsType === 'workday'
+      ? { boardId: 'fixture/Careers', apiUrl: 'https://fixture.wd5.myworkdayjobs.com/wday/cxs/fixture/Careers/jobs' } : {});
+    let large = false;
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      const params = atsType === 'workday' ? JSON.parse(init.body) : Object.fromEntries(new URL(url).searchParams);
+      const offset = Number(params.offset);
+      const pageSize = Number(params.limit);
+      const jobs = Array.from({ length: large ? Math.min(pageSize, total - offset) : 1 }, (_, index) => {
+        const jobId = large ? `role-${offset + index}` : 'no-longer-posted';
+        return atsType === 'workday'
+          ? { title: 'Recruiter', externalPath: `/job/${jobId}`, locationsText: 'Toronto, ON', postedOn: 'Posted Today' }
+          : { id: jobId, name: 'Recruiter', location: { city: 'Toronto', country: 'Canada' }, ref: `https://example.test/${jobId}` };
+      });
+      return Response.json(atsType === 'workday' ? { total: offset ? 0 : large ? total : 1, jobPostings: jobs } : { totalFound: large ? total : 1, content: jobs });
+    });
+    await store.importLiveJobs(id, options);
+    large = true;
+    const imported = await store.importLiveJobs(id, options);
+    assert.equal(imported.stats.errors, 0);
+    assert.equal(imported.stats.partialBoards, 0);
+    assert.equal(imported.stats.newJobs, total);
+    assert.equal(imported.stats.closedJobs, 1);
+    assert.equal((await store.findJobs(id, { active: true })).total, total);
+    const coverage = (await store.findConfigs(id, {})).items[0].lastImportCoverage;
+    assert.equal(coverage.complete, true);
+    assert.equal(coverage.fetched, total);
+    assert.equal(coverage.pagination.uniqueJobs, total);
+  });
+}
 
 test('Workday relative posting dates participate in recency filters without fabricating dates for ranges', async (t) => {
   const id = 'quality-workday-dates';

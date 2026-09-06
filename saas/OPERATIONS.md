@@ -330,3 +330,28 @@ configuration and an end-to-end test.
 - `BD_ATS_RENDER_TIMEOUT_MS` bounds each render request and defaults to 20 seconds.
 - Keep renderer concurrency and egress restricted. The application sends only a public careers URL and never customer records.
 - Run `npm run benchmark:ats:live` after provider or renderer changes. The deterministic `npm run benchmark:ats` remains the CI-safe adapter contract check.
+
+### Paginated board coverage
+
+- Workday defaults to 250 pages of 20 jobs; SmartRecruiters to 50 pages of 100.
+  Both can retrieve 5,000 postings per board. This is a safety ceiling, not a
+  guarantee of employer-wide coverage. Environment overrides are
+  `BD_WORKDAY_MAX_PAGES` (maximum 500) and `BD_ATS_MAX_PAGES` (maximum 100).
+- `BD_ATS_PAGE_FETCH_CONCURRENCY` defaults to 6 (maximum 10). Unknown-total feeds
+  page sequentially until a short page, avoiding speculative out-of-range calls.
+- `BD_ATS_BOARD_TIME_BUDGET_MS` defaults to 120000 (maximum 300000). The deadline
+  is shared by page requests, request timeouts, and retry waits. A timeout or
+  failed later page preserves the previous board inventory.
+- `lastImportCoverage.pagination` records unique jobs, pages, verification
+  requests, duplicate rows, elapsed milliseconds, and explicit partial reasons.
+  Page/time limits, malformed rows, duplicates, or changing source results never
+  authorize closing unseen roles. Completed multi-page scans recheck page zero.
+- Workday's non-head `total: 0` response is a count-omitted sentinel; page zero
+  supplies the reported total. An empty or short page before that total remains
+  incomplete. A stable count/head check is not a transactional source snapshot.
+- Repeated refreshes start at page zero. They do not resume old offset cursors
+  against a potentially changed job list. Boards above the configured ceiling
+  remain explicitly partial and require source-specific follow-up.
+- The live canary refuses a populated `DATABASE_URL`. Run it in an isolated
+  process with that variable unset, never as a customer-workspace mutation test.
+  An `EMPTY` sample is unresolved evidence, not a successful nonempty-adapter test.

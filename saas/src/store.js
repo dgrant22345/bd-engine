@@ -11,6 +11,7 @@ import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
 import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
+import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -71,15 +72,16 @@ const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
-const DEFAULT_ATS_MAX_PAGES = readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 10);
-const DEFAULT_WORKDAY_MAX_PAGES = readPositiveInteger(process.env.BD_WORKDAY_MAX_PAGES, 50);
+const DEFAULT_ATS_MAX_PAGES = Math.min(100, readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 50));
+const DEFAULT_WORKDAY_MAX_PAGES = Math.min(500, readPositiveInteger(process.env.BD_WORKDAY_MAX_PAGES, 250));
+const ATS_BOARD_TIME_BUDGET_MS = Math.min(300000, readPositiveInteger(process.env.BD_ATS_BOARD_TIME_BUDGET_MS, 120000));
 const DEFAULT_IMPORT_DISCOVERY_LIMIT = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_LIMIT, 250);
 const DEFAULT_ATS_MAX_DISCOVERY_BATCH = readPositiveInteger(process.env.BD_ATS_MAX_DISCOVERY_BATCH, 150);
 const DEFAULT_IMPORT_DISCOVERY_MIN_READY = readPositiveInteger(process.env.BD_IMPORT_DISCOVERY_MIN_READY, 100);
 const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'boardUrl', 'careersUrl', 'url'];
 const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MIN_JOB_LINKS, 3);
 const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
-const ATS_PAGE_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6);
+const ATS_PAGE_FETCH_CONCURRENCY = Math.min(10, readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6));
 const ATS_DISCOVERY_PROBE_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_PROBE_CONCURRENCY, 4);
 const ATS_JSON_REQUEST_ATTEMPTS = readPositiveInteger(process.env.BD_ATS_JSON_REQUEST_ATTEMPTS, 3);
 const ATS_RENDER_SERVICE_URL = String(process.env.BD_ATS_RENDER_SERVICE_URL || '').trim();
@@ -2055,6 +2057,13 @@ export function createStore() {
         const meta = BOARD_COVERAGE_META[category];
         let detail = meta.action;
         if (category === 'failed') detail = getBoardCoverageFailureDetail(config);
+        if (category === 'partial' && config.lastImportCoverage) {
+          const coverage = config.lastImportCoverage;
+          const reasons = Array.isArray(coverage.pagination?.reasons) ? coverage.pagination.reasons : [];
+          const explanation = reasons.map((reason) => ATS_COVERAGE_REASONS[reason]).filter(Boolean).join(' ');
+          const count = Number.isSafeInteger(coverage.fetched) ? `${coverage.fetched.toLocaleString('en-US')} jobs fetched${Number.isSafeInteger(coverage.reportedTotal) ? ` of ${coverage.reportedTotal.toLocaleString('en-US')} reported` : ''}. ` : '';
+          detail = `${count}${explanation || 'The source did not return a complete, readable result.'} Unseen roles are preserved.`;
+        }
         if (category === 'tracking_only') detail = `${config.atsType || config.ats || 'This provider'} does not expose a supported public job feed.`;
         if (category === 'careers_page_only') {
           detail = getConfigUrlCandidates(config).map((value) => getUsableCareerUrl(value)).find(Boolean) || meta.action;
@@ -4383,7 +4392,8 @@ export function createStore() {
         invalidRows += configInvalidRows;
         if (!complete) {
           partialBoards++;
-          warnings.push(`${config.companyName}: partial import (${fetchedJobs.length} fetched${settled.value.reportedTotal ? ` of ${settled.value.reportedTotal} reported` : ''}${configInvalidRows ? `; ${configInvalidRows} invalid rows` : ''}). Unseen jobs were preserved; coverage is incomplete.`);
+          const coverageDetail = (settled.value.pagination?.reasons || []).map((reason) => ATS_COVERAGE_REASONS[reason]).filter(Boolean).join(' ');
+          warnings.push(`${config.companyName}: partial import (${fetchedJobs.length} fetched${settled.value.reportedTotal != null ? ` of ${settled.value.reportedTotal} reported` : ''}${configInvalidRows ? `; ${configInvalidRows} invalid rows` : ''}). ${coverageDetail ? `${coverageDetail} ` : ''}Unseen jobs were preserved; coverage is incomplete.`);
         }
         const closedForConfig = complete ? deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, now()) : [];
         closedJobs += closedForConfig.length;
@@ -4400,6 +4410,7 @@ export function createStore() {
 
         config.lastImportStatus = !complete ? 'partial' : configKept > 0 ? 'success' : 'empty';
         config.lastImportCoverage = { fetched: fetchedJobs.length, kept: configKept, complete, invalidRows: configInvalidRows, reportedTotal: settled.value.reportedTotal ?? null };
+        if (settled.value.pagination) config.lastImportCoverage.pagination = settled.value.pagination;
         config.lastImportedAt = now();
         config.lastImportError = '';
         config.updatedAt = now();
@@ -7130,24 +7141,19 @@ function requireJobArray(provider, ...candidates) {
 async function fetchSmartRecruitersJobs(config, boardId) {
   const pageSize = 100;
   const baseUrl = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings`;
-  const firstPayload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset: 0 }));
-  const firstJobs = requireJobArray('SmartRecruiters', firstPayload?.content, firstPayload?.postings, firstPayload);
-  const jobs = [...firstJobs];
-  const reportedTotal = Number(firstPayload?.totalFound || firstPayload?.total || firstPayload?.count || 0);
-  const maxRows = pageSize * DEFAULT_ATS_MAX_PAGES;
-  const totalRows = reportedTotal > 0 ? Math.min(reportedTotal, maxRows) : (firstJobs.length === pageSize ? maxRows : firstJobs.length);
-  const offsets = [];
-  for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
-  const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, async (offset) => {
-    const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }));
-    return requireJobArray('SmartRecruiters', payload?.content, payload?.postings, payload);
+  return fetchPaginatedAtsJobs({
+    providerName: 'SmartRecruiters', pageSize, maxPages: DEFAULT_ATS_MAX_PAGES,
+    concurrency: ATS_PAGE_FETCH_CONCURRENCY, timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
+    recheckFirstPage: true,
+    jobKey: (item) => item?.id || item?.ref,
+    readPage: async (offset, { deadlineAt }) => {
+      const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }), 15000, {}, deadlineAt);
+      return {
+        jobs: requireJobArray('SmartRecruiters', payload?.content, payload?.postings, payload),
+        total: readAtsReportedTotal(payload?.totalFound, payload?.total, payload?.count),
+      };
+    },
   });
-  assertCompleteAtsPages('SmartRecruiters', pages);
-  for (const page of pages) {
-    jobs.push(...page.value);
-  }
-  const uniqueCount = new Set(jobs.map((item) => item?.id || item?.ref)).size;
-  return { jobs, reportedTotal: reportedTotal || null, complete: reportedTotal > 0 ? uniqueCount >= reportedTotal : jobs.length < maxRows };
 }
 
 async function fetchJobviteJobs(config, boardId) {
@@ -7163,31 +7169,27 @@ async function fetchWorkdayJobs(config) {
   if (!descriptor) throw new Error('Workday: invalid board URL; existing jobs preserved');
   const url = descriptor.apiUrl;
   const pageSize = 20;
-  const readPage = async (offset) => {
+  const readPage = async (offset, { deadlineAt }) => {
     const payload = await fetchJson(url, 15000, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ appliedFacets: {}, limit: pageSize, offset, searchText: '' }),
-    });
+    }, deadlineAt);
+    const reportedTotal = readAtsReportedTotal(payload?.total, payload?.totalResults, payload?.count);
     return {
       jobs: requireJobArray('Workday', payload?.jobPostings, payload?.jobs, payload?.data?.children),
-      total: Number(payload?.total || payload?.totalResults || payload?.count || 0),
+      // Observed on the public Workday CXS API: non-head pages return total: 0
+      // alongside actual postings. It is a count-omitted sentinel, not a closure.
+      total: offset > 0 && reportedTotal === 0 ? null : reportedTotal,
     };
   };
 
-  const firstPage = await readPage(0);
-  const jobs = [...firstPage.jobs];
-  const maxRows = pageSize * DEFAULT_WORKDAY_MAX_PAGES;
-  const totalRows = firstPage.total > 0 ? Math.min(firstPage.total, maxRows) : (firstPage.jobs.length === pageSize ? maxRows : firstPage.jobs.length);
-  const offsets = [];
-  for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
-  const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, readPage);
-  assertCompleteAtsPages('Workday', pages);
-  for (const page of pages) {
-    jobs.push(...page.value.jobs);
-  }
-  const uniqueCount = new Set(jobs.map((item) => item?.externalPath || item?.id || item?.jobPostingId)).size;
-  return { jobs, reportedTotal: firstPage.total || null, complete: firstPage.total > 0 ? uniqueCount >= firstPage.total : jobs.length < maxRows };
+  return fetchPaginatedAtsJobs({
+    providerName: 'Workday', pageSize, maxPages: DEFAULT_WORKDAY_MAX_PAGES,
+    concurrency: ATS_PAGE_FETCH_CONCURRENCY, timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
+    recheckFirstPage: true,
+    readPage, jobKey: (item) => item?.externalPath || item?.id || item?.jobPostingId,
+  });
 }
 
 async function fetchBamboohrJobs(config, boardId) {
@@ -7364,11 +7366,13 @@ async function fetchWithPublicRedirects(url, init = {}) {
   throw new Error('ATS request exceeded the redirect limit.');
 }
 
-async function fetchJson(url, timeoutMs = 15000, init = {}) {
+async function fetchJson(url, timeoutMs = 15000, init = {}, deadlineAt = Infinity) {
   let lastError = null;
   for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) throw new Error('ATS board time budget exceeded; existing jobs preserved');
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remainingMs));
     try {
       const { response } = await fetchWithPublicRedirects(url, {
         ...init,
@@ -7406,7 +7410,7 @@ async function fetchJson(url, timeoutMs = 15000, init = {}) {
     } finally {
       clearTimeout(timeout);
     }
-    await waitForAtsRetry(lastError, attempt);
+    await waitForAtsRetry(lastError, attempt, deadlineAt);
   }
   throw lastError || new Error('ATS request failed');
 }
@@ -7451,14 +7455,6 @@ async function fetchTextPage(url, timeoutMs = 15000) {
   throw lastError || new Error('ATS request failed');
 }
 
-function assertCompleteAtsPages(providerName, pages) {
-  const failedPages = pages.filter((page) => page.status === 'rejected');
-  if (!failedPages.length) return;
-  const error = new Error(`${providerName} could not load every results page. Retry the refresh; existing jobs were preserved.`);
-  error.cause = failedPages[0].reason;
-  throw error;
-}
-
 function readRetryAfterMs(response) {
   const value = response?.headers?.get?.('retry-after');
   if (!value) return null;
@@ -7469,10 +7465,11 @@ function readRetryAfterMs(response) {
   return Math.min(10000, Math.max(0, retryAt - Date.now()));
 }
 
-async function waitForAtsRetry(error, attempt) {
+async function waitForAtsRetry(error, attempt, deadlineAt = Infinity) {
   const retryAfterMs = error?.retryAfterMs == null ? Number.NaN : Number(error.retryAfterMs);
   const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : 200 * attempt;
-  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  const boundedDelayMs = Math.min(delayMs, Math.max(0, deadlineAt - performance.now()));
+  if (boundedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, boundedDelayMs));
 }
 
 function firstArray(...values) {

@@ -5,14 +5,17 @@
 The highest-priority failure was real: the deployed database query returned six
 jobs on a page that should contain twenty. This branch fixes that defect and
 hardens import completeness, role matching, saved pipeline stages, and product
-claims. It is a reliability release candidate, **not approval for a broad paid
+claims. The first reliability release is deployed, **not approval for a broad paid
 launch**. Willingness to pay still needs customer evidence.
 
 Branch: `agent/paid-product-quality-audit`. The branch incorporates the live
 `origin/main` commit `b24d7b8` and the separate production-readiness work from
 `f8112ad`; neither original branch contained all of the other's changes.
-No production records were changed by this audit. Deployment remains separate
-from pushing the reviewed code.
+The initial audit was read-only. Operator-authorized deployment `f094f262-c066-4009-8a82-41fda05be94e`
+subsequently released `054a404` (0.1.1.0). Read-only production checks passed;
+the normal scheduled importer then updated and rescored inventory. The verified
+backup, reconciliation, and subsequent pagination work are recorded in the
+[ingestion release follow-up](ingestion-pagination-release-2026-09-06.md).
 
 ## The six-result defect, reproduced against production
 
@@ -129,14 +132,15 @@ PostgreSQL CI job and can run with `npm run verify:job-queries`.
 | Production HTTP | `/health` and `/readyz` returned 200 |
 | Billing catalog | Read-only verification passed: live mode, two configured paid plans, one matching webhook |
 
-The live ATS sample returned **2,300 jobs in 10.734 seconds**: 9.843 seconds fetching
+The initial live ATS sample returned **2,300 jobs in 10.734 seconds**: 9.843 seconds fetching
 and 0.857 seconds upserting into the canary's test store. Ten of twelve sample
 boards returned complete, nonempty results. This is not complete-provider
 certification:
 
 - NVIDIA Workday: **partial**, 1,000 fetched versus 2,000 reported. The existing
-  request/page budget remains bounded; this release exposes the shortfall and
-  prevents false closures, but does not retrieve the missing half.
+  request/page budget in 0.1.1.0 exposes the shortfall and prevents false closures.
+  The [0.1.1.1 follow-up](ingestion-pagination-release-2026-09-06.md) retrieves all
+  2,000 reported jobs in the same public-board sample, within a larger bounded scan.
 - The tested BambooHR board: **empty**. Zero postings alone is not evidence of
   either a working nonempty importer or a broken employer board.
 - HTML-based career pages can omit paginated or client-rendered postings. A
@@ -153,8 +157,8 @@ The installed Windows desktop application's ingestion paths were not exercised.
 | Priority | Remaining work | Acceptance evidence |
 | --- | --- | --- |
 | P0 — operations | Configure `RESEND_API_KEY` and a verified `BD_EMAIL_FROM`; then enable email verification deliberately | Password reset, verification, and support mail received in real test inboxes; value-safe production check passes |
-| P0 — release | Deploy the reconciled candidate only with operator approval; rescore the owner focus and check the live Canada shortlist | Full pages, relevant titles, preserved stages after restart, healthy readiness, and no unexplained count loss |
-| P1 — ingestion | Resume large-board pagination safely within provider/request budgets; add source-specific empty-feed checks | Reported/fetched totals reconcile or the source stays explicitly partial; failed refreshes preserve prior jobs |
+| P0 — workflow proof | The paging correction is deployed and the scheduled import rescored 9,042 jobs; verify a real saved stage through a production restart | Full live pages already verified; a real persisted-stage restart journey remains unexercised |
+| P1 — ingestion | Verify the larger bounded scans across connected boards; investigate empty-feed sources and boards exceeding the new ceiling | Reported/fetched totals reconcile or the source stays explicitly partial; failed refreshes preserve prior jobs |
 | P1 — commercial truth | Audit or retire remaining experimental objection/call/presentation tools | No unverified candidate representation, staffing terms, past contact, revenue, or success claims in any generated content |
 | P1 — customer operations | Prove live checkout lifecycle, support ownership, a current production backup restore, and rollback | Owner-signed release checklist with durable evidence; professional review of public policies |
 | P1 — matching validation | Label a representative Canada/recruiting sample with the owner; evaluate title precision and missed-role cases | Agreed examples and regression cases, separately from stored relevance-score counts |

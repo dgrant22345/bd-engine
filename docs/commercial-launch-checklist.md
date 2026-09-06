@@ -10,8 +10,9 @@ The checked July items below are historical evidence, **not approval of the
 current release**. See the [September product-quality audit](product-quality-audit-2026-09-06.md)
 for the reproduced six-row paging defect, corrected code, current tests, and
 remaining gates. Email credentials, verified sender, and verification rollout
-remain incomplete. The latest live sample is 10 complete/nonempty boards out of
-12, with one partial Workday board and one empty BambooHR board; do not reuse the
+remain incomplete. The pagination follow-up's live sample is 11 complete/nonempty
+boards out of 12, with the empty BambooHR board unresolved; see the
+[new ingestion evidence](ingestion-pagination-release-2026-09-06.md). Do not reuse the
 older 12/12 result as a current completeness claim. Re-run release, billing,
 recovery, and delivery checks before a broad paid launch.
 

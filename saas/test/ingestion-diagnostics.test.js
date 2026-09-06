@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.js';
 
+test('partial coverage explains the source count and pagination limit without promising a complete refresh', async () => {
+  const store = createStore();
+  store.ensureTenant({ id: 'partial-coverage', name: 'Partial' }, { id: 'partial-owner' });
+  store.addConfig('partial-coverage', {
+    companyName: 'Large Board', atsType: 'workday', boardId: 'fixture/Careers',
+    lastImportStatus: 'partial',
+    lastImportCoverage: { fetched: 5000, kept: 300, reportedTotal: 6000, complete: false, pagination: { reasons: ['page_limit'] } },
+  });
+  const issue = (await store.getIngestionDiagnostics('partial-coverage')).coverageIssues[0];
+  assert.equal(issue.category, 'partial');
+  assert.match(issue.detail, /5,000 jobs fetched of 6,000 reported/);
+  assert.match(issue.detail, /page limit/);
+  assert.match(issue.detail, /Unseen roles are preserved/);
+});
+
 test('ingestion diagnostics group coverage gaps into actionable customer states', async () => {
   const store = createStore();
   const tenantId = 'tenant-coverage-diagnostics';

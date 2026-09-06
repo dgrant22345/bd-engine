@@ -120,7 +120,7 @@ async function auditWorkspace(tenantId, index) {
   const scoredJobs = activeJobs.filter((job) => job.relevanceScore !== null && job.relevanceScore !== undefined && job.relevanceScore !== '' && Number.isFinite(Number(job.relevanceScore)));
   const matchingJobs = scoredJobs.filter((job) => job.matchesSearchFocus !== false && Number(job.relevanceScore) >= minimumRelevanceScore);
   const canadaJobs = activeJobs.filter((job) => locationMatchesGeography(job, 'canada'));
-  const canadaMatchingJobs = canadaJobs.filter((job) => Number(job.relevanceScore) >= minimumRelevanceScore);
+  const canadaMatchingJobs = matchingJobs.filter((job) => locationMatchesGeography(job, 'canada'));
   const focusSummary = {
     configured: Boolean(termCount(focus.targetRoles)
       || termCount(focus.excludedRoles)

@@ -4,6 +4,19 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.1.1 — 2026-09-06 — Large-board ingestion
+
+- Raised bounded Workday and SmartRecruiters coverage from 1,000 to 5,000
+  postings per board, with shared request deadlines and bounded concurrency.
+- Handled Workday's zero-total sentinel on later pages and verified the source
+  head before treating multi-page scans as complete.
+- Detect repeated, missing, invalid, and changing pages; preserve unseen jobs
+  and explain incomplete coverage with fetched/reported counts in source health.
+- Added pagination regression cases and per-board timings. The live sample now
+  retrieves 2,000 of 2,000 reported NVIDIA jobs; the empty BambooHR sample remains
+  unresolved. This does not establish complete coverage of every employer.
+- Prevented the public live canary from running against a configured database.
+
 ## 0.1.1.0 — 2026-09-06 — Hosted reliability release
 
 - Fixed relational job pagination dropping matches that were absent from old

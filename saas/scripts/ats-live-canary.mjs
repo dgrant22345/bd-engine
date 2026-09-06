@@ -31,6 +31,7 @@ const LIVE_BOARDS = [
 ];
 
 export async function runAtsLiveCanary({ logger = console } = {}) {
+  if (process.env.DATABASE_URL) throw new Error('Live ATS canary requires DATABASE_URL to be unset; use an isolated in-memory workspace, never the customer database.');
   const store = createStore();
   const tenantId = `tenant-ats-live-canary-${Date.now()}`;
   store.ensureTenant({ id: tenantId, name: 'ATS live canary' }, { id: `${tenantId}-owner`, name: 'Canary owner' });
@@ -66,6 +67,9 @@ export async function runAtsLiveCanary({ logger = console } = {}) {
       jobs: count,
       status: error ? 'FAIL' : config?.lastImportStatus === 'partial' ? 'PARTIAL' : count > 0 ? 'PASS' : 'EMPTY',
       reportedTotal: config?.lastImportCoverage?.reportedTotal ?? null,
+      pages: config?.lastImportCoverage?.pagination?.pagesFetched ?? null,
+      fetchMs: config?.lastImportCoverage?.pagination?.elapsedMs ?? null,
+      incompleteReason: (config?.lastImportCoverage?.pagination?.reasons || []).join(', '),
       error,
     };
   });
