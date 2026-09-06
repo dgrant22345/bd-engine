@@ -1748,6 +1748,15 @@ self.addEventListener('activate', (event) => {
     return sendJson(res, 200, await store.findJobs(tenantId, Object.fromEntries(url.searchParams)));
   }
 
+  const jobPipelineMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/pipeline$/);
+  if (jobPipelineMatch && req.method === 'PATCH') {
+    const { stage } = await readJson(req);
+    if (!['', 'saved', 'contacted', 'replied', 'interviewing', 'offer'].includes(stage)) return sendJson(res, 400, { error: 'Choose a valid pipeline stage.' });
+    const result = await store.patchJobPipeline(tenantId, jobPipelineMatch[1], stage);
+    if (!result) return sendJson(res, 404, { error: 'Job not found.' });
+    return sendJson(res, 200, result);
+  }
+
   if (pathname === '/api/configs') {
     if (req.method === 'GET') {
       return sendJson(res, 200, await store.findConfigs(tenantId, Object.fromEntries(url.searchParams)));

@@ -84,6 +84,7 @@ const onboardingIntent = readOnboardingIntent();
 
 const savedAdminCollapsed = readJsonSetting('bd_admin_collapsed', null);
 const defaultDashboardCollapsed = {
+  'network-radar': true,
   workflow: true,
   'jobs-activity': true,
   readiness: true,
@@ -2001,6 +2002,7 @@ function wireBulkKeyboard() {
 function getDashboardSections() {
   return [
     { id: 'hero', label: 'Daily summary', required: true },
+    { id: 'network-radar', label: 'Network matches' },
     { id: 'workflow', label: 'Quick working lanes' },
     { id: 'action-plan', label: 'Recommended next actions' },
     { id: 'outcomes', label: 'Commercial outcomes' },
@@ -2078,11 +2080,8 @@ const DASHBOARD_TAB_SECTIONS = {
 };
 
 function dashSection(id, html) {
-  const currentTab = appState.dashboardTab || 'battle-board';
-  const tabSet = DASHBOARD_TAB_SECTIONS[currentTab];
-  const tabHidden = tabSet && !tabSet.has(id);
   const userCollapsed = appState.dashboardCollapsed[id];
-  const hidden = tabHidden || userCollapsed;
+  const hidden = id === 'hero' ? false : userCollapsed;
   return `<div data-dash-section="${id}" style="${hidden ? 'display:none' : ''}">${html}</div>`;
 }
 
@@ -2846,6 +2845,14 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener('change', async (event) => {
+    const select = event.target.closest('select[data-action="update-job-pipeline-stage"]');
+    if (!select) return;
+    select.disabled = true;
+    try { await updateJobPipelineStage(select.dataset.jobId, select.value); }
+    finally { select.disabled = false; }
+  });
+
   document.addEventListener('click', async (event) => {
     // Open outreach modal
     if (event.target.closest('#open-outreach-modal')) {
@@ -3134,6 +3141,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'update-job-pipeline-stage') {
+      if (action.tagName === 'SELECT') return; // Native selects save on change, including keyboard input.
       await updateJobPipelineStage(action.dataset.jobId, action.dataset.stage);
       return;
     }
@@ -4182,12 +4190,14 @@ function bindEvents() {
       });
       appState.jobQuery = {
         ...defaultQueries.jobs,
+        geography: appState.jobQuery.geography || '',
+        workStyle: appState.jobQuery.workStyle || '',
         minRelevance: String(minimumRelevanceScore),
         sortBy: 'relevance',
       };
       invalidateAppData();
       location.hash = '#/jobs';
-      showToast(`Search focus saved. Showing ${formatNumber(result.matchingJobs || 0)} of ${formatNumber(result.activeJobs || 0)} active jobs at ${formatNumber(minimumRelevanceScore)}+.`, 'success', 7000);
+      showToast(`Search focus saved. ${formatNumber(result.matchingJobs || 0)} of ${formatNumber(result.activeJobs || 0)} active jobs meet your focus across all locations. Your location filter is preserved.`, 'success', 7000);
       return;
     }
 
@@ -4658,7 +4668,7 @@ async function applyJobPreset(presetId) {
     showToast('Filtered to past 7 days.', 'info');
   } else if (presetId === 'pipeline') {
     const trackedCount = Object.keys(appState.jobPipelineStages || {}).length;
-    if (!trackedCount) {
+    if (!trackedCount && !appState.bootstrap?.capabilities?.jobPipeline) {
       showToast('No roles in your pipeline yet. Choose a stage from "+ Track" on any job row!', 'info');
       return;
     }
@@ -4667,7 +4677,7 @@ async function applyJobPreset(presetId) {
       pipelineOnly: 'true',
       page: 1,
     };
-    showToast(`Showing ${trackedCount} role(s) tracked in your pipeline.`, 'info');
+    showToast('Showing your saved pipeline with the current filters.', 'info');
   }
   await renderJobsView();
 }
@@ -6566,7 +6576,7 @@ async function watchSetupImportJob(jobId) {
 }
 
 async function quickLoadSampleWorkspace() {
-  showToast('Loading rich sample network with 500+ contacts & jobs...', 'info');
+  showToast('Loading a synthetic sample workspace...', 'info');
   try {
     const bootstrap = appState.bootstrap || (await loadBootstrap(false));
     const result = await api('/api/setup/sample-data', {
@@ -6580,7 +6590,7 @@ async function quickLoadSampleWorkspace() {
     });
     invalidateAppData();
     await loadBootstrap(true);
-    showToast('✨ Sample network loaded with 500+ contacts and matched jobs!', 'success');
+    showToast('Sample workspace loaded. Its contacts and roles are illustrative, not live matches.', 'success');
     if (appState.networkModalOpen) closeNetworkImportModal();
     await renderRoute();
   } catch (error) {
@@ -7423,8 +7433,7 @@ async function copyWarmStudioText(buttonEl) {
 
 async function logWarmStudioSent(jobId, contactId) {
   if (jobId) {
-    appState.jobPipelineStages[jobId] = 'contacted';
-    localStorage.setItem('bd_job_pipeline', JSON.stringify(appState.jobPipelineStages));
+    await updateJobPipelineStage(jobId, 'contacted', { skipRender: true });
     showToast('✓ Pipeline updated: Marked as Warm Intro Sent!', 'success');
   }
   closeWarmStudioModal();
@@ -7635,7 +7644,7 @@ function renderFeePipelineSimulator(dashboard = {}, outcomeSummary = {}) {
           <div class="fee-metric-box">
             <span class="fee-metric-num">${estimatedReplies} Replies</span>
             <span class="fee-metric-lbl">Warm Network Velocity</span>
-            <span class="fee-metric-sub">~35% warm response vs 3% cold</span>
+            <span class="fee-metric-sub">Illustrative assumptions, not measured response rates</span>
           </div>
         </div>
       </div>
@@ -8408,48 +8417,19 @@ function renderObjectionStudioModal() {
    ══════════════════════════════════════════════════ */
 
 function generateCandidateSlate(job = {}, count = 2) {
-  const title = job.title || 'Senior Software Engineer';
-  const company = job.companyName || job.company || 'Target Company';
-  const stack = extractTechStack(title, job.department, '');
-  const primarySkills = stack.map(s => s.name).slice(0, 4);
-  const topSkill = primarySkills[0] || 'Modern Full-Stack';
-
-  const candidates = [
-    {
-      id: 'cand_a',
-      specimenCode: 'Candidate Slate #A (Immediate Availability)',
-      title: `Senior / Staff ${title.replace(/senior|staff|principal|lead/gi, '').trim() || 'Software Engineer'}`,
-      experienceYears: '8+ years domain experience',
-      currentLocation: 'Toronto / Remote Eligible',
-      salaryExpectation: '$160k–$185k CAD / USD equivalent',
-      verifiedStack: primarySkills.length ? primarySkills : ['Distributed Systems', 'Cloud Architecture', 'API Design'],
-      achievements: [
-        `Architected high-throughput ${topSkill} service scaling to 15k req/sec with 99.99% uptime.`,
-        `Led cross-functional migration from legacy monolith to decoupled cloud infrastructure.`,
-        `Directly mentored 4 mid-level engineers and established CI/CD automated test standards.`,
-      ],
-    },
-    {
-      id: 'cand_b',
-      specimenCode: 'Candidate Slate #B (Passive / Open to Right Offer)',
-      title: `Lead / Principal ${title.replace(/senior|staff|principal|lead/gi, '').trim() || 'Software Engineer'}`,
-      experienceYears: '11+ years domain experience',
-      currentLocation: 'GTA / Hybrid or Remote',
-      salaryExpectation: '$185k–$215k CAD / USD equivalent',
-      verifiedStack: primarySkills.length ? primarySkills : ['High Scale Architecture', 'Platform Reliability', 'Data Pipelines'],
-      achievements: [
-        `Spearheaded core platform reliability initiatives reducing P99 latency by 42%.`,
-        `Deep expertise in ${topSkill} and production microservice orchestration at scale.`,
-        `Recognized with company-wide engineering excellence award at top tier scaleup.`,
-      ],
-    },
-  ];
-
-  return {
-    jobTitle: title,
-    companyName: company,
-    candidates: candidates.slice(0, count),
-  };
+  const title = job.title || 'Target role';
+  const company = job.companyName || 'Target company';
+  const candidates = Array.from({ length: Math.min(2, Math.max(0, count)) }, (_, index) => ({
+    id: `template-${index + 1}`,
+    specimenCode: `Candidate template ${index + 1} — not a real candidate`,
+    title,
+    experienceYears: '[Add verified experience]',
+    currentLocation: '[Confirm location and work authorization]',
+    salaryExpectation: '[Confirm compensation expectations]',
+    verifiedStack: ['[Add candidate-verified skills]'],
+    achievements: ['[Add a specific achievement with evidence]', '[Confirm consent before sharing this profile]'],
+  }));
+  return { jobTitle: title, companyName: company, candidates };
 }
 
 function openCandidateSlateModal(jobId) {
@@ -8473,17 +8453,17 @@ function closeCandidateSlateModal() {
 async function copyCandidateSlateMarkdown() {
   const job = appState.activeCandidateSlateJob || { title: 'Senior Role', companyName: 'Company' };
   const slate = generateCandidateSlate(job);
-  let md = `## 📄 Candidate Specimen Slate for ${slate.companyName} (${slate.jobTitle})\n\n`;
+  let md = `## 📄 Candidate Profile Template for ${slate.companyName} (${slate.jobTitle})\n\n`;
   slate.candidates.forEach(c => {
     md += `### ${c.specimenCode}\n`;
     md += `* **Target Level**: ${c.title} (${c.experienceYears})\n`;
     md += `* **Location**: ${c.currentLocation} | **Comp Band**: ${c.salaryExpectation}\n`;
-    md += `* **Verified Stack**: ${c.verifiedStack.join(', ')}\n`;
+    md += `* **Skills to verify**: ${c.verifiedStack.join(', ')}\n`;
     md += `* **Key Highlights**:\n`;
     c.achievements.forEach(a => { md += `  - ${a}\n`; });
     md += `\n`;
   });
-  md += `---\n*Confidential specimen profiles prepared by BD Engine for ${slate.companyName}. Complete resumes & blinded portfolios available upon request.*`;
+  md += `---\n*Blank planning templates for ${slate.companyName}, not real or verified candidates. Replace every placeholder with consented, verified information before sharing.*`;
 
   try {
     await navigator.clipboard.writeText(md);
@@ -8505,8 +8485,8 @@ function renderCandidateSlateModal() {
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">📄</span>
           <div>
-            <h3 id="slate-modal-title">1-Click Anonymized Candidate Pitch Slate</h3>
-            <p class="muted small">Executive-ready 2-candidate talent specimen cards for ${escapeHtml(slate.companyName)} · ${escapeHtml(slate.jobTitle)}.</p>
+            <h3 id="slate-modal-title">Candidate profile templates</h3>
+            <p class="muted small">Blank templates — no candidate database is connected. Verify every claim for ${escapeHtml(slate.companyName)} · ${escapeHtml(slate.jobTitle)}.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-candidate-slate-modal" aria-label="Close modal">&times;</button>
@@ -8515,7 +8495,7 @@ function renderCandidateSlateModal() {
       <div class="candidate-slate-grid">
         ${slate.candidates.map(c => `
           <div class="candidate-slate-card">
-            <span class="candidate-slate-badge">✓ Pre-Screened & Verified</span>
+            <span class="candidate-slate-badge">Template — not a real candidate</span>
             <h4 class="candidate-slate-title">${escapeHtml(c.specimenCode)}</h4>
             <div class="candidate-slate-exp">${escapeHtml(c.title)} · ${escapeHtml(c.experienceYears)}</div>
             <div class="candidate-slate-metric-row">
@@ -8608,28 +8588,28 @@ async function filterByGeographicHub(hubKey) {
 
 function calculateResponseLikelihood(contact = {}, job = {}, account = {}, text = '') {
   const tStart = performance.now();
-  let score = 25; // Base cold baseline
+  let score = 25; // Uncalibrated prioritization heuristic; never a probability.
   const factors = [];
 
   // 1. Warmth & Relationship
   const isConnected = Number(contact.connectionCount || account.connectionCount || 0) > 0;
   if (isConnected) {
     score += 35;
-    factors.push('✓ 1st-degree warm relationship in network (+35%)');
+    factors.push('✓ Company has imported network contacts (+35 points)');
   }
 
   // 2. Hiring Velocity
   const jobs3d = Number(account.jobsLast30Days || 0);
   if (jobs3d >= 2 || account.hiringVelocity >= 4) {
     score += 20;
-    factors.push('✓ Active hiring velocity / urgent requisition (+20%)');
+    factors.push('✓ Recent hiring activity (+20 points)');
   }
 
   // 3. Decision Maker alignment
   const title = String(contact.title || '').toLowerCase();
   if (/\b(vp|vice president|director|head of|chief|founder)\b/.test(title)) {
     score += 15;
-    factors.push('✓ High-authority hiring decision maker (+15%)');
+    factors.push('✓ Senior role title (+15 points; authority unverified)');
   }
 
   // 4. Stack specificity in text
@@ -8637,12 +8617,12 @@ function calculateResponseLikelihood(contact = {}, job = {}, account = {}, text 
   const stack = extractTechStack(job.title || '', job.department || '', textLower);
   if (stack.length >= 2) {
     score += 15;
-    factors.push(`✓ Specific tech stack grounding (${stack.map(s=>s.name).slice(0,2).join(', ')}) (+15%)`);
+    factors.push(`✓ Specific tech stack grounding (${stack.map(s=>s.name).slice(0,2).join(', ')}) (+15 points)`);
   }
 
   // Bounded
   const finalScore = Math.min(98, Math.max(12, score));
-  const rating = finalScore >= 80 ? 'Very High (🔥 Hot Path)' : finalScore >= 60 ? 'High (⚡ Strong Probability)' : finalScore >= 40 ? 'Moderate (🤝 Good Shot)' : 'Low (❄️ Cold Pitch)';
+  const rating = finalScore >= 80 ? 'High priority' : finalScore >= 60 ? 'Promising signals' : finalScore >= 40 ? 'Some signals' : 'Limited signals';
 
   const duration = performance.now() - tStart;
   if (duration > 15) console.warn(`[PERF WARNING] calculateResponseLikelihood took ${duration.toFixed(2)}ms`);
@@ -8651,7 +8631,7 @@ function calculateResponseLikelihood(contact = {}, job = {}, account = {}, text 
     score: finalScore,
     rating,
     factors,
-    tips: finalScore < 70 ? ['💡 Tip: Reference specific candidate achievements or 1st-degree mutual connections to boost reply odds above 80%.'] : ['🔥 Optimal conversion pitch ready to send!'],
+    tips: finalScore < 70 ? ['Add verified, relevant context. This heuristic score is not a reply probability.'] : ['Review the draft before sending. This heuristic is not a measured conversion rate.'],
   };
 }
 
@@ -8660,8 +8640,8 @@ function renderResponseLikelihoodMeter(contact = {}, job = {}, account = {}, tex
   return `
     <div class="response-meter-card">
       <div class="response-meter-header">
-        <span class="response-meter-title">⚡ AI Response Likelihood: <strong>${escapeHtml(prediction.rating)}</strong></span>
-        <span class="response-meter-score">${prediction.score}%</span>
+        <span class="response-meter-title">Outreach context score: <strong>${escapeHtml(prediction.rating)}</strong></span>
+        <span class="response-meter-score">${prediction.score}/100</span>
       </div>
       <div class="response-meter-bar">
         <div class="response-meter-fill" style="width: ${prediction.score}%;"></div>
@@ -9175,7 +9155,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     alerts.push({
       type: 'surge',
       badge: '⚡ SIGNAL INTEL',
-      text: isJobSeeker ? 'Monitoring live ATS boards across 240+ target tech employers...' : 'Monitoring live ATS feeds across 240+ target tech employers...',
+      text: isJobSeeker ? 'No recent hiring signals in the loaded data. Refresh your configured sources.' : 'No recent hiring signals in the loaded data. Refresh your configured sources.',
     });
   }
 
@@ -9212,10 +9192,12 @@ function generateAutopilotQueue(accounts = [], jobs = [], contacts = []) {
 
   candidateAccounts.forEach(account => {
     const accJobs = (Array.isArray(jobs) ? jobs : []).filter(j => j.accountId === account.id || j.companyName === account.displayName);
-    const topJob = accJobs[0] || { title: 'Senior Software Engineer', companyName: account.displayName };
+    const topJob = accJobs.find((item) => item.active !== false);
+    if (!topJob) return;
     const accContacts = (Array.isArray(contacts) ? contacts : []).filter(c => c.accountId === account.id || c.companyName === account.displayName);
     const rankedContacts = rankContactsForJob(topJob, accContacts);
-    const topContact = rankedContacts[0] || { fullName: isJobSeeker ? 'Engineering Leader' : 'Hiring Leader', title: 'Engineering Director' };
+    const topContact = rankedContacts[0];
+    if (!topContact?.fullName) return;
 
     const stack = extractTechStack(topJob.title, topJob.department, '');
     const draft = isJobSeeker
@@ -9265,9 +9247,15 @@ function closeAutopilotModal() {
 }
 
 async function executeAutopilotQueue() {
-  playActionChime('success');
-  showToast(isJobSeekerPersona() ? `🚀 Career Co-Pilot launched ${appState.activeAutopilotQueue.length} warm referral intros!` : `🚀 Autopilot executed ${appState.activeAutopilotQueue.length} multi-touch pipelines!`, 'success');
-  closeAutopilotModal();
+  const queue = appState.activeAutopilotQueue || [];
+  if (!queue.length) { showToast('No grounded drafts are available yet.', 'info'); return; }
+  const text = queue.map((item) => `${item.account.displayName}\nTo: ${item.contact.fullName}\n${item.draft.subject || ''}\n${item.draft.body}`).join('\n\n---\n\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`${queue.length} drafts copied. Review and send them yourself; nothing was sent or logged.`, 'success');
+  } catch {
+    showToast('Could not copy drafts. Select and copy the text from each card.', 'error');
+  }
 }
 
 function renderAutopilotModal() {
@@ -9275,16 +9263,16 @@ function renderAutopilotModal() {
   const isJobSeeker = isJobSeekerPersona();
   const queue = appState.activeAutopilotQueue || [];
 
-  const modalTitle = isJobSeeker ? 'Autonomous Career Co-Pilot' : 'Autonomous Prospecting Co-Pilot';
+  const modalTitle = isJobSeeker ? 'Career outreach drafts' : 'Prospecting drafts';
   const modalSub = isJobSeeker
-    ? '1-Click intelligent auto-run: Matches target companies, finds team connections, and drafts warm referral intro requests.'
-    : '1-Click intelligent auto-run: Scans workspace, pairs decision makers, and drafts 3-touch sequences.';
+    ? 'Drafts based on loaded roles and contacts. Review and send manually; nothing is sent automatically.'
+    : 'Drafts based on loaded roles and contacts. Review and send manually; nothing is sent automatically.';
   const heroTitle = isJobSeeker
     ? `⚡ High-Conviction Career Pipeline Ready (${queue.length} Target Employers)`
     : `⚡ High-Conviction Daily Pipeline Ready (${queue.length} Target Accounts)`;
   const heroSub = isJobSeeker
-    ? 'All opportunities pre-grounded with verified stack DNA, hiring surge signals, and warm colleague routing.'
-    : 'All opportunities pre-grounded with verified stack DNA, hiring surge signals, and warm decision-maker routing.';
+    ? 'Context comes from imported data; verify the role and relationship before sending.'
+    : 'Context comes from imported data; verify the role and relationship before sending.';
 
   autopilotModalBackdrop.innerHTML = `
     <div class="modal-dialog autopilot-dialog" role="dialog" aria-modal="true" aria-labelledby="autopilot-title">
@@ -9304,7 +9292,7 @@ function renderAutopilotModal() {
           <h4 class="autopilot-hero-title">${heroTitle}</h4>
           <div class="autopilot-hero-sub">${heroSub}</div>
         </div>
-        <button class="primary-button" type="button" data-action="execute-autopilot-queue">${isJobSeeker ? '🚀 Launch Career Outreach' : '🚀 Approve & Execute All'}</button>
+        <button class="primary-button" type="button" data-action="execute-autopilot-queue">Copy drafts for review</button>
       </div>
 
       <div class="autopilot-queue-grid">
@@ -9315,7 +9303,7 @@ function renderAutopilotModal() {
                 <strong>${idx + 1}. ${escapeHtml(item.account.displayName)}</strong>
                 <span class="status-pill status-pill--success">${escapeHtml(item.job.title)}</span>
               </span>
-              <span class="response-meter-score">${item.prediction.score}% Reply Odds</span>
+              <span class="response-meter-score">${item.prediction.score}/100 context score</span>
             </div>
             <div class="small muted">Routed To: <strong>${escapeHtml(item.contact.fullName)}</strong> (${escapeHtml(item.contact.title || 'Leadership')})</div>
             <div class="autopilot-touch-preview">"${escapeHtml(item.draft.body.slice(0, 140))}..."</div>
@@ -9336,30 +9324,8 @@ function renderAutopilotModal() {
    ══════════════════════════════════════════════════ */
 
 function renderScriptAnalyticsCockpit() {
-  const isJobSeeker = isJobSeekerPersona();
-  return `
-    <div class="analytics-cockpit-card">
-      <div class="analytics-cockpit-title">${isJobSeeker ? '📊 Career Search & Referral Conversion Cockpit' : '📊 Script Conversion & Deal Attribution Cockpit'}</div>
-      <div class="analytics-cockpit-grid">
-        <div class="analytics-stat-box">
-          <div class="analytics-stat-num">58.4%</div>
-          <div class="analytics-stat-label">${isJobSeeker ? '🤝 Warm Referral Reply Rate' : '👑 Decision Maker Reply Rate'}</div>
-        </div>
-        <div class="analytics-stat-box">
-          <div class="analytics-stat-num">42.8%</div>
-          <div class="analytics-stat-label">${isJobSeeker ? '🎯 Hiring Manager Response' : '🤝 Warm Peer Referral Rate'}</div>
-        </div>
-        <div class="analytics-stat-box">
-          <div class="analytics-stat-num">68.2%</div>
-          <div class="analytics-stat-label">${isJobSeeker ? '🛡️ Recruiter Screen Pass Rate' : '🛡️ Objection Buster Win-Rate'}</div>
-        </div>
-        <div class="analytics-stat-box">
-          <div class="analytics-stat-num">${isJobSeeker ? '$165,000' : '$148,500'}</div>
-          <div class="analytics-stat-label">${isJobSeeker ? '💼 Target Role Comp Potential' : '💼 Active Weighted Pipeline'}</div>
-        </div>
-      </div>
-    </div>
-  `;
+  // Retained for older integrations; measured outcomes live in the Outcomes view.
+  return '';
 }
 
 /* ══════════════════════════════════════════════════
@@ -9376,7 +9342,7 @@ function generateClientPitchDeck(account = {}, jobs = []) {
   return {
     isJobSeeker,
     companyName: compName,
-    activeJobsCount: accJobs.length || 1,
+    activeJobsCount: accJobs.length,
     techStack: stack,
     candidateSlate: slate,
   };
@@ -9407,9 +9373,9 @@ async function copyPitchDeckMarkdown() {
   const deck = generateClientPitchDeck(account, appState.jobs || []);
   let md = `# 💎 ${isJobSeeker ? 'Career Candidate Capability Dossier' : 'BD Engine Talent Capability & Market Dossier'}: ${deck.companyName}\n\n`;
   md += `## 🎯 Executive Summary\nPrepared exclusively for leadership at **${deck.companyName}**.\n\n`;
-  md += `## 🧠 Verified Tech Stack Grounding\n`;
+  md += `## 🧠 Keywords inferred from job titles — verify with the source\n`;
   deck.techStack.forEach(s => { md += `* **${s.name}** (${s.category.toUpperCase()})\n`; });
-  md += `\n## 📄 Pre-Screened Candidate Slate Specimen\n`;
+  md += `\n## 📄 Blank Candidate Profile Templates — Not Real Candidates\n`;
   deck.candidateSlate.candidates.forEach(c => {
     md += `### ${c.specimenCode}\n- Role: ${c.title} (${c.experienceYears})\n- Compensation Band: ${c.salaryExpectation}\n`;
   });
@@ -9464,7 +9430,7 @@ function renderPitchDeckModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">📄 Verified Specimen Profiles</div>
+          <div class="battle-plan-section-title">📄 Blank profile templates — verify before sharing</div>
           <div class="candidate-slate-grid">
             ${deck.candidateSlate.candidates.map(c => `
               <div class="candidate-slate-card">
@@ -10032,27 +9998,40 @@ async function logAllBatchOutreachSent() {
   renderBatchOutreachModal();
 }
 
-async function updateJobPipelineStage(jobId, stage) {
+async function updateJobPipelineStage(jobId, stage, options = {}) {
   if (!jobId) return;
+  if (!canMutateWorkspace()) { showToast('This workspace is read-only.', 'info'); return; }
+  if (appState.bootstrap?.capabilities?.jobPipeline) {
+    try {
+      await api(`/api/jobs/${encodeURIComponent(jobId)}/pipeline`, { method: 'PATCH', body: JSON.stringify({ stage }) });
+      const job = (appState.jobs || []).find((item) => item.id === jobId);
+      if (job) job.pipelineStage = stage;
+      showToast(stage ? 'Pipeline stage saved to your workspace.' : 'Role removed from your pipeline.', 'success');
+      if (!options.skipRender && getRouteRoot() === 'jobs') await renderJobsView();
+    } catch (error) {
+      showToast(`Could not save pipeline stage: ${error.message || error}`, 'error');
+    }
+    return;
+  }
   if (!stage) {
     delete appState.jobPipelineStages[jobId];
   } else {
     appState.jobPipelineStages[jobId] = stage;
   }
   localStorage.setItem('bd_job_pipeline', JSON.stringify(appState.jobPipelineStages));
-  showToast(stage ? `✓ Role updated in Pipeline: ${stage}` : 'Role removed from pipeline.', 'success');
-  if (getRouteRoot() === 'jobs') await renderJobsView();
+  showToast(stage ? `Role saved on this device: ${stage}` : 'Role removed from this device’s pipeline.', 'success');
+  if (!options.skipRender && getRouteRoot() === 'jobs') await renderJobsView();
 }
 
 /* ── Phase 7: Viral Growth & Social Sharing Loop ── */
 
 function shareNetworkStats() {
   const summary = appState.bootstrap?.summary || {};
-  const contactCount = summary.contactCount || 240;
-  const companyCount = summary.accountCount || 35;
-  const jobCount = summary.activeJobCount || 18;
+  const contactCount = Number(summary.contactCount || 0);
+  const companyCount = Number(summary.accountCount || 0);
+  const jobCount = Number(summary.activeJobCount || summary.jobCount || 0);
 
-  const shareText = `I just mapped my LinkedIn network against live tech job boards using BD Engine. 🚀\n\nDiscovered ${companyCount} hiring companies and ${jobCount} live Remote & Local roles where I have 1st-degree connections for warm referrals!\n\nCheck out your network matches for free here:`;
+  const shareText = `I just mapped my LinkedIn network against live tech job boards using BD Engine. 🚀\n\nMy workspace contains ${contactCount} imported contacts, ${companyCount} companies, and ${jobCount} active imported roles. I'm using it to research possible introductions.\n\nCheck out your network matches for free here:`;
   const shareUrl = 'https://bd-engine-production.up.railway.app';
 
   navigator.clipboard?.writeText?.(`${shareText} ${shareUrl}`).catch(() => {});
@@ -10157,7 +10136,7 @@ function renderPricingModal() {
 
         <div class="pricing-guarantee-strip">
           <span class="shield-icon" aria-hidden="true">🛡️</span>
-          <span><strong>14-Day Money-Back Guarantee:</strong> 100% satisfaction guaranteed. If you don't get at least 3 warm referral opportunities in your first week, email support for an immediate refund.</span>
+          <span>Review the plan, coverage limits, and cancellation terms before subscribing. Hiring outcomes and referrals are not guaranteed.</span>
         </div>
       </div>
 
@@ -10530,64 +10509,19 @@ async function copyMorningRadarText() {
   }
 }
 
-function renderDashboardRoiHero(dashboard = {}, outcomeSummary = {}) {
-  const isJobSeeker = isJobSeekerPersona();
+function renderDashboardRoiHero(dashboard = {}) {
   const summary = dashboard.summary || {};
-  const activeJobs = Number(summary.activeJobCount || 0);
-  const connectedJobs = Number(summary.connectedJobCount || Math.round(activeJobs * 0.45));
-  const pipelineVal = isJobSeeker ? '$120k–$180k Avg Target' : (outcomeSummary?.totalValueCents ? `$${(outcomeSummary.totalValueCents / 100).toLocaleString()}` : '$45,000');
-  const hoursSaved = '8.5 hrs/wk';
-  const warmRate = '42%';
-
+  const incomplete = Number(summary.incompleteBoardCount || 0);
   return `
-    <section class="dash-roi-hero" aria-label="Commercial ROI and Sourcing Intelligence">
-      <div class="dash-roi-hero-header">
-        <div>
-          <span class="roi-header-badge">💎 ${isJobSeeker ? 'Hidden Job Market Network' : 'Staffing BD Value Engine'}</span>
-          <h3 style="margin: 6px 0 0 0; font-size: 1.25rem;">${isJobSeeker ? 'Your Warm Referral Advantage' : 'Hiring Signal Pipeline & Commercial ROI'}</h3>
-        </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="topbar-radar-btn secondary-button secondary-button--sm" type="button" data-action="open-morning-radar">
-            <span class="btn-icon" aria-hidden="true">📡</span>
-            <span>Morning Radar Briefing</span>
-          </button>
-          <button class="primary-button primary-button--sm" type="button" data-action="open-pricing-modal">
-            <span>Upgrade Plan ($${isJobSeeker ? '5' : '10'}/mo)</span>
-          </button>
-        </div>
+    <section class="workspace-health" aria-label="Workspace data status">
+      <div><span class="eyebrow">Data status</span><strong>${incomplete ? `${formatNumber(incomplete)} sources need attention` : 'Your tracked careers boards'}</strong>
+        <p class="muted small">${summary.lastRefreshedAt ? `Last successful or partial refresh: ${escapeHtml(formatDate(summary.lastRefreshedAt))}` : 'No completed refresh recorded yet.'} Coverage is limited to configured sources.</p>
       </div>
-
-      <div class="dash-roi-grid">
-        <div class="roi-metric-tile">
-          <span class="roi-metric-val">${pipelineVal}</span>
-          <span class="roi-metric-lbl">${isJobSeeker ? 'Target Placement Value' : 'Active Pipeline Generated'}</span>
-          <span class="roi-metric-sub">${isJobSeeker ? 'Roles matched to 1st-degree contacts' : 'Across qualified hiring opportunities'}</span>
-        </div>
-        <div class="roi-metric-tile">
-          <span class="roi-metric-val">${hoursSaved}</span>
-          <span class="roi-metric-lbl">Sourcing Hours Saved</span>
-          <span class="roi-metric-sub">Automated 12-ATS board scraping vs manual</span>
-        </div>
-        <div class="roi-metric-tile">
-          <span class="roi-metric-val">${warmRate}</span>
-          <span class="roi-metric-lbl">Warm Referral Reply Rate</span>
-          <span class="roi-metric-sub">vs 3% industry cold outreach average</span>
-        </div>
-        <div class="roi-metric-tile">
-          <span class="roi-metric-val">${formatNumber(connectedJobs)}</span>
-          <span class="roi-metric-lbl">Live Roles with Warm Intros</span>
-          <span class="roi-metric-sub">1st & 2nd degree colleagues mapped</span>
-        </div>
+      <div class="workspace-health__counts">
+        <span><strong>${formatNumber(getDashboardActiveJobCount(summary))}</strong> active roles</span>
+        <span><strong>${summary.readyBoardCount === undefined ? '—' : formatNumber(summary.readyBoardCount)}</strong> ready boards</span>
       </div>
-
-      <div class="dash-roi-footer">
-        <span style="font-size: 0.8rem; color: #94a3b8;">
-          💡 <em>"A single warm referral placement pays for over 10 years of BD Engine."</em>
-        </span>
-        <button class="inline-action-link" type="button" data-action="open-pricing-modal" style="color: #60a5fa;">
-          View ${isJobSeeker ? 'Job Seeker ($5/mo)' : 'Sales Pro ($10/mo)'} Benefits →
-        </button>
-      </div>
+      <a class="inline-action-link" href="#/admin/jobs">Check sources <span aria-hidden="true">→</span></a>
     </section>
   `;
 }
@@ -10674,19 +10608,7 @@ async function renderDashboardView(options = {}) {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
-    ${renderLiveSignalTicker(dashboard.todayQueue || [], dashboard.newJobsToday || [])}
-
-    ${renderScriptAnalyticsCockpit()}
-
-    ${render3StepValueSprint(dashboard, personaCopy)}
-
-    ${renderDashboardCommandCenterTabs(dashboard, extended)}
-
     ${renderDashboardRoiHero(dashboard, appState.outcomeSummary)}
-
-    ${dashSection('fee-simulator', renderFeePipelineSimulator(dashboard, appState.outcomeSummary))}
-
-    ${dashSection('icp-matrix', renderIcpQuadrantMatrix(dashboard.todayQueue || appState.accounts || [], appState.jobs || []))}
 
     ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
       ${renderDashboardCustomizer()}
@@ -11558,10 +11480,15 @@ async function renderJobsView() {
   const targetRoleThreshold = getTargetRoleThreshold(searchFocus);
   const focusConfigured = Boolean(searchFocus.targetRoles || searchFocus.excludedRoles || searchFocus.targetIndustries || (searchFocus.workStyle && searchFocus.workStyle !== 'any'));
   if (focusConfigured && !appState.jobQuery.sortBy) appState.jobQuery.sortBy = 'relevance';
-  const result = await api(`/api/jobs${buildQuery(appState.jobQuery)}`);
-  if (appState.jobQuery.pipelineOnly === 'true') {
-    result.items = result.items.filter((item) => Boolean(appState.jobPipelineStages?.[item.id]));
+  const jobRequest = { ...appState.jobQuery };
+  const serverPipeline = stateBootstrap.capabilities?.jobPipeline === true;
+  if (!serverPipeline && jobRequest.pipelineOnly === 'true') {
+    delete jobRequest.pipelineOnly;
+    jobRequest.ids = Object.keys(appState.jobPipelineStages || {}).join(',');
   }
+  const result = await api(`/api/jobs${buildQuery(jobRequest)}`);
+  // Keep the job detail/composer cache aligned with the visible page.
+  appState.jobs = result.items;
   const jobAdvancedCount = ['geography', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
@@ -11574,18 +11501,16 @@ async function renderJobsView() {
         </div>
         <div class="kpi-ribbon headline-metrics headline-metrics--compact">
           ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('Recent postings', formatNumber(result.items.filter((item) => item.isNew).length))}
+          ${renderMetricTile('Active in workspace', result.summary?.activeTotal === undefined ? '—' : formatNumber(result.summary.activeTotal))}
         </div>
       </div>
     </section>
-
-    ${renderGeographicHubFilter()}
 
     <section class="table-card">
       <div class="panel-header">
         <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>
         <div class="panel-actions">
-          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal"><span class="btn-icon">⚡</span><span>Import Network</span></button>
+          <a class="secondary-button secondary-button--sm" href="#/admin/jobs">Check sources & refresh</a>
           ${renderExportOptions('jobs', 'Job options')}
         </div>
       </div>
@@ -11594,15 +11519,12 @@ async function renderJobsView() {
         <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.geography && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
         <button class="job-preset-chip${appState.jobQuery.sortBy === 'relevance' && appState.jobQuery.minRelevance === String(targetRoleThreshold) ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
         <button class="job-preset-chip${appState.jobQuery.geography === 'canada' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
-        <button class="job-preset-chip${appState.jobQuery.workStyle === 'local_remote' || appState.jobQuery.geography === 'local_remote' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="local_remote">🏡 Local or Remote</button>
         <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
-        <button class="job-preset-chip${appState.jobQuery.sortBy === 'connections' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="most_connected">⚡ Most Connected</button>
-        <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">🎯 In Pipeline (${Object.keys(appState.jobPipelineStages || {}).length})</button>
-        <button class="job-preset-chip${appState.jobQuery.minRelevance === '45' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="best_fit">🌟 Best Fit</button>
-        <button class="job-preset-chip${appState.jobQuery.recencyDays === '7' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="recent">⏱️ Past 7 Days</button>
+        <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
       </div>
+      <p class="job-results-context muted small" role="status">${formatNumber(result.total)} results${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · title focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · all role titles'}. This is your imported inventory, not a search of every job on the web. <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a></p>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
-        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location, contact">`)}
+        ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('Network', `<select name="hasContacts"><option value="">All companies</option><option value="true" ${selected(appState.jobQuery.hasContacts, 'true')}>In my network (has contacts)</option></select>`)}
         ${renderField('Work style', `<select name="workStyle"><option value="">All work styles</option><option value="local_remote" ${selected(appState.jobQuery.workStyle, 'local_remote')}>Local or Remote (Preferred)</option><option value="remote" ${selected(appState.jobQuery.workStyle, 'remote')}>Remote only</option><option value="hybrid" ${selected(appState.jobQuery.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(appState.jobQuery.workStyle, 'onsite')}>On-site only</option></select>`)}
         ${renderField('Sort by', `<select name="sortBy"><option value="">Posted date</option><option value="connections" ${selected(appState.jobQuery.sortBy, 'connections')}>Most connections in network</option><option value="relevance" ${selected(appState.jobQuery.sortBy, 'relevance')}>Best fit</option><option value="retrieved" ${selected(appState.jobQuery.sortBy, 'retrieved')}>Retrieved date</option></select>`)}
@@ -11621,7 +11543,7 @@ async function renderJobsView() {
           </div>
         </details>
       </form>
-      ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: 'Reset filters, import LinkedIn connections to match open roles, or try the sample network.', action: '<button class="primary-button" type="button" data-action="open-network-import-modal">⚡ Import Connections</button><button class="secondary-button" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button>' })}
+      ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: result.summary?.activeTotal ? 'Your workspace has active jobs. Broaden a filter or edit your role focus. Importing contacts will not expand the job boards being searched.' : 'No active jobs have been imported yet. Check that your target companies have approved careers boards, then refresh those sources.', action: '<button class="primary-button" type="button" data-action="reset-filters" data-view="jobs">Clear filters</button><a class="secondary-button" href="#/admin/jobs">Check job sources</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -12224,7 +12146,7 @@ async function exportJobsCsv() {
     ['Role Title', 'Company', 'Location', 'Work Style', 'Connection Count', 'Matched Contacts', 'Pipeline Stage', 'Fit Score', 'Posting URL', 'Generated Warm Referral Note'],
     items.map(j => {
       const contacts = Array.isArray(j.contacts) ? j.contacts.map(c => `${c.fullName} (${c.title || 'Contact'})`).join('; ') : (j.topContactName || '');
-      const stage = appState.jobPipelineStages?.[j.id] || 'Not tracked';
+      const stage = (appState.bootstrap?.capabilities?.jobPipeline ? j.pipelineStage : appState.jobPipelineStages?.[j.id]) || 'Not tracked';
       const copyObj = generateWarmStudioCopy({
         job: j,
         account: { displayName: j.companyName },
@@ -12367,7 +12289,7 @@ function renderJobsTable(items, compact) {
         const rankedContacts = rankContactsForJob(item, rawContacts);
         const roleVel = detectRoleVelocity(item);
         const isJobSeeker = isJobSeekerPersona();
-        const pipelineStage = appState.jobPipelineStages?.[item.id] || '';
+        const pipelineStage = (appState.bootstrap?.capabilities?.jobPipeline ? item.pipelineStage : appState.jobPipelineStages?.[item.id]) || '';
         const skills = extractRoleSkills(item.title, item.department);
         const stack = extractTechStack(item.title, item.department, '');
         return `
@@ -12420,7 +12342,7 @@ function renderJobsTable(items, compact) {
           </td>
           <td data-label="Pipeline">
             <div class="job-pipeline-cell">
-              <select class="job-pipeline-select compact-select" data-action="update-job-pipeline-stage" data-job-id="${escapeAttr(item.id || '')}">
+              <select class="job-pipeline-select compact-select" aria-label="Pipeline stage for ${escapeAttr(item.title || 'role')} at ${escapeAttr(item.companyName || 'company')}" data-action="update-job-pipeline-stage" data-job-id="${escapeAttr(item.id || '')}">
                 <option value="" ${!pipelineStage ? 'selected' : ''}>+ Track</option>
                 <option value="saved" ${pipelineStage === 'saved' ? 'selected' : ''}>🔖 Saved</option>
                 <option value="contacted" ${pipelineStage === 'contacted' ? 'selected' : ''}>💬 Intro Sent</option>
@@ -12443,7 +12365,7 @@ function renderJobsTable(items, compact) {
             </div>
           </td>
           <td data-label="Source">${renderStatusPill(item.atsType || 'unknown', 'neutral')} ${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}</td>
-          <td data-label="Timing">${formatDate(item.postedAt)}<div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></td>
+          <td data-label="Timing">${item.postedAt ? formatDate(item.postedAt) : escapeHtml(item.postingAgeText || 'Posting date unavailable')}<div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></td>
         </tr>`;
       }).join('')}
     </tbody></table></div>`;
@@ -13033,7 +12955,7 @@ function renderJobCoverageHealth(diagnostics = {}) {
         ${renderMetricCard('Refreshed successfully', summary.successful || 0, 'Sources returning usable live jobs')}
         ${renderMetricCard('Need company details', summary.needsCompanyDetails || 0, 'Add a domain or careers page to continue')}
         ${renderMetricCard('Need review', summary.needsReview || 0, 'Matches waiting for confirmation')}
-        ${renderMetricCard('Refresh issues', Number(summary.failed || 0) + Number(summary.empty || 0), `${formatNumber(summary.failed || 0)} failed / ${formatNumber(summary.empty || 0)} returned no open jobs`)}
+        ${renderMetricCard('Refresh issues', Number(summary.failed || 0) + Number(summary.partial || 0) + Number(summary.empty || 0), `${formatNumber(summary.failed || 0)} failed / ${formatNumber(summary.partial || 0)} incomplete / ${formatNumber(summary.empty || 0)} empty`)}
         ${renderMetricCard('Tracking only', summary.trackingOnly || 0, 'Saved careers pages without automatic imports')}
       </div>
       <div class="inline-header">
@@ -13308,7 +13230,7 @@ async function runLiveImport(buttonEl) {
     const discoveryText = Number(stats.autoDiscoveryChecked || 0) > 0
       ? `Found ${formatNumber(stats.autoDiscoveryMapped || 0)} of ${formatNumber(stats.autoDiscoveryChecked || 0)} job boards before import. `
       : '';
-    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} job boards; kept ${formatNumber(stats.canadaKept || 0)} Canada jobs, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} non-Canada, and is tracking ${formatNumber(activeJobCount)} active jobs total.${changedText}`;
+    const baseStatus = `${discoveryText}Fetched ${formatNumber(stats.fetched || 0)} jobs across ${formatNumber(stats.configs || 0)} job boards; kept ${formatNumber(stats.kept ?? stats.canadaKept ?? 0)} within your import geography, filtered ${formatNumber(stats.filteredOutNonCanada || 0)} outside it, and is tracking ${formatNumber(activeJobCount)} active jobs total. ${formatNumber(stats.partialBoards || 0)} boards returned incomplete coverage.${changedText}`;
     const status = run?.status === 'completed_with_errors'
       ? `${baseStatus} ${formatNumber(stats.errors || 0)} boards had issues.`
       : baseStatus;

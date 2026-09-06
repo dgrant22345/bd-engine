@@ -69,6 +69,14 @@ export function parseGeographyFocus(geographyFocus) {
 }
 
 export function classifyJobRegion(item = {}, accountItem = null) {
+  const locations = Array.isArray(item.locations) ? item.locations : String(item.location || '').split(' | ');
+  if (locations.length > 1) {
+    const regions = new Set(locations.map((location) => classifyJobRegion({ location })));
+    if (regions.has('north_america') || (regions.has('canada') && regions.has('us'))) return 'north_america';
+    if (regions.has('canada')) return 'canada';
+    if (regions.has('us')) return 'us';
+    if (regions.has('remote')) return 'remote';
+  }
   const text = [
     item.location,
     item.country,
@@ -143,4 +151,53 @@ export function buildCanadaJobLocationSql(expression = 'j.location') {
     ${expression} ~* '${CANADA_CODE_SQL_PATTERN}' OR
     ((${canadaCities}) AND NOT ((${conflicts}) OR ${expression} ~* '${CONFLICTING_CODE_SQL_PATTERN}'))
   )`;
+}
+
+// Generate PostgreSQL patterns from the same rules as the in-memory classifier.
+// Expressions are code-owned, never user input; filter values remain parameters.
+function regexSql(expression, regex) {
+  const pattern = regex.source.replaceAll('\\b', '\\y').replaceAll('(?:', '(');
+  return `${expression} ~* '${sqlLiteral(pattern)}'`;
+}
+
+export function buildJobGeographySql(geography, expression = 'j.location') {
+  if (geography === 'gta') {
+    return `(${regexSql(expression, GTA_CITY_RE)} OR ((${regexSql(expression, /\b(canada|ontario)\b/i)} OR ${regexSql(expression, /(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i)}) AND NOT ${regexSql(expression, NON_GTA_CANADA_RE)}))`;
+  }
+  if (!['canada', 'us', 'canada_us'].includes(geography)) return 'TRUE';
+  const text = 'location_part';
+  const match = (regex) => regexSql(text, regex);
+  const region = `CASE
+    WHEN ${match(NORTH_AMERICA_REGION_RE)} OR (${match(CANADA_COUNTRY_RE)} AND ${match(US_COUNTRY_RE)}) THEN 'north_america'
+    WHEN ${match(CANADA_COUNTRY_RE)} THEN 'canada'
+    WHEN ${match(US_COUNTRY_RE)} THEN 'us'
+    WHEN ${match(NEWFOUNDLAND_CODE_RE)} THEN 'canada'
+    WHEN ${match(OTHER_REGION_RE)} OR ${match(OTHER_COUNTRY_CODE_RE)} THEN 'other'
+    WHEN ${match(CANADA_CODE_RE)} THEN 'canada'
+    WHEN ${match(US_CODE_RE)} THEN 'us'
+    WHEN ${match(CANADA_PROVINCE_RE)} THEN 'canada'
+    WHEN ${match(US_STATE_RE)} THEN 'us'
+    WHEN ${match(CANADA_CITY_RE)} THEN 'canada'
+    WHEN ${match(US_CITY_RE)} THEN 'us' ELSE 'other' END`;
+  const allowed = geography === 'canada_us' ? "'canada', 'us', 'north_america'" : `'${geography}', 'north_america'`;
+  return `EXISTS (SELECT 1 FROM unnest(string_to_array(COALESCE(${expression}, ''), ' | ')) AS location_part WHERE (${region}) IN (${allowed}))`;
+}
+
+export function classifyWorkStyle(item = {}) {
+  const declared = normalizeKey(item.workplaceType);
+  if (['remote', 'hybrid', 'onsite'].includes(declared)) return declared;
+  const text = [item.location, item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' ').toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  if (/\bhybrid\b/.test(text)) return 'hybrid';
+  if (/\b(remote|work from home|distributed|anywhere)\b/.test(text)) return 'remote';
+  if (/\b(on site|onsite|in office|office based)\b/.test(text)) return 'onsite';
+  return 'unknown';
+}
+
+export function buildJobWorkStyleSql(alias = 'j') {
+  const declared = `lower(COALESCE(${alias}.raw->>'workplaceType', ''))`;
+  const text = `lower(regexp_replace(concat_ws(' ', ${alias}.location, ${alias}.title, ${alias}.raw->>'department', ${alias}.raw->>'employmentType', ${alias}.raw->>'commitment'), '[^a-zA-Z0-9]+', ' ', 'g'))`;
+  return `CASE WHEN ${declared} IN ('remote', 'hybrid', 'onsite') THEN ${declared}
+    WHEN ${regexSql(text, /\bhybrid\b/i)} THEN 'hybrid'
+    WHEN ${regexSql(text, /\b(remote|work from home|distributed|anywhere)\b/i)} THEN 'remote'
+    WHEN ${regexSql(text, /\b(on site|onsite|in office|office based)\b/i)} THEN 'onsite' ELSE 'unknown' END`;
 }

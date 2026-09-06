@@ -1,6 +1,6 @@
 import { dbQuery, isDbReady } from './db.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
-import { buildCanadaJobLocationSql } from './job-geography.js';
+import { buildTenantJobQueries } from './job-queries.js';
 
 function rawOrRow(row) {
   return row?.raw && typeof row.raw === 'object' ? row.raw : row;
@@ -251,149 +251,38 @@ export async function findTenantConfigsRelational(tenantId, query = {}) {
   };
 }
 
-function normalizedAtsFilter(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (normalized.includes('greenhouse')) return ['like', '%greenhouse%'];
-  if (normalized.includes('lever')) return ['like', '%lever%'];
-  if (normalized.includes('ashby')) return ['like', '%ashby%'];
-  if (normalized.includes('smartrecruiters')) return ['like', '%smartrecruiters%'];
-  if (normalized.includes('jobvite')) return ['like', '%jobvite%'];
-  if (normalized.includes('workday') || normalized.includes('myworkdayjobs')) return ['like', '%workday%'];
-  if (normalized.includes('bamboohr')) return ['like', '%bamboohr%'];
-  if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return ['in', ['customstatic', 'staticcareers']];
-  return ['equal', normalized];
-}
-
 export async function findTenantJobsRelational(tenantId, query = {}) {
   if (!isDbReady()) return null;
-  const page = Math.max(1, Number(query.page || 1));
-  const pageSize = Math.max(1, Math.min(10000, Number(query.pageSize || 25)));
-  const offset = (page - 1) * pageSize;
-  const params = [tenantId];
-  const clauses = ['j.tenant_id = $1'];
-  const addParam = (value) => {
-    params.push(value);
-    return `$${params.length}`;
-  };
-
-  const search = String(query.q || '').trim();
-  if (search) {
-    const ref = addParam(escapedSearchPattern(search));
-    clauses.push(`(j.title ILIKE ${ref} ESCAPE '\\' OR j.company_name ILIKE ${ref} ESCAPE '\\' OR j.location ILIKE ${ref} ESCAPE '\\' OR j.source ILIKE ${ref} ESCAPE '\\')`);
-  }
-  if (query.geography) {
-    if (query.geography === 'gta') {
-      clauses.push(`(
-        j.location ILIKE '%toronto%' OR j.location ILIKE '%gta%' OR j.location ILIKE '%mississauga%' OR
-        j.location ILIKE '%brampton%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%vaughan%' OR
-        j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
-        j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
-        j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
-        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
-      )`);
-    } else if (query.geography === 'remote') {
-      clauses.push(`(j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%')`);
-    } else if (query.geography === 'local_remote') {
-      clauses.push(`(
-        j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%' OR
-        j.location ILIKE '%toronto%' OR j.location ILIKE '%gta%' OR j.location ILIKE '%mississauga%' OR
-        j.location ILIKE '%brampton%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%vaughan%' OR
-        j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
-        j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
-        j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
-        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
-      )`);
-    } else if (query.geography === 'canada') {
-      clauses.push(buildCanadaJobLocationSql('j.location'));
-    } else if (query.geography === 'us') {
-      clauses.push(`(
-        j.location ILIKE '%united states%' OR j.location ILIKE '%usa%' OR j.location ILIKE '%u.s.%' OR
-        j.location ILIKE '%, CA%' OR j.location ILIKE '%, NY%' OR j.location ILIKE '%, MA%' OR
-        j.location ILIKE '%, TX%' OR j.location ILIKE '%, WA%' OR j.location ILIKE '%, FL%' OR
-        j.location ILIKE '%, IL%' OR j.location ILIKE '%, GA%' OR j.location ILIKE '%, CO%'
-      )`);
-    }
-  }
-  if (query.workStyle) {
-    if (query.workStyle === 'remote') {
-      clauses.push(`(j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%')`);
-    } else if (query.workStyle === 'hybrid') {
-      clauses.push(`(j.location ILIKE '%hybrid%' OR j.raw->>'location' ILIKE '%hybrid%')`);
-    } else if (query.workStyle === 'onsite') {
-      clauses.push(`(j.location ILIKE '%onsite%' OR j.location ILIKE '%on site%' OR j.location ILIKE '%in office%')`);
-    } else if (query.workStyle === 'local_remote') {
-      clauses.push(`(
-        j.location ILIKE '%remote%' OR j.title ILIKE '%remote%' OR j.raw->>'location' ILIKE '%remote%' OR
-        j.location ILIKE '%toronto%' OR j.location ILIKE '%gta%' OR j.location ILIKE '%mississauga%' OR
-        j.location ILIKE '%brampton%' OR j.location ILIKE '%markham%' OR j.location ILIKE '%vaughan%' OR
-        j.location ILIKE '%oakville%' OR j.location ILIKE '%scarborough%' OR j.location ILIKE '%north york%' OR
-        j.location ILIKE '%richmond hill%' OR j.location ILIKE '%etobicoke%' OR j.location ILIKE '%kitchener%' OR
-        j.location ILIKE '%waterloo%' OR j.location ILIKE '%hamilton%' OR j.location ILIKE '%, ON%' OR
-        j.location ILIKE '%,ON%' OR j.location ILIKE '%ontario%' OR j.location ILIKE '%canada%'
-      )`);
-    }
-  }
-  if (query.hasContacts === 'true' || query.hasContacts === true || query.hasConnections === 'true' || query.hasConnections === true || query.networkOnly === 'true' || query.networkOnly === true) {
-    clauses.push(`COALESCE((j.raw->>'connectionCount')::int, 0) > 0`);
-  }
-  const minConnections = Number(query.minConnections || 0);
-  if (minConnections > 0) {
-    clauses.push(`COALESCE((j.raw->>'connectionCount')::int, 0) >= ${addParam(minConnections)}`);
-  }
-  if (query.ats) {
-    const [mode, value] = normalizedAtsFilter(query.ats);
-    const expression = `lower(regexp_replace(COALESCE(NULLIF(j.ats_type, ''), j.source), '[^a-z0-9]', '', 'g'))`;
-    if (mode === 'like') clauses.push(`${expression} LIKE ${addParam(value)}`);
-    else if (mode === 'in') clauses.push(`${expression} = ANY(${addParam(value)}::text[])`);
-    else clauses.push(`${expression} = ${addParam(value)}`);
-  }
-  if (query.active === 'true' || query.active === true) clauses.push('j.active IS NOT FALSE');
-  else if (query.active === 'false' || query.active === false) clauses.push('j.active IS FALSE');
-  if (query.isNew === 'true' || query.isNew === true) clauses.push(`lower(COALESCE(j.raw->>'isNew', 'false')) IN ('true', '1', 'yes')`);
-  else if (query.isNew === 'false' || query.isNew === false) clauses.push(`lower(COALESCE(j.raw->>'isNew', 'false')) NOT IN ('true', '1', 'yes')`);
-  const recencyDays = Number(query.recencyDays || 0);
-  if (recencyDays > 0) {
-    const ref = addParam(Math.floor(recencyDays));
-    clauses.push(`j.posted_at ~ '^\\d{4}-\\d{2}-\\d{2}' AND (CURRENT_DATE - substring(j.posted_at, 1, 10)::date) <= ${ref}`);
-  }
-  const relevanceExpression = `CASE WHEN COALESCE(j.raw->>'relevanceScore', '') ~ '^\\d+(\\.\\d+)?$' THEN (j.raw->>'relevanceScore')::numeric ELSE -1 END`;
-  const minRelevance = Number(query.minRelevance || 0);
-  if (minRelevance > 0) clauses.push(`${relevanceExpression} >= ${addParam(minRelevance)}`);
-
-  const whereSql = clauses.join(' AND ');
-  const countParams = [...params];
-  const limitRef = addParam(pageSize);
-  const offsetRef = addParam(offset);
-  const orderSql = query.sortBy === 'connections'
-    ? `COALESCE((j.raw->>'connectionCount')::int, 0) DESC, ${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
-    : query.sortBy === 'relevance'
-      ? `${relevanceExpression} DESC, COALESCE(j.posted_at, j.raw->>'importedAt', '') DESC, source_order.position ASC`
-      : query.sortBy === 'retrieved'
-        ? `COALESCE(j.raw->>'retrievedAt', j.raw->>'importedAt', '') DESC, source_order.position ASC`
-        : 'source_order.position ASC';
+  const startedAt = performance.now();
+  const built = buildTenantJobQueries(tenantId, query);
   const [rowsResult, countResult] = await Promise.all([
-    dbQuery(
-      `WITH source_order AS (
-         SELECT item->>'id' AS id, position
-         FROM tenant_data, jsonb_array_elements(jobs) WITH ORDINALITY AS ordered(item, position)
-         WHERE tenant_id = $1
-       )
-       SELECT j.raw
-       FROM jobs j
-       JOIN source_order ON source_order.id = j.id
-       WHERE ${whereSql}
-       ORDER BY ${orderSql}
-       LIMIT ${limitRef} OFFSET ${offsetRef}`,
-      params
-    ),
-    dbQuery(`SELECT COUNT(*)::int AS total FROM jobs j WHERE ${whereSql}`, countParams),
+    dbQuery(built.rows.text, built.rows.params),
+    dbQuery(built.count.text, built.count.params),
   ]);
-  return {
-    items: (rowsResult?.rows || []).map(rawOrRow),
-    page,
-    pageSize,
-    total: Number(countResult?.rows?.[0]?.total || 0),
-  };
+  const items = (rowsResult?.rows || []).map(rawOrRow);
+  const accountIds = [...new Set(items.map((item) => item.accountId).filter(Boolean))];
+  const contacts = accountIds.length ? await dbQuery(`
+    SELECT raw, account_id FROM (
+      SELECT raw, account_id, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY priority_score DESC, id ASC) AS position
+      FROM contacts WHERE tenant_id = $1 AND account_id = ANY($2::text[])
+    ) ranked WHERE position <= 3`, [tenantId, accountIds]) : null;
+  const byAccount = new Map();
+  for (const row of contacts?.rows || []) {
+    const list = byAccount.get(row.account_id) || [];
+    const contact = row.raw || {};
+    list.push({ id: contact.id, fullName: contact.fullName, title: contact.title || contact.position || '', seniority: contact.seniority || '', priorityScore: contact.priorityScore || 0, linkedinUrl: contact.linkedinUrl || '', outreachStatus: contact.outreachStatus || 'not_started' });
+    byAccount.set(row.account_id, list);
+  }
+  for (const item of items) {
+    item.contacts = byAccount.get(item.accountId) || [];
+    item.topContactName ||= item.contacts[0]?.fullName || '';
+  }
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 250) console.warn(`Slow relational job query: saas/src/relational-reads.js findTenantJobsRelational ${elapsedMs}ms`);
+  return { items, page: built.page, pageSize: built.pageSize, total: Number(countResult?.rows?.[0]?.total || 0), summary: {
+    activeTotal: Number(countResult?.rows?.[0]?.active_total || 0),
+    pipelineTotal: Number(countResult?.rows?.[0]?.pipeline_total || 0),
+  } };
 }
 
 export function compareTenantDataCounts(blobStats = {}, relationalStats = {}, includeContacts = true) {

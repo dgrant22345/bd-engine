@@ -27,6 +27,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
     env: {
+      DATABASE_URL: '',
       BD_CLOUD_PORT: '8788',
       // Journeys perform several signups per run; the production limiter
       // stays intact — only the harness raises the ceiling.

@@ -122,6 +122,8 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
 test('search focus form saves settings and opens the matching shortlist', async ({ page }) => {
   const { app } = await signup(page, { persona: 'jobseeker' });
   await completeSetup(page, app);
+  await gotoAppRoute(page, '#/jobs');
+  await app.locator('[data-preset="canada"]').click();
   await gotoAppRoute(page, '#/admin');
   const searchFocus = app.locator('[data-collapse-id="search-focus"]');
   await expect(searchFocus).toBeVisible({ timeout: 10000 });
@@ -138,6 +140,7 @@ test('search focus form saves settings and opens the matching shortlist', async 
   const fit = app.locator('#jobs-filter-form select[name="minRelevance"]');
   await expect(fit).toHaveValue('35');
   await expect(fit.locator('option:checked')).toHaveText('Saved target threshold (35+)');
+  await expect(app.locator('#jobs-filter-form select[name="geography"]')).toHaveValue('canada');
 
   const saved = await page.evaluate(async () => {
     const response = await fetch('/api/bootstrap');
@@ -151,6 +154,37 @@ test('search focus form saves settings and opens the matching shortlist', async 
     workStyle: 'any',
     minimumRelevanceScore: 35,
   });
+});
+
+test('role pipeline is saved to the workspace and survives a page reload', async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const { app } = await signup(page, { persona: 'jobseeker' });
+  const profile = app.locator('#setup-profile-form');
+  await expect(profile).toBeVisible({ timeout: 15000 });
+  await profile.locator('button[type="submit"]').click();
+  await app.locator('[data-action="setup-skip-targets"]').click();
+  await app.locator('[data-action="setup-load-sample"]').click();
+  await app.locator('[data-action="setup-open-dashboard"]').click({ timeout: 15000 });
+  await expect(app.locator('.workspace-health')).toBeVisible();
+  await expect(app.locator('.analytics-cockpit-card')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('dashboard-desktop.png'), animations: 'disabled' });
+  await gotoAppRoute(page, '#/jobs');
+  const select = app.locator('.job-pipeline-select').first();
+  await expect(select).toBeVisible();
+  const id = await select.getAttribute('data-job-id');
+  await select.selectOption('saved');
+  await expect(app.locator(`.job-pipeline-select[data-job-id="${id}"]`)).toHaveValue('saved');
+  await expect.poll(async () => (await (await page.request.get('/api/jobs?pipelineOnly=true')).json()).total).toBe(1);
+  await page.reload();
+  await expect(page.locator('iframe.cloud-app-frame')).toBeVisible();
+  await gotoAppRoute(page, '#/jobs');
+  await app.locator('[data-preset="pipeline"]').click();
+  await expect(app.locator('.job-pipeline-select')).toHaveCount(1);
+  await expect(app.locator('.job-pipeline-select')).toHaveValue('saved');
+  await expect(app.locator('.job-results-context')).toContainText('1 results');
+  await page.screenshot({ path: testInfo.outputPath('roles-desktop.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('roles-mobile.png'), animations: 'disabled' });
 });
 
 test('persona mode switch survives a full page reload', async ({ page }) => {

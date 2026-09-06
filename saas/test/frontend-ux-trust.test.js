@@ -55,7 +55,7 @@ test('Warm Referral Studio provides 3-step multi-touch sequences and 1-click mai
   assert.match(app, /mailtoHref\s*=\s*`mailto:\$\{encodeURIComponent\(recipientEmail\)\}/);
   assert.match(app, /data-action="warm-studio-switch-step"/);
   assert.match(app, /data-action="warm-studio-copy"/);
-  assert.match(app, /data-action="open-morning-radar"/);
+  assert.match(app, /aria-label="Workspace data status"/);
   assert.match(app, /function getJobSignalBadges\(item\)/);
   assert.match(app, /function renderDashboardRoiHero\(dashboard/);
   assert.match(app, /function renderMorningRadarModal\(data\)/);

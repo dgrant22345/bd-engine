@@ -55,20 +55,23 @@ export async function runAtsLiveCanary({ logger = console } = {}) {
   });
   const imported = await store.findJobs(tenantId, { page: 1, pageSize: 10000 });
   const errorsByProvider = new Map((result.errors || []).map((error) => [error.atsType, error.error]));
+  const configs = (await store.findConfigs(tenantId, { pageSize: 100 })).items;
   const rows = LIVE_BOARDS.map((board) => {
     const count = imported.items.filter((job) => job.atsType === board.atsType).length;
     const error = errorsByProvider.get(board.atsType) || '';
+    const config = configs.find((item) => item.atsType === board.atsType);
     return {
       provider: board.atsType,
       board: board.companyName,
       jobs: count,
-      status: count > 0 && !error ? 'PASS' : 'FAIL',
+      status: error ? 'FAIL' : config?.lastImportStatus === 'partial' ? 'PARTIAL' : count > 0 ? 'PASS' : 'EMPTY',
+      reportedTotal: config?.lastImportCoverage?.reportedTotal ?? null,
       error,
     };
   });
-  const failed = rows.filter((row) => row.status === 'FAIL');
+  const failed = rows.filter((row) => row.status !== 'PASS');
   logger.table?.(rows);
-  logger.log?.(`Live ATS canary: ${rows.length - failed.length}/${rows.length} providers passed; ${imported.total} public jobs imported in ${Date.now() - startedAt}ms.`);
+  logger.log?.(`Live ATS canary: ${rows.length - failed.length}/${rows.length} sampled boards returned a complete, nonempty result; ${imported.total} public jobs imported in ${Date.now() - startedAt}ms. PARTIAL means incomplete coverage; EMPTY does not establish adapter health.`);
   return { ok: failed.length === 0, rows, totalJobs: imported.total, importResult: result };
 }
 

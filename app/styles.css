@@ -33,6 +33,27 @@
   box-sizing: border-box;
 }
 
+.workspace-health {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.workspace-health > div:first-child { flex: 1; min-width: 0; }
+.workspace-health .eyebrow { display: block; margin: 0 0 .25rem; }
+.workspace-health p { margin: .25rem 0 0; }
+.workspace-health__counts { display: flex; gap: 1.5rem; color: var(--muted); font-size: .8rem; }
+.workspace-health__counts strong { display: block; font-size: 1.3rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+.job-results-context { padding: .75rem 0; margin: 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .workspace-health { flex-wrap: wrap; gap: .75rem; padding: 1rem; }
+  .workspace-health > div:first-child { flex-basis: 100%; }
+  .workspace-health__counts { flex: 1; }
+}
+
 html,
 body {
   margin: 0;

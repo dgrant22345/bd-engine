@@ -10,7 +10,7 @@ import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
-import { classifyJobRegion, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
+import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -2074,6 +2074,7 @@ export function createStore() {
       const coverageCategories = countValues(coverageRows.map((item) => item.category));
       const issuePriorities = {
         failed: 0,
+        partial: 0,
         needs_review: 1,
         empty: 2,
         careers_page_only: 3,
@@ -2132,6 +2133,7 @@ export function createStore() {
           successful: coverageCategories.healthy || 0,
           readyNotRun: coverageCategories.ready_not_run || 0,
           failed: coverageCategories.failed || 0,
+          partial: coverageCategories.partial || 0,
           empty: coverageCategories.empty || 0,
           needsReview: coverageCategories.needs_review || 0,
           needsCompanyDetails: (coverageCategories.missing_identity || 0)
@@ -2343,7 +2345,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
-        capabilities: { commercialOutcomes: true },
+        capabilities: { commercialOutcomes: true, jobPipeline: true },
         ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
@@ -2387,6 +2389,9 @@ export function createStore() {
           accountCount: tenantAccounts.length,
           hiringAccountCount: tenantAccounts.filter((item) => item.jobCount > 0).length,
           activeJobCount: activeJobs.length,
+          readyBoardCount: tenantConfigs.filter(isImportReadyConfig).length,
+          incompleteBoardCount: tenantConfigs.filter((item) => item.active !== false && ['failed', 'partial'].includes(item.lastImportStatus)).length,
+          lastRefreshedAt: tenantConfigs.map((item) => item.lastImportedAt || '').sort().at(-1) || '',
           jobsImportedLast24h: jobsImportedLast24h.length,
           jobsPostedLast24h: jobsPostedLast24h.length,
           newJobsLast24h: jobsPostedLast24h.length,
@@ -2770,7 +2775,7 @@ export function createStore() {
       return item;
     },
 
-    async findJobs(tenantId, query) {
+    async findJobs(tenantId, query = {}) {
       assertTenant(tenantId);
       if (relationalJobSqlEnabledForTenant(tenantId)) {
         try {
@@ -2791,6 +2796,8 @@ export function createStore() {
         }
       }
       const queryStartedAt = performance.now();
+      // Direct visits after restart/eviction must not query an unloaded cache.
+      await ensureDataLoaded(tenantId, true);
       const tenantAccounts = accountsForTenant(tenantId);
       const accountByIdMap = new Map(tenantAccounts.map((acc) => [acc.id, acc]));
       const accountByNameMap = new Map(tenantAccounts.map((acc) => [normalizeKey(acc.displayName), acc]));
@@ -2811,7 +2818,7 @@ export function createStore() {
           || (jobItem.companyName && accountByNameMap.get(normalizeKey(jobItem.companyName)))
           || null;
         const accContacts = (acc && contactsByAccountId.get(acc.id)) || [];
-        const connectionCount = Number(acc?.connectionCount ?? accContacts.length ?? 0);
+        const connectionCount = accContacts.length;
         const workStyle = classifyWorkStyle(jobItem);
         const topContacts = accContacts.slice(0, 3).map((c) => ({
           id: c.id,
@@ -2839,6 +2846,11 @@ export function createStore() {
       };
 
       let rawItems = jobsForTenant(tenantId);
+      if (query.pipelineOnly === true || query.pipelineOnly === 'true') rawItems = rawItems.filter((item) => item.pipelineStage);
+      if (query.ids !== undefined) {
+        const ids = new Set(String(query.ids).split(',').filter(Boolean));
+        rawItems = rawItems.filter((item) => ids.has(item.id));
+      }
       let items = filterText(rawItems, query.q, ['title', 'companyName', 'location', 'source']);
       items = items.map(enrichJob);
 
@@ -2893,7 +2905,7 @@ export function createStore() {
       }
       const minRelevance = Number(query.minRelevance || 0);
       if (minRelevance > 0) {
-        items = items.filter((item) => Number(item.relevanceScore ?? -1) >= minRelevance);
+        items = items.filter((item) => item.matchesSearchFocus !== false && Number(item.relevanceScore ?? -1) >= minRelevance);
       }
       if (query.sortBy === 'connections') {
         items.sort((a, b) => (b.connectionCount || 0) - (a.connectionCount || 0)
@@ -2904,13 +2916,39 @@ export function createStore() {
           || String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')));
       } else if (query.sortBy === 'retrieved') {
         items.sort((a, b) => String(b.retrievedAt || b.importedAt || '').localeCompare(String(a.retrievedAt || a.importedAt || '')));
+      } else {
+        items.sort((a, b) => String(b.postedAt || b.importedAt || '').localeCompare(String(a.postedAt || a.importedAt || '')) || a.id.localeCompare(b.id));
       }
       const result = paginate(items, query);
+      result.summary = {
+        activeTotal: jobsForTenant(tenantId).filter((item) => item.active !== false).length,
+        pipelineTotal: jobsForTenant(tenantId).filter((item) => item.pipelineStage).length,
+      };
       const queryElapsedMs = Math.round(performance.now() - queryStartedAt);
       if (queryElapsedMs > 250) {
         console.warn(`Slow job query: saas/src/store.js findJobs ${queryElapsedMs}ms`);
       }
       return result;
+    },
+
+    async patchJobPipeline(tenantId, jobId, stage) {
+      assertTenant(tenantId);
+      if (!['', 'saved', 'contacted', 'replied', 'interviewing', 'offer'].includes(stage)) throw new Error('Invalid job pipeline stage');
+      const startedAt = performance.now();
+      await ensureDataLoaded(tenantId, false);
+      const item = jobsForTenant(tenantId).find((entry) => entry.id === jobId);
+      if (!item) return null;
+      const previous = { pipelineStage: item.pipelineStage, updatedAt: item.updatedAt };
+      Object.assign(item, { pipelineStage: stage, updatedAt: now() });
+      try {
+        if (isDbEnabled()) await saveTenantNow(tenantId);
+      } catch (error) {
+        Object.assign(item, previous);
+        throw error;
+      }
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 250) console.warn(`Slow pipeline save: saas/src/store.js patchJobPipeline ${elapsedMs}ms`);
+      return { id: item.id, pipelineStage: stage, updatedAt: item.updatedAt };
     },
 
     async findConfigs(tenantId, query) {
@@ -3884,7 +3922,7 @@ export function createStore() {
       const relevantJobsByAccount = new Map();
       for (const item of jobsForTenant(tenantId)) {
         if (!item.accountId || item.active === false) continue;
-        if (Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
+        if (item.matchesSearchFocus === false || Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
         relevantJobsByAccount.set(item.accountId, (relevantJobsByAccount.get(item.accountId) || 0) + 1);
       }
       candidates = prioritizeDiscoveryCandidates(candidates, accountsById, accountsByName, {
@@ -4141,7 +4179,7 @@ export function createStore() {
       const relevantJobsByAccount = new Map();
       for (const item of tenantJobs) {
         if (!item.accountId || item.active === false) continue;
-        if (Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
+        if (item.matchesSearchFocus === false || Number(item.relevanceScore ?? -1) < searchFocus.minimumRelevanceScore) continue;
         relevantJobsByAccount.set(item.accountId, (relevantJobsByAccount.get(item.accountId) || 0) + 1);
       }
       importReadyConfigs = prioritizeDiscoveryCandidates(
@@ -4204,6 +4242,8 @@ export function createStore() {
       let updatedJobs = 0;
       let closedJobs = 0;
       let reactivatedJobs = 0;
+      let partialBoards = 0;
+      let invalidRows = 0;
       const touchedAccountIds = new Set();
 
       const fetchStartedAt = performance.now();
@@ -4211,7 +4251,7 @@ export function createStore() {
       const fetchedBoards = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async ({ config, atsType, boardId }) => {
         const fetcher = ATS_FETCHERS.get(atsType);
         const response = await fetcher(config, boardId);
-        return { config, atsType, jobs: response.jobs || [] };
+        return { config, atsType, ...response };
       });
       timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
       timings.fetchConcurrency = fetchConcurrency;
@@ -4257,13 +4297,20 @@ export function createStore() {
         }
         if (accountItem?.id) touchedAccountIds.add(accountItem.id);
         let configKept = 0;
+        let configInvalidRows = 0;
         const seenJobIds = new Set();
 
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
-          if (!normalizedJob) continue;
+          if (!normalizedJob) { configInvalidRows++; continue; }
           normalizedJob.jobUrl = normalizePublicHttpUrl(normalizedJob.jobUrl || normalizedJob.url);
           normalizedJob.url = normalizedJob.jobUrl;
+          const naturalKey = getJobNaturalKey(normalizedJob);
+          const providerIdentity = getProviderJobIdentity(normalizedJob);
+          const existingJob = existingByNaturalKey.get(naturalKey)
+            || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null);
+          // Presence on a board is independent of the user's import geography.
+          if (existingJob) seenJobIds.add(existingJob.id);
           if (!jobMatchesGeography(normalizedJob, accountItem, geographyFilter)) {
             filteredOutNonCanada++;
             continue;
@@ -4274,10 +4321,6 @@ export function createStore() {
 
           kept++;
           configKept++;
-          const naturalKey = getJobNaturalKey(normalizedJob);
-          const providerIdentity = getProviderJobIdentity(normalizedJob);
-          const existingJob = existingByNaturalKey.get(naturalKey)
-            || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null);
           if (existingJob) {
             const wasClosed = existingJob.active === false || Boolean(existingJob.closedAt);
             Object.assign(existingJob, {
@@ -4336,7 +4379,13 @@ export function createStore() {
           if (accountItem?.id) touchedAccountIds.add(accountItem.id);
         }
 
-        const closedForConfig = deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, now());
+        const complete = settled.value.complete !== false && configInvalidRows === 0;
+        invalidRows += configInvalidRows;
+        if (!complete) {
+          partialBoards++;
+          warnings.push(`${config.companyName}: partial import (${fetchedJobs.length} fetched${settled.value.reportedTotal ? ` of ${settled.value.reportedTotal} reported` : ''}${configInvalidRows ? `; ${configInvalidRows} invalid rows` : ''}). Unseen jobs were preserved; coverage is incomplete.`);
+        }
+        const closedForConfig = complete ? deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, now()) : [];
         closedJobs += closedForConfig.length;
         for (const closedJob of closedForConfig) {
           importItems.push({
@@ -4349,7 +4398,8 @@ export function createStore() {
           });
         }
 
-        config.lastImportStatus = configKept > 0 ? 'success' : 'empty';
+        config.lastImportStatus = !complete ? 'partial' : configKept > 0 ? 'success' : 'empty';
+        config.lastImportCoverage = { fetched: fetchedJobs.length, kept: configKept, complete, invalidRows: configInvalidRows, reportedTotal: settled.value.reportedTotal ?? null };
         config.lastImportedAt = now();
         config.lastImportError = '';
         config.updatedAt = now();
@@ -4393,7 +4443,7 @@ export function createStore() {
         kept,
         canadaKept: kept,
         filteredOutNonCanada,
-        relevantJobs: tenantJobs.filter((item) => item.active !== false && Number(item.relevanceScore ?? -1) >= searchFocus.minimumRelevanceScore).length,
+        relevantJobs: tenantJobs.filter((item) => item.active !== false && item.matchesSearchFocus !== false && Number(item.relevanceScore ?? -1) >= searchFocus.minimumRelevanceScore).length,
         imported: activeTrackedJobs,
         runImported: newJobs + updatedJobs,
         jobsTouched: newJobs + updatedJobs + closedJobs,
@@ -4401,6 +4451,8 @@ export function createStore() {
         updatedJobs,
         closedJobs,
         reactivatedJobs,
+        partialBoards,
+        invalidRows,
         errors: errors.length,
       };
       const importRun = {
@@ -6473,6 +6525,10 @@ const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters'
 
 const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'phenom']);
 const BOARD_COVERAGE_META = {
+  partial: {
+    label: 'Incomplete refresh',
+    action: 'Some source rows were not fetched or could not be read. Unseen roles are preserved; verify the careers board for full coverage.',
+  },
   healthy: {
     label: 'Importing successfully',
     action: 'No action needed.',
@@ -6813,6 +6869,7 @@ function classifyBoardCoverage(config = {}) {
 
   if (reviewStatus === 'rejected') return 'rejected';
   if (importStatus === 'failed') return 'failed';
+  if (importStatus === 'partial') return 'partial';
   if (importReady) {
     if (importStatus === 'empty') return 'empty';
     if (importStatus === 'success') return 'healthy';
@@ -7049,26 +7106,32 @@ function getWorkdayDescriptor(config = {}) {
 async function fetchGreenhouseJobs(config, boardId) {
   const url = config.apiUrl || `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardId)}/jobs?content=true`;
   const payload = await fetchJson(url);
-  return { jobs: Array.isArray(payload?.jobs) ? payload.jobs : [] };
+  return { jobs: requireJobArray('Greenhouse', payload?.jobs) };
 }
 
 async function fetchLeverJobs(config, boardId) {
   const url = config.apiUrl || `https://api.lever.co/v0/postings/${encodeURIComponent(boardId)}?mode=json`;
   const payload = await fetchJson(url);
-  return { jobs: Array.isArray(payload) ? payload : [] };
+  return { jobs: requireJobArray('Lever', payload) };
 }
 
 async function fetchAshbyJobs(config, boardId) {
   const url = config.apiUrl || `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(boardId)}`;
   const payload = await fetchJson(url);
-  return { jobs: Array.isArray(payload?.jobs) ? payload.jobs : [] };
+  return { jobs: requireJobArray('Ashby', payload?.jobs).filter((item) => item?.isListed !== false) };
+}
+
+function requireJobArray(provider, ...candidates) {
+  const jobs = candidates.find(Array.isArray);
+  if (!jobs) throw new Error(`${provider}: invalid jobs response; existing jobs preserved`);
+  return jobs;
 }
 
 async function fetchSmartRecruitersJobs(config, boardId) {
   const pageSize = 100;
   const baseUrl = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings`;
   const firstPayload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset: 0 }));
-  const firstJobs = firstArray(firstPayload?.content, firstPayload?.postings, firstPayload);
+  const firstJobs = requireJobArray('SmartRecruiters', firstPayload?.content, firstPayload?.postings, firstPayload);
   const jobs = [...firstJobs];
   const reportedTotal = Number(firstPayload?.totalFound || firstPayload?.total || firstPayload?.count || 0);
   const maxRows = pageSize * DEFAULT_ATS_MAX_PAGES;
@@ -7077,24 +7140,27 @@ async function fetchSmartRecruitersJobs(config, boardId) {
   for (let offset = pageSize; offset < totalRows; offset += pageSize) offsets.push(offset);
   const pages = await mapSettledWithConcurrency(offsets, ATS_PAGE_FETCH_CONCURRENCY, async (offset) => {
     const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }));
-    return firstArray(payload?.content, payload?.postings, payload);
+    return requireJobArray('SmartRecruiters', payload?.content, payload?.postings, payload);
   });
   assertCompleteAtsPages('SmartRecruiters', pages);
   for (const page of pages) {
     jobs.push(...page.value);
   }
-  return { jobs };
+  const uniqueCount = new Set(jobs.map((item) => item?.id || item?.ref)).size;
+  return { jobs, reportedTotal: reportedTotal || null, complete: reportedTotal > 0 ? uniqueCount >= reportedTotal : jobs.length < maxRows };
 }
 
 async function fetchJobviteJobs(config, boardId) {
   const url = getJobviteBoardUrl(config, boardId);
   const content = await fetchText(url, 15000);
-  return { jobs: parseJobviteJobs(content, url) };
+  const jobs = parseJobviteJobs(content, url);
+  // An unrecognized HTML page is not authoritative evidence of zero openings.
+  return { jobs, complete: jobs.length > 0 };
 }
 
 async function fetchWorkdayJobs(config) {
   const descriptor = getWorkdayDescriptor(config);
-  if (!descriptor) return { jobs: [] };
+  if (!descriptor) throw new Error('Workday: invalid board URL; existing jobs preserved');
   const url = descriptor.apiUrl;
   const pageSize = 20;
   const readPage = async (offset) => {
@@ -7104,7 +7170,7 @@ async function fetchWorkdayJobs(config) {
       body: JSON.stringify({ appliedFacets: {}, limit: pageSize, offset, searchText: '' }),
     });
     return {
-      jobs: firstArray(payload?.jobPostings, payload?.jobs, payload?.data?.children),
+      jobs: requireJobArray('Workday', payload?.jobPostings, payload?.jobs, payload?.data?.children),
       total: Number(payload?.total || payload?.totalResults || payload?.count || 0),
     };
   };
@@ -7120,25 +7186,26 @@ async function fetchWorkdayJobs(config) {
   for (const page of pages) {
     jobs.push(...page.value.jobs);
   }
-  return { jobs };
+  const uniqueCount = new Set(jobs.map((item) => item?.externalPath || item?.id || item?.jobPostingId)).size;
+  return { jobs, reportedTotal: firstPage.total || null, complete: firstPage.total > 0 ? uniqueCount >= firstPage.total : jobs.length < maxRows };
 }
 
 async function fetchBamboohrJobs(config, boardId) {
   const url = getBambooCareersApiUrl(config, boardId);
   const payload = await fetchJson(url);
-  return { jobs: firstArray(payload?.result, payload?.jobs, payload) };
+  return { jobs: requireJobArray('BambooHR', payload?.result, payload?.jobs, payload) };
 }
 
 async function fetchWorkableJobs(config, boardId) {
   const url = getWorkableJobsApiUrl(config, boardId);
   const payload = await fetchJson(url);
-  return { jobs: firstArray(payload?.jobs, payload) };
+  return { jobs: requireJobArray('Workable', payload?.jobs, payload) };
 }
 
 async function fetchRecruiteeJobs(config, boardId) {
   const url = getRecruiteeJobsApiUrl(config, boardId);
   const payload = await fetchJson(url);
-  return { jobs: firstArray(payload?.offers, payload?.jobs, payload) };
+  return { jobs: requireJobArray('Recruitee', payload?.offers, payload?.jobs, payload) };
 }
 
 async function fetchPersonioJobs(config, boardId) {
@@ -7151,6 +7218,7 @@ async function fetchPersonioJobs(config, boardId) {
     trimValues: true,
   });
   const payload = parser.parse(content);
+  if (!Object.prototype.hasOwnProperty.call(payload || {}, 'workzag-jobs')) throw new Error('Personio: unrecognized jobs feed; existing jobs preserved');
   const positions = payload?.['workzag-jobs']?.position;
   return { jobs: Array.isArray(positions) ? positions : (positions ? [positions] : []) };
 }
@@ -7159,7 +7227,7 @@ async function fetchRipplingJobs(config, boardId) {
   const boardUrl = getRipplingBoardUrl(config, boardId);
   const content = await fetchText(boardUrl, 15000);
   const scriptMatch = content.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (!scriptMatch?.[1]) return { jobs: [] };
+  if (!scriptMatch?.[1]) throw new Error('Rippling: jobs data missing from the page; existing jobs preserved');
 
   const payload = JSON.parse(scriptMatch[1]);
   const queries = payload?.props?.pageProps?.dehydratedState?.queries;
@@ -7182,7 +7250,7 @@ async function fetchRipplingJobs(config, boardId) {
       });
     }
   }
-  return { jobs };
+  return { jobs, complete: jobs.length > 0 };
 }
 
 function getWorkableJobsApiUrl(config = {}, boardId = '') {
@@ -7273,9 +7341,10 @@ function getBambooCareersApiUrl(config = {}, boardId = '') {
 
 async function fetchStaticCareersJobs(config) {
   const url = config.apiUrl || config.sourceUrl || config.resolvedBoardUrl || config.careersUrl || config.boardUrl || config.url;
-  if (!url) return { jobs: [] };
+  if (!url) throw new Error('Careers page: URL missing; existing jobs preserved');
   const content = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
-  return { jobs: parseStaticCareersJobs(content, url) };
+  const jobs = parseStaticCareersJobs(content, url);
+  return { jobs, complete: jobs.length > 0 && jobs.length < STATIC_CAREERS_MAX_JOBS };
 }
 
 async function fetchWithPublicRedirects(url, init = {}) {
@@ -8224,7 +8293,22 @@ function findAccountForConfig(config, accountsByNormalizedName, accountsById) {
   return accountsByNormalizedName.get(normalized) || null;
 }
 
+function normalizeWorkdayPostedAt(value, referenceTime) {
+  const text = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text) && Number.isFinite(Date.parse(text))) return new Date(text).toISOString();
+  const age = /^(?:posted\s+)?today$/i.test(text) ? 0
+    : /^(?:posted\s+)?yesterday$/i.test(text) ? 1
+      : text.match(/^(?:posted\s+)?(\d+)\s+days?\s+ago$/i)?.[1];
+  // "30+ days ago" is a range, not an exact date. Keep it as source text.
+  if (age === undefined) return '';
+  const date = new Date(referenceTime);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() - Number(age));
+  return date.toISOString();
+}
+
 function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
+  if (!raw || typeof raw !== 'object') return null;
   const retrievedAt = now();
   const companyName = accountItem?.displayName || config.companyName || raw.company || raw.companyName || '';
   const accountId = accountItem?.id || config.accountId || '';
@@ -8256,7 +8340,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
   if (atsType === 'lever') {
     const title = raw.text || raw.title || '';
     if (!title) return null;
-    const location = raw.categories?.location || raw.location || '';
+    const locations = [...new Set([raw.categories?.location || raw.location, ...(raw.categories?.allLocations || [])].filter((value) => typeof value === 'string' && value.trim()))];
+    const location = locations.join(' | ');
     const postedAt = raw.createdAt ? new Date(Number(raw.createdAt)).toISOString() : (raw.updatedAt || retrievedAt);
     return {
       tenantId: config.tenantId,
@@ -8267,6 +8352,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       location,
       department: raw.categories?.team || raw.department || '',
       commitment: raw.categories?.commitment || '',
+      locations,
+      workplaceType: raw.workplaceType || '',
       atsType,
       source: 'Lever',
       jobId: String(raw.id || ''),
@@ -8284,7 +8371,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
   if (atsType === 'ashby') {
     const title = raw.title || '';
     if (!title) return null;
-    const location = readAshbyLocation(raw.location);
+    const locations = [...new Set([readAshbyLocation(raw.location), ...(Array.isArray(raw.secondaryLocations) ? raw.secondaryLocations.map((item) => readAshbyLocation(item.location) || [item.address?.addressLocality, item.address?.addressRegion, item.address?.addressCountry].filter(Boolean).join(', ')) : [])].filter(Boolean))];
+    const location = locations.join(' | ');
     return {
       tenantId: config.tenantId,
       accountId,
@@ -8294,6 +8382,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       location,
       department: raw.department || raw.team || '',
       employmentType: raw.employmentType || '',
+      locations,
+      workplaceType: raw.workplaceType || (raw.isRemote ? 'remote' : ''),
       atsType,
       source: 'Ashby',
       jobId: String(raw.id || raw.jobId || ''),
@@ -8368,7 +8458,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.jobTitle || '';
     if (!title) return null;
     const location = raw.locationsText || raw.location || raw.locationText || '';
-    const postedAt = raw.postedOn || raw.postedOnDate || raw.startDate || retrievedAt;
+    const postingAgeText = String(raw.postedOn || '');
+    const postedAt = normalizeWorkdayPostedAt(raw.postedOnDate || raw.startDate || raw.postedOn, retrievedAt);
     const descriptor = getWorkdayDescriptor(config);
     const externalPath = raw.externalPath || raw.jobPostingUrl || raw.url || '';
     const jobUrl = externalPath && descriptor?.resolvedBoardUrl
@@ -8385,6 +8476,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       employmentType: raw.timeType || raw.workerSubType || raw.employmentType || '',
       atsType,
       source: 'Workday',
+      postingAgeText,
       jobId: String(raw.externalPath || raw.id || raw.jobPostingId || title),
       naturalKey: makeJobNaturalKey(config, atsType, raw.externalPath || raw.id || raw.jobPostingId || title, location),
       jobUrl,
@@ -8699,7 +8791,7 @@ function phraseMatchesText(phrase, normalizedText) {
   const term = normalizeSearchText(phrase);
   const text = normalizeSearchText(normalizedText);
   if (!term || !text) return false;
-  return ` ${text} `.includes(` ${term} `) || text.includes(term);
+  return ` ${text} `.includes(` ${term} `);
 }
 
 const ROLE_FAMILY_ALIASES = [
@@ -8746,11 +8838,10 @@ function roleFamilyAliasStrength(term, titleText) {
   return family.some((alias) => phraseMatchesText(alias, normalizedTitle)) ? 45 : 0;
 }
 
-function roleMatchStrength(term, titleText, detailText) {
+function roleMatchStrength(term, titleText) {
   const normalizedTerm = normalizeSearchText(term);
   if (!normalizedTerm) return 0;
   if (phraseMatchesText(normalizedTerm, titleText)) return 60;
-  if (phraseMatchesText(normalizedTerm, detailText)) return 35;
   const familyStrength = roleFamilyAliasStrength(normalizedTerm, titleText);
   if (familyStrength) return familyStrength;
   const words = normalizedTerm
@@ -8758,22 +8849,10 @@ function roleMatchStrength(term, titleText, detailText) {
     .filter((word) => word.length > 2 && !ROLE_MATCH_GENERIC_TERMS.has(word));
   if (!words.length) return 0;
   const titleTokens = new Set(normalizeSearchText(titleText).split(' ').filter(Boolean));
-  const detailTokens = new Set(normalizeSearchText(detailText).split(' ').filter(Boolean));
   const titleMatchCount = words.filter((word) => titleTokens.has(word)).length;
   const titleCoverage = titleMatchCount / words.length;
-  const detailCoverage = words.filter((word) => detailTokens.has(word)).length / words.length;
   if (titleCoverage === 1) return 52;
-  if (titleMatchCount >= 2 && titleCoverage >= 0.5) return 30;
-  if (detailCoverage === 1) return 25;
   return 0;
-}
-
-function classifyWorkStyle(item = {}) {
-  const text = normalizeSearchText([item.location, item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' '));
-  if (/\bhybrid\b/.test(text)) return 'hybrid';
-  if (/\b(remote|work from home|distributed|anywhere)\b/.test(text)) return 'remote';
-  if (/\b(on site|onsite|in office|office based)\b/.test(text)) return 'onsite';
-  return 'unknown';
 }
 
 function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
@@ -8783,26 +8862,28 @@ function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
   const targetIndustries = parseFocusTerms(focus.targetIndustries);
   const configured = targetRoles.length || excludedRoles.length || targetIndustries.length || focus.workStyle !== 'any';
   if (!configured) {
-    return { relevanceScore: null, relevanceBand: 'unscored', relevanceReasons: ['Set a search focus to rank this role'] };
+    return { relevanceScore: null, relevanceBand: 'unscored', matchesSearchFocus: false, relevanceReasons: ['Set a search focus to rank this role'] };
   }
 
   const titleText = normalizeSearchText(item.title);
   const detailText = normalizeSearchText([item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' '));
   const excluded = excludedRoles.find((term) => phraseMatchesText(term, detailText));
   if (excluded) {
-    return { relevanceScore: 5, relevanceBand: 'low', relevanceReasons: [`Excluded role: ${excluded}`] };
+    return { relevanceScore: 5, relevanceBand: 'low', matchesSearchFocus: false, relevanceReasons: [`Excluded role: ${excluded}`] };
   }
 
   let score = targetRoles.length ? 5 : 25;
   const reasons = [];
+  let matchesSearchFocus = !targetRoles.length;
   if (targetRoles.length) {
     const matches = targetRoles
-      .map((term) => ({ term, strength: roleMatchStrength(term, titleText, detailText) }))
+      .map((term) => ({ term, strength: roleMatchStrength(term, titleText) }))
       .sort((a, b) => b.strength - a.strength);
     const best = matches[0];
     if (best?.strength) {
       score += best.strength;
-      reasons.push(`Role match: ${best.term}`);
+      matchesSearchFocus = true;
+      reasons.push(`Role match${best.strength === 45 ? ' (related title)' : ''}: ${best.term}`);
     } else {
       reasons.push('Outside target roles');
     }
@@ -8833,12 +8914,14 @@ function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
   const age = daysSince(item.postedAt || item.importedAt || item.retrievedAt);
   if (age <= 7) {
     score += 10;
-    reasons.push('Posted recently');
+    reasons.push(item.postedAt ? 'Posted recently' : 'Recently imported');
   } else if (age <= 30) {
     score += 5;
   }
   score = Math.max(0, Math.min(100, Math.round(score)));
+  if (!matchesSearchFocus) score = Math.min(score, focus.minimumRelevanceScore - 1);
   return {
+    matchesSearchFocus,
     relevanceScore: score,
     relevanceBand: score >= 70 ? 'strong' : score >= focus.minimumRelevanceScore ? 'possible' : 'low',
     relevanceReasons: reasons.slice(0, 3),
@@ -8861,7 +8944,7 @@ function rescoreTenantJobs(tenantId, focusValue) {
   return {
     rescoredJobs: tenantJobs.length,
     activeJobs: activeJobs.length,
-    matchingJobs: activeJobs.filter((item) => Number(item.relevanceScore ?? -1) >= focus.minimumRelevanceScore).length,
+    matchingJobs: activeJobs.filter((item) => item.matchesSearchFocus !== false && Number(item.relevanceScore ?? -1) >= focus.minimumRelevanceScore).length,
   };
 }
 
@@ -8881,7 +8964,7 @@ function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
     || parseFocusTerms(focus.targetIndustries).length
     || focus.workStyle !== 'any'));
   const relevantJobs = hasFocus
-    ? accountJobs.filter((jobItem) => Number(jobItem.relevanceScore ?? -1) >= focus.minimumRelevanceScore)
+    ? accountJobs.filter((jobItem) => jobItem.matchesSearchFocus !== false && Number(jobItem.relevanceScore ?? -1) >= focus.minimumRelevanceScore)
     : accountJobs;
   item.relevantRoleCount = hasFocus ? relevantJobs.length : null;
   item.strongFitRoleCount = hasFocus ? accountJobs.filter((jobItem) => jobItem.relevanceBand === 'strong').length : null;

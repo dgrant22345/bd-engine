@@ -34,7 +34,7 @@ const KNOWN_DEFERRED = [];
 
 function extractFrontendPaths(source) {
   const paths = new Set();
-  const callPattern = /(?:api|fetch)\((?:`|')(\/api\/[^'`)]*)/g;
+  const callPattern = /(?:api|fetch)\((?:`|')(\/api\/(?:\$\{[^}]*\}|[^'`)])*)/g;
   for (const match of source.matchAll(callPattern)) {
     let path = match[1];
     path = path.split('?')[0];
