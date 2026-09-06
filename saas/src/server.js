@@ -2862,8 +2862,8 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
   if (persona === 'jobseeker' && !cachedJobSeekerIndexHtml) {
     cachedJobSeekerIndexHtml = cachedCloudIndexHtml
       .replace(
-        'BD Engine ranks target companies using public hiring activity and your relationship context, then turns the strongest signal into a clear next action.',
-        'BD Engine helps job seekers rank target companies and relevant public roles by role, location, keywords, and user-supplied network context.'
+        'Stop applying blind or cold calling. Real-time hiring intelligence and 1st-degree referral paths across 2,300+ live jobs on Greenhouse, Lever, Ashby, Workday & more.',
+        'Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions.'
       )
       .replace(
         /<meta name="description" content="[^"]*">/,

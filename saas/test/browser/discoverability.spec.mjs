@@ -22,7 +22,7 @@ test('job-seeker campaign link replaces a mismatched staffing demo session', asy
 
   await expect(page.getByRole('heading', { name: /Know which employers are worth your next move/ })).toBeVisible();
   await expect(page.getByText(/role, location, and keyword focus/)).toBeVisible();
-  await expect(page.locator('#hero-signup')).toHaveText('Find my next role');
+  await expect(page.locator('#hero-signup')).toHaveText('Start job search');
   await expect(page.getByRole('link', { name: 'Audit career sites' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Explore live demo' })).toHaveCount(0);
   await expect(page.getByText('Read-only demo workspace')).toHaveCount(0);
@@ -357,7 +357,8 @@ test('job-seeker route shows only its relevant paid offer and preserves plan int
 test('recruiter hero keeps the trial, demo, and attributed ATS utility discoverable', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.locator('.hero-cta #hero-signup')).toHaveText('Start free trial');
+  await expect(page.locator('.hero-cta').getByRole('link', { name: 'Run free ATS audit', exact: true })).toHaveAttribute('href', /utm_content=recruiter_hero_primary/);
+  await expect(page.locator('#pricing [data-signup]')).toHaveText('Start 14-day trial');
   await expect(page.getByRole('button', { name: 'Explore live demo' })).toBeVisible();
   const audit = page.getByRole('link', { name: 'Free ATS audit', exact: true });
   await expect(audit).toBeVisible();

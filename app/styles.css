@@ -321,6 +321,8 @@ a {
   color: var(--sidebar-text);
   font-weight: 600;
   overflow-wrap: anywhere;
+  color: var(--sidebar-text, var(--ink));
+  font-weight: 500;
 }
 
 .workspace-load-warning {
@@ -369,13 +371,15 @@ a {
 .topbar-tools {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  min-width: 0;
 }
 
 .search-shell {
   display: grid;
   gap: 6px;
-  min-width: min(34vw, 360px);
+  min-width: 180px;
+  max-width: 360px;
   padding: 12px 14px;
   border-radius: var(--radius-md);
   background: var(--surface-muted);
@@ -5622,25 +5626,54 @@ a {
 }
 
 @media (max-width: 820px) {
+  .persona-mode-toggle,
+  .topbar-radar-btn,
+  .topbar-network-btn,
+  .topbar-upgrade-btn {
+    display: none !important;
+  }
+
   .shell {
     display: block;
     padding: 12px;
   }
 
   .topbar {
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
   }
 
   .topbar > * {
     min-width: 0;
   }
 
+  .topbar .view-heading {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .topbar-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
   .topbar .search-shell,
   .topbar .command-search {
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  .topbar-tools .search-shell .kbd {
+    display: none;
   }
 
   .hero-card,
@@ -5652,6 +5685,8 @@ a {
   .metric-card,
   .action-card {
     padding: 16px;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .panel-header,
@@ -5673,53 +5708,6 @@ a {
   .setup-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-}
-
-@media (max-width: 480px) {
-  .topbar-tools {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr);
-    align-items: stretch;
-  }
-
-  .topbar-tools .mobile-hamburger {
-    grid-column: 1;
-    grid-row: 1;
-    width: 40px;
-  }
-
-  .topbar-tools .search-shell {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .topbar-tools .search-shell .kbd {
-    display: none;
-  }
-
-  .topbar-tools .theme-toggle {
-    grid-column: 1;
-    grid-row: 2;
-    width: 40px;
-    padding-inline: 0;
-    justify-content: center;
-  }
-
-  .topbar-tools .theme-toggle #theme-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  .topbar-tools #refresh-bootstrap {
-    grid-column: 2;
-    grid-row: 2;
-    width: 100%;
-  }
 }
 
 /* Final render-review refinements. Keep primary work visible without sacrificing clarity. */
@@ -5740,7 +5728,8 @@ a {
   }
 
   .topbar .search-shell {
-    min-width: min(34vw, 390px);
+    min-width: 180px;
+    max-width: 360px;
     padding: 5px 10px;
   }
 
@@ -6757,6 +6746,12 @@ textarea:focus-visible {
 }
 
 @media (max-width: 820px) {
+  .persona-mode-toggle,
+  .topbar-radar-btn,
+  .topbar-network-btn {
+    display: none !important;
+  }
+
   .topbar {
     display: grid;
     gap: 10px;
@@ -11727,7 +11722,7 @@ body.global-dragover::after {
 
 .fee-metric-sub {
   font-size: 0.72rem;
-  color: var(--text-subtle);
+  color: var(--text-muted, #475569);
   margin-top: 2px;
 }
 
@@ -12052,6 +12047,9 @@ body.global-dragover::after {
   padding: 18px;
   margin-bottom: 24px;
   box-shadow: var(--shadow-sm);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .revenue-kanban-header {
@@ -12101,6 +12099,8 @@ body.global-dragover::after {
   display: grid;
   grid-template-columns: repeat(5, minmax(220px, 1fr));
   gap: 14px;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
   padding-bottom: 8px;
 }

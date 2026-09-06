@@ -1,4 +1,4 @@
-# 📡 Live Verified Hiring Radar (Aug 23, 2026)
+# 📡 Live Verified Hiring Radar (Aug 24, 2026)
 *Direct ATS signals verified on Greenhouse, Lever, and Ashby (Zero ghost postings).*
 
 | Company | Verified Active Roles | Sample Roles | ATS Platform | Direct Careers URL |

@@ -4,6 +4,17 @@ This checklist is the release record for a broad paid launch. Do not mark an
 item complete based only on code presence. Record the owner, completion date,
 and durable evidence link or identifier. Never paste secrets or customer rows.
 
+## Current audit checkpoint — 6 September 2026
+
+The checked July items below are historical evidence, **not approval of the
+current release**. See the [September product-quality audit](product-quality-audit-2026-09-06.md)
+for the reproduced six-row paging defect, corrected code, current tests, and
+remaining gates. Email credentials, verified sender, and verification rollout
+remain incomplete. The latest live sample is 10 complete/nonempty boards out of
+12, with one partial Workday board and one empty BambooHR board; do not reuse the
+older 12/12 result as a current completeness claim. Re-run release, billing,
+recovery, and delivery checks before a broad paid launch.
+
 ## Release candidate
 
 - [x] Approved head: `3345c56218854a1b997ba516d10762e3ac42e107`

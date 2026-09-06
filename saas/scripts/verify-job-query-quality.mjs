@@ -43,6 +43,8 @@ for (const workStyle of ['remote', 'hybrid', 'onsite']) {
 }
 const builtIds = buildTenantJobQueries(tenantId, { ids: 'ca-31,ca-32,ca-33,foreign-tenant', pageSize: 2 });
 tests.push({ name: 'pipeline IDs before pagination and tenant isolation', rows: fixtureStatement(builtIds.rows), count: fixtureStatement(builtIds.count), total: 3, ids: ['ca-31', 'ca-32'] });
+const builtPipeline = buildTenantJobQueries(tenantId, { pipelineOnly: true, pageSize: 2 });
+tests.push({ name: 'persisted pipeline before pagination', rows: fixtureStatement(builtPipeline.rows), count: fixtureStatement(builtPipeline.count), total: 3, ids: ['ca-31', 'ca-32'] });
 
 async function runChecks(db, tests, liveQuery, legacyFind = null) {
   if (!await db.initDb({ migrate: false, readOnly: true })) throw new Error('A read-only PostgreSQL connection is required');

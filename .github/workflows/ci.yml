@@ -163,6 +163,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify relational job pagination and filter parity
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/bd_engine_recovery_source
+          DB_SSL: "false"
+          NODE_ENV: test
+        run: npm run verify:job-queries
+
       - name: Run encrypted backup and restore drill
         env:
           RECOVERY_SOURCE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/bd_engine_recovery_source

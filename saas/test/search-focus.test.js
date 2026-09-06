@@ -420,3 +420,73 @@ test('name-only discovery tries a bounded company acronym domain', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('multi-word recruiting search focus ranks relevant talent roles and rejects unrelated management roles', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-recruiting-focus-test';
+  addTenant(store, tenantId, 'jobseeker');
+  await store.patchSettings(tenantId, {
+    geographyFocus: 'Canada',
+    searchFocus: {
+      targetRoles: 'talent acquisition manager, talent acquisition partner, recruitment manager, recruiting operations manager, talent operations',
+      excludedRoles: 'intern, internship, retail sales, warehouse, mechanic',
+      targetIndustries: 'saas, technology',
+      workStyle: 'any',
+      minimumRelevanceScore: 45,
+    },
+  });
+
+  const account = await store.addAccount(tenantId, {
+    displayName: 'Canadian Tech Systems',
+    industry: 'Technology',
+  });
+  store.addConfig(tenantId, {
+    accountId: account.id,
+    companyName: account.displayName,
+    atsType: 'greenhouse',
+    boardId: 'cdn-tech',
+    discoveryStatus: 'resolved',
+    reviewStatus: 'approved',
+    active: true,
+  });
+
+  const postedAt = new Date().toISOString();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    jobs: [
+      { id: 'ta-mgr', title: 'Talent Acquisition Manager', location: { name: 'Toronto, ON, CA' }, absolute_url: 'https://example.test/1', updated_at: postedAt },
+      { id: 'sr-ta-partner', title: 'Senior Talent Acquisition Partner', location: { name: 'Vancouver, BC' }, absolute_url: 'https://example.test/2', updated_at: postedAt },
+      { id: 'rec-mgr', title: 'Recruiting Manager', location: { name: 'Montreal, QC' }, absolute_url: 'https://example.test/3', updated_at: postedAt },
+      { id: 'tech-recruiter', title: 'Technical Recruiter', location: { name: 'Waterloo, ON' }, absolute_url: 'https://example.test/4', updated_at: postedAt },
+      { id: 'talent-ops', title: 'Talent Operations Specialist', location: { name: 'Remote - Canada' }, absolute_url: 'https://example.test/5', updated_at: postedAt },
+      { id: 'eng-mgr', title: 'Engineering Manager', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/6', updated_at: postedAt },
+      { id: 'prod-mgr', title: 'Product Manager', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/7', updated_at: postedAt },
+      { id: 'sec-ops', title: 'Security Operations Engineer', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/8', updated_at: postedAt },
+      { id: 'retail', title: 'Retail Sales Associate', location: { name: 'Toronto, ON' }, absolute_url: 'https://example.test/9', updated_at: postedAt },
+    ],
+  });
+
+  try {
+    const imported = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    assert.equal(imported.stats.newJobs, 9);
+    assert.equal(imported.stats.canadaKept, 9);
+
+    const relevant = await store.findJobs(tenantId, { minRelevance: 45, page: 1, pageSize: 20 });
+    const relevantTitles = relevant.items.map((j) => j.title);
+
+    assert.ok(relevantTitles.includes('Talent Acquisition Manager'));
+    assert.ok(relevantTitles.includes('Senior Talent Acquisition Partner'));
+    assert.ok(relevantTitles.includes('Recruiting Manager'));
+    assert.ok(relevantTitles.includes('Technical Recruiter'));
+    assert.ok(relevantTitles.includes('Talent Operations Specialist'));
+
+    // Verify unrelated roles are NOT falsely included in the shortlist
+    assert.equal(relevantTitles.includes('Engineering Manager'), false);
+    assert.equal(relevantTitles.includes('Product Manager'), false);
+    assert.equal(relevantTitles.includes('Security Operations Engineer'), false);
+    assert.equal(relevantTitles.includes('Retail Sales Associate'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+

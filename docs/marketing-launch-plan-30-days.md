@@ -2,6 +2,11 @@
 
 Status: working launch plan
 
+6 September checkpoint: follow the [current product-quality release gates](product-quality-audit-2026-09-06.md)
+before acquisition work. The live job-paging defect is fixed on the review branch,
+not yet a verified production release. Keep outreach founder-led and permission-based;
+do not reuse unsupported reply-rate, time-savings, job-count, or review-rating claims.
+
 Primary audience: independent recruiters and hands-on founders of small staffing agencies
 
 Scope: controlled beta acquisition and learning, not a broad paid launch

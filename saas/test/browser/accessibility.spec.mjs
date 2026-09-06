@@ -148,6 +148,8 @@ test('primary workspace routes stay within phone, tablet, and desktop viewports'
   await page.locator('[data-demo-start]').first().click();
   const frame = page.locator('iframe.cloud-app-frame');
   await expect(frame).toBeVisible({ timeout: 15000 });
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('#app')).toBeVisible({ timeout: 15000 });
   const appFrame = page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes('/app/'));
   const routes = ['dashboard', 'accounts', 'jobs', 'contacts', 'tasks', 'admin'];
 

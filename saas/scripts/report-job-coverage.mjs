@@ -117,8 +117,8 @@ async function auditWorkspace(tenantId, index) {
     location: row.location || row.raw?.location || '',
     accountLocation: row.account_location || '',
   }));
-  const scoredJobs = activeJobs.filter((job) => Number.isFinite(Number(job.relevanceScore)));
-  const matchingJobs = scoredJobs.filter((job) => Number(job.relevanceScore) >= minimumRelevanceScore);
+  const scoredJobs = activeJobs.filter((job) => job.relevanceScore !== null && job.relevanceScore !== undefined && job.relevanceScore !== '' && Number.isFinite(Number(job.relevanceScore)));
+  const matchingJobs = scoredJobs.filter((job) => job.matchesSearchFocus !== false && Number(job.relevanceScore) >= minimumRelevanceScore);
   const canadaJobs = activeJobs.filter((job) => locationMatchesGeography(job, 'canada'));
   const canadaMatchingJobs = canadaJobs.filter((job) => Number(job.relevanceScore) >= minimumRelevanceScore);
   const focusSummary = {
