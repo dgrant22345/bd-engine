@@ -115,7 +115,32 @@ passed authenticated verification: `bd-engine-backup-2026-09-06T13-53-03-799Z.js
 (29.44 MB, 27.4 seconds), in the same operator backup directory. SHA-256:
 `8ae568c7126a1897758a3a08b29c4022a1cf13c8cf9411f1e9e87405b8b32d9a`.
 
-The deployment checkpoint will record the exact production revision. Email
-delivery, verification rollout, full backup restore,
-real saved-stage restart proof, and human-labelled matching evaluation remain
-open launch gates.
+## Deployed 0.1.1.1 checkpoint
+
+- Released commit: `9d735bb49b21dc3cebfab20d1401fb809a155b68`.
+- Railway deployment: `26569ebb-71a4-4d07-8b72-aded0217c0bd`, created
+  13:55:44 UTC; status **SUCCESS**. The interrupted upload's separate deployment
+  `2c00b3ab-65ac-4612-8487-10a59fd183e6` had no associated build and is now removed.
+- LF-normalized SHA-256 hashes of the deployed store, new pagination module,
+  live canary, and coverage-report script matched the reviewed commit exactly.
+- Eight read-only HTTP smoke checks passed, including readiness, security
+  headers, anonymous access denial, public plans, and read-only demo entry.
+  Mutation checks remained disabled.
+- Twenty PostgreSQL query fixtures passed again. The actual deployed owner
+  Canada/active/minimum-45 query returned **247 matches / 20 page rows** in 123 ms;
+  the separate count/page-only check took 182 ms. Active inventory remained 9,099.
+  These reads preceded the next normal full customer refresh.
+- Deep legacy parity passed for all three legacy workspaces. The immediate
+  deployment log check returned no error-level records.
+- The deployed live canary ran with `DATABASE_URL` explicitly unset in its
+  isolated process. It retrieved **3,300 public jobs in 16,977 ms**, with
+  **11/12** complete/nonempty sample boards. NVIDIA returned **2,000/2,000**, 100
+  result pages plus one verification request, in 15,974 ms. BambooHR remained
+  empty; the canary correctly exited nonzero rather than certifying that source.
+- Rollback reference: the earlier corrected 0.1.1.0 deployment
+  `f094f262-c066-4009-8a82-41fda05be94e` / commit `054a404`. No new migration or
+  production variable change was required. New pagination takes effect on the
+  next manual or scheduled job refresh; the canary did not populate customer jobs.
+
+Email delivery, verification rollout, full backup restore, real saved-stage
+restart proof, and human-labelled matching evaluation remain open launch gates.
