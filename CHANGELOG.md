@@ -4,6 +4,20 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.1.0 — 2026-09-06 — Hosted reliability release
+
+- Fixed relational job pagination dropping matches that were absent from old
+  workspace snapshots, and aligned Canada/role filtering with the result count.
+- Preserved prior jobs during incomplete imports, exposed source completeness,
+  and tightened title matching and posting-date handling.
+- Saved job pipeline stages to the cloud workspace with failure-safe UI feedback.
+- Simplified the dashboard and removed unsupported performance, review, candidate,
+  and referral claims from primary customer workflows and public marketing.
+- This is a limited reliability release. Email delivery and the broader paid-launch
+  gates remain incomplete; see `docs/product-quality-audit-2026-09-06.md`.
+
+## Earlier pre-release hardening
+
 - Fixed dashboard tab visibility, post-setup navigation races, mobile header
   overflow, wide Accounts layouts, and several customer-facing accessibility
   failures found during the production audit.
