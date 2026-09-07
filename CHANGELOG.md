@@ -4,6 +4,22 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.0 — 2026-09-07 — Recruiter People workspace
+
+- Make People the hosted recruiter home, with in-context profile review,
+  contact correction, multiline notes, manual add and comparison of saved people.
+- Preserve search, pagination and profile context on reload; prevent delayed
+  responses from replacing a newer screen; keep single-person saves scoped.
+- Introduce restrained neutral/teal light and dark styling, compact controls,
+  clearer table hierarchy and optional disclosures for business-development tools.
+- Prepare outreach without requiring a linked company, distinguish copying from
+  sending, and remove unsupported candidate and template claims.
+- Improve first-run, empty, loading, error, keyboard and responsive states.
+- Validate contact sorting/filtering with SELECT-only PostgreSQL fixtures.
+  No schema migration or ingestion rewrite; existing paid-launch controls remain.
+- Hosted interface release only. The Windows-local People renderer and broader
+  email/verification launch gates remain unchanged.
+
 ## 0.1.1.1 — 2026-09-06 — Large-board ingestion
 
 - Raised bounded Workday and SmartRecruiters coverage from 1,000 to 5,000

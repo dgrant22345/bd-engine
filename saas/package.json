@@ -33,6 +33,7 @@
     "repair:board-links": "node scripts/repair-board-account-links.mjs",
     "repair:rollups": "node scripts/repair-rollups.mjs",
     "verify:job-queries": "node scripts/verify-job-query-quality.mjs",
+    "verify:contact-queries": "node scripts/verify-contact-query-quality.mjs",
     "verify:db-contracts": "node scripts/verify-db-write-contracts.mjs",
     "check:schema": "node scripts/check-schema-contract.mjs",
     "schema:manifest": "node scripts/check-schema-contract.mjs --write"
