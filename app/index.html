@@ -8,8 +8,9 @@
   <meta name="theme-color" content="#f8fafc">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Hiring Signals for Staffing BD</title>
-  <link rel="stylesheet" href="/styles.css?v=20260906-product-quality-01">
-  <link rel="stylesheet" href="/palette.css?v=20260906-product-quality-01">
+  <link rel="stylesheet" href="/styles.css?v=20260906-people-01">
+  <link rel="stylesheet" href="/palette.css?v=20260906-people-01">
+  <link rel="stylesheet" href="/workspace.css?v=20260906-people-01">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -23,7 +24,7 @@
         <div class="brand-lockup">
           <span class="brand-mark" aria-hidden="true">BD</span>
           <div>
-            <p class="eyebrow">Hiring intelligence</p>
+            <p class="eyebrow">Recruiter workspace</p>
             <h1>BD Engine</h1>
           </div>
         </div>
@@ -102,7 +103,7 @@
               </button>
               <button class="menu-action" id="menu-referral-btn" type="button" data-action="open-referral-modal">
                 <span class="menu-action-icon" aria-hidden="true">🎁</span>
-                <span><strong>Refer Colleagues</strong><small>Give 1 month, get 1 month</small></span>
+                <span><strong>Refer Colleagues</strong><small>Eligible referrals earn invoice credit</small></span>
               </button>
               <button class="menu-action" id="menu-pricing-btn" type="button" data-action="open-pricing-modal">
                 <span class="menu-action-icon" aria-hidden="true">💎</span>
@@ -179,8 +180,9 @@
   <div id="pitch-deck-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/local-api.js?v=20260906-product-quality-01"></script>
-  <script src="/app.js?v=20260906-product-quality-01"></script>
+  <script src="/local-api.js?v=20260906-people-01"></script>
+  <script src="/people-workspace.js?v=20260906-people-01"></script>
+  <script src="/app.js?v=20260906-people-01"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});

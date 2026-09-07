@@ -55,7 +55,7 @@ async function completeSetup(page, app) {
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await fillProfileForm(profile);
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   const skipTargets = app.locator('[data-action="setup-skip-targets"]');
   await expect(skipTargets).toBeVisible({ timeout: 10000 });
   await skipTargets.click();
@@ -136,7 +136,7 @@ test('search focus form saves settings and opens the matching shortlist', async 
   await form.locator('[name="minimumRelevanceScore"]').fill('35');
   await form.getByRole('button', { name: 'Save focus and show matches' }).click();
 
-  await expect(app.getByRole('heading', { name: 'Open roles at target companies' })).toBeVisible({ timeout: 10000 });
+  await expect(app.locator('#view-title')).toHaveText('Open roles', { timeout: 10000 });
   const fit = app.locator('#jobs-filter-form select[name="minRelevance"]');
   await expect(fit).toHaveValue('35');
   await expect(fit.locator('option:checked')).toHaveText('Saved target threshold (35+)');
@@ -161,7 +161,7 @@ test('role pipeline is saved to the workspace and survives a page reload', async
   const { app } = await signup(page, { persona: 'jobseeker' });
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await app.locator('[data-action="setup-skip-targets"]').click();
   await app.locator('[data-action="setup-load-sample"]').click();
   await app.locator('[data-action="setup-open-dashboard"]').click({ timeout: 15000 });
@@ -196,13 +196,13 @@ test('role pipeline is saved to the workspace and survives a page reload', async
 test('persona mode switch survives a full page reload', async ({ page }) => {
   const { app } = await signup(page, { persona: 'bd' });
   await completeSetup(page, app);
-  await expect(app.locator('#persona-mode-label')).toHaveText('Staffing BD');
+  await expect(app.locator('#persona-mode-label')).toHaveText('Recruiting');
   await app.locator('#persona-mode-btn').click();
-  await expect(app.locator('#persona-mode-label')).toHaveText('Job Seeker', { timeout: 10000 });
+  await expect(app.locator('#persona-mode-label')).toHaveText('Job seeker', { timeout: 10000 });
 
   await page.reload();
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
-  await expect(page.frameLocator('iframe.cloud-app-frame').locator('#persona-mode-label')).toHaveText('Job Seeker', { timeout: 15000 });
+  await expect(page.frameLocator('iframe.cloud-app-frame').locator('#persona-mode-label')).toHaveText('Job seeker', { timeout: 15000 });
 });
 
 test('post-setup dashboard is usable and its optional tour is accessible', async ({ page }) => {
@@ -214,7 +214,7 @@ test('post-setup dashboard is usable and its optional tour is accessible', async
   await expect(setupTitle).toBeFocused();
 
   await fillProfileForm(profile);
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await expect(setupTitle).toHaveText('Watchlist');
   await expect(setupTitle).toBeFocused();
 
@@ -262,7 +262,7 @@ test('mobile setup keeps the active step and readiness hierarchy compact', async
   expect(readinessHeight).toBeLessThanOrEqual(200);
 
   await fillProfileForm(profile);
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await expect(app.locator('#setup-title')).toHaveText('Watchlist');
   const flowTops = await app.locator('.setup-flow-preview > span').evaluateAll((elements) => (
     elements.map((element) => Math.round(element.getBoundingClientRect().top))
@@ -276,11 +276,11 @@ test('sample setup journey: loaded data updates readiness before launch', async 
   const { app } = await signup(page);
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   await app.locator('[data-action="setup-load-sample"]').click();
   await expect(app.locator('[data-action="setup-open-dashboard"]')).toBeVisible({ timeout: 15000 });
-  await expect.poll(async () => Number(await app.locator('.setup-value-score strong').textContent())).toBeGreaterThan(0);
+  await expect(app.locator('.setup-people-count')).toContainText('4 people saved');
   await expect(app.locator('.setup-summary-grid')).toContainText('Accounts');
   await expect(app.locator('.setup-summary-grid')).toContainText('Jobs');
 
@@ -325,7 +325,7 @@ test('job seeker journey keeps company, network, role, and outreach language', a
   const { app } = await signup(page, { persona: 'jobseeker' });
   await expect(app.locator('body')).toContainText('Job search setup', { timeout: 15000 });
   await fillProfileForm(app.locator('#setup-profile-form'));
-  await app.locator('#setup-profile-form button[type="submit"]').click();
+  await app.locator('#setup-profile-form button[type="submit"]:not([value="people"])').click();
   await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   await app.locator('[data-action="setup-load-sample"]').click();
   await expect(app.locator('.setup-summary-grid')).toContainText('Companies', { timeout: 15000 });
@@ -338,12 +338,13 @@ test('job seeker journey keeps company, network, role, and outreach language', a
   await expect(openRole).toBeVisible({ timeout: 10000 });
   await expect(openRole).toHaveAttribute('href', /^https?:\/\//);
   await gotoAppRoute(page, '#/accounts');
-  await expect(app.locator('body')).toContainText('Ranked target companies', { timeout: 10000 });
+  await expect(app.locator('#view-title')).toHaveText('Companies', { timeout: 10000 });
   await expect(app.locator('body')).toContainText('Company shortlist');
   await gotoAppRoute(page, '#/contacts');
-  await expect(app.locator('body')).toContainText('Warm contact paths', { timeout: 10000 });
+  await expect(app.locator('#view-title')).toHaveText('People', { timeout: 10000 });
+  await expect(app.locator('.people-table tbody tr')).toHaveCount(4);
   await gotoAppRoute(page, '#/jobs');
-  await expect(app.locator('body')).toContainText('Open roles at target companies', { timeout: 10000 });
+  await expect(app.locator('#view-title')).toHaveText('Open roles', { timeout: 10000 });
   await gotoAppRoute(page, '#/accounts');
   await app.locator('[data-action="open-account"]').first().click();
   await app.locator('#open-outreach-modal').click();
@@ -357,7 +358,7 @@ test('setup journey: whitespace-only workspace name is rejected visibly', async 
   // Whitespace passes native `required` and must hit the app's trim validation.
   await fillProfileForm(profileForm);
   await profileForm.locator('#setup-workspace-name').fill('   ');
-  await profileForm.locator('button[type="submit"]').click();
+  await profileForm.getByRole('button', { name: 'Continue guided setup' }).click();
   await expect(app.locator('.toast').first()).toContainText(/required/i, { timeout: 5000 });
 });
 
@@ -373,7 +374,7 @@ test('commercial loop: quick-start watchlist becomes a measurable account outcom
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await fillProfileForm(profile);
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
 
   const targetForm = app.locator('#setup-target-form');
   await expect(targetForm).toBeVisible({ timeout: 10000 });
@@ -612,7 +613,7 @@ test('import journey: setup preview selects tracked targets and preserves networ
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await fillProfileForm(profile);
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
   const fileInput = app.locator('#setup-csv-file');
   await expect(app.locator('[data-action="setup-browse-csv"]')).toBeVisible({ timeout: 10000 });

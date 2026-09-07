@@ -79,7 +79,7 @@ test('dark workspace surfaces retain accessible contrast', async ({ page }) => {
   await expect(app.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expectNoBlockingViolations(page);
 
-  await app.getByRole('link', { name: 'Admin', exact: true }).click();
+  await app.getByRole('link', { name: 'Settings', exact: true }).click();
   const runtimeHeader = app.locator('[data-collapse-id="runtime-status"]');
   if (await runtimeHeader.getAttribute('aria-expanded') === 'false') await runtimeHeader.click();
   await expect(app.locator('.status-matrix--premium .status-item').first()).toBeVisible();
@@ -92,7 +92,7 @@ test('workspace keyboard controls expose state and contain focus', async ({ page
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
   const app = page.frameLocator('iframe.cloud-app-frame');
 
-  await app.getByRole('link', { name: 'Accounts', exact: true }).click();
+  await app.getByRole('link', { name: 'Companies', exact: true }).click();
   const filterToggle = app.locator('#toggle-advanced-filters');
   await filterToggle.locator('.filter-toggle-label').click();
   await expect(filterToggle).toHaveAttribute('aria-expanded', 'true');

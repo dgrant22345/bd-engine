@@ -2328,6 +2328,13 @@ window.addEventListener('error', (event) => {
   window.bdLocalApi.handleError(event.error || event.message, appAlert);
 });
 
+let peopleWorkspace;
+let viewRenderSequence = 0;
+function beginViewRender() {
+  const request = ++viewRenderSequence;
+  const routeAtStart = location.hash;
+  return () => request === viewRenderSequence && location.hash === routeAtStart;
+}
 init();
 
 function getWorkspaceLoadProgressKey(hint = appState.workspaceLoadHint) {
@@ -2510,20 +2517,28 @@ async function init() {
 
 function bindEvents() {
   window.addEventListener('hashchange', async () => {
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+    const requestedHash = location.hash;
+    const withinPeople = appState.activeView === 'contacts' && getRouteRoot() === 'contacts';
+    if (!withinPeople) {
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }
     try {
       await renderRoute();
-      if (!appState.outreachModalOpen) viewTitle?.focus({ preventScroll: true });
+      if (location.hash !== requestedHash) return;
+      if (!appState.outreachModalOpen && !withinPeople) viewTitle?.focus({ preventScroll: true });
     } catch (error) {
+      if (location.hash !== requestedHash) return;
       if (isBillingRequiredError(error)) {
         renderBillingRequiredView(error);
         return;
       }
       window.bdLocalApi.handleError(error, appAlert);
+      if (appRoot.querySelector('.loading-shell')) appRoot.innerHTML = renderEmptyState({ title: 'This view couldn’t be loaded', copy: error.message || 'Please try again.', action: '<button class="secondary-button" type="button" data-action="retry-current-view">Try again</button>' });
     }
   });
   document.addEventListener('keydown', (e) => {
+    if (document.querySelector('dialog[open]')) return;
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
 
@@ -3006,6 +3021,12 @@ function bindEvents() {
     if (actionName === 'setup-open-dashboard') {
       invalidateAppData();
       location.hash = '#/dashboard';
+      return;
+    }
+    if (actionName === 'retry-current-view') {
+      window.bdLocalApi.invalidate();
+      window.bdLocalApi.setAlert('', appAlert);
+      await renderRoute();
       return;
     }
     if (actionName === 'paginate') {
@@ -3880,6 +3901,17 @@ function bindEvents() {
         showToast('Workspace, name, and email are required.', 'warning');
         return;
       }
+      if (event.submitter?.value === 'people' && !appState.setupStatus?.licensingEnabled) {
+        appState.setupTargetsSkipped = true;
+        const submit = event.submitter;
+        submit.disabled = true;
+        try {
+          await completeSetupWizard();
+          if (!appState.setupStatus?.requiresSetup) location.hash = '#/contacts';
+        } catch { /* completeSetupWizard preserves inputs and reports the failure */ }
+        finally { submit.disabled = false; }
+        return;
+      }
       appState.setupStep = Math.min(getSetupSteps().length, appState.setupStep + 1);
       await renderSetupWizard();
       return;
@@ -4355,13 +4387,41 @@ function applyPersonaChrome() {
   const personaIcon = document.getElementById('persona-mode-icon');
   const personaLabel = document.getElementById('persona-mode-label');
 
-  if (accountLabel) accountLabel.textContent = jobSeeker ? 'Companies' : 'Accounts';
-  if (jobsLabel) jobsLabel.textContent = jobSeeker ? 'Open roles' : 'Jobs';
-  if (contactsLabel) contactsLabel.textContent = jobSeeker ? 'Network' : 'Contacts';
-  if (adminLabel) adminLabel.textContent = jobSeeker ? 'Tools' : 'Admin';
-  if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Hiring-signal workspace';
+  if (accountLabel) accountLabel.textContent = 'Companies';
+  if (jobsLabel) jobsLabel.textContent = jobSeeker ? 'Open roles' : 'Hiring activity';
+  if (contactsLabel) contactsLabel.textContent = 'People';
+  if (adminLabel) adminLabel.textContent = 'Settings';
+  const taskLabel = document.querySelector('[data-route="tasks"] .nav-label');
+  const overviewLabel = document.querySelector('[data-route="dashboard"] .nav-label');
+  if (taskLabel) taskLabel.textContent = 'Follow-ups';
+  if (overviewLabel) overviewLabel.textContent = 'Overview';
+  const navigation = document.querySelector('.nav');
+  if (navigation && !navigation.dataset.organized) {
+    const group = text => { const label = document.createElement('p'); label.className = 'nav-group-label'; label.textContent = text; navigation.append(label); };
+    group('Workspace');
+    for (const route of ['contacts', 'tasks']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
+    group('Company intelligence');
+    for (const route of ['accounts', 'jobs', 'dashboard']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
+    group('Manage');
+    navigation.append(navigation.querySelector('[data-route="admin"]'));
+    navigation.dataset.organized = 'true';
+  }
+  const menu = document.querySelector('.topbar-overflow-menu');
+  if (menu && !menu.dataset.organized) {
+    const group = document.createElement('details'); group.className = 'menu-group';
+    group.innerHTML = '<summary>Optional business-development tools</summary><p class="muted small">Templates and planning aids. Verify all facts before using.</p>';
+    for (const id of ['morning-radar-menu-btn', 'menu-objection-btn', 'menu-candidate-slate-btn', 'menu-call-studio-btn', 'menu-network-graph-btn', 'menu-battle-plan-btn', 'menu-autopilot-btn', 'menu-pitch-deck-btn']) {
+      const item = document.getElementById(id); if (item) group.append(item);
+    }
+    menu.append(group);
+    // One consistent light/dark system; legacy preset cycling is redundant.
+    document.getElementById('theme-preset-btn')?.setAttribute('hidden', '');
+    document.getElementById('sound-toggle-btn')?.setAttribute('hidden', '');
+    menu.dataset.organized = 'true';
+  }
+  if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Recruiter workspace';
   if (personaIcon) personaIcon.textContent = jobSeeker ? '🎯' : '💼';
-  if (personaLabel) personaLabel.textContent = jobSeeker ? 'Job Seeker' : 'Staffing BD';
+  if (personaLabel) personaLabel.textContent = jobSeeker ? 'Job seeker' : 'Recruiting';
   if (personaBtn) personaBtn.title = `Current mode: ${jobSeeker ? 'Job Seeker' : 'Business Development'}. Click to switch mode.`;
 }
 
@@ -4473,7 +4533,7 @@ function buildQuery(params) {
 
 function getRouteRoot(hashValue = location.hash) {
   const hash = hashValue || '#/dashboard';
-  return hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard';
+  return hash.split('?')[0].replace(/^#\/?/, '').split('/')[0] || 'dashboard';
 }
 
 function routeNeedsBootstrapFilters(routeRoot) {
@@ -5234,58 +5294,13 @@ function updateBackgroundProgressPanel(job, fallbackLabel = 'Background job') {
 
 function renderLoadingState(title, subtitle) {
   setViewTitle(title);
-  const isFirstSetup = appState.setupStatus?.requiresSetup || appState.setupBusy;
   appRoot.innerHTML = `
-    <section class="hero-card loading-shell" role="status" aria-live="polite" aria-busy="true">
-      <div class="loading-copy">
-        <p class="eyebrow">Operating view</p>
-        <h3>${escapeHtml(title)}</h3>
-        <p class="subtitle small">${escapeHtml(subtitle || 'Fetching the latest hiring and account signals...')}</p>
-        
-        ${isFirstSetup ? `
-          <div class="setup-warning-box">
-            <div class="small"><strong>First-time setup in progress.</strong> This may take up to 2-3 minutes while we process your LinkedIn network and build your hiring radar.</div>
-            <div class="progress-container" role="progressbar" aria-label="Workspace setup progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="15">
-              <div class="progress-bar-fill" id="setup-progress-bar" style="width: 15%"></div>
-            </div>
-            <div class="progress-label small muted" id="setup-progress-text">Initializing workspace...</div>
-          </div>
-        ` : ''}
+    <section class="table-card loading-shell" role="status" aria-live="polite" aria-busy="true">
+      <div class="people-toolbar"><span>${escapeHtml(subtitle || 'Loading workspace data…')}</span></div>
+      <div class="people-skeleton" aria-hidden="true">
+        ${Array.from({ length: 5 }, () => '<div><i></i><span></span><span></span></div>').join('')}
       </div>
-      <div class="loading-grid" aria-hidden="true">
-        <span class="skeleton skeleton-pill"></span>
-        <span class="skeleton skeleton-pill"></span>
-        <span class="skeleton skeleton-pill"></span>
-        <span class="skeleton skeleton-pill"></span>
-      </div>
-    </section>
-    <section class="metrics-grid" aria-hidden="true">
-      <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
-      <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
-      <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
-      <article class="metric-card"><span class="skeleton skeleton-line short"></span><span class="skeleton skeleton-block"></span><span class="skeleton skeleton-line"></span></article>
-    </section>
-  `;
-  
-  if (isFirstSetup) {
-    // Simulate some progress movement if it's stuck on the loader
-    let progress = 15;
-    const interval = setInterval(() => {
-      const bar = document.getElementById('setup-progress-bar');
-      const text = document.getElementById('setup-progress-text');
-      if (!bar) {
-        clearInterval(interval);
-        return;
-      }
-      progress = Math.min(95, progress + Math.random() * 2);
-      bar.style.width = `${progress}%`;
-      bar.parentElement?.setAttribute('aria-valuenow', String(Math.round(progress)));
-      if (progress > 80) text.textContent = 'Finalizing hiring signals...';
-      else if (progress > 60) text.textContent = 'Resolving company ATS boards...';
-      else if (progress > 40) text.textContent = 'Analyzing job activity...';
-      else if (progress > 25) text.textContent = 'Parsing LinkedIn connections...';
-    }, 3000);
-  }
+    </section>`;
 }
 
 function isBillingRequiredError(error) {
@@ -5354,8 +5369,10 @@ function activateNav(routeKey) {
 
 async function renderRoute() {
   const hash = location.hash || '#/dashboard';
-  const parts = hash.replace(/^#\/?/, '').split('/');
+  const parts = hash.split('?')[0].replace(/^#\/?/, '').split('/');
   const root = parts[0] || 'dashboard';
+  if (root !== 'contacts' && peopleWorkspace && !peopleWorkspace.beforeLeave()) return;
+  if (root !== 'contacts') peopleWorkspace?.leave();
   appState.activeView = root;
   clearRuntimePoll();
   closeMobileNav({ restoreFocus: false });
@@ -5363,6 +5380,7 @@ async function renderRoute() {
   if (!appState.setupStatus) {
     await loadSetupStatus(false);
   }
+  if ((location.hash || '#/dashboard') !== hash) return;
 
   if (root === 'setup') {
     if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
@@ -5633,7 +5651,7 @@ async function renderSetupWizard() {
   const setupEyebrow = `${steps.length} quick steps`;
   const setupIntro = jobSeeker
     ? 'Start with companies you care about, then add contacts when you are ready to map warm paths.'
-    : 'Start with a focused company watchlist, see the first hiring signals, then add contacts when they are useful.';
+    : 'Start reviewing people immediately, or continue guided setup to configure optional company and hiring intelligence.';
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -5670,6 +5688,7 @@ async function renderSetupWizard() {
 }
 
 function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
+  if (!jobSeeker) return `<div class="setup-value-guide"><div><strong>A workspace for your recruiting network</strong><p class="muted small">Import connections or add one person. Review source details, keep notes, and prepare outreach. Company tracking can be configured later.</p></div><div class="setup-people-count"><strong>${formatNumber(readiness?.metrics?.contactCount || 0)}</strong><span> people saved</span></div></div>`;
   const metrics = readiness?.metrics || {};
   const visibleChecks = [
     { label: jobSeeker ? 'Target companies' : 'Target accounts', value: Number(metrics.accountCount || 0), target: 5, suffix: '' },
@@ -5735,7 +5754,8 @@ function renderSetupStepContent(stepKey) {
             </label>`}
         </div>
         <div class="button-row">
-          <button class="primary-button" type="submit">Continue</button>
+          ${!jobSeeker && !appState.setupStatus?.licensingEnabled ? '<button class="primary-button" type="submit" value="people">Start with people</button>' : ''}
+          <button class="secondary-button" type="submit">Continue guided setup</button>
         </div>
       </form>
     `;
@@ -6849,7 +6869,7 @@ function renderNetworkImportModal() {
           <span class="modal-icon-badge" aria-hidden="true">⚡</span>
           <div>
             <h3 id="network-import-title">Import LinkedIn Connections</h3>
-            <p class="muted small">Automatically target all companies you have connections at and pull in their open jobs.</p>
+            <p class="muted small">Import first-degree connection details. Review which employers to track; job discovery depends on supported sources and your plan limits.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-network-import-modal" aria-label="Close modal">&times;</button>
@@ -6890,7 +6910,7 @@ function renderNetworkImportModal() {
           <button class="ghost-button" type="button" data-action="close-network-import-modal">${isDone ? 'Close' : 'Cancel'}</button>
           ${hasFile && !isDone ? `
             <button class="primary-button" type="button" data-action="network-modal-run-import" ${appState.modalImportBusy ? 'disabled' : ''}>
-              ${appState.modalImportBusy ? 'Importing...' : 'Target Companies & Pull Jobs'}
+              ${appState.modalImportBusy ? 'Importing...' : 'Import connections'}
             </button>
           ` : ''}
         </div>
@@ -6908,7 +6928,7 @@ function renderLinkedInGuideModal() {
           <span class="modal-icon-badge" aria-hidden="true">📥</span>
           <div>
             <h3 id="linkedin-guide-title">How to Export LinkedIn Connections</h3>
-            <p class="muted small">Download your connections CSV in under 30 seconds directly from LinkedIn.</p>
+            <p class="muted small">Request your connection data directly from LinkedIn. Export preparation time varies.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-linkedin-guide" aria-label="Close modal">&times;</button>
@@ -6927,21 +6947,21 @@ function renderLinkedInGuideModal() {
             <span class="guide-step-num">2</span>
             <div>
               <strong>Request Data Archive</strong>
-              <p class="muted small">Click <strong>Get a copy of your data</strong>, select <strong>Connections</strong>, and click <strong>Request archive</strong>.</p>
+              <p class="muted small">In <strong>Get a copy of your data</strong>, request the larger data archive. Check <a href="https://www.linkedin.com/help/lms/answer/a566336" target="_blank" rel="noreferrer">LinkedIn’s current export instructions</a> if the options differ.</p>
             </div>
           </li>
           <li class="guide-step-item">
             <span class="guide-step-num">3</span>
             <div>
               <strong>Check Your Email</strong>
-              <p class="muted small">LinkedIn will email you a download link (usually in 2-5 minutes). Unzip the downloaded file.</p>
+              <p class="muted small">Wait for LinkedIn’s download email, then unzip the archive. Delivery is controlled by LinkedIn; no fixed time is guaranteed.</p>
             </div>
           </li>
           <li class="guide-step-item">
             <span class="guide-step-num">4</span>
             <div>
               <strong>Upload Connections.csv here</strong>
-              <p class="muted small">Drop the <code>Connections.csv</code> file into BD Engine to automatically map all jobs and companies.</p>
+              <p class="muted small">Upload only <code>Connections.csv</code>, not the whole archive. It contains first-degree connection details, not full candidate profiles. Some emails will be missing because of privacy settings. Employer matching and supported job-board discovery are separate steps.</p>
             </div>
           </li>
         </ol>
@@ -7158,91 +7178,24 @@ function switchWarmStudioTone(tone) {
 
 function generateWarmStudioCopy(data) {
   const { job, account, selectedContact, selectedTone, selectedStep = 1 } = data;
-  const contactName = selectedContact?.fullName || selectedContact?.firstName || 'there';
-  const firstName = selectedContact?.firstName || contactName.split(' ')[0] || 'there';
-  const contactTitle = selectedContact?.title || 'Team Member';
-  const companyName = job?.companyName || job?.company || account?.displayName || 'the team';
-  const jobTitle = job?.title || 'Open Role';
-  const jobLocation = job?.location || (job?.isRemote ? 'Remote' : '');
-  const jobUrl = job?.url || job?.jobUrl || '';
-  const myName = appState.bootstrap?.user?.name || 'Applicant';
-
-  let linkedinNote = '';
-  let referralDm = '';
-  let emailPitch = '';
-  let emailSubject = '';
-  let recruiterPitch = '';
-
-  if (selectedStep === 1) {
-    if (selectedTone === 'casual') {
-      linkedinNote = `Hi ${firstName}! Saw your work at ${companyName} and wanted to connect. I noticed ${companyName} has an open ${jobTitle} role—would love to connect and learn more about your experience on the team! Best, ${myName}`;
-      referralDm = `Hey ${firstName}! Hope all is well with you.\n\nI saw that ${companyName} is currently hiring for a ${jobTitle}${jobLocation ? ` (${jobLocation})` : ''} and the role looks like a great match for my background.\n\nAre you still enjoying your time at ${companyName}? If you're open to it, I'd love to ask for your internal referral or advice on who leads the team. Happy to send over my resume and a 2-line summary to make it super easy.\n\nThanks a ton!\n${myName}`;
-      emailSubject = `${jobTitle} inquiry — ${myName}`;
-      emailPitch = `Hi ${firstName},\n\nI'm reaching out because I saw ${companyName}'s open ${jobTitle} role${jobLocation ? ` in ${jobLocation}` : ''} and was really excited by what the team is building.\n\nOver the past few years, I've specialized in delivering impactful results and driving technical excellence. I'd love the opportunity to bring that experience to ${companyName}.\n\nI've reviewed the requirements and believe I can hit the ground running immediately. Would you be open to a quick 10-minute chat this week?\n\nBest,\n${myName}${jobUrl ? `\n\nRole link: ${jobUrl}` : ''}`;
-      recruiterPitch = `Hi ${firstName}! I saw you're on the Talent team at ${companyName}. I recently came across the ${jobTitle} posting and would love to connect. I have strong experience in this domain and would appreciate connecting with the recruiter managing this search! Cheers, ${myName}`;
-    } else if (selectedTone === 'direct') {
-      linkedinNote = `Hi ${firstName}, reaching out as I'm applying for the ${jobTitle} opening at ${companyName}. Would value connecting and hearing any quick advice on the team. Thanks! - ${myName}`;
-      referralDm = `Hi ${firstName},\n\nI noticed ${companyName} posted a ${jobTitle} role recently. My experience aligns closely with what the team is looking for.\n\nWould you be open to submitting an internal referral or introducing me to the hiring manager? I can share a quick blurb and my resume right away.\n\nAppreciate your time!\n${myName}`;
-      emailSubject = `Application & Introduction: ${jobTitle} (${myName})`;
-      emailPitch = `Hi ${firstName},\n\nI'm writing regarding the ${jobTitle} role at ${companyName}.\n\nHere is what I bring to the table:\n• Proven track record delivering key initiatives on time and scale\n• Deep familiarity with modern tech stacks and collaborative workflows\n• Strong background matching the exact responsibilities for this opening\n\nCould we schedule a brief 10-minute intro call this week to see if there's a strong mutual fit?\n\nBest regards,\n${myName}`;
-      recruiterPitch = `Hi ${firstName}, I'm an active candidate for the ${jobTitle} role at ${companyName}. My profile aligns directly with the posted qualifications. Are you managing this search, or could you point me to the right recruiter on your team? Thanks, ${myName}`;
-    } else {
-      linkedinNote = `Hello ${firstName}, I came across your profile and admire your work as ${contactTitle} at ${companyName}. I'm following ${companyName}'s ${jobTitle} opening and would be grateful to connect. Regards, ${myName}`;
-      referralDm = `Hi ${firstName},\n\nI hope you are doing well. I have been following ${companyName}'s growth and noticed the recent opening for ${jobTitle}.\n\nGiven your role at ${companyName}, I would appreciate any insight you might have into the team. If you feel comfortable, I would be grateful for an internal referral.\n\nLet me know if you might have 5 minutes to connect, or if I can send over my background materials.\n\nBest regards,\n${myName}`;
-      emailSubject = `Inquiry regarding ${jobTitle} opening at ${companyName}`;
-      emailPitch = `Dear ${firstName},\n\nI am writing to express my strong interest in the ${jobTitle} position currently open at ${companyName}.\n\nWith my background and proven success in similar environments, I am confident in my ability to make an immediate, positive contribution to your team's objectives.\n\nI would welcome the opportunity to discuss how my skill set aligns with your current priorities. Thank you for your time and consideration.\n\nSincerely,\n${myName}`;
-      recruiterPitch = `Hello ${firstName}, I noticed you lead recruitment efforts at ${companyName}. I am very interested in the ${jobTitle} position and believe my background would be a strong asset. I would welcome the chance to share my profile with you. Best regards, ${myName}`;
-    }
-  } else if (selectedStep === 2) {
-    if (selectedTone === 'casual') {
-      linkedinNote = `Hi ${firstName}! Quick follow-up on my note regarding ${jobTitle} at ${companyName}. Would love to share two quick project highlights whenever convenient. Cheers!`;
-      referralDm = `Hey ${firstName}! Quick follow-up on this—I know things get busy!\n\nI put together a 2-bullet summary of my relevant projects matching ${companyName}'s ${jobTitle} tech stack so it's super lightweight for you to pass along:\n• Led similar production initiatives delivering measured latency and throughput wins\n• Hands-on expertise with the exact workflows required for this role\n\nLet me know if you're open to introducing me to the hiring lead. Thanks again!\n${myName}`;
-      emailSubject = `Re: ${jobTitle} inquiry — Project & candidate perspective`;
-      emailPitch = `Hi ${firstName},\n\nFollowing up on my previous note regarding the ${jobTitle} opening.\n\nI took a closer look at ${companyName}'s recent product direction and put together a few concrete examples of how I've solved analogous scaling and implementation challenges in past roles.\n\nI'd be glad to share these notes or hop on a brief 10-minute introductory call whenever fits your schedule.\n\nBest,\n${myName}`;
-      recruiterPitch = `Hi ${firstName}! Following up on the ${jobTitle} opening. I'm actively interviewing for target roles this month and wanted to check if ${companyName}'s team is scheduling candidate screens this week. Thanks! - ${myName}`;
-    } else if (selectedTone === 'direct') {
-      linkedinNote = `Hi ${firstName}, following up on my previous message regarding ${jobTitle}. Happy to send over targeted portfolio samples if helpful. Thanks, ${myName}`;
-      referralDm = `Hi ${firstName},\n\nFollowing up on the ${jobTitle} opening. I've prepared a brief summary of my relevant accomplishments and would be grateful for an internal referral or hiring manager intro when you have a free moment.\n\nAppreciate your help!\n${myName}`;
-      emailSubject = `Follow-up: ${jobTitle} at ${companyName} (${myName})`;
-      emailPitch = `Hi ${firstName},\n\nI'm following up on my note from earlier this week regarding the ${jobTitle} role.\n\nMy profile offers immediate alignment with your team's current hiring goals. Do you have 10 minutes open this Thursday or Friday for a concise conversation?\n\nBest regards,\n${myName}`;
-      recruiterPitch = `Hi ${firstName}, checking in regarding candidate review for the ${jobTitle} role. I'd be glad to provide any additional materials needed to advance my application. Best, ${myName}`;
-    } else {
-      linkedinNote = `Hello ${firstName}, following up regarding the ${jobTitle} role at ${companyName}. I would welcome the opportunity to discuss how my qualifications align with your team.`;
-      referralDm = `Hi ${firstName},\n\nI wanted to follow up briefly regarding the ${jobTitle} opening at ${companyName}. I have prepared materials outlining my key project contributions and would be grateful for an opportunity to be referred to the hiring team.\n\nThank you again for your consideration.\n\nBest regards,\n${myName}`;
-      emailSubject = `Follow-up regarding ${jobTitle} position at ${companyName}`;
-      emailPitch = `Dear ${firstName},\n\nI am writing to follow up on my previous inquiry regarding the ${jobTitle} position.\n\nI remain deeply interested in contributing to ${companyName}'s ongoing initiatives and would appreciate the chance to discuss how my experience can support your team's milestones.\n\nThank you for your time and continued consideration.\n\nSincerely,\n${myName}`;
-      recruiterPitch = `Hello ${firstName}, I am writing to follow up on my interest in the ${jobTitle} search. Please let me know if you would like me to submit any further credentials for team review. Best regards, ${myName}`;
-    }
-  } else {
-    if (selectedTone === 'casual') {
-      linkedinNote = `Hi ${firstName}! Closing the loop on ${jobTitle} at ${companyName}. No worries if timing is tight—let's stay connected for the future! Best, ${myName}`;
-      referralDm = `Hey ${firstName}! Closing the loop on this—I know how hectic schedules get so no worries at all if now isn't the right time.\n\nReally appreciate you taking a look, and I hope we can stay in touch down the road!\n\nCheers,\n${myName}`;
-      emailSubject = `Closing the loop — ${jobTitle} at ${companyName}`;
-      emailPitch = `Hi ${firstName},\n\nWanted to check in one final time regarding the ${jobTitle} role. If the team has already moved forward with other candidates, I completely understand.\n\nIf timing is better later in the year, I'd welcome staying in touch. Wishing you and the ${companyName} team continued success!\n\nBest,\n${myName}`;
-      recruiterPitch = `Hi ${firstName}! Closing the loop on the ${jobTitle} search. If the role has been filled, no problem at all—wishing you a great rest of the quarter! Best, ${myName}`;
-    } else if (selectedTone === 'direct') {
-      linkedinNote = `Hi ${firstName}, closing out my note regarding ${jobTitle}. If timing is better later, let's keep in touch. Thanks, ${myName}`;
-      referralDm = `Hi ${firstName},\n\nWanted to close the loop on the ${jobTitle} referral request. If the position is already progressing or timing is not ideal, no problem at all.\n\nThanks again for your time!\n${myName}`;
-      emailSubject = `Closing the loop: ${jobTitle} (${myName})`;
-      emailPitch = `Hi ${firstName},\n\nI understand priorities move fast, so I will close the loop on my application for the ${jobTitle} position.\n\nShould another opportunity arise that matches my background, please feel free to reach out. Thank you for your consideration.\n\nBest regards,\n${myName}`;
-      recruiterPitch = `Hi ${firstName}, closing the loop on the ${jobTitle} opening. If the position is filled, I appreciate your consideration and hope to connect on future searches. Thanks, ${myName}`;
-    } else {
-      linkedinNote = `Hello ${firstName}, I am closing the loop regarding the ${jobTitle} position. I wish you and ${companyName} every continued success.`;
-      referralDm = `Hi ${firstName},\n\nI am writing to close the loop regarding my referral inquiry for the ${jobTitle} role. If the search has progressed or timing is unfavorable, I fully understand.\n\nThank you for your time, and I look forward to staying connected.\n\nBest regards,\n${myName}`;
-      emailSubject = `Final follow-up regarding ${jobTitle} position — ${companyName}`;
-      emailPitch = `Dear ${firstName},\n\nI am writing to conclude my application inquiry for the ${jobTitle} position. If the search is complete, I understand and wish your team great success.\n\nThank you for your time and consideration.\n\nSincerely,\n${myName}`;
-      recruiterPitch = `Hello ${firstName}, I am writing to conclude my inquiry regarding the ${jobTitle} search. Thank you for your time and consideration. Best regards, ${myName}`;
-    }
-  }
-
-  if (linkedinNote.length > 295) linkedinNote = linkedinNote.slice(0, 292) + '...';
-
+  const firstName = selectedContact?.firstName || selectedContact?.fullName?.split(' ')[0] || 'there';
+  const companyName = job?.companyName || job?.company || account?.displayName || 'the company';
+  const jobTitle = job?.title || '[role to discuss]';
+  const myName = appState.bootstrap?.user?.name || '[your name]';
+  const greeting = selectedTone === 'executive' ? 'Hello' : 'Hi';
+  const opening = selectedStep === 1
+    ? `I'm interested in learning more about the ${jobTitle} role at ${companyName}.`
+    : selectedStep === 2 ? `[Confirm a previous message was sent.] I wanted to follow up on my enquiry about ${jobTitle}.`
+    : `Thank you for considering my enquiry about ${jobTitle}. I will leave this with you.`;
+  const nextStep = selectedStep === 3 ? '' : 'Would you be comfortable sharing more context, or pointing me to the appropriate person?';
+  const linkedinNote = `${greeting} ${firstName}, ${opening} ${nextStep}`.trim();
+  const body = `${greeting} ${firstName},\n\n${opening}\n\n${selectedStep === 1 ? '[Add your own relevant, verified background.]\n\n' : ''}${nextStep}\n\nBest,\n${myName}`;
   return {
-    linkedinNote,
-    referralDm,
-    emailPitch,
-    emailSubject,
-    recruiterPitch,
+    linkedinNote: linkedinNote.length > 295 ? linkedinNote.slice(0, 292) + '...' : linkedinNote,
+    referralDm: body,
+    emailPitch: body,
+    emailSubject: `Enquiry about ${jobTitle} at ${companyName}`,
+    recruiterPitch: body,
   };
 }
 
@@ -8243,56 +8196,31 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
    ══════════════════════════════════════════════════ */
 
 const OBJECTION_DATABASE = {
-  psl: {
-    title: 'Vendor List (PSL)',
-    subtitle: 'We only work with preferred vendors',
-    psychology: 'Hiring leaders use the PSL brush-off to avoid procurement bureaucracy, but routinely approve one-off contingency carve-outs for pre-vetted niche specialists they can\'t source internally.',
-    scripts: {
-      executive: `Hi {{name}},\n\nCompletely respect your existing PSL structure. We operate exclusively as a targeted contingency carve-out for critical, hard-to-fill technical roles when standard vendor pipelines stall.\n\nWe currently represent 2 vetted candidates matching {{company}}'s exact stack. Zero risk, zero retainer—you only review profiles if you're stuck.\n\nWorth a 3-minute look at their snapshots?\n\nBest,\n{{myName}}`,
-      direct: `Hi {{name}},\n\nUnderstood on the PSL. Quick question: if your current vendors haven't filled {{jobTitle}} in 30+ days, are you open to reviewing 2 off-market, pre-screened profiles on a pure contingency basis?\n\nNo upfront commitments.\n\nBest,\n{{myName}}`,
-      casual: `Hey {{name}},\n\nTotally get the vendor policy. We don't need to be on the PSL—we just happen to have two exceptional candidates available for {{jobTitle}} right now. Happy to send anonymized snapshots if helpful!\n\nBest,\n{{myName}}`,
-    },
-  },
-  internal_ta: {
-    title: 'Internal Talent Team',
-    subtitle: 'Our internal TA handles all hiring',
-    psychology: 'Internal recruiters are overwhelmed managing 15-25 requisitions simultaneously. They focus on active inbound applicants, leaving passive, high-impact candidates untouched.',
-    scripts: {
-      executive: `Hi {{name}},\n\nYour internal team does great work. We don't replace internal talent acquisition—we function as specialized sourcing overflow for bottlenecked engineering searches.\n\nRather than competing with inbound applicants, we bring 2 passive candidates who aren't on job boards.\n\nWould it hurt to see their profiles?\n\nBest,\n{{myName}}`,
-      direct: `Hi {{name}},\n\nGreat to hear your internal team is active. For hard-to-fill roles like {{jobTitle}}, we supplement their efforts with passive candidate headhunting with zero retainer.\n\nHappy to share two candidate resumes for review.\n\nBest,\n{{myName}}`,
-      casual: `Hey {{name}},\n\nMakes complete sense! If your internal team ever hits a bottleneck on {{jobTitle}}, feel free to ping me. We have deep bench strength in this exact domain.\n\nBest,\n{{myName}}`,
-    },
-  },
-  hiring_freeze: {
-    title: 'Hiring Freeze / Budget Hold',
-    subtitle: 'We are on a hiring freeze',
-    psychology: 'A hiring freeze is usually temporary or localized to specific departments. Keeping in touch with market compensation benchmarks and future talent pools gives you first-mover advantage when the freeze lifts.',
-    scripts: {
-      executive: `Hi {{name}},\n\nAppreciate the transparency on the budget timeline. When key requisitions reopen, top talent moves within 10 days.\n\nI can send our quarterly compensation & talent availability benchmark for {{jobTitle}} so you have actionable market intelligence ready for the next planning cycle.\n\nBest,\n{{myName}}`,
-      direct: `Hi {{name}},\n\nUnderstood on the freeze. Let's stay connected so that when headcount unfreezes, you have an immediate pipeline without starting from scratch.\n\nBest,\n{{myName}}`,
-      casual: `Hey {{name}},\n\nGot it! Let's touch base next quarter. Hope the team continues to execute well in the meantime.\n\nBest,\n{{myName}}`,
-    },
-  },
-  rates_first: {
-    title: 'Rates / Terms First',
-    subtitle: 'Send us your fee structure and rates',
-    psychology: 'Asking for rates early commoditizes your service. Anchor on candidate quality and exclusivity before opening contract negotiation.',
-    scripts: {
-      executive: `Hi {{name}},\n\nOur standard contingency fee is 20-25% upon successful placement with a full 90-day replacement guarantee.\n\nThat said, terms are always secondary to fit. Let me send over the 2 candidate snapshots first—if the talent caliber doesn't blow you away, rates won't even matter.\n\nSending profiles over now,\n{{myName}}`,
-      direct: `Hi {{name}},\n\nWe work on standard success-based contingency (no upfront fees, 90-day guarantee). Happy to adjust terms based on volume. Let me first share the candidate profiles so you can verify fit.\n\nBest,\n{{myName}}`,
-      casual: `Hey {{name}},\n\nStandard 20% on completion, zero risk. Let me shoot over the two candidate teasers so you can judge the caliber first!\n\nBest,\n{{myName}}`,
-    },
-  },
-  no_agency_fee: {
-    title: 'No Agency Fees',
-    subtitle: 'We do not pay recruitment agency fees',
-    psychology: 'Companies say this when they\'ve been burned by low-quality resume spam. Refocus the conversation on the tangible cost of vacancy ($1,500/day for engineering delay).',
-    scripts: {
-      executive: `Hi {{name}},\n\nCompletely understand why you avoid generic agency fees. The cost of an open technical role lingering for 60+ days often exceeds $50k in delayed roadmap velocity.\n\nIf we have the exact candidate who can start in 2 weeks, would you be open to an executive exception?\n\nBest,\n{{myName}}`,
-      direct: `Hi {{name}},\n\nUnderstood. If our candidates can accelerate your delivery timeline by 2 months, the ROI speaks for itself. Zero fee unless you hire.\n\nBest,\n{{myName}}`,
-      casual: `Hey {{name}},\n\nFair enough! If a critical hire becomes urgent enough to reconsider, our door is open. Wishing you success on the search!\n\nBest,\n{{myName}}`,
-    },
-  },
+  psl: { title: 'Existing vendors', subtitle: 'We work with preferred vendors', psychology: 'Respect the stated policy. Ask whether further contact is useful; do not imply an exception exists.', scripts: {
+    executive: `Hi {{name}},\n\nThank you for explaining {{company}}'s vendor policy. I will respect that process. Is there a published route for future supplier enquiries?\n\nBest,\n{{myName}}`,
+    direct: `Hi {{name}},\n\nUnderstood on your vendor policy. Should I close this enquiry, or is there an appropriate future review date?\n\nBest,\n{{myName}}`,
+    casual: `Hi {{name}},\n\nThanks for letting me know. I'll respect your vendor process and won't send unsolicited profiles.\n\nBest,\n{{myName}}`
+  }},
+  internal_ta: { title: 'Internal recruiting team', subtitle: 'Our team handles hiring', psychology: 'Do not assume the team is overwhelmed or lacks capability. Ask permission before offering support.', scripts: {
+    executive: `Hi {{name}},\n\nThanks for the context. If external sourcing support is ever useful to {{company}}, I would be happy to discuss the scope. No need to respond if this is not relevant.\n\nBest,\n{{myName}}`,
+    direct: `Hi {{name}},\n\nUnderstood. Would you prefer that I close this enquiry?\n\nBest,\n{{myName}}`,
+    casual: `Hi {{name}},\n\nThanks for letting me know. Wishing your team well with the search.\n\nBest,\n{{myName}}`
+  }},
+  hiring_freeze: { title: 'Hiring paused', subtitle: 'We are not hiring right now', psychology: 'Acknowledge the pause. Do not invent a reopening date or promise market data you do not have.', scripts: {
+    executive: `Hi {{name}},\n\nThank you for the update. I'll pause outreach about {{jobTitle}}. Please let me know if you would prefer no further contact.\n\nBest,\n{{myName}}`,
+    direct: `Hi {{name}},\n\nUnderstood. Is a later check-in welcome, or should I close the enquiry?\n\nBest,\n{{myName}}`,
+    casual: `Hi {{name}},\n\nThanks for the update. I'll leave this with you.\n\nBest,\n{{myName}}`
+  }},
+  rates_first: { title: 'Fees and terms', subtitle: 'Please send your terms', psychology: 'Provide your actual approved commercial terms. This template does not establish fees, guarantees or a contract.', scripts: {
+    executive: `Hi {{name}},\n\nThank you for your interest.\n\n[Insert your approved fees, scope and terms here.]\n\nPlease let me know what you would like clarified.\n\nBest,\n{{myName}}`,
+    direct: `Hi {{name}},\n\n[Insert the requested, approved commercial terms.]\n\nBest,\n{{myName}}`,
+    casual: `Hi {{name}},\n\nHappy to clarify our terms. [Add accurate fees and scope before sending.]\n\nBest,\n{{myName}}`
+  }},
+  no_agencies: { title: 'No agency support', subtitle: 'We do not use agencies', psychology: 'Respect the preference. Do not use invented vacancy costs or candidate claims to pressure a response.', scripts: {
+    executive: `Hi {{name}},\n\nUnderstood. I will respect {{company}}'s preference and close this enquiry.\n\nBest,\n{{myName}}`,
+    direct: `Hi {{name}},\n\nThanks for confirming. I won't follow up on this enquiry.\n\nBest,\n{{myName}}`,
+    casual: `Hi {{name}},\n\nThanks for letting me know. Best wishes with the search.\n\n{{myName}}`
+  }},
 };
 
 function openObjectionStudioModal() {
@@ -8362,7 +8290,7 @@ function renderObjectionStudioModal() {
           <span class="modal-icon-badge" aria-hidden="true">🛡️</span>
           <div>
             <h3 id="objection-modal-title">Objection Buster & Counter-Pitch Studio</h3>
-            <p class="muted small">Proven executive counter-scripts for the top 5 hiring manager brush-offs.</p>
+            <p class="muted small">Editable response templates. Respect contact preferences and verify every detail before use.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-objection-studio" aria-label="Close modal">&times;</button>
@@ -8804,49 +8732,19 @@ function renderNetworkGraphModal(account, contacts, jobs) {
    ══════════════════════════════════════════════════ */
 
 const CALL_BRANCHES = {
-  opener: {
-    label: '🎯 10s Pattern Interrupt',
-    text: `Hi {{name}}, I know you weren't expecting my call, but I saw {{company}} has been actively searching for a {{jobTitle}} for over 30 days.\n\nI'll be brief—we currently represent 2 pre-vetted senior candidates matching your exact technical stack who are open to interviews.\n\nDid I catch you at a bad time, or can I share 30 seconds of context on their backgrounds?`,
-  },
-  send_email: {
-    label: '📧 "Send me an email"',
-    text: `Happy to do that {{name}}. I want to make sure I don't send generic spam—if I send over two anonymized candidate summaries, is your priority more focused on distributed systems depth or cloud scalability?`,
-  },
-  internal_ta: {
-    label: '👥 "We use internal TA"',
-    text: `Totally respect that {{name}}. Your internal team is great for inbound pipeline, but for specialized roles like {{jobTitle}}, we provide off-market passive candidates on pure contingency with zero upfront retainer.\n\nIf you're already 100% covered, no worries at all!`,
-  },
-  not_hiring: {
-    label: '🛑 "Not hiring right now"',
-    text: `Appreciate the transparency on that {{name}}. When the search reopens next quarter, would it be helpful if I shared our compensation benchmark data for {{jobTitle}} so you have market rates ready?`,
-  },
-  fees: {
-    label: '💰 "What are your fees?"',
-    text: `We work on standard success-based contingency (no placement, zero cost) with a full 90-day guarantee. But terms are always secondary—let me send the 2 profiles first so you can judge the caliber yourself!`,
-  },
+  opener: { label: 'Introduction', text: `Hi {{name}}, I'm calling about [state your verified reason for contacting {{company}}]. Is this a convenient time for a brief conversation?` },
+  send_email: { label: 'Send an email', text: `Of course. What information would be useful, and which address should I use? [Record permission and the agreed scope.]` },
+  internal_ta: { label: 'Internal recruiting team', text: `Understood. Is external support relevant at all, or would you prefer that I close this enquiry?` },
+  not_hiring: { label: 'Not hiring', text: `Thank you for letting me know. I'll pause this enquiry. Would you prefer no further contact?` },
+  fees: { label: 'Fees and terms', text: `[Explain your actual approved fees, scope and terms. Do not promise guarantees or candidate availability unless verified.]` },
 };
 
 const JOBSEEKER_CALL_BRANCHES = {
-  opener: {
-    label: '🎯 30s Elevator Pitch',
-    text: `Hi {{name}}, thanks so much for taking the time to speak today!\n\nI'm a senior software engineer with deep expertise across modern distributed systems, cloud infrastructure, and product velocity. I saw {{company}}'s opening for {{jobTitle}} and was immediately excited by the engineering challenges your team is solving.\n\nI'd love to hear more about the team's top priorities this quarter!`,
-  },
-  why_company: {
-    label: '🏢 "Why {{company}}?"',
-    text: `I've followed {{company}}'s recent technical milestones closely. What stands out to me is your commitment to high-reliability infrastructure and developer experience. That aligns directly with the architectural challenges where I do my best work.`,
-  },
-  tough_question: {
-    label: '💡 Impact Story',
-    text: `In my last role, I led the re-architecture of our core data ingestion service, cutting latency by 45% while handling 5x traffic during peak loads. I thrive at the intersection of technical rigor and business impact.`,
-  },
-  questions_for_them: {
-    label: '❓ High-Leverage Qs',
-    text: `I'd love to ask: What are the biggest technical bottlenecks the team is tackling right now, and what does success look like in the first 90 days for whoever steps into the {{jobTitle}} role?`,
-  },
-  closing: {
-    label: '🤝 Closing & Next Steps',
-    text: `Based on what we discussed, this feels like an exceptional match with my background and engineering philosophy. What are the next steps in the interview loop, and when would be best to check in?`,
-  },
+  opener: { label: 'Introduction', text: `Hi {{name}}, thank you for speaking with me. I'm interested in {{jobTitle}} at {{company}}. [Add your own accurate background and reason for interest.]` },
+  why_company: { label: 'Why this company', text: `[Explain what you learned about {{company}}, with a source, and why it relates to your interests.]` },
+  tough_question: { label: 'Experience example', text: `[Describe a real situation, your action and a result you can substantiate. Do not use invented metrics.]` },
+  questions_for_them: { label: 'Questions', text: `What would success look like in the first 90 days for the person taking on {{jobTitle}}?` },
+  closing: { label: 'Next steps', text: `Thank you for the conversation. What are the next steps, and is a follow-up from me welcome?` },
 };
 
 let callTimerInterval = null;
@@ -9310,7 +9208,7 @@ function renderAutopilotModal() {
 
       <div class="modal-footer">
         <button class="ghost-button" type="button" data-action="close-autopilot-modal">Cancel</button>
-        <button class="primary-button" type="button" data-action="execute-autopilot-queue">${isJobSeeker ? '🚀 Launch Career Outreach' : '🚀 Approve & Launch Pipeline'}</button>
+        <button class="primary-button" type="button" data-action="execute-autopilot-queue">Prepare drafts for manual review</button>
       </div>
     </div>
   `;
@@ -9431,7 +9329,7 @@ function renderPitchDeckModal() {
           <div class="candidate-slate-grid">
             ${deck.candidateSlate.candidates.map(c => `
               <div class="candidate-slate-card">
-                <span class="candidate-slate-badge">✓ Verified & Available</span>
+                <span class="candidate-slate-badge">Blank template · Not a verified candidate</span>
                 <h4 class="candidate-slate-title">${escapeHtml(c.specimenCode)}</h4>
                 <div class="candidate-slate-exp">${escapeHtml(c.title)} · ${escapeHtml(c.experienceYears)}</div>
                 <div class="candidate-slate-metric-row">
@@ -9670,7 +9568,7 @@ function renderBatchOutreachModal() {
           <div class="batch-grounding-chips">
             <span class="batch-grounding-chip">🏢 <strong>${escapeHtml(activeItem.company)}</strong></span>
             <span class="batch-grounding-chip">👤 <strong>${escapeHtml(activeItem.name)}</strong> (${escapeHtml(activeItem.title)})</span>
-            ${activeItem.jobTitle ? `<span class="batch-grounding-chip">⚡ <strong>Verified Role:</strong> ${escapeHtml(activeItem.jobTitle)}</span>` : ''}
+            ${activeItem.jobTitle ? `<span class="batch-grounding-chip"><strong>Role context to verify:</strong> ${escapeHtml(activeItem.jobTitle)}</span>` : ''}
             ${activeItem.email ? `<span class="batch-grounding-chip">✉️ ${escapeHtml(activeItem.email)}</span>` : ''}
           </div>
 
@@ -9992,7 +9890,7 @@ function renderPricingModal() {
           <span class="modal-icon-badge" aria-hidden="true">💎</span>
           <div>
             <h3 id="pricing-modal-title">Transparent, Recurring Monthly Plans</h3>
-            <p class="muted small">All plans recur monthly. Cancel anytime with 1 click in your Stripe Customer Portal.</p>
+            <p class="muted small">Plans renew monthly. Review billing and cancellation options in your Stripe customer portal.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-pricing-modal" aria-label="Close modal">&times;</button>
@@ -10002,7 +9900,7 @@ function renderPricingModal() {
         <div class="pricing-cards-grid">
           <!-- Job Seeker Plan ($5/mo) -->
           <div class="pricing-card ${currentPlan === 'jobseeker' ? 'is-current' : 'is-popular'}">
-            <div class="pricing-badge-popular">MOST POPULAR FOR CANDIDATES</div>
+            <div class="pricing-badge-popular">FOR YOUR JOB SEARCH</div>
             <div class="pricing-card-header">
               <h4>🎯 Job Seeker</h4>
               <p class="muted small">Dedicated job search workspace to skip ATS queues & land warm referrals.</p>
@@ -10014,8 +9912,8 @@ function renderPricingModal() {
             </div>
             <ul class="pricing-feature-list">
               <li>✓ <strong>Full Access to Job Seeker Mode</strong></li>
-              <li>✓ <strong>Unlimited LinkedIn Connections CSV Imports</strong></li>
-              <li>✓ <strong>Auto-Target All Network Employers</strong> (Greenhouse, Lever, Ashby, Workday)</li>
+              <li>✓ <strong>50 LinkedIn connections CSV imports per billing period</strong></li>
+              <li>✓ <strong>Track selected employers within plan limits</strong> using supported careers boards</li>
               <li>✓ <strong>1-Click Warm Referral Intro Request Generator</strong></li>
               <li>✓ <strong>Recruiter & Hiring Manager Screen Teleprompter</strong></li>
               <li>✓ <strong>Daily Career Radar & Target Company Dossier</strong></li>
@@ -10441,7 +10339,9 @@ function getDashboardPosted24h(summary = {}) {
 
 async function renderDashboardView(options = {}) {
   const dashboardStartedAt = performance.now();
+  const isCurrent = beginViewRender();
   if (!appState.bootstrap) await loadBootstrap(false);
+  if (!isCurrent()) return;
   if (!options.skipLoading) {
     renderLoadingState('Dashboard', "Building today's hiring radar...");
   }
@@ -10461,6 +10361,8 @@ async function renderDashboardView(options = {}) {
         })
       : Promise.resolve({}));
   const [dashboardPayload, outcomeSummary] = await Promise.all([dashboardPromise, outcomePromise]);
+  // A slow overview response must not replace the newer People/Follow-ups view.
+  if (!isCurrent()) return;
   appState.outcomeSummary = outcomeSummary || {};
   const outcomeElapsedMs = Math.round(performance.now() - outcomeStartedAt);
   if (outcomeElapsedMs > 250) console.info(`BD Engine outcome summary load: ${outcomeElapsedMs}ms`);
@@ -10818,9 +10720,11 @@ async function renderDashboardView(options = {}) {
 }
 
 async function renderAccountsView() {
+  const isCurrent = beginViewRender();
   renderLoadingState('Accounts', 'Loading ranked target accounts...');
-  setViewTitle(isJobSeekerPersona() ? 'Companies' : 'Accounts');
+  setViewTitle('Companies');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
+  if (!isCurrent()) return;
   const filters = stateBootstrap.filters || { atsTypes: [], industries: [] };
   // Board view has no pagination, so a 20-row page would show ~4 cards per
   // column and hide the rest with no indication. Pull a larger page for the
@@ -10830,11 +10734,11 @@ async function renderAccountsView() {
     ? { ...appState.accountQuery, page: 1, pageSize: BOARD_PAGE_SIZE }
     : appState.accountQuery;
   const result = await api(`/api/accounts${buildQuery(fetchQuery)}`);
+  if (!isCurrent()) return;
   result.items.forEach(a => {
     const score = getTargetScore(a);
     if (appState.previousScores[a.id] === undefined) appState.previousScores[a.id] = score;
   });
-  const hiringRows = result.items.filter((item) => (item.jobCount || 0) > 0).length;
   const industryOptions = filters.industries || [];
   const personaCopy = getPersonaUiCopy();
   const jobSeeker = personaCopy.persona === 'jobseeker';
@@ -10854,19 +10758,7 @@ async function renderAccountsView() {
     : `<input name="industry" placeholder="Any industry" value="${escapeAttr(appState.accountQuery.industry)}">`;
 
   appRoot.innerHTML = `
-    <section class="hero-card hero-card--compact">
-      <div class="hero-layout">
-        <div class="hero-copy">
-          <p class="eyebrow">${jobSeeker ? 'Target company shortlist' : 'Account command center'}</p>
-          <h3>Ranked target ${escapeHtml(personaCopy.accountPlural)}</h3>
-          <p class="subtitle">${jobSeeker ? 'Focus on employers with the strongest mix of live roles, fit, warm contacts, and timely next steps.' : 'Focus the day on companies with the strongest combination of hiring motion, relationship access, and follow-up urgency.'}</p>
-        </div>
-        <div class="kpi-ribbon headline-metrics headline-metrics--compact">
-          ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('Hiring on page', formatNumber(hiringRows))}
-        </div>
-      </div>
-    </section>
+    <div class="compact-page-intro"><p>Employer context from your network and tracked sources.</p><strong>${formatNumber(result.total)} results</strong></div>
 
     ${legacyUnclassified
       ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Your target portfolio is not focused yet.</strong><span>${formatNumber(legacyUnclassified)} older companies are still treated as targets, so job-board discovery is spread across your full network. Create a focused portfolio ranked by role fit, hiring signals, and relationship strength.</span><button class="secondary-button" type="button" data-action="curate-legacy-targets">Create focused portfolio</button></div>`
@@ -10874,6 +10766,7 @@ async function renderAccountsView() {
         ? `<div class="ingestion-health__notice account-portfolio-notice" role="status"><strong>Keep this shortlist aligned.</strong><span>Refresh the ranking when your target roles, industries, or work style change.</span><button class="secondary-button" type="button" data-action="rebalance-targets">Rebalance</button></div>`
         : ''}
 
+    <details class="workspace-strategy"><summary>Company strategy & business-development tools</summary>
     ${renderLiveSignalTicker(result.items, appState.jobs || [])}
 
     ${renderIcpQuadrantMatrix(result.items, appState.jobs || [])}
@@ -10881,6 +10774,7 @@ async function renderAccountsView() {
     ${renderRevenueKanbanBoard(result.items, appState.jobs || [])}
 
     ${renderGeographicHubFilter()}
+    </details>
 
     <section class="detail-grid detail-grid--workspace detail-grid--accounts">
       <div class="table-card">
@@ -11002,11 +10896,13 @@ async function renderAccountsView() {
 }
 
 async function renderAccountDetail(accountId) {
+  const isCurrent = beginViewRender();
   renderLoadingState('Account detail', 'Loading account context...');
   const [detail] = await Promise.all([
     api(`/api/accounts/${accountId}`),
     appState.bootstrap ? Promise.resolve(appState.bootstrap) : loadBootstrap(false),
   ]);
+  if (!isCurrent()) return;
   appState.accountDetail = detail;
   appState.generatedOutreach = null;
   setViewTitle(detail.account.displayName);
@@ -11040,6 +10936,7 @@ async function renderAccountDetail(accountId) {
       ? api(`/api/outcomes?accountId=${encodeURIComponent(accountId)}&page=1&pageSize=20`, { skipCache: true })
       : Promise.resolve({ items: [], total: 0 }),
   ]);
+  if (!isCurrent()) return;
   if (velocityResult.status === 'fulfilled' && velocityResult.value?.weeks) {
     hiringVelocity = Object.entries(velocityResult.value.weeks).map(([label, count]) => ({ label, count }));
   } else if (velocityResult.status === 'rejected') {
@@ -11321,9 +11218,27 @@ async function renderAccountDetail(accountId) {
   wireAccountNotes(accountId);
 }
 async function renderContactsView() {
+  const isCurrent = beginViewRender();
+  // The hosted service supports this additive query contract. The Windows
+  // local API retains its existing renderer until it supports scoped ID/sort.
+  if (window.bdPeople && location.pathname.startsWith('/app')) {
+    peopleWorkspace ||= window.bdPeople.create({
+      root: appRoot,
+      api,
+      setTitle: setViewTitle,
+      onQuery: (query) => { appState.contactQuery = query; },
+      exportOptions: () => renderExportOptions('contacts', 'People options'),
+      onUpdated: (person) => {
+        const index = (appState.contacts || []).findIndex(item => item.id === person.id);
+        if (index >= 0) appState.contacts[index] = person;
+      },
+    });
+    return peopleWorkspace.render();
+  }
   renderLoadingState('Contacts', 'Loading relationship intelligence...');
-  setViewTitle(isJobSeekerPersona() ? 'Network' : 'Contacts');
+  setViewTitle('People');
   const result = await api(`/api/contacts${buildQuery(appState.contactQuery)}`);
+  if (!isCurrent()) return;
   const jobSeeker = isJobSeekerPersona();
   const readyContacts = result.items.filter((item) => ['ready_to_contact', 'replied', 'opportunity'].includes(item.outreachStatus)).length;
   const contactAdvancedOpen = Boolean(appState.contactQuery.minScore);
@@ -11371,9 +11286,11 @@ async function renderContactsView() {
 }
 
 async function renderJobsView() {
+  const isCurrent = beginViewRender();
   renderLoadingState('Jobs', 'Loading job activity...');
-  setViewTitle(isJobSeekerPersona() ? 'Open roles' : 'Jobs');
+  setViewTitle(isJobSeekerPersona() ? 'Open roles' : 'Hiring activity');
   const stateBootstrap = await loadBootstrap(false, { includeFilters: true });
+  if (!isCurrent()) return;
   const atsOptions = stateBootstrap.filters?.atsTypes || [];
   const jobSeeker = isJobSeekerPersona();
   const personaKey = jobSeeker ? 'jobseeker' : 'bd';
@@ -11388,24 +11305,13 @@ async function renderJobsView() {
     jobRequest.ids = Object.keys(appState.jobPipelineStages || {}).join(',');
   }
   const result = await api(`/api/jobs${buildQuery(jobRequest)}`);
+  if (!isCurrent()) return;
   // Keep the job detail/composer cache aligned with the visible page.
   appState.jobs = result.items;
   const jobAdvancedCount = ['geography', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
 
   appRoot.innerHTML = `
-    <section class="hero-card hero-card--compact">
-      <div class="hero-layout">
-        <div class="hero-copy">
-          <p class="eyebrow">Hiring feed</p>
-          <h3>${jobSeeker ? 'Open roles at target companies' : 'Imported job activity'}</h3>
-          <p class="subtitle">${jobSeeker ? 'Current roles from supported careers boards, deduped and ready to compare against your target list and network.' : 'Normalized open roles from supported ATS boards, deduped and ready to use as outreach context.'}</p>
-        </div>
-        <div class="kpi-ribbon headline-metrics headline-metrics--compact">
-          ${renderMetricTile('Results', formatNumber(result.total))}
-          ${renderMetricTile('Active in workspace', result.summary?.activeTotal === undefined ? '—' : formatNumber(result.summary.activeTotal))}
-        </div>
-      </div>
-    </section>
+    <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${formatNumber(result.total)} results</strong></div>
 
     <section class="table-card">
       <div class="panel-header">
@@ -11613,8 +11519,9 @@ function renderAcquisitionFunnel(analytics = {}) {
 }
 
 async function renderAdminView() {
+  const isCurrent = beginViewRender();
   renderLoadingState('Admin', 'Loading pipeline controls...');
-  setViewTitle(isJobSeekerPersona() ? 'Tools' : 'Admin');
+  setViewTitle('Settings');
   const batchQuery = {};
   const cq = appState.configQuery;
   if (cq.page) batchQuery.configPage = cq.page;
@@ -11635,6 +11542,7 @@ async function renderAdminView() {
   if (eq.minTargetScore) batchQuery.enrichmentMinTargetScore = eq.minTargetScore;
   if (eq.topN) batchQuery.enrichmentTopN = eq.topN;
   const batch = await api(`/api/admin/bootstrap${buildQuery(batchQuery)}`);
+  if (!isCurrent()) return;
   const stateBootstrap = batch.bootstrap || {};
   if (!stateBootstrap.settings) stateBootstrap.settings = {};
   if (!stateBootstrap.defaults) stateBootstrap.defaults = {};
@@ -11690,11 +11598,11 @@ async function renderAdminView() {
         industryLabel: 'Preferred industries',
       }
     : {
-        title: 'Your demand signal focus',
-        subtitle: 'Define the hiring signals that suggest a company may need what you sell. Saving this focus immediately rescores imported jobs and opens the matching shortlist.',
-        roleLabel: 'Roles that signal demand',
+        title: 'Hiring activity preferences',
+        subtitle: 'Choose the job openings you want to monitor. Saving updates job relevance and opens the matching list. These preferences do not evaluate people.',
+        roleLabel: 'Roles to monitor',
         rolePlaceholder: 'Recruiter, sales engineer, implementation manager',
-        industryLabel: 'Industries you sell into',
+        industryLabel: 'Preferred industries',
       };
   const paymentAttentionRequired = Boolean(billingAccess.paymentAttentionRequired);
   const billingGraceDate = billingAccess.graceEndsAt ? formatDate(billingAccess.graceEndsAt) : '';
@@ -11731,26 +11639,14 @@ async function renderAdminView() {
 ` : '';
 
   appRoot.innerHTML = `
-    <section class="hero-card hero-card--compact">
-      <div class="hero-layout">
-        <div class="hero-copy">
-          <p class="eyebrow">Workspace operations</p>
-          <h3>Keep coverage fresh</h3>
-          <p class="subtitle">Refresh company data, find job boards, import live roles, and keep the daily account queue ready for action.</p>
-          <div class="hero-signal-strip">
-            ${renderSignalChip('Tracked coverage', `${formatNumber(operationalCoveragePercent)}%`, 'success')}
-            ${renderSignalChip('Needs review', formatNumber((summary.mediumReviewQueueCount || 0) + (summary.unresolvedReviewQueueCount || 0)), 'warning')}
-            ${renderSignalChip('Background work', formatNumber((runtime.runningJobs || 0) + (runtime.queuedJobs || 0)), (runtime.runningJobs || runtime.queuedJobs) ? 'accent' : 'neutral')}
-          </div>
-        </div>
-        <div class="action-card action-card--featured">
-          <p class="eyebrow">Most used</p>
-          <h4>Refresh all signals</h4>
-          <p class="small muted">Updates company identity, finds job boards, imports live jobs, and refreshes account scores in one background run.</p>
-          <button class="primary-button" type="button" data-action="run-launch-workflow">Refresh all signals</button>
-        </div>
-      </div>
-    </section>
+    <div class="compact-page-intro"><p>Recruiting preferences, import sources and workspace controls.</p><button class="secondary-button" type="button" data-action="run-launch-workflow">Refresh hiring sources</button></div>
+    <nav class="settings-subnav" aria-label="Settings sections">
+      <a href="#/admin/search-focus">Hiring preferences</a>
+      <a href="#/admin/coverage-health">Source coverage</a>
+      <a href="#/admin/background-jobs">Import history</a>
+      <a href="#/admin/billing-subscription">Plan & workspace</a>
+      <a href="#/admin/runtime-status">Advanced diagnostics</a>
+    </nav>
 
     <div id="pipeline-progress-container" class="pipeline-progress hidden">
       <div class="pipeline-progress-header">
@@ -12068,7 +11964,7 @@ function renderAccountsTable(items) {
       <input id="bulk-tags" placeholder="Add tags..." class="compact-input" aria-label="Bulk add tags">
       <button class="secondary-button" data-action="apply-bulk-update">Apply</button>
     </div>
-    <div class="table-scroll"><table class="table accounts-table responsive-table"><thead><tr><th><input type="checkbox" id="bulk-select-all" aria-label="Select all accounts"></th><th>Company & Tech Stack</th><th>Target score</th><th>Hiring Signals</th><th>Owner / next step</th><th>Status</th><th>ATS</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table accounts-table responsive-table"><thead><tr><th><input type="checkbox" id="bulk-select-all" aria-label="Select all accounts"></th><th>Company</th><th>Target score</th><th>Hiring signals</th><th>Owner / next step</th><th>Status</th><th>ATS</th></tr></thead><tbody>
       ${items.map((item) => {
         const vel = calculateHiringVelocity(item, appState.jobs || []);
         const stack = extractTechStack(item.displayName || '', item.industry || '', item.recommendedAction || '');
@@ -12078,6 +11974,7 @@ function renderAccountsTable(items) {
           <td data-label="Company">
             <a class="row-link" href="#/accounts/${item.id}" data-action="open-account" data-id="${item.id}">${escapeHtml(item.displayName)}</a>
             <div class="small muted">${escapeHtml(item.domain || item.topContactName || item.recommendedAction || '')}</div>
+            <details class="job-row-context"><summary>Additional context</summary>
             ${renderTechDnaCluster(stack)}
             ${vel.surgeBadge ? `<div style="margin-top:3px;"><span class="signal-badge signal-badge--surge">${vel.surgeBadge}</span></div>` : ''}
             ${vel.hardToFillBadge ? `<div style="margin-top:3px;"><span class="signal-badge signal-badge--hard-to-fill">${vel.hardToFillBadge}</span></div>` : ''}
@@ -12086,6 +11983,7 @@ function renderAccountsTable(items) {
               <button class="inline-action-link" type="button" data-action="open-network-graph-modal" data-account-id="${item.id}">🕸️ Entity Graph</button>
               <button class="inline-action-link" type="button" data-action="open-pitch-deck-modal" data-account-id="${item.id}">💎 Pitch Deck</button>
             </div>
+            </details>
           </td>
           <td data-label="Target score">${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td data-label="Hiring">
@@ -12134,7 +12032,7 @@ function renderContactsTable(items) {
             </div>
             <details class="contact-edit-details">
               <summary>Edit details</summary>
-              <form id="contact-inline-form-${escapeAttr(item.id)}" data-contact-id="${item.id}" class="detail-form contact-inline-form"><div class="inline-field"><label>Stage</label><select name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label>Notes</label><input name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
+              <form id="contact-inline-form-${escapeAttr(item.id)}" data-contact-id="${item.id}" class="detail-form contact-inline-form"><div class="inline-field"><label for="contact-stage-${escapeAttr(item.id)}">Stage</label><select id="contact-stage-${escapeAttr(item.id)}" name="outreachStatus"><option value="not_started" ${selected(item.outreachStatus, 'not_started')}>Not started</option><option value="researching" ${selected(item.outreachStatus, 'researching')}>Researching</option><option value="ready_to_contact" ${selected(item.outreachStatus, 'ready_to_contact')}>Ready</option><option value="contacted" ${selected(item.outreachStatus, 'contacted')}>Contacted</option><option value="replied" ${selected(item.outreachStatus, 'replied')}>Replied</option><option value="opportunity" ${selected(item.outreachStatus, 'opportunity')}>Opportunity</option></select></div><div class="inline-field"><label for="contact-note-${escapeAttr(item.id)}">Notes</label><input id="contact-note-${escapeAttr(item.id)}" name="notes" value="${escapeAttr(item.notes || '')}" placeholder="Short note"></div><button class="ghost-button" type="submit">Save</button></form>
             </details>
           </td>
         </tr>`).join('')}
@@ -12150,7 +12048,7 @@ function renderJobsTable(items, compact) {
         <button class="ghost-button ghost-button--sm" type="button" data-action="clear-jobs-bulk">Clear</button>
       </div>
     `}
-    <div class="table-scroll"><table class="table responsive-table jobs-table"><thead><tr>${compact ? '' : '<th><input type="checkbox" id="jobs-bulk-select-all" aria-label="Select all jobs"></th>'}<th>Role</th><th>Company</th><th>Network / Decision Makers</th><th>Pipeline</th><th>Fit</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table jobs-table${compact ? '' : ' jobs-table--selectable'}"><thead><tr>${compact ? '' : '<th><input type="checkbox" id="jobs-bulk-select-all" aria-label="Select all jobs"></th>'}<th>Role</th><th>Company</th><th>Network</th><th>Pipeline</th><th>Role match</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
       ${items.map((item) => {
         const hasConn = Number(item.connectionCount || 0) > 0;
         const rawContacts = Array.isArray(item.contacts) ? item.contacts : [];
@@ -12165,6 +12063,7 @@ function renderJobsTable(items, compact) {
           ${compact ? '' : `<td data-label=""><input type="checkbox" class="jobs-bulk-checkbox" value="${item.id}" data-job-title="${escapeAttr(item.title || '')}" data-company="${escapeAttr(item.companyName || item.company || '')}" data-account-id="${escapeAttr(item.accountId || '')}" data-job-url="${escapeAttr(item.jobUrl || item.url || '')}" data-job-location="${escapeAttr(item.location || (item.isRemote ? 'Remote' : ''))}" data-contacts="${escapeAttr(JSON.stringify(rawContacts))}" aria-label="Select ${escapeAttr(item.title || '')}"></td>`}
           <td data-label="Role">
             ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
+            <details class="job-row-context"><summary>Context & preparation</summary><p class="muted small">Tags below are inferred from the role title, not candidate evidence.</p>
             ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
             ${renderTechDnaCluster(stack)}
             <div class="job-signals-cluster">
@@ -12179,6 +12078,7 @@ function renderJobsTable(items, compact) {
                 <button class="inline-action-link" type="button" data-action="open-call-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">🎙️ Call Prompter</button>
               </div>
             `}
+            </details>
           </td>
           <td data-label="Company">
             ${item.accountId ? `<a class="row-link company-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : `<span class="company-name">${escapeHtml(item.companyName || '')}</span>`}
@@ -12188,7 +12088,7 @@ function renderJobsTable(items, compact) {
               <div class="job-network-cell">
                 <span class="status-pill status-pill--success"><span class="pill-dot"></span>⚡ ${formatNumber(item.connectionCount)} in network</span>
                 ${rankedContacts.length ? `
-                  <div class="job-contacts-list">
+                  <details class="job-row-context"><summary>View ${rankedContacts.length} people</summary><div class="job-contacts-list">
                     ${rankedContacts.slice(0, 3).map((c) => `
                       <div class="job-contact-chip">
                         <span class="align-chip ${c.chipClass}" title="${escapeAttr(c.alignmentReason)}">${c.badgeIcon} ${c.badgeLabel}</span>
@@ -12198,7 +12098,7 @@ function renderJobsTable(items, compact) {
                       </div>
                     `).join('')}
                     ${rankedContacts.length > 3 ? `<span class="small muted">+${rankedContacts.length - 3} more contacts</span>` : ''}
-                  </div>
+                  </div></details>
                 ` : (item.topContactName ? `<div class="small muted">${escapeHtml(item.topContactName)}</div>` : '')}
               </div>
             ` : `
@@ -12220,7 +12120,7 @@ function renderJobsTable(items, compact) {
               </select>
             </div>
           </td>
-          <td data-label="Fit">${renderJobRelevance(item)}</td>
+          <td data-label="Role match">${renderJobRelevance(item)}</td>
           <td data-label="Location">
             <div class="job-location-cell">
               <span class="job-location-text">${escapeHtml(item.location || 'Location unspecified')}</span>
@@ -12948,8 +12848,9 @@ function renderStoryCard(label, value, description, tone = 'neutral') {
 
 let fieldIdCounter = 0;
 function renderField(label, control, hint = '') {
-  const id = `field-${++fieldIdCounter}`;
-  const controlWithId = control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
+  const existingId = control.match(/<(?:input|select|textarea)\b[^>]*\bid=["']([^"']+)["']/)?.[1];
+  const id = existingId || `field-${++fieldIdCounter}`;
+  const controlWithId = existingId ? control : control.replace(/<(input|select|textarea)(\s)/, `<$1 id="${id}"$2`);
   return `<div class="field"><label for="${id}">${escapeHtml(label)}</label>${controlWithId}${hint ? `<span class="small muted">${escapeHtml(hint)}</span>` : ''}</div>`;
 }
 
@@ -14476,7 +14377,7 @@ async function runSearch(value) {
     searchResults.innerHTML = `
     ${total ? '' : `<div class="empty-state empty-state--compact">No matches for "${escapeHtml(value)}". Try a company, person, or role name.</div>`}
     ${renderSearchGroup(isJobSeekerPersona() ? 'Companies' : 'Accounts', results.accounts, (item) => `#/accounts/${item.id}`, (item) => escapeHtml(item.displayName), (item) => `${formatNumber(getTargetScore(item))} target score · ${formatNumber(item.hiringVelocity || 0)} hiring velocity · ${formatNumber(item.engagementScore || 0)} engagement`)}
-    ${renderSearchGroup(isJobSeekerPersona() ? 'Network' : 'Contacts', results.contacts, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.companyName || '')} · ${formatNumber(item.priorityScore)} score`)}
+    ${renderSearchGroup('People', results.contacts, (item) => location.pathname.startsWith('/app') ? `#/contacts?person=${encodeURIComponent(item.id)}` : '#/contacts', (item) => escapeHtml(item.fullName), (item) => `${escapeHtml(item.title || '')} · ${escapeHtml(item.companyName || '')}`)}
     ${renderSearchGroup(isJobSeekerPersona() ? 'Open roles' : 'Jobs', results.jobs, (item) => item.accountId ? `#/accounts/${item.accountId}` : '#/jobs', (item) => escapeHtml(item.title), (item) => `${escapeHtml(item.companyName || '')} · ${formatDate(item.postedAt)}`)}
     `;
   } catch (error) {
@@ -14791,10 +14692,12 @@ function endTour(options = {}) {
 }
 
 async function renderTasksView() {
+  const isCurrent = beginViewRender();
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
-    setViewTitle('Tasks & Reminders');
+    if (!isCurrent()) return;
+    setViewTitle('Follow-ups');
 
     const todayKey = toLocalDateInputValue(new Date());
     const overdue = tasks.items.filter(t => {
@@ -14851,6 +14754,7 @@ async function renderTasksView() {
       </section>
     `;
   } catch (error) {
+    if (!isCurrent()) return;
     appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;
   }
 }

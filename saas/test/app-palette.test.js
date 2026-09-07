@@ -8,7 +8,7 @@ const appPath = new URL('../../app/app.js', import.meta.url);
 const cloudStylesPath = new URL('../public/cloud.css', import.meta.url);
 const atsStylesPath = new URL('../public/ats-checker.css', import.meta.url);
 
-test('embedded app uses the accessible sapphire and cool-slate palette in both modes', async () => {
+test('legacy palette layer preserves sapphire and cool-slate fallback tokens', async () => {
   const palette = await readFile(palettePath, 'utf8');
 
   assert.match(palette, /--bg:\s*#f8fafc/);
@@ -47,7 +47,7 @@ test('palette refresh preserves semantic statuses and Light Dark System behavior
   );
 });
 
-test('workspace, public, auth, and ATS surfaces share the sapphire/slate contract', async () => {
+test('legacy public/auth/ATS palette contracts remain available beneath workspace overrides', async () => {
   const [palette, cloudStyles, atsStyles] = await Promise.all([
     readFile(palettePath, 'utf8'),
     readFile(cloudStylesPath, 'utf8'),

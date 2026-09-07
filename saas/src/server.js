@@ -26,6 +26,7 @@ import { isUnsafeCrossSiteRequest } from './request-security.js';
 import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLargeError, resolveRequestLimits } from './request-limits.js';
 import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './commercial-outcomes.js';
 import { applyCommercialCheckoutReadiness, isCommercialCheckoutReady } from './production-readiness.js';
+import { validateContactInput } from './contact-queries.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -1731,7 +1732,11 @@ self.addEventListener('activate', (event) => {
   if (pathname === '/api/contacts') {
     if (req.method === 'POST') {
       if (!await requireEntitlement(res, tenant, user, { feature: 'contacts', resource: 'contacts' })) return;
-      const item = await store.addContact(tenantId, await readJson(req));
+      const payload = await readJson(req);
+      let validated;
+      try { validated = validateContactInput(payload, { create: true }); }
+      catch (error) { return sendJson(res, 400, { error: error.message }); }
+      const item = await store.addContact(tenantId, { ...payload, ...validated });
       return sendJson(res, 201, item);
     }
     return sendJson(res, 200, await store.findContacts(tenantId, Object.fromEntries(url.searchParams)));
@@ -1739,7 +1744,10 @@ self.addEventListener('activate', (event) => {
 
   const contactMatch = pathname.match(/^\/api\/contacts\/([^/]+)$/);
   if (contactMatch && req.method === 'PATCH') {
-    const contact = await store.patchContact(tenantId, contactMatch[1], await readJson(req));
+    let patch;
+    try { patch = validateContactInput(await readJson(req)); }
+    catch (error) { return sendJson(res, 400, { error: error.message }); }
+    const contact = await store.patchContact(tenantId, contactMatch[1], patch);
     if (!contact) return sendJson(res, 404, { error: 'Contact not found' });
     return sendJson(res, 200, contact);
   }

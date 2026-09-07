@@ -12,6 +12,7 @@ import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
 import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
+import { compareContacts, normalizeContactQuery } from './contact-queries.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -2354,7 +2355,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
-        capabilities: { commercialOutcomes: true, jobPipeline: true },
+        capabilities: { commercialOutcomes: true, jobPipeline: true, peopleWorkspace: true },
         ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
@@ -2744,8 +2745,8 @@ export function createStore() {
 
     async findContacts(tenantId, query) {
       assertTenant(tenantId);
-      const needsInMemoryFiltering = ['minScore', 'outreachStatus'].some((key) => String(query?.[key] || '').trim());
-      if (relationalContactSqlEnabledForTenant(tenantId) && !needsInMemoryFiltering) {
+      query = normalizeContactQuery(query);
+      if (relationalContactSqlEnabledForTenant(tenantId)) {
         try {
           if (await hasRelationalParity(tenantId, true)) {
             const result = await findTenantContactsRelational(tenantId, query);
@@ -2765,20 +2766,20 @@ export function createStore() {
       }
       await ensureDataLoaded(tenantId, true); // MUST load contacts here
       let items = filterText(contactsForTenant(tenantId), query.q, ['fullName', 'companyName', 'title', 'email', 'notes']);
+      if (query.id) items = items.filter(item => item.id === query.id);
       const minScore = Number(query.minScore || 0);
       if (minScore > 0) items = items.filter((item) => Number(item.priorityScore || 0) >= minScore);
       if (query.outreachStatus) items = items.filter((item) => normalizeKey(item.outreachStatus) === normalizeKey(query.outreachStatus));
-      items.sort((a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0)
-        || String(a.fullName || '').localeCompare(String(b.fullName || '')));
+      items.sort((a, b) => compareContacts(a, b, query.sortBy));
       return paginate(items, query);
     },
 
     async patchContact(tenantId, contactId, patch) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, true);
       const item = contacts.find((contactItem) => contactItem.tenantId === tenantId && contactItem.id === contactId);
       if (!item) return null;
-      Object.assign(item, pickPatch(patch, ['outreachStatus', 'notes', 'email', 'title', 'linkedinUrl']));
+      Object.assign(item, pickPatch(patch, ['fullName', 'outreachStatus', 'notes', 'email', 'title', 'linkedinUrl']));
       item.updatedAt = now();
       persistTenant(tenantId);
       return item;
@@ -5277,7 +5278,7 @@ export function createStore() {
 
     async addContact(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId);
+      await ensureDataLoaded(tenantId, true);
       const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const item = contact({
         id,

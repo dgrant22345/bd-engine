@@ -28,7 +28,7 @@ async function continueProfile(app) {
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   await expect(profile.locator('#setup-workspace-name')).toHaveValue('Activation Workspace');
-  await profile.locator('button[type="submit"]').click();
+  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
 }
 
 async function finishSetup(app) {

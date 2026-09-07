@@ -3390,3 +3390,29 @@ a:hover { text-decoration: underline; }
   color: var(--text-secondary);
 }
 
+/* Compact application chrome shares the recruiter workspace's neutral/teal
+   foundation. Billing details remain accessible in the disclosure. */
+.cloud-shell { --accent: #0f6b65; --accent-hover: #0b5550; --accent-soft: #e7f3f1; }
+.cloud-shell .cloud-topbar { min-height: 40px; height: 40px; background: #18232f; }
+.cloud-shell .cloud-demo-banner, .cloud-shell .cloud-trial-cta { min-height: 38px; padding: 4px 20px; gap: 12px; background: #edf4f3; color: #254541; border-bottom: 1px solid #c7dcd7; }
+.cloud-shell .cloud-demo-banner strong, .cloud-shell .cloud-demo-banner span { color: #254541; }
+.cloud-shell .cloud-demo-banner .btn, .cloud-shell .cloud-trial-cta .btn { min-height: 30px; padding: 4px 10px; border-radius: 6px; background: #0f6b65; border-color: #0f6b65; color: #fff; box-shadow: none; }
+.cloud-shell .cloud-trial-cta-copy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cloud-shell .cloud-trial-cta-copy .cloud-trial-cta-kicker { color: #254541; font-size: 12px; }
+.cloud-shell .cloud-trial-cta-copy > strong { color: #254541; font-size: 12px; font-weight: 400; }
+.cloud-shell .cloud-trial-cta-copy > span:last-child { display: none; }
+.cloud-shell .cloud-trial-badge { display: none; }
+.cloud-shell .cloud-plan-badge { background: #25403e; color: #b6eee2; border-color: #50776d; }
+.cloud-shell .cloud-user-menu button:focus-visible { outline: 2px solid #80d4c5; outline-offset: 2px; }
+.landing { --landing-accent: #0f6b65; --landing-accent-hover: #0b5550; --landing-surface-soft: #e7f3f1; }
+.landing .social-proof-bar { background: #edf3f2; border-color: #d5dce2; }
+.landing .social-proof-bar .proof-item strong { color: #18232f; }
+.landing .social-proof-bar .proof-item span { color: #526272; }
+@media (max-width: 760px) {
+  .cloud-shell .cloud-demo-banner, .cloud-shell .cloud-trial-cta { flex-direction: row; align-items: center; padding: 4px 12px; gap: 8px; font-size: 11px; }
+  .cloud-shell .cloud-demo-banner span, .cloud-shell .cloud-trial-cta-copy > strong { display: none; }
+  .cloud-shell .cloud-demo-banner .btn { width: auto; margin-left: auto; }
+  .cloud-shell .cloud-trial-cta-actions { width: auto; margin-left: auto; flex: 0 0 auto; }
+  .cloud-shell .cloud-trial-cta-actions .btn { flex: 0 0 auto; }
+}
+

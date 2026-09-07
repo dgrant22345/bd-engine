@@ -620,7 +620,7 @@
       const payload = {
         visitorId: getVisitorId(),
         eventType,
-        path: `${window.location.pathname}${window.location.hash || ''}`,
+        path: `${window.location.pathname}${(window.location.hash || '').split('?')[0]}`,
         referrer: document.referrer || '',
         source: getAcquisitionSource(),
       };
@@ -2324,9 +2324,12 @@
     function renderApp() {
       const planBadge = state.demo ? 'Demo' : (state.plan ? state.plan.displayName : 'Trial');
       const onboardingIntentScope = getAuthenticatedOnboardingIntentScope();
+      const entryRoute = state.demo ? 'dashboard' : state.persona === 'jobseeker' ? 'jobs' : 'contacts';
+      const requestedHash = window.location.hash;
+      const entryHash = /^#\/(dashboard|contacts|jobs|tasks|accounts|admin|setup)(?:\/[^?#]*)?(?:\?[^#]*)?$/.test(requestedHash) ? requestedHash : `#/${entryRoute}`;
       const appFrameSrc = onboardingIntentScope
-        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}#/dashboard`
-        : '/app/#/dashboard';
+        ? `/app/?intentScope=${encodeURIComponent(onboardingIntentScope)}${entryHash}`
+        : `/app/${entryHash}`;
       const trialNotice = !state.demo && state.trialDaysRemaining !== null && state.trialDaysRemaining <= 14
         ? `<span class="cloud-trial-badge">${state.trialDaysRemaining}d left</span>` : '';
       const trialUpgradeBanner = state.demo
@@ -2375,9 +2378,21 @@
           ${trialUpgradeBanner}
           ${verificationNotice}
           <div class="cloud-app-container">
-            <iframe class="cloud-app-frame" title="BD Engine workspace" src="${appFrameSrc}"></iframe>
+            <iframe class="cloud-app-frame" title="BD Engine workspace" src="${escapeHtml(appFrameSrc).replace(/"/g, '&quot;')}"></iframe>
           </div>
         </div>`;
+
+      // Preserve the actual workspace context on a full browser reload.
+      // No local storage: routes are scoped by the authenticated server session.
+      const workspaceFrame = root.querySelector('.cloud-app-frame');
+      workspaceFrame?.addEventListener('load', () => {
+        const syncWorkspaceHash = () => {
+          const hash = workspaceFrame.contentWindow?.location.hash;
+          if (hash?.startsWith('#/')) history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+        };
+        workspaceFrame.contentWindow?.addEventListener('hashchange', syncWorkspaceHash);
+        syncWorkspaceHash();
+      });
 
       // Wire user menu
       const avatarBtn = root.querySelector('#cloud-avatar-btn');

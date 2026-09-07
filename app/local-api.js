@@ -29,8 +29,9 @@
       return rawMessage || 'Request failed before BD Engine could respond.';
     }
 
-    const target = String(path || '').startsWith('/api/') ? 'BD Engine local server' : 'BD Engine';
-    return `${target} did not respond. Refresh the browser tab, or launch BD Engine again from the desktop shortcut if the server is not running.`;
+    const hosted = location.pathname.startsWith('/app');
+    const target = String(path || '').startsWith('/api/') && !hosted ? 'BD Engine local server' : 'BD Engine';
+    return hosted ? `${target} did not respond. Check your connection and try again. Your saved data has not been removed.` : `${target} did not respond. Refresh the browser tab, or launch BD Engine again from the desktop shortcut if the server is not running.`;
   }
 
   async function remoteApi(path, options = {}) {

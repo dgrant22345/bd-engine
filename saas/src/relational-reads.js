@@ -1,6 +1,7 @@
 import { dbQuery, isDbReady } from './db.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { buildTenantJobQueries } from './job-queries.js';
+import { buildContactQuerySql } from './contact-queries.js';
 
 function rawOrRow(row) {
   return row?.raw && typeof row.raw === 'object' ? row.raw : row;
@@ -193,37 +194,24 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
 
 export async function findTenantContactsRelational(tenantId, query = {}) {
   if (!isDbReady()) return null;
-  const page = Math.max(1, Number(query.page || 1));
-  const pageSize = Math.max(1, Math.min(10000, Number(query.pageSize || 25)));
-  const offset = (page - 1) * pageSize;
-  const search = String(query.q || '').trim();
-  const params = [tenantId];
-  let searchSql = '';
-  if (search) {
-    params.push(escapedSearchPattern(search));
-    searchSql = ` AND (
-      full_name ILIKE $2 ESCAPE '\\' OR company_name ILIKE $2 ESCAPE '\\' OR
-      title ILIKE $2 ESCAPE '\\' OR email ILIKE $2 ESCAPE '\\' OR notes ILIKE $2 ESCAPE '\\'
-    )`;
-  }
-  const countParams = [...params];
-  const limitIndex = params.length + 1;
-  const offsetIndex = params.length + 2;
-  params.push(pageSize, offset);
+  const startedAt = performance.now();
+  const built = buildContactQuerySql(tenantId, query);
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `SELECT raw FROM contacts
-       WHERE tenant_id = $1${searchSql}
-       ORDER BY priority_score DESC, updated_at DESC, id ASC
-       LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
-      params
+       WHERE ${built.where}
+       ORDER BY ${built.order}
+       LIMIT ${built.limit} OFFSET ${built.offset}`,
+      built.params
     ),
-    dbQuery(`SELECT COUNT(*)::int AS total FROM contacts WHERE tenant_id = $1${searchSql}`, countParams),
+    dbQuery(`SELECT COUNT(*)::int AS total FROM contacts WHERE ${built.where}`, built.countParams),
   ]);
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 250) console.warn(`Slow contact query: saas/src/relational-reads.js findTenantContactsRelational ${elapsedMs}ms`);
   return {
     items: (rowsResult?.rows || []).map(rawOrRow),
-    page,
-    pageSize,
+    page: built.page,
+    pageSize: built.pageSize,
     total: Number(countResult?.rows?.[0]?.total || 0),
   };
 }

@@ -1,10 +1,12 @@
-const ASSET_VERSION = '20260906-product-quality-01';
+const ASSET_VERSION = '20260906-people-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
   '/index.html',
   `/styles.css?v=${ASSET_VERSION}`,
   `/palette.css?v=${ASSET_VERSION}`,
+  `/workspace.css?v=${ASSET_VERSION}`,
+  `/people-workspace.js?v=${ASSET_VERSION}`,
   `/app.js?v=${ASSET_VERSION}`,
   `/local-api.js?v=${ASSET_VERSION}`,
   '/manifest.json',
