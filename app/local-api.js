@@ -20,6 +20,8 @@
 
   function invalidateCache() {
     responseCache.clear();
+    // Existing callers can finish, but subsequent reads must start fresh.
+    inflightRequests.clear();
   }
 
   function getNetworkErrorMessage(path, error) {
@@ -38,6 +40,12 @@
     const method = getMethod(options);
     const useCache = method === 'GET' && !options.skipCache;
     const cacheKey = useCache ? getCacheKey(path, options) : '';
+
+    if (method === 'GET' && options.skipCache) {
+      const refreshKey = getCacheKey(path, options);
+      responseCache.delete(refreshKey);
+      inflightRequests.delete(refreshKey);
+    }
 
     if (useCache && responseCache.has(cacheKey)) {
       return cloneValue(responseCache.get(cacheKey));
@@ -93,13 +101,14 @@
     try {
       const payload = await fetchPromise;
       if (method === 'GET' && useCache) {
-        responseCache.set(cacheKey, payload);
+        // An invalidation or forced refresh may have superseded this request.
+        if (inflightRequests.get(cacheKey) === fetchPromise) responseCache.set(cacheKey, payload);
       } else if (method !== 'GET') {
         invalidateCache();
       }
       return useCache ? cloneValue(payload) : payload;
     } finally {
-      if (useCache) {
+      if (useCache && inflightRequests.get(cacheKey) === fetchPromise) {
         inflightRequests.delete(cacheKey);
       }
     }

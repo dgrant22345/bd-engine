@@ -4,6 +4,15 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.1 — 2026-09-07 — People workflow reliability
+
+- Protect add-person input and pending saves; preserve notes and list context.
+- Prevent old requests from repopulating the cache after a save or refresh.
+- Save only edited person fields, preserving unrelated updates made elsewhere.
+- Make failed searches recoverable without misleading stale rows or pagination.
+- Normalize outdated empty page links and retain the existing visual design.
+- Hosted maintenance release; no schema migration or paid-launch configuration change.
+
 ## 0.1.2.0 — 2026-09-07 — Recruiter People workspace
 
 - Make People the hosted recruiter home, with in-context profile review,

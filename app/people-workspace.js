@@ -16,6 +16,8 @@
     const state = { result: null, key: '', query: {}, selected: '', person: null, checked: new Set(), dirty: false, busy: false, sequence: 0, scroll: 0, notice: '', dialog: null };
     let lastHash = location.hash;
     let returnFocus = null;
+    let savedFormValues = {};
+    const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"]') && [...state.dialog.querySelectorAll('input')].some(input => input.value.trim()));
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
     const readQuery = () => {
@@ -36,7 +38,7 @@
     }
     function navigate(query, person = '') {
       if (!allowLeave()) return;
-      state.scroll = root.querySelector('.people-table-scroll')?.scrollTop || 0;
+      state.scroll = JSON.stringify(query) === JSON.stringify(state.query) ? root.querySelector('.people-table-scroll')?.scrollTop || 0 : 0;
       const next = hash(query, person);
       if (location.hash === next) return;
       location.hash = next;
@@ -50,15 +52,9 @@
     function loading() {
       root.innerHTML = `<section class="people-workspace" aria-label="People workspace" aria-busy="true"><div class="people-toolbar"><span role="status">Loading people…</span></div><div class="people-skeleton" aria-hidden="true">${Array.from({ length: 7 }, () => '<div><i></i><span></span><span></span></div>').join('')}</div></section>`;
     }
-    function errorState(error, existing = false) {
+    function errorState(error) {
       const copy = error?.message || 'The server did not respond.';
-      if (existing) {
-        message(`Could not refresh people. Showing previous results. ${copy}`, true, root.querySelector('[data-people-feedback]'));
-        root.querySelector('[data-people-feedback]')?.insertAdjacentHTML('beforeend', button('retry', 'Try again'));
-        root.querySelector('.people-workspace')?.setAttribute('aria-busy', 'false');
-        return;
-      }
-      root.innerHTML = `<section class="people-workspace"><div class="people-empty" role="alert"><h3>People couldn’t be loaded</h3><p>${escape(copy)}</p>${button('retry', 'Try again')}<a class="ghost-button" href="#/admin">Check workspace settings</a></div></section>`;
+      root.innerHTML = `<section class="people-workspace"><div class="people-empty" role="alert"><h3>People couldn’t be loaded</h3><p>${escape(copy)}</p><p>Your saved people are unchanged. Try this search again or return to the full list.</p>${button('retry', 'Try again')}${button('reset-list', 'Show all people')}<a class="ghost-button" href="#/admin">Check workspace settings</a></div></section>`;
     }
     async function render({ force = false } = {}) {
       if (force && !allowLeave()) return;
@@ -83,14 +79,15 @@
         updateSelection();
         return;
       }
-      const previous = alive() && state.result;
-      if (!previous) loading();
-      else root.querySelector('.people-workspace').setAttribute('aria-busy', 'true');
+      // Retire the displayed query before fetching: old rows and editable
+      // details must not remain actionable under a different URL/query.
+      state.key = '';
+      loading();
       try {
         const result = await api(`/api/contacts?${new URLSearchParams(nextQuery)}`, { skipCache: force });
         if (ticket !== state.sequence || !active()) return;
-        if (result.total > 0 && !result.items.length && nextQuery.page > 1) {
-          navigate({ ...nextQuery, page: Math.ceil(result.total / nextQuery.pageSize) });
+        if (!result.items.length && nextQuery.page > 1) {
+          navigate({ ...nextQuery, page: Math.max(1, Math.ceil(result.total / nextQuery.pageSize)) });
           return;
         }
         state.result = result;
@@ -102,7 +99,7 @@
         const elapsed = Math.round(performance.now() - startedAt);
         window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::render', elapsedMs: elapsed, rows: result.items.length } }));
       } catch (error) {
-        if (ticket === state.sequence && active()) errorState(error, Boolean(previous));
+        if (ticket === state.sequence && active()) errorState(error);
       }
     }
     function draw() {
@@ -218,10 +215,12 @@
           <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">A starting point, not a sent message. Add the opportunity and check every claim before copying. Drafts are not saved.</p><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8"></textarea></label><div class="person-links">${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
           <footer class="person-review-footer">${index >= 0 ? `${index + 1} of ${state.result.items.length} on this page · J / K to move when not typing` : 'Opened directly · Not in the current results'}</footer>
         </div>`;
+      savedFormValues = Object.fromEntries(new FormData(panel.querySelector('.person-edit-form')));
     }
     async function savePerson(form) {
       if (state.busy) return;
-      const values = Object.fromEntries(new FormData(form));
+      const values = Object.fromEntries([...new FormData(form)].filter(([key, value]) => value !== savedFormValues[key]));
+      if (!Object.keys(values).length) { message('No changes to save.'); return; }
       const button = form.querySelector('[type="submit"]');
       const fields = [...form.querySelectorAll('input, textarea, select')];
       const startedAt = performance.now();
@@ -232,6 +231,8 @@
         const updated = await api(`/api/contacts/${encodeURIComponent(state.person.id)}`, { method: 'PATCH', body: JSON.stringify(values) });
         state.person = updated;
         updateRow(updated);
+        for (const field of fields) field.value = updated[field.name] ?? (field.name === 'outreachStatus' ? 'not_started' : '');
+        savedFormValues = Object.fromEntries(fields.map(field => [field.name, field.value]));
         state.dirty = Boolean(root.querySelector('#person-draft')?.value);
         // Keep the form and focus intact; update identity separately.
         root.querySelector('#person-heading').textContent = updated.fullName;
@@ -244,7 +245,7 @@
       finally { state.busy = false; fields.forEach(control => control.disabled = false); button.disabled = false; button.textContent = 'Save changes'; }
     }
     function openDialog(title, content, className = '') {
-      closeDialog();
+      if (!closeDialog()) return;
       const dialog = document.createElement('dialog');
       dialog.className = `people-dialog ${className}`;
       dialog.setAttribute('aria-labelledby', 'people-dialog-title');
@@ -253,12 +254,22 @@
       state.dialog = dialog;
       dialog.addEventListener('click', onClick);
       dialog.addEventListener('submit', onSubmit);
+      dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
       dialog.addEventListener('close', () => { dialog.remove(); if (state.dialog === dialog) state.dialog = null; });
       dialog.showModal();
     }
-    function closeDialog() { state.dialog?.close(); state.dialog = null; }
+    function closeDialog({ saved = false } = {}) {
+      if (!state.dialog) return true;
+      if (!saved && state.busy) return false;
+      if (!saved && hasAddDraft() && !window.confirm('Discard this new person? These details have not been saved.')) return false;
+      state.dialog.close(); state.dialog = null;
+      return true;
+    }
     function addPerson() {
+      const discardPerson = state.dirty;
       if (!allowLeave()) return;
+      // A confirmed discard must also remove the abandoned values from view.
+      if (discardPerson && state.person) drawPerson();
       openDialog('Add person', `<form data-people-form="add"><p class="people-provenance">Save details you have permission to use. Adding a URL does not scrape a profile.</p>${field('new-name', 'Full name', '<input id="person-new-name" name="fullName" required maxlength="200" autofocus>')}${field('new-title', 'Current role', '<input id="person-new-title" name="title" maxlength="300">')}${field('new-company', 'Company', '<input id="person-new-company" name="companyName" maxlength="300">')}${field('new-url', 'Profile URL', '<input id="person-new-url" name="linkedinUrl" type="url" maxlength="2000" placeholder="https://www.linkedin.com/in/…">')}<p class="people-feedback" data-add-feedback role="status"></p><footer><button class="primary-button" type="submit">Add person</button>${button('close-dialog', 'Cancel')}</footer></form>`);
     }
     function compare() {
@@ -275,15 +286,30 @@
       if (form.dataset.peopleForm === 'person') return savePerson(form);
       if (form.dataset.peopleForm !== 'add') return;
       const submit = form.querySelector('[type="submit"]');
-      if (submit.disabled) return;
+      if (submit.disabled || state.busy) return;
+      const values = Object.fromEntries(new FormData(form));
+      const dialog = form.closest('dialog');
+      const controls = [...dialog.querySelectorAll('input, button')];
+      const startedAt = performance.now();
+      state.busy = true;
+      controls.forEach(control => control.disabled = true);
+      dialog.setAttribute('aria-busy', 'true');
       submit.disabled = true; submit.textContent = 'Adding…';
+      message('Saving person… Please wait before closing.', false, form.querySelector('[data-add-feedback]'));
       try {
-        const created = await api('/api/contacts', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-        closeDialog();
+        const created = await api('/api/contacts', { method: 'POST', body: JSON.stringify(values) });
+        closeDialog({ saved: true });
+        state.busy = false;
         state.key = '';
         navigate({ q: '', outreachStatus: '', sortBy: 'recent', page: 1, pageSize: 20, minScore: '' }, created.id);
       } catch (error) { message(`Could not add person. ${error.message}`, true, form.querySelector('[data-add-feedback]')); }
-      finally { submit.disabled = false; submit.textContent = 'Add person'; }
+      finally {
+        state.busy = false;
+        controls.forEach(control => control.disabled = false);
+        dialog.setAttribute('aria-busy', 'false');
+        submit.textContent = 'Add person';
+        window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::addPerson', elapsedMs: Math.round(performance.now() - startedAt) } }));
+      }
     }
     async function onClick(event) {
       const control = event.target.closest('[data-people]');
@@ -294,7 +320,12 @@
       event.preventDefault(); event.stopPropagation();
       if (action === 'open') { returnFocus = control.dataset.id; navigate(state.query, control.dataset.id); }
       if (action === 'close') navigate(state.query);
-      if (action === 'retry') { state.key = ''; await render({ force: true }); }
+      if (action === 'retry') await render({ force: true });
+      if (action === 'reset-list') {
+        const query = { q: '', outreachStatus: '', sortBy: 'name', page: 1, pageSize: 20, minScore: '' };
+        if (location.hash === hash(query, '')) await render({ force: true });
+        else navigate(query);
+      }
       if (action === 'clear') navigate({ ...state.query, q: '', outreachStatus: '', minScore: '', page: 1 });
       if (action === 'previous-page' || action === 'next-page') { state.scroll = 0; navigate({ ...state.query, page: state.query.page + (action === 'next-page' ? 1 : -1) }); }
       if (action === 'sort-name') navigate({ ...state.query, sortBy: state.query.sortBy === 'name' ? 'name_desc' : 'name', page: 1 });
@@ -319,14 +350,19 @@
       }
       if (action === 'mark-contacted') {
         if (state.busy || !window.confirm(`Have you actually sent your message to ${state.person.fullName}? This changes the outreach stage to Contacted; it does not send anything.`)) return;
+        const stage = root.querySelector('#person-outreachStatus');
+        const save = root.querySelector('.person-edit-form [type="submit"]');
         state.busy = true; control.disabled = true;
+        stage.disabled = true; save.disabled = true;
+        message('Updating stage…', false, root.querySelector('[data-draft-feedback]'));
         try {
           const updated = await api(`/api/contacts/${encodeURIComponent(state.person.id)}`, { method: 'PATCH', body: JSON.stringify({ outreachStatus: 'contacted' }) });
           state.person = updated; updateRow(updated);
           root.querySelector('#person-outreachStatus').value = 'contacted';
+          savedFormValues.outreachStatus = 'contacted';
           message('Stage updated to Contacted. No message was sent by this app.', false, root.querySelector('[data-draft-feedback]'));
         } catch (error) { message(`Stage was not changed. ${error.message}`, true, root.querySelector('[data-draft-feedback]')); }
-        finally { state.busy = false; control.disabled = false; }
+        finally { state.busy = false; control.disabled = false; stage.disabled = false; save.disabled = false; }
       }
     }
     function move(direction) {
@@ -365,7 +401,7 @@
       if ((event.key === 'j' || event.key === 'k') && state.selected) { event.preventDefault(); event.stopImmediatePropagation(); move(event.key === 'j' ? 1 : -1); }
       if (event.key === 'Escape' && state.selected) { event.preventDefault(); event.stopImmediatePropagation(); navigate(state.query); }
     }, true);
-    window.addEventListener('beforeunload', event => { if (state.dirty || state.busy) { event.preventDefault(); event.returnValue = ''; } });
+    window.addEventListener('beforeunload', event => { if (state.dirty || state.busy || hasAddDraft()) { event.preventDefault(); event.returnValue = ''; } });
     return { render, allowLeave, beforeLeave: () => { if (allowLeave()) return true; history.replaceState(null, '', lastHash); return false; }, leave: () => { ++state.sequence; state.key = ''; }, open: id => navigate(state.query, id) };
   }
   window.bdPeople = { create };
