@@ -1,7 +1,7 @@
 # Recruiter workspace audit and redesign
 
 Date: 6 September 2026. Baseline: `64aa9d7` / application 0.1.1.1.
-Status: audit and implementation brief written **before product-code changes**. Core redesign implemented; final review added 7 September 2026. Deployment is separate from this local validation.
+Status: audit and implementation brief written **before product-code changes**. Core redesign implemented; final review added 7 September 2026. Hosted 0.1.2.0 was subsequently deployed and verified; see the [release record](recruiter-workspace-release-2026-09-07.md).
 
 ## Executive judgment
 
@@ -176,4 +176,6 @@ No known failing core journey is being intentionally accepted as a redesign feat
 
 ### Recommended next release gate
 
-Before production rollout: run the contact query/parity checks against staging PostgreSQL and smoke-test import → People → save → reload with representative tenant sizes. Then conduct recruiter task sessions, prioritizing saved People views/lists, contact-linked follow-ups, evidence-rich candidate profiles and mobile hiring filters. Public marketing should describe only the functionality that ships. This implementation has no schema migration, no new framework/dependency, and no replacement of working ingestion logic.
+The PostgreSQL query and parity gate was subsequently completed using SELECT-only production fixtures because no staging environment was configured. Hosted 0.1.2.0 is now deployed; see the [release record](recruiter-workspace-release-2026-09-07.md) for exact checks, backup, limitations and rollback.
+
+Next, validate import → People → save → reload with representative tenant sizes in an isolated staging workspace, then conduct recruiter task sessions. Prioritize saved People views/lists, contact-linked follow-ups, evidence-rich candidate profiles and mobile hiring filters. Public marketing should describe only the functionality that ships. This implementation has no schema migration, no new framework/dependency, and no replacement of working ingestion logic.
