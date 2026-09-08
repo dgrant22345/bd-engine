@@ -16,13 +16,15 @@
 - Eight live non-mutating smoke checks passed; mutation tests stayed disabled. Immediate deployment error-level log review returned no entries.
 - Existing authenticated owner session loaded the new saved-focus explanation and target-role filter successfully. No saved preferences or customer records were changed.
 
-## Pending score recalculation and backup authorization
+## Completed score recalculation and encrypted backup
 
 The automatic safety review rejected copying the complete production database to a local encrypted backup without explicit approval of the payload and destination. The backup command did not execute. No workaround was attempted and no bulk rescore was performed.
 
-Proposed destination, only after approval: `saas/backups/pre-focus-0.1.2.2-2026-09-08.json.gz.enc` (Git-ignored) using the existing encryption key. This backup would contain sensitive production customer records. After creating and verifying it, use the owner's normal saved-focus workflow to recalculate existing scores without changing the saved titles/threshold. Verify persistence and parity afterward.
+The user subsequently explicitly approved that payload and destination. The approved backup was completed and verified on 2026-09-08 at `saas/backups/pre-focus-0.1.2.2-2026-09-08.json.gz.enc` (Git-ignored), using the existing AES-256-GCM encryption key. Size: 31,404,850 bytes (29.95 MiB); creation/verification: 22.2 seconds. SHA-256: `46d357273e9aa97d3264498eef4a093856b0e9cb433979e91350b05bf2e1ed92`. No plaintext backup or encryption key was committed.
 
-Geography query filtering is live immediately. Recruitment-event relevance corrections apply on import or rescore; existing stored relevance scores are not retroactively updated merely by deployment.
+The owner's unchanged focus was submitted once through the existing authenticated saved-focus form. Final aggregate-only PostgreSQL verification: 29,199/29,199 stored jobs rescored; 11,150 active jobs preserved; 10 Canadian matches at the existing 45 cutoff (12 before the geography and event corrections); four active event listings excluded across all locations. Deep relational parity passed for all three legacy workspaces. No titles, thresholds, source boards or pipeline stages were edited.
+
+A detailed diagnostic export was separately rejected by automatic review; the check was narrowed to aggregate counts, with no individual job records or preference text returned. During persistence, an intermediate check showed only 6,812 rescored jobs; completion was not reported until all 29,199 were verified. The normal settings-save path returns before all queued relational writes finish, which remains a reliability improvement opportunity.
 
 ## Rollback
 

@@ -35,6 +35,6 @@ A real-browser failure fixture holds the first request, attempts a second submit
 
 ## Deployment status
 
-Deployed as 0.1.2.2 on 2026-09-08; see [release verification](focus-release-2026-09-08.md). Existing persisted relevance scores still require a normal focus save/rescore (or refreshing the relevant source boards). The bulk rescore is pending explicit backup authorization. Deploying the classifier alone does not retroactively change stored scores. Geography query filtering is live. Do not directly rewrite scores in SQL.
+Deployed as 0.1.2.2 on 2026-09-08; see [release verification](focus-release-2026-09-08.md). After explicit user approval, an encrypted backup was verified and all 29,199 owner jobs were rescored through the existing saved-focus form. The saved preferences and active-job count remained unchanged. Aggregate verification found 10 Canadian matches. No scores were directly rewritten in SQL.
 
 The owner's saved target remains `talent acquisition specialist`, threshold 45. No preference changes were made. Confirm the intended broader role list before restoring earlier titles; this correction should improve precision, not be presented as increasing the match count. Source coverage and unexplained changes to the saved role list deserve separate investigation.
