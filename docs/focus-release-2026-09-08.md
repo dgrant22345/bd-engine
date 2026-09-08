@@ -26,6 +26,8 @@ The owner's unchanged focus was submitted once through the existing authenticate
 
 A detailed diagnostic export was separately rejected by automatic review; the check was narrowed to aggregate counts, with no individual job records or preference text returned. During persistence, an intermediate check showed only 6,812 rescored jobs; completion was not reported until all 29,199 were verified. The normal settings-save path returns before all queued relational writes finish, which remains a reliability improvement opportunity.
 
+Subsequent live verification initially displayed nine rather than ten Canadian matches. The actual production query builder returned nine rows/count, agreeing with the interface. A concurrent live-job import completed (started 2026-09-08 16:38:42 UTC; finished 16:40:01 UTC), changing inventory during verification. Latest aggregate snapshot: 29,444 total jobs, all scored today; 11,173 active jobs; nine Canadian matches at 45; four excluded active event listings. Deep parity again passed across all three legacy workspaces. The earlier ten-match count is the pre-refresh snapshot, not the final live count. The owner tab was left on Canada + saved focus.
+
 ## Rollback
 
 Restore deployment `345f3ad0-0ee4-4cbb-ba63-ea5c283d73ab` (0.1.2.1; source `645e1b7decfc6819a04ebafd1317180b825740cf`). No data rollback is required for this code-only deployment.
