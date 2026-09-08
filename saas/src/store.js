@@ -1253,8 +1253,21 @@ function getTouchedJobCountFromResult(result = {}) {
 
 const pendingSaves = new Map();
 const saveRetryCounts = new Map();
+const activeSaves = new Map();
 
-async function saveTenantNow(tenantId) {
+function saveTenantNow(tenantId, options = {}) {
+  // Serialize workspace writes, but let other tenants save independently.
+  const previous = activeSaves.get(tenantId) || Promise.resolve();
+  const save = previous.catch(() => {}).then(() => writeTenantSnapshot(tenantId, options));
+  activeSaves.set(tenantId, save);
+  const cleanup = () => {
+    if (activeSaves.get(tenantId) === save) activeSaves.delete(tenantId);
+  };
+  save.then(cleanup, cleanup);
+  return save;
+}
+
+async function writeTenantSnapshot(tenantId, { requireMirror = false } = {}) {
   const profile = tenantProfiles.get(tenantId);
   const status = loadedTenants.get(tenantId) || {};
 
@@ -1281,10 +1294,15 @@ async function saveTenantNow(tenantId) {
     const settingsResult = await dbSaveTenantData(tenantId, { settings: data.settings }, { throwOnError: true });
     if (!settingsResult?.saved) throw new Error(`Workspace settings save failed: ${settingsResult?.reason || 'unknown error'}`);
   } else {
-    await dbSaveTenantData(tenantId, data, { throwOnError: true });
+    const result = await dbSaveTenantData(tenantId, data, { throwOnError: true });
+    if (!result?.saved) throw new Error(`Workspace save failed: ${result?.reason || 'unknown error'}`);
     try {
-      await syncTenantRelationalMirror(tenantId, data);
+      const mirror = await syncTenantRelationalMirror(tenantId, data);
+      if (requireMirror && mirror?.skipped && (relationalReadsEnabledForTenant(tenantId) || relationalJobSqlEnabledForTenant(tenantId))) {
+        throw new Error('Relational score save was skipped.');
+      }
     } catch (err) {
+      if (requireMirror) throw err;
       console.error('Relational mirror sync error:', safeErrorSummary(err));
     }
   }
@@ -1311,11 +1329,33 @@ function persistTenant(tenantId) {
   scheduleTenantSave(tenantId, 500);
 }
 
+async function persistScoredFocus(tenantId) {
+  if (!isDbEnabled()) return;
+  const startedAt = performance.now();
+  clearTimeout(pendingSaves.get(tenantId));
+  pendingSaves.delete(tenantId);
+  try {
+    await saveTenantNow(tenantId, { requireMirror: true });
+  } catch (cause) {
+    // Partial writes can already be committed. Preserve the current focus and
+    // retry instead of rolling memory back to a potentially stale version.
+    persistTenant(tenantId);
+    console.error('Search focus persistence failed:', safeErrorSummary(cause));
+    const error = new Error('Your focus is still being saved. Please retry before relying on the updated shortlist.');
+    error.status = 503;
+    error.code = 'focus_save_incomplete';
+    throw error;
+  } finally {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 250) console.warn(`Slow focus persistence: saas/src/store.js persistScoredFocus ${elapsedMs}ms`);
+  }
+}
+
 // Debounced writes still pending at shutdown would otherwise be dropped on
 // every deploy/restart, silently losing up to 500ms of mutations (including
 // whole CSV imports, which queue exactly one save).
 export async function flushPendingSaves() {
-  const tenantIds = [...pendingSaves.keys()];
+  const tenantIds = [...new Set([...pendingSaves.keys(), ...activeSaves.keys()])];
   for (const tenantId of tenantIds) {
     clearTimeout(pendingSaves.get(tenantId));
     pendingSaves.delete(tenantId);
@@ -1377,6 +1417,7 @@ function evictIdleResidentTenants(protectedTenantId = '') {
   const candidates = [...loadedTenants.entries()]
     .filter(([tenantId, status]) => tenantId !== protectedTenantId
       && !pendingSaves.has(tenantId)
+      && !activeSaves.has(tenantId)
       && Number(status.lastAccessAt || 0) <= cutoff)
     .sort((a, b) => Number(a[1].lastAccessAt || 0) - Number(b[1].lastAccessAt || 0));
   let evicted = 0;
@@ -1760,7 +1801,7 @@ export function createStore() {
       profile.settings.persona = profile.persona;
       const focus = getSearchFocus(profile.settings, profile.persona);
       const scoreSummary = rescoreTenantJobs(tenantId, focus);
-      persistTenant(tenantId);
+      await persistScoredFocus(tenantId);
       return { ok: true, persona: profile.persona, ...scoreSummary };
     },
 
@@ -3082,7 +3123,7 @@ export function createStore() {
       }
       const focus = getSearchFocus(profile.settings, persona);
       const scoreSummary = rescoreTenantJobs(tenantId, focus);
-      persistTenant(tenantId);
+      await persistScoredFocus(tenantId);
       return { ok: true, settings: { ...profile.settings }, ...scoreSummary };
     },
 

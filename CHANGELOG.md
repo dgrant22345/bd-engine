@@ -4,6 +4,13 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.4 — 2026-09-08 — Durable focus saves
+
+- Wait for saved focus and recalculated scores to finish persisting before reporting success, including persona changes.
+- Return retryable feedback if storage fails instead of claiming the shortlist is ready.
+- Serialize workspace saves and drain already-running writes during graceful shutdown.
+- Preserve existing styling, search preferences, records and API success payloads; no migration or bulk cleanup.
+
 ## 0.1.2.3 — 2026-09-08 — Static vacancy validation
 
 - Reject static-careers category, search, location, pagination and facet-only links as vacancies.
