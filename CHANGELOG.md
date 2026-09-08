@@ -4,6 +4,13 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.3 — 2026-09-08 — Static vacancy validation
+
+- Reject static-careers category, search, location, pagination and facet-only links as vacancies.
+- Correct multi-word navigation-label filtering without rejecting real role titles.
+- Preserve existing jobs when the source returns only navigation instead of vacancies.
+- Backend-only maintenance; no bulk cleanup, schema migration, preference or branding changes.
+
 ## 0.1.2.2 — 2026-09-08 — Saved-focus matching and recovery
 
 - Keep recruitment-event listings out of vacancy matches while retaining source records.

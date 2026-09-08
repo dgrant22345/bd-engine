@@ -8043,14 +8043,23 @@ function normalizePublicHttpUrl(value) {
 function looksLikeStaticJobUrl(url) {
   const parsed = new URL(url);
   const path = parsed.pathname.toLowerCase();
+  if (isStaticJobBrowsePath(path)) return false;
   if (/\/careers\/job\//.test(path)) return true;
   if (/\/jobs\/[^/]+/.test(path) && !/\/jobs\/?(search|alerts?|categories?)?\/?$/.test(path)) return true;
   if (/\/careers\/[^/]+\/[a-f0-9-]{16,}/.test(path)) return true;
   return false;
 }
 
+function isStaticJobBrowsePath(path) {
+  // Faceted/search/category indexes describe collections, not one vacancy.
+  // Match path segments, not title words: Search Engineer and Category Manager
+  // remain valid jobs. A deeper detail slug after a facet also remains eligible.
+  return /\/jobs\/(?:search|alerts?|categor(?:y|ies)|locations?|departments?|page)(?:\/[^/]+)?\/?$/.test(path)
+    || /\/jobs\/(?:(?:s|r|i|l|q)-[^/]+\/?)+$/.test(path);
+}
+
 function isGenericCareersLink(title, url) {
-  const normalizedTitle = normalizeKey(title).replace(/[^a-z0-9 ]/g, '').trim();
+  const normalizedTitle = normalizeSearchText(title);
   if (!normalizedTitle || normalizedTitle.length < 4) return true;
   if ([
     'career',
@@ -8062,12 +8071,20 @@ function isGenericCareersLink(title, url) {
     'locations',
     'culture',
     'how we hire',
+    'view all jobs',
+    'view jobs',
+    'search jobs',
+    'browse jobs',
+    'all jobs',
+    'view all openings',
+    'job alerts',
     'us en',
     'ca en',
   ].includes(normalizedTitle)) return true;
   try {
     const parsed = new URL(url);
     const path = parsed.pathname.toLowerCase();
+    if (isStaticJobBrowsePath(path)) return true;
     if (/\/careers\/openings\/?$/.test(path) || /\/careers\/?$/.test(path) || /\/jobs\/?$/.test(path)) return true;
   } catch {
     return true;

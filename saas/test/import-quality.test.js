@@ -17,6 +17,40 @@ const ghJob = (id, title = 'Talent Acquisition Manager', location = 'Toronto, ON
   id, title, location: { name: location }, absolute_url: `https://example.test/jobs/${id}`, updated_at: new Date().toISOString(),
 });
 
+test('static careers import rejects browsing links but retains real vacancy links and structured jobs', async (t) => {
+  const id = 'quality-static-navigation';
+  const store = await workspace(id, 'custom_static', { careersUrl: 'https://example.test/careers' });
+  const navigation = `<nav>
+    <a href="/jobs/s-employment-recruitment-agency/">employment &amp; recruitment agency</a>
+    <a href="/jobs/s-human-resources/r-ontario/">Human resources in Ontario</a>
+    <a href="/jobs/categories/engineering/">Engineering vacancies</a>
+    <a href="/jobs/search/?q=recruiter">Recruiter opportunities</a>
+    <a href="/jobs/locations/toronto/">Toronto vacancies</a>
+    <a href="/jobs/page/2/">Next jobs page</a>
+    <a href="/jobs/123/">View all jobs</a>
+    <a href="/jobs/456/">How we hire</a>
+  </nav>`;
+  const vacancies = `<a href="/jobs/talent-acquisition-specialist_12345/">Talent Acquisition Specialist</a>
+    <a href="/careers/job/category-manager-456/">Category Manager</a>
+    <a href="/jobs/search-engineer-789/">Search Engineer</a>
+    <a href="/jobs/s-engineering/platform-engineer_987/">Platform Engineer</a>
+    <script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', title: 'Recruitment Partner', url: '/positions/role-123', jobLocation: { address: { addressLocality: 'Toronto', addressRegion: 'ON' } } })}</script>`;
+  let html = navigation + vacancies;
+  t.mock.method(globalThis, 'fetch', async () => new Response(html, { headers: { 'content-type': 'text/html' } }));
+  const started = performance.now();
+  const result = await store.importLiveJobs(id, options);
+  console.log(`Static navigation import fixture: ${(performance.now() - started).toFixed(1)}ms`);
+  assert.equal(result.stats.newJobs, 5);
+  const jobs = await store.findJobs(id, { active: true, pageSize: 30 });
+  assert.deepEqual(new Set(jobs.items.map((j) => j.title)), new Set(['Talent Acquisition Specialist', 'Category Manager', 'Search Engineer', 'Platform Engineer', 'Recruitment Partner']));
+  html = navigation;
+  const partial = await store.importLiveJobs(id, options);
+  assert.equal(partial.stats.newJobs, 0);
+  assert.equal(partial.stats.closedJobs, 0, 'navigation-only response must not close genuine jobs');
+  assert.ok(partial.stats.errors > 0 || partial.stats.partialBoards > 0);
+  assert.equal((await store.findJobs(id, { active: true })).total, 5);
+});
+
 test('malformed board responses cannot close existing jobs', async (t) => {
   const id = 'quality-malformed';
   const store = await workspace(id);
