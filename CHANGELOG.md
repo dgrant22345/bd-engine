@@ -4,6 +4,12 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.5 — 2026-09-08 — Import coverage and historical listing cleanup
+
+- Continue bounded pagination after isolated duplicate rows, while still stopping fully repeated pages and preserving unseen jobs on incomplete feeds.
+- Mark recognized historical static collection-page listings inactive during refresh; retain records and skip saved pipeline entries.
+- Add provider-level Canadian coverage and import freshness diagnostics, plus an isolated public TD source check.
+
 ## 0.1.2.4 — 2026-09-08 — Durable focus saves
 
 - Wait for saved focus and recalculated scores to finish persisting before reporting success, including persona changes.

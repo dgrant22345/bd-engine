@@ -35,6 +35,7 @@ export async function fetchPaginatedAtsJobs({
   let duplicateRows = 0;
   let verificationRequests = 0;
   let lastPageLength = 0;
+  let repeatedPage = false;
   const firstPage = await readPage(0, { deadlineAt });
   const reportedTotal = readAtsReportedTotal(firstPage?.total);
 
@@ -48,6 +49,7 @@ export async function fetchPaginatedAtsJobs({
     }
     pagesFetched++;
     lastPageLength = page.jobs.length;
+    const duplicatesBefore = duplicateRows;
     for (const item of page.jobs) {
       const identity = jobKey(item);
       const key = typeof identity === 'string' || typeof identity === 'number' ? String(identity).trim() : '';
@@ -62,6 +64,7 @@ export async function fetchPaginatedAtsJobs({
         jobs.push(item);
       }
     }
+    if (page.jobs.length > 0 && duplicateRows - duplicatesBefore === page.jobs.length) repeatedPage = true;
   };
   appendPage(firstPage, 0);
 
@@ -72,7 +75,9 @@ export async function fetchPaginatedAtsJobs({
     // Without a total, read sequentially: speculative requests beyond a short
     // terminal page can return 404 and incorrectly fail a healthy board.
     if (reportedTotal === null && lastPageLength < pageSize) break;
-    if (reasons.has('duplicate_jobs') || reasons.has('total_changed')) break;
+    // A small overlap on a changing board must not hide every later page.
+    // Still stop a source that repeats an entire page (e.g. ignores offset).
+    if (repeatedPage || reasons.has('total_changed')) break;
     if (clock() >= deadlineAt) { reasons.add('time_budget'); break; }
     const batchSize = reportedTotal === null ? 1 : Math.min(concurrency, pageLimit - nextPage);
     const offsets = Array.from({ length: batchSize }, (_, index) => (nextPage + index) * pageSize);

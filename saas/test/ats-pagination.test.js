@@ -84,6 +84,21 @@ test('changed totals are partial even when the initial job count was fetched', a
   assert.ok(result.pagination.reasons.includes('total_changed'));
 });
 
+test('isolated duplicate rows do not hide the remaining pages of a board', async () => {
+  const startedAt = performance.now();
+  const result = await paginate({ readPage: async (offset) => {
+    const jobs = rows(offset, 20);
+    if (offset === 20) jobs[0] = { id: '0' };
+    return { total: 100, jobs };
+  } });
+  console.log(`Overlapping-page fixture: ${(performance.now() - startedAt).toFixed(2)}ms`);
+  assert.equal(result.pagination.pagesFetched, 5);
+  assert.equal(result.pagination.uniqueJobs, 99);
+  assert.ok(result.jobs.some((job) => job.id === '99'));
+  assert.equal(result.complete, false, 'duplicates still prevent closure of unseen jobs');
+  assert.ok(result.pagination.reasons.includes('duplicate_jobs'));
+});
+
 test('missing and invalid rows cannot count toward proven coverage', async () => {
   const missing = await paginate({ readPage: async (offset) => ({ total: 21, jobs: offset ? [] : rows(0, 20) }) });
   assert.equal(missing.complete, false);

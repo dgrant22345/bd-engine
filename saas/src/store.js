@@ -4297,6 +4297,18 @@ export function createStore() {
       let invalidRows = 0;
       const touchedAccountIds = new Set();
 
+      const cleanupStartedAt = performance.now();
+      const invalidListings = quarantineStaticBrowseJobs(tenantJobs, supportedConfigs.map(({ config }) => config));
+      closedJobs += invalidListings.length;
+      for (const item of invalidListings) {
+        if (item.accountId) touchedAccountIds.add(item.accountId);
+        importItems.push({ entityType: 'job', entityId: item.id, naturalKey: getJobNaturalKey(item),
+          status: 'closed', message: 'Collection page incorrectly imported as a vacancy; record retained',
+          sourceRow: { jobId: item.jobId } });
+      }
+      if (invalidListings.length) warnings.push(`${invalidListings.length} collection-page listings were marked inactive; records and saved pipeline entries were preserved.`);
+      timings.invalidListingCleanupMs = Math.round(performance.now() - cleanupStartedAt);
+
       const fetchStartedAt = performance.now();
       const fetchConcurrency = readPositiveInteger(options.fetchConcurrency, DEFAULT_ATS_FETCH_CONCURRENCY);
       const fetchedBoards = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async ({ config, atsType, boardId }) => {
@@ -8091,12 +8103,27 @@ function looksLikeStaticJobUrl(url) {
   return false;
 }
 
-function isStaticJobBrowsePath(path) {
+export function isStaticJobBrowsePath(path) {
   // Faceted/search/category indexes describe collections, not one vacancy.
   // Match path segments, not title words: Search Engineer and Category Manager
   // remain valid jobs. A deeper detail slug after a facet also remains eligible.
   return /\/jobs\/(?:search|alerts?|categor(?:y|ies)|locations?|departments?|page)(?:\/[^/]+)?\/?$/.test(path)
     || /\/jobs\/(?:(?:s|r|i|l|q)-[^/]+\/?)+$/.test(path);
+}
+
+export function quarantineStaticBrowseJobs(tenantJobs, configs, timestamp = now()) {
+  const eligible = new Map(configs.filter((config) => getConfigAtsType(config) === 'custom_static').map((config) => [config.id, config]));
+  const changed = [];
+  for (const item of tenantJobs) {
+    if (item.active === false || item.pipelineStage || !eligible.has(item.configId)) continue;
+    let path;
+    try { path = new URL(item.jobUrl || item.url).pathname.toLowerCase(); } catch { continue; }
+    if (!isStaticJobBrowsePath(path)) continue;
+    Object.assign(item, { active: false, isNew: false, closedAt: timestamp, updatedAt: timestamp,
+      closureReason: 'invalid_collection_page' });
+    changed.push(item);
+  }
+  return changed;
 }
 
 function isGenericCareersLink(title, url) {

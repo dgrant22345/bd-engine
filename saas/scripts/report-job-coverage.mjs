@@ -105,8 +105,16 @@ async function auditWorkspace(tenantId, index) {
     FROM accounts WHERE tenant_id = $1
     GROUP BY value ORDER BY accounts DESC
   `, tenantId);
+  const importHealth = await aggregate(`
+    SELECT ats_type, coalesce(raw->>'lastImportStatus', 'never_imported') AS status,
+      count(*)::int AS boards,
+      min(nullif(raw->>'lastImportedAt', '')) AS oldest_recorded_import,
+      max(nullif(raw->>'lastImportedAt', '')) AS newest_recorded_import
+    FROM board_configs WHERE tenant_id = $1 AND active
+    GROUP BY ats_type, coalesce(raw->>'lastImportStatus', 'never_imported') ORDER BY ats_type, status
+  `, tenantId);
   const activeJobRows = await aggregate(`
-    SELECT j.location, j.raw, a.location AS account_location
+    SELECT j.location, j.raw, j.ats_type, a.location AS account_location
     FROM jobs j
     LEFT JOIN accounts a ON a.id = j.account_id AND a.tenant_id = j.tenant_id
     WHERE j.tenant_id = $1 AND j.active
@@ -115,12 +123,22 @@ async function auditWorkspace(tenantId, index) {
   const activeJobs = activeJobRows.map((row) => ({
     ...(row.raw && typeof row.raw === 'object' ? row.raw : {}),
     location: row.location || row.raw?.location || '',
+    atsType: row.ats_type || row.raw?.atsType || 'unknown',
     accountLocation: row.account_location || '',
   }));
   const scoredJobs = activeJobs.filter((job) => job.relevanceScore !== null && job.relevanceScore !== undefined && job.relevanceScore !== '' && Number.isFinite(Number(job.relevanceScore)));
   const matchingJobs = scoredJobs.filter((job) => job.matchesSearchFocus !== false && Number(job.relevanceScore) >= minimumRelevanceScore);
   const canadaJobs = activeJobs.filter((job) => locationMatchesGeography(job, 'canada'));
   const canadaMatchingJobs = matchingJobs.filter((job) => locationMatchesGeography(job, 'canada'));
+  const canadianCoverageByProvider = [...new Set(canadaJobs.map((job) => job.atsType))].map((atsType) => {
+    const rows = canadaJobs.filter((job) => job.atsType === atsType);
+    return { atsType, active: rows.length,
+      outsideFocus: rows.filter((job) => job.matchesSearchFocus === false).length,
+      matching: canadaMatchingJobs.filter((job) => job.atsType === atsType).length,
+      belowThreshold: rows.filter((job) => job.matchesSearchFocus !== false
+        && job.relevanceScore !== null && job.relevanceScore !== undefined && job.relevanceScore !== ''
+        && Number.isFinite(Number(job.relevanceScore)) && Number(job.relevanceScore) < minimumRelevanceScore).length };
+  }).sort((a, b) => b.active - a.active);
   const focusSummary = {
     configured: Boolean(termCount(focus.targetRoles)
       || termCount(focus.excludedRoles)
@@ -156,6 +174,8 @@ async function auditWorkspace(tenantId, index) {
     statuses,
     providers,
     activeJobSources,
+    canadianCoverageByProvider,
+    importHealth,
     targetFlags,
   };
 }
