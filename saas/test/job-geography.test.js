@@ -69,3 +69,14 @@ test('geography focus defaults preserve North American jobs without allowing oth
   assert.deepEqual(parseGeographyFocus('Canada'), { canada: true, us: false, other: false });
   assert.deepEqual(parseGeographyFocus('Global'), { canada: true, us: true, other: true });
 });
+
+test('ambiguous city names require province or country evidence for Canada', () => {
+  for (const city of ['London', 'Cambridge', 'Richmond', 'Surrey', 'Victoria', 'Windsor', 'Kingston']) {
+    assert.equal(locationMatchesGeography({ location: city }, 'canada'), false, city);
+    assert.equal(locationMatchesGeography({ location: `${city}, ON` }, 'canada'), true, city);
+    assert.equal(locationMatchesGeography({ location: city, country: 'Canada' }, 'canada'), true, city);
+  }
+  assert.equal(locationMatchesGeography({ location: 'London - 12 Arthur Street' }, 'canada'), false);
+  assert.equal(locationMatchesGeography({ location: 'London | Toronto, ON' }, 'canada'), true);
+  assert.equal(locationMatchesGeography({ location: 'London, UK' }, 'canada'), false);
+});

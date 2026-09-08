@@ -8,7 +8,10 @@ import { locationMatchesGeography, classifyWorkStyle } from '../src/job-geograph
 const tenantId = 'query-quality-fixture';
 const jobs = [
   ...Array.from({ length: 35 }, (_, index) => ({ id: `ca-${String(index).padStart(2, '0')}`, title: 'Senior Recruiter', location: index % 2 ? 'Toronto, ON' : 'Vancouver, BC', relevanceScore: 75 })),
-  ...['New York, NY', 'London, UK', 'Cambridge, MA', 'Remote - US', 'North America', 'St. John’s, NL', 'New York, NY | Toronto, ON', 'Remote - Canada', 'Hybrid - Toronto, ON'].map((location, index) => ({ id: `other-${index}`, title: 'Recruiter', location, relevanceScore: 60 })),
+  ...['New York, NY', 'London, UK', 'Cambridge, MA', 'Remote - US', 'North America', 'St. John’s, NL', 'New York, NY | Toronto, ON', 'Remote - Canada', 'Hybrid - Toronto, ON',
+    'London - 12 Arthur Street', 'London, ON', 'London | Toronto, ON', 'Cambridge', 'Richmond', 'Surrey', 'Victoria', 'Windsor', 'Kingston',
+    'Cambridge, ON', 'Richmond, BC', 'Surrey, BC', 'Victoria, BC', 'Windsor, Ontario', 'Kingston, Canada',
+  ].map((location, index) => ({ id: `other-${index}`, title: 'Recruiter', location, relevanceScore: 60 })),
 ].map((j) => ({ ...j, tenantId, accountId: 'account-1', companyName: 'Fixture Employer', active: true, postedAt: '2026-09-01', pipelineStage: ['ca-31', 'ca-32', 'ca-33'].includes(j.id) ? 'saved' : '' }));
 const jobRows = [...jobs, { ...jobs[0], id: 'foreign-tenant', tenantId: 'not-this-tenant' }].map((j) => ({
   id: j.id, tenant_id: j.tenantId, account_id: j.accountId, title: j.title, company_name: j.companyName,

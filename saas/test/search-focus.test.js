@@ -4,6 +4,44 @@ import { createStore } from '../src/store.js';
 
 const plan = { displayName: 'Unlimited', limits: { jobBoards: -1 } };
 
+test('recruitment events stay out of saved focus without losing actual recruiting vacancies', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-recruiting-events';
+  addTenant(store, tenantId, 'jobseeker');
+  const focus = { targetRoles: 'talent acquisition specialist', minimumRelevanceScore: 45 };
+  await store.patchSettings(tenantId, { geographyFocus: 'Global', searchFocus: focus });
+  const account = await store.addAccount(tenantId, { displayName: 'Event Fixture', industry: 'Technology' });
+  store.addConfig(tenantId, { accountId: account.id, companyName: account.displayName,
+    atsType: 'greenhouse', boardId: 'event-fixture', discoveryStatus: 'resolved', reviewStatus: 'approved', active: true });
+  const events = ['Montréal West Island In‑Person Recruitment Event (September 22, 2026)',
+    'Virtual Recruiting Event', 'Talent Acquisition Specialist Hiring Event', 'Recruitment Fair'];
+  const roles = ['Talent Acquisition Specialist', 'Technical Recruiter', 'Recruitment Events Coordinator', 'Event Recruiter'];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ jobs: [...events, ...roles].map((title, id) => ({
+    id: String(id), title, location: { name: 'Toronto, ON' }, absolute_url: `https://example.test/events/${id}`,
+    updated_at: new Date().toISOString(),
+  })) });
+  try {
+    const started = performance.now();
+    const result = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    console.log(`Recruitment-event import fixture: ${(performance.now() - started).toFixed(1)}ms`);
+    assert.equal(result.stats.newJobs, events.length + roles.length, 'retain source records');
+    const all = await store.findJobs(tenantId, { pageSize: 20 });
+    for (const title of events) {
+      const job = all.items.find((item) => item.title === title);
+      assert.equal(job.matchesSearchFocus, false, title);
+      assert.deepEqual(job.relevanceReasons, ['Recruitment event, not an individual vacancy']);
+    }
+    const matches = await store.findJobs(tenantId, { minRelevance: 45, geography: 'canada', pageSize: 20 });
+    assert.deepEqual(new Set(matches.items.map((item) => item.title)), new Set(roles));
+    // Existing records also use the same guard when the user saves their focus.
+    const rescored = await store.patchSettings(tenantId, { searchFocus: { ...focus, targetIndustries: 'technology' } });
+    assert.equal(rescored.matchingJobs, roles.length);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function addTenant(store, tenantId, persona = 'bd') {
   store.ensureTenant({ id: tenantId, name: tenantId, persona }, { id: `${tenantId}-owner`, name: 'Owner' });
 }

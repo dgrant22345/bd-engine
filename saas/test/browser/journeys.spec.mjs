@@ -119,7 +119,7 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
-test('search focus form saves settings and opens the matching shortlist', async ({ page }) => {
+test('search focus form saves settings and opens the matching shortlist', async ({ page }, testInfo) => {
   const { app } = await signup(page, { persona: 'jobseeker' });
   await completeSetup(page, app);
   await gotoAppRoute(page, '#/jobs');
@@ -154,6 +154,79 @@ test('search focus form saves settings and opens the matching shortlist', async 
     workStyle: 'any',
     minimumRelevanceScore: 35,
   });
+  const explanation = app.locator('.job-focus-explanation');
+  await explanation.locator('summary').click();
+  await expect(explanation).toContainText('talent acquisition manager, recruitment manager');
+  await expect(explanation).toContainText('Lowering the cutoff does not include titles outside your focus');
+  for (const close of await app.locator('.toast-close').all()) await close.click();
+  await app.locator('.job-results-context').screenshot({ path: testInfo.outputPath('saved-focus-desktop.png') });
+  await app.locator('#jobs-filter-form input[name="q"]').fill('Toronto');
+  await app.locator('#jobs-filter-form select[name="workStyle"]').selectOption('remote');
+  await app.locator('#jobs-filter-form').getByRole('button', { name: 'Apply', exact: true }).click();
+  await app.getByRole('button', { name: 'Remove focus filter', exact: true }).click();
+  await expect(app.locator('#jobs-filter-form select[name="minRelevance"]')).toHaveValue('');
+  await expect(app.locator('#jobs-filter-form select[name="geography"]')).toHaveValue('canada');
+  await expect(app.locator('#jobs-filter-form input[name="q"]')).toHaveValue('Toronto');
+  await expect(app.locator('#jobs-filter-form select[name="workStyle"]')).toHaveValue('remote');
+  await app.locator('[data-preset="target_roles"]').click();
+  await expect(app.locator('#jobs-filter-form select[name="minRelevance"]')).toHaveValue('35');
+  await expect(app.locator('#jobs-filter-form select[name="geography"]')).toHaveValue('canada');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await app.locator('.job-focus-explanation summary').click();
+  await expect(app.locator('.job-focus-explanation dd').first()).toBeVisible();
+  const mobileOverflow = await app.locator('.job-results-context').evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+  expect(mobileOverflow).toBe(false);
+  for (const close of await app.locator('.toast-close').all()) await close.click();
+  await app.locator('.job-results-context').screenshot({ path: testInfo.outputPath('saved-focus-mobile.png') });
+});
+
+test('focus save prevents overlapping requests and preserves entries for retry after failure', async ({ page }) => {
+  const { app } = await signup(page, { persona: 'jobseeker' });
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/admin/search-focus');
+  const form = app.locator('#settings-form');
+  const roles = form.locator('[name="targetRoles"]');
+  await roles.fill('Recruitment Manager, Talent Partner');
+  let requests = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route('**/api/settings', async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await gate;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Temporarily unavailable' }) });
+    } else await route.continue();
+  });
+  await form.getByRole('button', { name: 'Save focus and show matches' }).click();
+  await expect(form).toHaveAttribute('aria-busy', 'true');
+  await expect(roles).toBeDisabled();
+  await form.evaluate((el) => el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  release();
+  await expect(app.getByText(/^Could not save search focus\./)).toBeVisible();
+  await expect(roles).toBeEnabled();
+  await expect(roles).toHaveValue('Recruitment Manager, Talent Partner');
+  expect(requests).toBe(1);
+  await form.getByRole('button', { name: 'Save focus and show matches' }).click();
+  await expect(app.locator('#view-title')).toHaveText('Open roles');
+  expect(requests).toBe(2);
+  const saved = await page.evaluate(async () => (await fetch('/api/bootstrap')).json());
+  expect(saved.settings.searchFocusByPersona.jobseeker.targetRoles).toBe('recruitment manager, talent partner');
+});
+
+test('target-role quick filter guides an unconfigured workspace to saved focus', async ({ page }) => {
+  const { app } = await signup(page, { persona: 'jobseeker' });
+  await completeSetup(page, app);
+  await gotoAppRoute(page, '#/admin/search-focus');
+  const form = app.locator('#settings-form');
+  for (const field of ['targetRoles', 'excludedRoles', 'targetIndustries']) {
+    await form.locator(`[name="${field}"]`).fill('');
+  }
+  await form.locator('[name="workStyle"]').selectOption('any');
+  await form.getByRole('button', { name: 'Save focus and show matches' }).click();
+  await expect(app.locator('#view-title')).toHaveText('Open roles');
+  await expect(app.locator('#jobs-filter-form select[name="minRelevance"]')).toHaveValue('');
+  await app.locator('[data-preset="target_roles"]').click();
+  await expect(app.locator('#settings-form [name="targetRoles"]')).toBeVisible();
 });
 
 test('role pipeline is saved to the workspace and survives a page reload', async ({ page }, testInfo) => {

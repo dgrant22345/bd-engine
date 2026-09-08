@@ -8853,6 +8853,11 @@ function roleMatchStrength(term, titleText) {
   return 0;
 }
 
+// Event invitations are often syndicated as jobs. Keep the source record, but
+// don't let recruiting aliases (or exact title phrases) make it a vacancy match.
+// Actual event-management roles remain eligible for normal title matching.
+const RECRUITMENT_EVENT_TITLE_RE = /\b(?:recruitment|recruiting|hiring|career|job) (?:events?|fairs?|open house)\b(?! (?:coordinator|manager|specialist|lead|director|planner|producer|organizer)\b)/;
+
 function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
   const focus = sanitizeSearchFocus(focusValue);
   const targetRoles = parseFocusTerms(focus.targetRoles);
@@ -8864,6 +8869,9 @@ function scoreJobRelevance(item = {}, accountItem = null, focusValue = {}) {
   }
 
   const titleText = normalizeSearchText(item.title);
+  if (RECRUITMENT_EVENT_TITLE_RE.test(titleText)) {
+    return { relevanceScore: 5, relevanceBand: 'low', matchesSearchFocus: false, relevanceReasons: ['Recruitment event, not an individual vacancy'] };
+  }
   const detailText = normalizeSearchText([item.title, item.department, item.employmentType, item.commitment].filter(Boolean).join(' '));
   const excluded = excludedRoles.find((term) => phraseMatchesText(term, detailText));
   if (excluded) {

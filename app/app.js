@@ -4203,30 +4203,54 @@ function bindEvents() {
     }
 
     if (form.id === 'settings-form') {
+      if (form.dataset.saving === 'true') return;
       const values = getFormValues(form);
       const minimumRelevanceScore = Math.max(1, Math.min(100, Number(values.minimumRelevanceScore || 45)));
-      const result = await api('/api/settings', {
-        method: 'POST',
-        body: JSON.stringify({
-          searchFocus: {
-            targetRoles: values.targetRoles,
-            excludedRoles: values.excludedRoles,
-            targetIndustries: values.targetIndustries,
-            workStyle: values.workStyle,
-            minimumRelevanceScore,
-          },
-        }),
-      });
-      appState.jobQuery = {
-        ...defaultQueries.jobs,
-        geography: appState.jobQuery.geography || '',
-        workStyle: appState.jobQuery.workStyle || '',
-        minRelevance: String(minimumRelevanceScore),
-        sortBy: 'relevance',
-      };
-      invalidateAppData();
-      location.hash = '#/jobs';
-      showToast(`Search focus saved. ${formatNumber(result.matchingJobs || 0)} of ${formatNumber(result.activeJobs || 0)} active jobs meet your focus across all locations. Your location filter is preserved.`, 'success', 7000);
+      const focusConfigured = [values.targetRoles, values.excludedRoles, values.targetIndustries].some((value) => String(value || '').trim())
+        || (values.workStyle && values.workStyle !== 'any');
+      const controls = [...form.querySelectorAll('input, textarea, select, button')];
+      const disabledStates = controls.map((control) => control.disabled);
+      const submitButton = form.querySelector('[type="submit"]');
+      const originalLabel = submitButton?.textContent;
+      form.dataset.saving = 'true';
+      form.setAttribute('aria-busy', 'true');
+      controls.forEach((control) => { control.disabled = true; });
+      if (submitButton) submitButton.textContent = 'Saving and recalculating…';
+      try {
+        const result = await api('/api/settings', {
+          method: 'POST',
+          body: JSON.stringify({
+            searchFocus: {
+              targetRoles: values.targetRoles,
+              excludedRoles: values.excludedRoles,
+              targetIndustries: values.targetIndustries,
+              workStyle: values.workStyle,
+              minimumRelevanceScore,
+            },
+          }),
+        });
+        invalidateAppData();
+        // A slow save must not drag the user back after they navigate elsewhere.
+        if (!form.isConnected) return;
+        appState.jobQuery = {
+          ...defaultQueries.jobs,
+          geography: appState.jobQuery.geography || '',
+          workStyle: appState.jobQuery.workStyle || '',
+          minRelevance: focusConfigured ? String(minimumRelevanceScore) : '',
+          sortBy: focusConfigured ? 'relevance' : '',
+        };
+        location.hash = '#/jobs';
+        showToast(focusConfigured
+          ? `Search focus saved. ${formatNumber(result.matchingJobs || 0)} of ${formatNumber(result.activeJobs || 0)} active jobs meet your focus across all locations. Your location filter is preserved.`
+          : 'Search focus cleared. Showing jobs without a focus cutoff. Your location and work-style filters are preserved.', 'success', 7000);
+      } catch (error) {
+        showToast(`Could not save search focus. ${error.message || error}${form.isConnected ? ' Your entries are still in the form; try again.' : ' Reopen search focus to check your saved settings.'}`, 'error', 8000);
+      } finally {
+        delete form.dataset.saving;
+        form.removeAttribute('aria-busy');
+        controls.forEach((control, index) => { control.disabled = disabledStates[index]; });
+        if (submitButton) submitButton.textContent = originalLabel;
+      }
       return;
     }
 
@@ -4673,6 +4697,13 @@ async function applyJobPreset(presetId) {
     };
     showToast('Showing all jobs.', 'info');
   } else if (presetId === 'target_roles') {
+    const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+    const focus = appState.bootstrap?.settings?.searchFocusByPersona?.[personaKey] || {};
+    if (!(focus.targetRoles || focus.excludedRoles || focus.targetIndustries || (focus.workStyle && focus.workStyle !== 'any'))) {
+      location.hash = '#/admin/search-focus';
+      showToast('Set your search focus before filtering to matches.', 'info');
+      return;
+    }
     appState.jobQuery = {
       ...appState.jobQuery,
       sortBy: 'relevance',
@@ -4680,6 +4711,9 @@ async function applyJobPreset(presetId) {
       page: 1,
     };
     showToast('🎯 Filtered to your target role family and saved search focus.', 'success');
+  } else if (presetId === 'all_titles') {
+    appState.jobQuery = { ...appState.jobQuery, minRelevance: '', page: 1 };
+    showToast('Focus filter removed. Your other filters and saved preferences are unchanged.', 'info');
   } else if (presetId === 'canada') {
     appState.jobQuery = {
       ...appState.jobQuery,
@@ -11329,7 +11363,22 @@ async function renderJobsView() {
         <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
         <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
       </div>
-      <p class="job-results-context muted small" role="status">${formatNumber(result.total)} results${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · title focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · all role titles'}. This is your imported inventory, not a search of every job on the web. <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a></p>
+      <div class="job-results-context muted small">
+        <p role="status">${formatNumber(result.total)} results${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}. This is your imported inventory, not a search of every job on the web.</p>
+        ${focusConfigured ? `<details class="job-focus-explanation"><summary>Saved focus &amp; how matching works</summary>
+          <dl>
+            <dt>Target titles</dt><dd>${escapeHtml(searchFocus.targetRoles || 'No title restriction')}</dd>
+            <dt>Excluded titles</dt><dd>${escapeHtml(searchFocus.excludedRoles || 'None')}</dd>
+            <dt>Preferred industries</dt><dd>${escapeHtml(searchFocus.targetIndustries || 'Any')}</dd>
+            <dt>Work-style preference</dt><dd>${escapeHtml(searchFocus.workStyle || 'any')}</dd>
+            <dt>Saved threshold</dt><dd>${escapeHtml(targetRoleThreshold)}+</dd>
+          </dl>
+          <p>Exact titles rank highest; related recruiting titles can include different seniority levels. When the focus filter is on, jobs must match your focus as well as meet the score cutoff. Lowering the cutoff does not include titles outside your focus or excluded listings.</p>
+          <p>Industry and work-style preferences affect ranking; they are not strict filters. Saving your focus recalculates existing jobs; it does not search new sources.</p>
+        </details>` : ''}
+        <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a>
+        ${appState.jobQuery.minRelevance ? '<button class="ghost-button ghost-button--xs" type="button" data-action="apply-job-preset" data-preset="all_titles">Remove focus filter</button>' : ''}
+      </div>
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('Network', `<select name="hasContacts"><option value="">All companies</option><option value="true" ${selected(appState.jobQuery.hasContacts, 'true')}>In my network (has contacts)</option></select>`)}
@@ -11668,7 +11717,7 @@ async function renderAdminView() {
           ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases score at the bottom and stay out of the focused shortlist.')}
           ${renderField(searchFocusCopy.industryLabel, `<textarea name="targetIndustries" rows="3" placeholder="Financial services, SaaS, manufacturing">${escapeHtml(searchFocus.targetIndustries || '')}</textarea>`, 'Adds relevance when company industry data is available and prioritizes limited board refresh or discovery batches.')}
           ${renderField('Work style', `<select name="workStyle"><option value="any" ${selected(searchFocus.workStyle || 'any', 'any')}>Any</option><option value="remote" ${selected(searchFocus.workStyle, 'remote')}>Remote</option><option value="hybrid" ${selected(searchFocus.workStyle, 'hybrid')}>Hybrid</option><option value="onsite" ${selected(searchFocus.workStyle, 'onsite')}>On-site</option></select>`, 'Matching location signals increase relevance; a known different work style lowers it.')}
-          ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="1" max="100" step="1" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, 'Jobs at or above this score appear in the focused shortlist. Raise it for fewer, stronger matches.')}
+          ${renderField('Relevant score threshold', `<input name="minimumRelevanceScore" type="number" min="1" max="100" step="1" value="${escapeAttr(searchFocus.minimumRelevanceScore ?? 45)}">`, 'Matching jobs must also meet this score. Lowering it does not include titles outside your focus or excluded listings.')}
           <div class="field field--action"><label>Update shortlist</label><button class="primary-button" type="submit">Save focus and show matches</button></div>
         </form>
       ${renderCollapsibleEnd()}

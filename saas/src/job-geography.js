@@ -4,7 +4,9 @@ const NORTH_AMERICA_REGION_RE = /\bnorth america\b/i;
 const OTHER_REGION_RE = /\b(emea|europe|european union|uk|united kingdom|england|scotland|wales|ireland|netherlands|germany|france|spain|italy|poland|sweden|norway|denmark|finland|switzerland|austria|portugal|belgium|australia|new zealand|india|singapore|japan|china|hong kong|latin america|latam|apac|asia|africa|middle east)\b/i;
 const CANADA_PROVINCE_RE = /\b(ontario|british columbia|alberta|quebec|québec|nova scotia|manitoba|saskatchewan|new brunswick|newfoundland(?: and labrador)?|prince edward island|pei|yukon|northwest territories|nunavut)\b/i;
 const US_STATE_RE = /\b(california|new york|texas|washington|massachusetts|florida|illinois|georgia|colorado|arizona|virginia|pennsylvania|north carolina|ohio|michigan|new jersey|maryland|oregon|minnesota|tennessee|utah|district of columbia)\b/i;
-const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|richmond|surrey|victoria|kelowna|quebec city|halifax|winnipeg|regina|saskatoon|london|guelph|barrie|windsor|kingston|cambridge|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean|st\.? john'?s)\b/i;
+// London, Cambridge, Richmond, Surrey, Victoria, Windsor and Kingston are
+// ambiguous without province/country evidence. Strong evidence is checked first.
+const CANADA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|ottawa|waterloo|kitchener|hamilton|calgary|edmonton|montreal|montréal|vancouver|burnaby|kelowna|quebec city|halifax|winnipeg|regina|saskatoon|guelph|barrie|laval|gatineau|longueuil|fredericton|moncton|charlottetown|dartmouth|kanata|nepean|st\.? john'?s)\b/i;
 const US_CITY_RE = /\b(seattle|boston|chicago|austin|denver|atlanta|san francisco|los angeles|new york city|miami|dallas|houston|phoenix|portland|philadelphia|detroit|minneapolis|nashville|salt lake city)\b/i;
 const CANADA_CODE_RE = /(?:^|,\s*|\s*-\s*|\(\s*)(on|bc|ab|qc|ns|mb|sk|nb|pe|pei|yt|nt|nu)(?=\s*(?:,|\/|\||\)|$))/i;
 const US_CODE_RE = /(?:^|,\s*)(ca|ny|tx|wa|ma|fl|il|ga|co|az|va|pa|nc|oh|mi|nj|md|or|mn|tn|ut|dc)(?=\s*(?:,|\/|\||\)|$))/i;
@@ -22,9 +24,9 @@ const CANADA_SQL_STRONG_TERMS = [
 const CANADA_SQL_CITY_TERMS = [
   'toronto', 'gta', 'mississauga', 'brampton', 'markham', 'vaughan', 'oakville',
   'ottawa', 'waterloo', 'kitchener', 'hamilton', 'calgary', 'edmonton', 'montreal',
-  'montréal', 'vancouver', 'burnaby', 'richmond', 'surrey', 'victoria', 'kelowna',
-  'quebec city', 'halifax', 'winnipeg', 'regina', 'saskatoon', 'london', 'guelph',
-  'barrie', 'windsor', 'kingston', 'cambridge', 'laval', 'gatineau', 'longueuil',
+  'montréal', 'vancouver', 'burnaby', 'kelowna',
+  'quebec city', 'halifax', 'winnipeg', 'regina', 'saskatoon', 'guelph',
+  'barrie', 'laval', 'gatineau', 'longueuil',
   'fredericton', 'moncton', 'charlottetown', 'dartmouth', 'kanata', 'nepean',
   'corner brook', 'gander',
   "st. john's", 'st johns',

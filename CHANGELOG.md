@@ -4,6 +4,15 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.2 — 2026-09-08 — Saved-focus matching and recovery
+
+- Keep recruitment-event listings out of vacancy matches while retaining source records.
+- Require province/country evidence for several ambiguous Canadian city names.
+- Explain saved titles, exclusions and scoring beside the shortlist.
+- Remove the focus cutoff without clearing geography and other filters.
+- Preserve focus entries on failed saves, prevent duplicate submissions and handle cleared focus.
+- Hosted maintenance release; no rebrand, schema migration or paid-launch configuration change.
+
 ## 0.1.2.1 — 2026-09-07 — People workflow reliability
 
 - Protect add-person input and pending saves; preserve notes and list context.
