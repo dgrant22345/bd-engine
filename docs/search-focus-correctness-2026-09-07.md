@@ -33,8 +33,8 @@ The focus form now catches save failures locally and keeps entered values availa
 
 A real-browser failure fixture holds the first request, attempts a second submit, returns HTTP 503, verifies retained input and restored controls, and retries against the local server to verify saved preferences. All nine focus browser cases passed across Chromium, Firefox and WebKit (28.5 seconds); unit tests, lint and syntax checks passed. No production preferences were changed. The earlier discrepancy between the user's historical role list and current saved title remains unproven; this fix is not presented as its established cause.
 
-## Deployment status (unchanged)
+## Deployment status
 
-Not deployed by this change. Existing persisted relevance scores require a normal focus save/rescore after deployment (or refreshing the relevant source boards). Deploying the classifier alone does not retroactively change stored scores. Geography query filtering takes effect with the deployed code. Do not directly rewrite scores in SQL.
+Deployed as 0.1.2.2 on 2026-09-08; see [release verification](focus-release-2026-09-08.md). Existing persisted relevance scores still require a normal focus save/rescore (or refreshing the relevant source boards). The bulk rescore is pending explicit backup authorization. Deploying the classifier alone does not retroactively change stored scores. Geography query filtering is live. Do not directly rewrite scores in SQL.
 
 The owner's saved target remains `talent acquisition specialist`, threshold 45. No preference changes were made. Confirm the intended broader role list before restoring earlier titles; this correction should improve precision, not be presented as increasing the match count. Source coverage and unexplained changes to the saved role list deserve separate investigation.
