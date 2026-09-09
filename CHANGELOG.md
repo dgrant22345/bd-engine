@@ -4,6 +4,12 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.6 — 2026-09-09 — Partial import recovery
+
+- Retain successfully fetched pages when a later ATS request or final verification fails; explicitly flag incomplete coverage and preserve unseen jobs.
+- Respect long Retry-After cooldowns by deferring the refresh instead of retrying earlier than the source requested.
+- Add failed-page counts and readable recovery reasons without changing focus or job-selection settings.
+
 ## 0.1.2.5 — 2026-09-08 — Import coverage and historical listing cleanup
 
 - Continue bounded pagination after isolated duplicate rows, while still stopping fully repeated pages and preserving unseen jobs on incomplete feeds.

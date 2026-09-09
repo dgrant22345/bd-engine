@@ -17,6 +17,37 @@ const ghJob = (id, title = 'Talent Acquisition Manager', location = 'Toronto, ON
   id, title, location: { name: location }, absolute_url: `https://example.test/jobs/${id}`, updated_at: new Date().toISOString(),
 });
 
+test('rate-limited later Workday pages retain fetched jobs and never close unseen jobs', async (t) => {
+  const id = 'quality-workday-partial-rate-limit';
+  const store = await workspace(id, 'workday', { boardId: 'fixture/Careers',
+    apiUrl: 'https://fixture.wd5.myworkdayjobs.com/wday/cxs/fixture/Careers/jobs' });
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const job = (n) => ({ title: 'Recruiter', externalPath: `/job/Toronto/Recruiter_${n}`, locationsText: 'Toronto, ON' });
+  globalThis.fetch = async () => Response.json({ total: 1, jobPostings: [job('old')] });
+  await store.importLiveJobs(id, options);
+  let limitedRequests = 0;
+  globalThis.fetch = async (_url, init) => {
+    const { offset } = JSON.parse(init.body);
+    if (offset === 20) {
+      limitedRequests++;
+      return new Response('Busy', { status: 429, headers: { 'retry-after': '120' } });
+    }
+    return Response.json({ total: offset === 0 ? 60 : 0,
+      jobPostings: Array.from({ length: 20 }, (_, index) => job(offset + index)) });
+  };
+  const startedAt = performance.now();
+  const result = await store.importLiveJobs(id, options);
+  console.log(`Partial Workday import fixture: ${(performance.now() - startedAt).toFixed(1)}ms`);
+  assert.equal(limitedRequests, 1, 'must not shorten the source cooldown and retry');
+  assert.equal(result.stats.newJobs, 40);
+  assert.equal(result.stats.closedJobs, 0);
+  assert.equal(result.stats.partialBoards, 1);
+  const jobs = await store.findJobs(id, { pageSize: 100 });
+  assert.equal(jobs.total, 41, 'old unseen job plus successfully fetched pages');
+  assert.ok(jobs.items.every((item) => item.active !== false));
+});
+
 test('static careers import rejects browsing links but retains real vacancy links and structured jobs', async (t) => {
   const id = 'quality-static-navigation';
   const store = await workspace(id, 'custom_static', { careersUrl: 'https://example.test/careers' });

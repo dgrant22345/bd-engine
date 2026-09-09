@@ -64,14 +64,16 @@ test('incomplete SmartRecruiters pagination preserves the previous complete job 
     assert.equal(first.stats.newJobs, 1);
 
     refresh = 2;
-    const failed = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
-    assert.equal(failed.stats.errors, 1);
-    assert.equal(failed.stats.closedJobs, 0);
-    assert.match(failed.errors[0].error, /existing jobs were preserved/i);
+    const partial = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    assert.equal(partial.stats.errors, 0);
+    assert.equal(partial.stats.partialBoards, 1);
+    assert.equal(partial.stats.newJobs, 1);
+    assert.equal(partial.stats.closedJobs, 0);
+    assert.ok(partial.warnings.some((warning) => /later results page/i.test(warning)));
 
     const activeJobs = await store.findJobs(tenantId, { active: 'true', page: 1, pageSize: 20 });
-    assert.equal(activeJobs.total, 1);
-    assert.equal(activeJobs.items[0].title, 'Stable Account Executive');
+    assert.equal(activeJobs.total, 2);
+    assert.ok(activeJobs.items.some((job) => job.title === 'Stable Account Executive'));
   } finally {
     globalThis.fetch = originalFetch;
   }

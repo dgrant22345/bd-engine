@@ -7509,21 +7509,23 @@ async function fetchTextPage(url, timeoutMs = 15000) {
   throw lastError || new Error('ATS request failed');
 }
 
-function readRetryAfterMs(response) {
+export function readRetryAfterMs(response, nowMs = Date.now()) {
   const value = response?.headers?.get?.('retry-after');
   if (!value) return null;
   const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(10000, seconds * 1000);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
   const retryAt = Date.parse(value);
   if (!Number.isFinite(retryAt)) return null;
-  return Math.min(10000, Math.max(0, retryAt - Date.now()));
+  return Math.max(0, retryAt - nowMs);
 }
 
-async function waitForAtsRetry(error, attempt, deadlineAt = Infinity) {
+export async function waitForAtsRetry(error, attempt, deadlineAt = Infinity) {
   const retryAfterMs = error?.retryAfterMs == null ? Number.NaN : Number(error.retryAfterMs);
-  const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : 200 * attempt;
-  const boundedDelayMs = Math.min(delayMs, Math.max(0, deadlineAt - performance.now()));
-  if (boundedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, boundedDelayMs));
+  const delayMs = !Number.isNaN(retryAfterMs) && retryAfterMs >= 0 ? retryAfterMs : 200 * attempt;
+  // Defer this refresh instead of shortening the source's requested cooldown.
+  // Keep individual workers bounded even for providers without a board deadline.
+  if (delayMs > 10000 || delayMs >= deadlineAt - performance.now()) throw error;
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function firstArray(...values) {

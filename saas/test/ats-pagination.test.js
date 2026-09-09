@@ -110,11 +110,22 @@ test('missing and invalid rows cannot count toward proven coverage', async () =>
   assert.ok(invalid.pagination.reasons.includes('invalid_rows'));
 });
 
-test('a failed later page throws a preservation error, not a board-removed HTTP 404', async () => {
-  await assert.rejects(paginate({ readPage: async (offset) => {
-    if (offset) throw new Error('HTTP 404');
-    return { total: 21, jobs: rows(0, 1) }; // short first page is not a terminal page with a known total
-  } }), (error) => /existing jobs were preserved/.test(error.message) && !/404/.test(error.message) && /404/.test(error.cause.message));
+test('a failed later page retains successful sibling pages without claiming complete coverage', async () => {
+  const offsets = [];
+  const result = await paginate({ concurrency: 2, readPage: async (offset) => {
+    offsets.push(offset);
+    if (offset === 20) throw new Error('HTTP 404');
+    return { total: 100, jobs: rows(offset, 20) };
+  } });
+  assert.deepEqual(offsets, [0, 20, 40], 'no more requests after the failed batch');
+  assert.equal(result.jobs.length, 40);
+  assert.equal(result.pagination.failedPages, 1);
+  assert.equal(result.complete, false);
+  assert.ok(result.pagination.reasons.includes('page_failed'));
+});
+
+test('a failed first page is still a failed import, not an empty or partial board', async () => {
+  await assert.rejects(paginate({ readPage: async () => { throw new Error('HTTP 403'); } }), /HTTP 403/);
 });
 
 test('time budget stops additional dispatch and propagates one shared request deadline', async () => {
@@ -141,7 +152,12 @@ for (const change of ['none', 'total', 'head', 'failure']) {
       if (verifying && change === 'failure') throw new Error('HTTP 404');
       return { total: verifying && change === 'total' ? 41 : 40, jobs: rows(verifying && change === 'head' ? 100 : offset, 20) };
     } });
-    if (change === 'failure') await assert.rejects(promise, /could not verify.*existing jobs were preserved/);
+    if (change === 'failure') {
+      const result = await promise;
+      assert.equal(result.complete, false);
+      assert.equal(result.jobs.length, 40);
+      assert.ok(result.pagination.reasons.includes('verification_failed'));
+    }
     else {
       const result = await promise;
       assert.equal(result.complete, change === 'none');

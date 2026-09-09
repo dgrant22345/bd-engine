@@ -17,6 +17,8 @@ export const ATS_COVERAGE_REASONS = Object.freeze({
   invalid_rows: 'Some source rows had no usable job identity.',
   missing_jobs: 'The source returned fewer unique jobs than it reported.',
   inconsistent_page: 'The source returned an inconsistent results page.',
+  page_failed: 'A later results page could not be loaded. Jobs already fetched were retained; unseen jobs were preserved.',
+  verification_failed: 'The final source check failed. Fetched jobs were retained; unseen jobs were preserved.',
 });
 
 export async function fetchPaginatedAtsJobs({
@@ -34,6 +36,7 @@ export async function fetchPaginatedAtsJobs({
   let pagesFetched = 0;
   let duplicateRows = 0;
   let verificationRequests = 0;
+  let failedPages = 0;
   let lastPageLength = 0;
   let repeatedPage = false;
   const firstPage = await readPage(0, { deadlineAt });
@@ -82,13 +85,17 @@ export async function fetchPaginatedAtsJobs({
     const batchSize = reportedTotal === null ? 1 : Math.min(concurrency, pageLimit - nextPage);
     const offsets = Array.from({ length: batchSize }, (_, index) => (nextPage + index) * pageSize);
     const pages = await Promise.allSettled(offsets.map((offset) => readPage(offset, { deadlineAt })));
-    const failed = pages.find((page) => page.status === 'rejected');
-    if (failed) {
-      // A missing *later* page must never be mistaken for a removed board.
-      throw new Error(`${providerName} could not load every results page. Retry the refresh; existing jobs were preserved.`, { cause: failed.reason });
-    }
-    pages.forEach((page, index) => appendPage(page.value, offsets[index]));
+    pages.forEach((page, index) => {
+      if (page.status === 'fulfilled') appendPage(page.value, offsets[index]);
+      else failedPages++;
+    });
     nextPage += batchSize;
+    if (failedPages) {
+      // A failed later page is neither an empty board nor proof of closure.
+      // Keep successfully fetched pages, stop dispatch, and report partial data.
+      reasons.add('page_failed');
+      break;
+    }
   }
 
   if (reportedTotal === null) {
@@ -105,12 +112,13 @@ export async function fetchPaginatedAtsJobs({
       try {
         verificationRequests++;
         verification = await readPage(0, { deadlineAt });
-      } catch (cause) {
-        throw new Error(`${providerName} could not verify its results. Retry the refresh; existing jobs were preserved.`, { cause });
+      } catch {
+        reasons.add('verification_failed');
       }
-      if (readAtsReportedTotal(verification?.total) !== reportedTotal) reasons.add('total_changed');
-      if (!Array.isArray(verification?.jobs)
-        || JSON.stringify(verification.jobs.map(jobKey)) !== JSON.stringify(firstPage.jobs.map(jobKey))) reasons.add('source_changed');
+      if (!verification) reasons.add('verification_failed');
+      if (verification && readAtsReportedTotal(verification.total) !== reportedTotal) reasons.add('total_changed');
+      if (verification && (!Array.isArray(verification.jobs)
+        || JSON.stringify(verification.jobs.map(jobKey)) !== JSON.stringify(firstPage.jobs.map(jobKey)))) reasons.add('source_changed');
     }
   }
   return {
@@ -118,7 +126,7 @@ export async function fetchPaginatedAtsJobs({
     reportedTotal,
     complete: reasons.size === 0,
     pagination: {
-      pagesFetched, pageLimit: maxPages, verificationRequests, uniqueJobs: seen.size, duplicateRows,
+      pagesFetched, pageLimit: maxPages, verificationRequests, failedPages, uniqueJobs: seen.size, duplicateRows,
       reasons: [...reasons], elapsedMs: Math.max(0, Math.round(clock() - startedAt)),
     },
   };
