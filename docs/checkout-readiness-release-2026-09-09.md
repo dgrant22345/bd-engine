@@ -52,4 +52,19 @@ customer invitations, live charges or account preferences were changed.
 Rollback target: Railway deployment `92206be8-493a-4f7a-944d-1a95d475f646`
 (0.1.2.6). No migration or data rollback is required.
 
-Deployment receipt will be recorded after health and runtime checks pass.
+## Deployment receipt
+
+- Source commit `bccf773`, pushed to the owner-confirmed repository's existing
+  `agent/paid-product-quality-audit` branch.
+- Railway deployment `db0a6af3-be2f-4d3d-ac2e-1abc9e14e198`, created
+  2026-09-09 15:25 UTC: SUCCESS (production Docker build and readiness passed).
+- Eight non-mutating production smoke checks passed, including public health,
+  readiness, security headers, anonymous authorization, plans, app mount and
+  read-only demo. Mutating signup, reset, payment and data journeys were skipped
+  in production; local browser and unit evidence above does not certify delivery
+  or a real purchase.
+- All six changed runtime files matched tested local source using LF-normalized
+  SHA-256: server, billing, production readiness, product analytics, landing page
+  and app UI.
+- No production credentials, email flags, customer records or Stripe catalog
+  records were changed. Commercial launch remains gated as described above.
