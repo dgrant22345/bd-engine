@@ -90,6 +90,15 @@ test('production checkout stays closed until every commercial dependency is read
   }), true);
 });
 
+test('checkout tolerates disclosed email limitations but never missing payment or storage safeguards', () => {
+  const env = { ...completeEnvironment, NODE_ENV: 'production', RESEND_API_KEY: '', BD_EMAIL_FROM: '', BD_REQUIRE_EMAIL_VERIFICATION: 'false' };
+  assert.equal(assessProductionReadiness(env).ready, false);
+  assert.equal(isCommercialCheckoutReady(env), true);
+  for (const key of ['DATABASE_URL', 'SESSION_SECRET', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_SALES', 'BD_BACKUP_ENCRYPTION_KEY']) {
+    assert.equal(isCommercialCheckoutReady({ ...env, [key]: '' }), false, key);
+  }
+});
+
 test('billing status reflects the commercial gate without hiding Stripe configuration', () => {
   const stripeStatus = {
     configured: true,

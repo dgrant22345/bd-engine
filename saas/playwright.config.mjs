@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+const testPort = Number(process.env.BD_BROWSER_TEST_PORT) || 8788;
 
 // Browser journey harness (CG-002). Starts the cloud server fresh on a test
 // port in in-memory mode (no DATABASE_URL), so journeys are deterministic and
@@ -13,7 +14,7 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:8788',
+    baseURL: `http://127.0.0.1:${testPort}`,
     trace: 'retain-on-failure',
   },
   projects: [
@@ -23,12 +24,12 @@ export default defineConfig({
   ],
   webServer: {
     command: 'node src/server.js',
-    port: 8788,
+    port: testPort,
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
     env: {
       DATABASE_URL: '',
-      BD_CLOUD_PORT: '8788',
+      BD_CLOUD_PORT: String(testPort),
       // Journeys perform several signups per run; the production limiter
       // stays intact — only the harness raises the ceiling.
       BD_SIGNUP_MAX: '1000',

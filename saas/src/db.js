@@ -299,6 +299,13 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
       CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens (user_id);
       CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_idx ON password_reset_tokens (expires_at);
 
+      CREATE TABLE IF NOT EXISTS account_recovery_codes (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, code_hash)
+      );
+
       CREATE TABLE IF NOT EXISTS email_verification_tokens (
         token_hash TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -1173,6 +1180,7 @@ export async function dbCloseUserAccount({ userId, deleteTenantIds = [], closure
     await query('DELETE FROM legal_consents WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
     await query('DELETE FROM sessions WHERE user_id = $1', [userId]);
     await query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+    await query('DELETE FROM account_recovery_codes WHERE user_id = $1', [userId]);
     await query('DELETE FROM email_verification_tokens WHERE user_id = $1', [userId]);
     await query('DELETE FROM memberships WHERE user_id = $1 OR tenant_id = ANY($2::text[])', [userId, deletedIds]);
     await query('DELETE FROM tenant_data WHERE tenant_id = ANY($1::text[])', [deletedIds]);

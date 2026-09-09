@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "ba99548c41999b191b0822dcf50a943c9caba5e52ed0a4f6cb4d8447b608abc5",
+  "sourceSha256": "44382fe27d00ab26c1bafb0fd308ec3ed15aff32d79d18277f4708a6fff5b44e",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -53,6 +53,7 @@
   ],
   "tables": [
     "account_closures",
+    "account_recovery_codes",
     "accounts",
     "activities",
     "analytics_events",

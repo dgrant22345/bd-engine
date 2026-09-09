@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { generateUserRecoveryCodes, recoverUserWithCode } from './recovery-codes.js';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
@@ -863,6 +864,28 @@ async function route(req, res) {
     return handlePasswordResetRequest(req, res);
   }
 
+  if (pathname === '/api/auth/recovery-code/confirm' && req.method === 'POST') {
+    if (await rateLimitExceeded(`recovery:${clientIp(req)}`, PASSWORD_RESET_MAX, PASSWORD_RESET_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many recovery attempts. Please wait before trying again.' });
+    }
+    const { email, code, password } = await readJson(req);
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH || password.length > 1024) {
+      return sendJson(res, 400, { error: `Use a password between ${MIN_PASSWORD_LENGTH} and 1024 characters.` });
+    }
+    const recoveryUser = findUserByEmail(email);
+    const startedAt = performance.now();
+    const recovered = await recoverUserWithCode(recoveryUser, code, password);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 150) console.warn(`Slow account recovery: saas/src/recovery-codes.js recoverUserWithCode ${elapsedMs}ms`);
+    if (!recovered) return sendJson(res, 400, { error: 'Email or recovery code is invalid, or the code has already been used.' });
+    for (const [key, record] of passwordResetTokens) {
+      if (record.userId === recoveryUser.id) passwordResetTokens.delete(key);
+    }
+    clearSessionCookie(res);
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { ok: true, message: 'Password changed. Existing sessions are signed out. This recovery code cannot be used again.' });
+  }
+
   if (pathname === '/api/auth/password-reset/confirm' && req.method === 'POST') {
     if (await rateLimitExceeded(`password-reset-confirm:${clientIp(req)}`, PASSWORD_RESET_MAX * 2, PASSWORD_RESET_WINDOW_MS)) {
       return sendJson(res, 429, { error: 'Too many reset attempts. Please wait a few minutes and try again.' });
@@ -999,6 +1022,24 @@ self.addEventListener('activate', (event) => {
       authenticatedAt,
       expiresAt: new Date(Date.parse(authenticatedAt) + PRIVILEGED_SESSION_MAX_AGE_MS).toISOString(),
     });
+  }
+
+  if (pathname === '/api/auth/recovery-codes' && req.method === 'POST') {
+    if (sessionData.demo || sessionData.readOnly || user.email === PUBLIC_DEMO_EMAIL) {
+      return sendJson(res, 403, { error: 'Recovery codes are not available in the demo.' });
+    }
+    if (await rateLimitExceeded(`recovery-issue:${user.id}:${clientIp(req)}`, PRIVILEGED_STEP_UP_MAX, PRIVILEGED_STEP_UP_WINDOW_MS)) {
+      return sendJson(res, 429, { error: 'Too many attempts. Please wait before trying again.' });
+    }
+    const body = await readJson(req);
+    if (typeof body.password !== 'string' || body.password.length > 1024) return sendJson(res, 400, { error: 'Enter your current password.' });
+    const startedAt = performance.now();
+    const codes = await generateUserRecoveryCodes(user, body.password);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 150) console.warn(`Slow account recovery: saas/src/recovery-codes.js generateUserRecoveryCodes ${elapsedMs}ms`);
+    if (!codes) return sendJson(res, 401, { error: 'Your password is incorrect or your session is out of date. Please sign in again.' });
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { codes });
   }
 
   let tenantId = sessionData.tenantId;

@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - deploy/perf-restore
+      - agent/paid-product-quality-audit
 
 permissions:
   contents: read
@@ -171,6 +172,13 @@ jobs:
         run: |
           npm run verify:job-queries
           npm run verify:contact-queries
+
+      - name: Verify one-time account recovery transactions
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/bd_engine_recovery_source
+          DB_SSL: "false"
+          NODE_ENV: test
+        run: node scripts/verify-recovery-codes.mjs
 
       - name: Run encrypted backup and restore drill
         env:

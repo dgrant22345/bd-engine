@@ -1050,6 +1050,8 @@
         case 'signup': return renderSignup();
         case 'forgot': return renderForgotPassword();
         case 'reset': return renderResetPassword();
+        case 'recovery-codes': return renderRecovery(false);
+        case 'recover-code': return renderRecovery(true);
         case 'app': return renderApp();
         case 'trust':
         case 'privacy':
@@ -1580,6 +1582,44 @@
     }
 
     // ── Signup page ───────────────────────────────────────────────────────
+    function renderRecovery(reset) {
+      if (!reset && (!state.user || state.demo)) { state.view = 'login'; return render(); }
+      root.innerHTML = `<div class="auth-page"><div class="auth-card">
+        <div class="auth-header"><h2>${reset ? 'Recover with a saved code' : 'Save your recovery codes'}</h2><p>${reset ? 'Use a code you previously saved. It works once and signs out existing sessions.' : 'Save codes before losing access. A new set immediately invalidates every previous code.'}</p></div>
+        <p id="recovery-status" role="status"></p>
+        <form id="recovery-form" class="auth-form">
+          ${reset ? '<div class="form-group"><label for="recovery-email">Account email</label><input id="recovery-email" type="email" autocomplete="email" required></div><div class="form-group"><label for="recovery-code">Saved recovery code</label><input id="recovery-code" autocomplete="off" spellcheck="false" maxlength="80" required></div>' : ''}
+          <div class="form-group"><label for="recovery-password">${reset ? 'New password' : 'Current password'}</label><input id="recovery-password" type="password" autocomplete="${reset ? 'new-password' : 'current-password'}" ${reset ? 'minlength="10"' : ''} maxlength="1024" required></div>
+          <button class="btn btn-primary" type="submit">${reset ? 'Reset password with code' : 'Generate new recovery codes'}</button>
+        </form><div id="recovery-result"></div>
+        <div class="auth-footer"><button class="link-btn" id="recovery-back">${reset ? 'Back to login' : 'Back to workspace'}</button></div>
+      </div></div>`;
+      root.querySelector('#recovery-back').addEventListener('click', () => { state.view = reset ? 'login' : 'app'; state.error = ''; render(); });
+      root.querySelector('#recovery-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = form.querySelector('button');
+        button.disabled = true;
+        const body = { password: form.querySelector('#recovery-password').value };
+        form.querySelector('#recovery-password').value = '';
+        if (reset) {
+          body.email = form.querySelector('#recovery-email').value;
+          body.code = form.querySelector('#recovery-code').value;
+          form.querySelector('#recovery-code').value = '';
+        }
+        const currentView = state.view;
+        try {
+          const result = await api(reset ? '/api/auth/recovery-code/confirm' : '/api/auth/recovery-codes', { method: 'POST', body: JSON.stringify(body) });
+          if (state.view !== currentView || !root.contains(form)) return;
+          form.hidden = true;
+          root.querySelector('#recovery-status').textContent = reset ? result.message + ' Return to login with your new password.' : 'Codes are shown only once. Save them in a password manager or another safe place before leaving.';
+          if (!reset) root.querySelector('#recovery-result').innerHTML = `<label for="recovery-code-list">Your eight one-time codes</label><textarea id="recovery-code-list" readonly rows="9" style="width:100%;box-sizing:border-box;font-family:monospace" spellcheck="false">${escapeHtml(result.codes.join('\n'))}</textarea><p>Do not share these codes with anyone, including support.</p>`;
+        } catch (error) {
+          if (state.view === currentView && root.contains(form)) root.querySelector('#recovery-status').textContent = error.message || 'Recovery request failed. Please try again.';
+        } finally { button.disabled = false; }
+      });
+    }
+
     function renderForgotPassword() {
       root.innerHTML = `
         <div class="auth-page">
@@ -1613,6 +1653,11 @@
         e.preventDefault();
         doRequestPasswordReset(root.querySelector('#forgot-email').value);
       });
+      const recoveryLink = document.createElement('button');
+      recoveryLink.className = 'link-btn';
+      recoveryLink.textContent = 'Use a saved recovery code';
+      recoveryLink.addEventListener('click', () => { state.view = 'recover-code'; render(); });
+      root.querySelector('.auth-footer').prepend(recoveryLink);
       root.querySelector('#goto-login')?.addEventListener('click', () => { state.view = 'login'; state.error = ''; render(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
     }
@@ -2376,6 +2421,7 @@
             </div>
           </div>
           ${trialUpgradeBanner}
+          ${!state.demo ? '<div class="cloud-trial-cta"><span>Email recovery may be unavailable. Save one-time recovery codes before losing access.</span><button class="btn btn-sm" id="cloud-save-recovery-btn">Save recovery codes</button></div>' : ''}
           ${verificationNotice}
           <div class="cloud-app-container">
             <iframe class="cloud-app-frame" title="BD Engine workspace" src="${escapeHtml(appFrameSrc).replace(/"/g, '&quot;')}"></iframe>
@@ -2433,6 +2479,7 @@
         setUserMenuOpen(false);
       });
       root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
+      root.querySelector('#cloud-save-recovery-btn')?.addEventListener('click', () => { state.view = 'recovery-codes'; render(); });
     }
 
     // ── Utility ───────────────────────────────────────────────────────────

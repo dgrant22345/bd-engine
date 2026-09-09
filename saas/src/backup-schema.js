@@ -23,6 +23,7 @@ export const BACKUP_TABLES = Object.freeze([
   { name: 'analytics_events', orderBy: 'id', conflict: ['id'], serial: 'id', analytics: true },
   { name: 'sessions', orderBy: 'id', conflict: ['id'], volatile: true },
   { name: 'password_reset_tokens', orderBy: 'created_at', conflict: ['token_hash'], volatile: true },
+  { name: 'account_recovery_codes', orderBy: 'user_id, code_hash', conflict: ['user_id', 'code_hash'], volatile: true },
   { name: 'email_verification_tokens', orderBy: 'created_at', conflict: ['token_hash'], volatile: true },
   { name: 'rate_limit_buckets', orderBy: 'bucket_key', conflict: ['bucket_key'], volatile: true },
 ]);

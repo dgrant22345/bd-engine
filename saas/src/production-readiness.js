@@ -131,7 +131,10 @@ export function isCommercialCheckoutReady(env = process.env) {
   const isProduction = Boolean(env.RAILWAY_ENVIRONMENT)
     || env.BD_CLOUD_ENV === 'production'
     || env.NODE_ENV === 'production';
-  return !isProduction || assessProductionReadiness(env).ready;
+  // Email is a separately disclosed launch limitation while saved recovery
+  // codes are available. Never bypass storage, billing, secret or backup checks.
+  const emailGates = new Set(['RESEND_API_KEY', 'BD_EMAIL_FROM', 'BD_REQUIRE_EMAIL_VERIFICATION']);
+  return !isProduction || assessProductionReadiness(env).errors.every((error) => emailGates.has(error.split(':')[0]));
 }
 
 export function applyCommercialCheckoutReadiness(stripeStatus = {}, env = process.env) {
@@ -142,7 +145,7 @@ export function applyCommercialCheckoutReadiness(stripeStatus = {}, env = proces
     commercialReady: Boolean(stripeStatus.commercialReady && commercialGateReady),
     commercialGateReady,
     checkoutUnavailableMessage: !commercialGateReady
-      ? 'Paid upgrades are temporarily paused while account email and launch-readiness checks are completed. No payment can be taken. Contact support from the account menu for help.'
+      ? 'Paid upgrades are temporarily paused while payment and storage readiness checks are completed. No payment can be taken. Contact support from the account menu for help.'
       : '',
   };
 }
