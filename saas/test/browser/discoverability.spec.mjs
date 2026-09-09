@@ -315,7 +315,7 @@ test('ATS audit hands the audited list and workflow intent into signup', async (
 test('pricing selection persists the intended paid plan through signup', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.pricing-card')).toHaveCount(1);
-  const salesPlan = page.locator('.pricing-card', { hasText: 'Sales Professional' });
+  const salesPlan = page.locator('.pricing-card', { hasText: 'Recruiter Pro' });
   await expect(salesPlan).toContainText('$10');
   await expect(salesPlan).not.toContainText('Job Seeker');
   await expect(page.locator('#referrals')).toHaveCount(0);
@@ -323,7 +323,7 @@ test('pricing selection persists the intended paid plan through signup', async (
 
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeFocused();
-  await expect(page.locator('[role="status"]', { hasText: 'Sales Professional selected.' })).toBeVisible();
+  await expect(page.locator('[role="status"]', { hasText: 'Recruiter Pro selected.' })).toBeVisible();
   const planIntent = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent') || 'null'));
   expect(planIntent).toMatchObject({
     version: 1,
@@ -341,7 +341,7 @@ test('job-seeker route shows only its relevant paid offer and preserves plan int
   await expect(page.locator('.pricing-card')).toHaveCount(1);
   const jobSeekerPlan = page.locator('.pricing-card', { hasText: 'Job Seeker' });
   await expect(jobSeekerPlan).toContainText('$5');
-  await expect(jobSeekerPlan).not.toContainText('Sales Professional');
+  await expect(jobSeekerPlan).not.toContainText('Recruiter Pro');
   await jobSeekerPlan.getByRole('button', { name: 'Start 14-day trial' }).click();
 
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();

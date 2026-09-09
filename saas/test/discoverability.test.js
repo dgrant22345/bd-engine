@@ -38,7 +38,7 @@ test('software application structured data is valid JSON with current public off
     schema.offers.map(({ name, price, priceCurrency }) => ({ name, price, priceCurrency })),
     [
       { name: 'Job Seeker', price: '5', priceCurrency: 'USD' },
-      { name: 'Sales Professional', price: '10', priceCurrency: 'USD' },
+      { name: 'Recruiter Pro', price: '10', priceCurrency: 'USD' },
     ]
   );
 });

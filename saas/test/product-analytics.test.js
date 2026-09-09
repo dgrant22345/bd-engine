@@ -144,6 +144,15 @@ test('core value milestones are accepted and idempotent per workspace', () => {
   assert.equal(jobs.eventType, 'useful_jobs_found');
 });
 
+test('checkout diagnostics distinguish blocked and failed sessions without provider content', () => {
+  for (const eventType of ['checkout_blocked', 'checkout_failed']) {
+    const event = buildProductEvent({ eventType, tenantId: 'tenant-1', eventKey: 'tenant-1:2026-09-09',
+      dimensions: { mode: 'commercial_readiness', error: 'private provider body', email: 'buyer@example.com' } });
+    assert.deepEqual(event.metadata, { mode: 'commercial_readiness' });
+    assert.equal(event.eventType, eventType);
+  }
+});
+
 test('commercial outcome milestones cover the funnel without customer content', () => {
   const outcomeTypes = [
     'outreach_logged',

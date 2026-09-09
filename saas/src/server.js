@@ -1257,6 +1257,11 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 403, { error: 'Workspace owner or admin access is required to change billing.' });
     }
     if (!isCommercialCheckoutReady(process.env)) {
+      await recordProductMilestone({
+        eventType: 'checkout_blocked', tenantId, userId: user.id,
+        eventKey: `${tenantId}:${new Date().toISOString().slice(0, 10)}`,
+        dimensions: { mode: 'commercial_readiness' },
+      });
       return sendJson(res, 503, {
         error: 'New subscriptions are temporarily unavailable while a production readiness check is completed. No payment was taken.',
         code: 'billing_unavailable',
@@ -1292,6 +1297,14 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 200, { url: sessionUrl, mode: 'checkout' });
     } catch (err) {
       const failure = getBillingErrorResponse(err, 'checkout');
+      await recordProductMilestone({
+        eventType: 'checkout_failed', tenantId, userId: user.id,
+        eventKey: `${tenantId}:${new Date().toISOString().slice(0, 10)}`,
+        dimensions: {
+          mode: failure.code,
+          planId: ['sales', 'jobseeker'].includes(planId) ? planId : '',
+        },
+      });
       if (failure.report) reportServerError(failure.status, req, err);
       return sendJson(res, failure.status, {
         error: failure.message,
@@ -1794,7 +1807,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 400, { error: 'Choose either Business Development or Job Seeker mode.' });
     }
     if (persona === 'bd' && getEffectivePlanId(tenant, user) === 'jobseeker') {
-      return sendJson(res, 403, { error: 'Business Development mode requires the Sales Professional plan.' });
+      return sendJson(res, 403, { error: 'Business Development mode requires the Recruiter Pro plan.' });
     }
     tenant = updateTenant(tenant.id, { persona }) || { ...tenant, persona };
     await persistUserWorkspace(user, tenant);

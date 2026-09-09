@@ -691,7 +691,7 @@ const cmdActions = [
   { id: 'refresh', label: 'Refresh data', icon: '&#8635;', key: '', action: () => refreshBootstrapButton?.click() },
   { id: 'export-csv', label: 'Export current view as CSV', icon: '&#8615;', key: '', action: () => {
     if (!hasPlanFeature('export')) {
-      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+      showToast('CSV export is available on Recruiter Pro. Opening plan options...', 'info');
       location.hash = '#/admin';
       return;
     }
@@ -3532,7 +3532,7 @@ function bindEvents() {
     }
     if (actionName === 'export-csv') {
       if (!hasPlanFeature('export')) {
-        showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+        showToast('CSV export is available on Recruiter Pro. Opening plan options...', 'info');
         location.hash = '#/admin';
         return;
       }
@@ -3543,7 +3543,7 @@ function bindEvents() {
       return;
     }
     if (actionName === 'upgrade-for-export') {
-      showToast('CSV export is available on Sales Pro. Opening plan options...', 'info');
+      showToast('CSV export is available on Recruiter Pro. Opening plan options...', 'info');
       location.hash = '#/admin';
       return;
     }
@@ -4397,7 +4397,7 @@ function renderExportButton(view) {
   if (hasPlanFeature('export')) {
     return `<button class="ghost-button" data-action="export-csv" data-view="${escapeAttr(view)}" aria-label="Export ${escapeAttr(view)} to CSV">Export CSV</button>`;
   }
-  return '<button class="ghost-button" data-action="upgrade-for-export" type="button" title="Available on Sales Pro">Export CSV · Sales Pro</button>';
+  return '<button class="ghost-button" data-action="upgrade-for-export" type="button" title="Available on Recruiter Pro">Export CSV · Recruiter Pro</button>';
 }
 
 function applyPersonaChrome() {
@@ -4454,7 +4454,7 @@ async function togglePersonaMode() {
   const next = current ? 'bd' : 'jobseeker';
   const planId = appState.bootstrap?.session?.plan?.id;
 
-  // $5/mo Job Seeker plan is dedicated to Job Seeker mode; $10/mo Sales Pro grants access to BOTH modes
+  // $5/mo Job Seeker plan is dedicated to Job Seeker mode; $10/mo Recruiter Pro grants access to BOTH modes
   if (current && next === 'bd' && planId === 'jobseeker') {
     openPricingModal();
     showToast('💼 Business Development mode requires the $10/mo Pro plan (which includes access to BOTH modes).', 'info', 6000);
@@ -5364,7 +5364,7 @@ async function renderBillingRequiredView(error = {}) {
     ? 'A workspace owner or admin must manage the subscription.'
     : stripeReady
     ? (canManageBilling ? 'Open the secure billing portal to update your payment method or plan.' : 'Secure checkout is ready.')
-    : 'Online plan changes are not available in this workspace. Your current access is unchanged.';
+    : (stripeStatus.checkoutUnavailableMessage || 'Online plan changes are not available in this workspace. Contact support from the account menu for help.');
 
   appRoot.innerHTML = `
     <section class="hero-card">
@@ -5376,7 +5376,7 @@ async function renderBillingRequiredView(error = {}) {
         <div class="inline-field-stack" style="max-width: 420px;">
           <select id="billing-plan-select">
             <option value="jobseeker" ${selected(selectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
-            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
+            <option value="sales" ${selected(selectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Recruiter Pro ($10 USD/mo)</option>
           </select>
           <div class="button-row">
             <button class="primary-button" type="button" data-action="${canManageBilling ? 'billing-portal' : 'billing-checkout'}"${canChangeBilling && (stripeReady || canManageBilling) ? '' : ' disabled'}>${!canChangeBilling ? 'Owner access required' : (canManageBilling ? 'Manage billing' : (stripeReady ? 'Choose this plan' : 'Plan changes unavailable'))}</button>
@@ -11634,7 +11634,7 @@ async function renderAdminView() {
     ? 'Secure online plan changes are available.'
     : (stripeReady
       ? 'Secure checkout is available for configured plans.'
-      : 'Online plan changes are not available in this workspace. Your current access is unchanged.');
+      : (stripeStatus.checkoutUnavailableMessage || 'Online plan changes are not available in this workspace. Contact support from the account menu for help.'));
   const billingAccess = billing.billingAccess || {};
   const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
   const searchFocus = stateBootstrap.settings.searchFocusByPersona?.[personaKey] || {};
@@ -11659,7 +11659,9 @@ async function renderAdminView() {
   const rememberedPlanIntent = appState.onboardingIntent?.planIntent;
   const billingSelectedPlanId = billing.plan?.id === 'trial' && ['sales', 'jobseeker'].includes(rememberedPlanIntent)
     ? rememberedPlanIntent
-    : billing.plan?.id;
+    : (['sales', 'jobseeker'].includes(billing.plan?.id)
+      ? billing.plan.id
+      : (isJobSeekerPersona() ? 'jobseeker' : 'sales'));
   const billingPrimaryAction = billing.canManageBilling ? 'billing-portal' : 'billing-checkout';
   const billingPrimaryLabel = !canChangeBilling
     ? 'Owner access required'
@@ -11669,11 +11671,22 @@ async function renderAdminView() {
   const siteAnalyticsSection = canViewSiteAnalytics ? `
         ${renderCollapsibleStart('site-analytics', 'Site analytics', 'First-party traffic and product milestones for campaign decisions.')}
           <div class="metrics-grid metrics-grid--compact">
-            ${renderMetricCard('Unique visitors today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
-            ${renderMetricCard('Unique visitors 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
-            ${renderMetricCard('All-time visitors', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
+            ${renderMetricCard('Visitor IDs today', analytics.recent?.visitorsToday || 0, `${formatNumber(analytics.recent?.visitsToday || 0)} visits today`)}
+            ${renderMetricCard('Visitor IDs 30d', analytics.recent?.visitors || 0, `${formatNumber(analytics.recent?.visits || 0)} visits in 30 days`)}
+            ${renderMetricCard('All-time visitor IDs', analytics.totals?.visitors || 0, `${formatNumber(analytics.totals?.visits || 0)} total visits`)}
           </div>
+          <p class="small muted">Visitor IDs are browser identifiers, not verified people. These totals and milestones include internal/test activity and may include bots. Do not interpret them as qualified leads or a linked conversion funnel.</p>
           ${renderAcquisitionFunnel(analytics)}
+          <div>
+            <p class="eyebrow">Checkout diagnostics · ${formatNumber(analytics.lookbackDays || 30)} days</p>
+            ${renderMiniStatList([
+              { eventType: 'checkout_started', label: 'Sessions created' },
+              { eventType: 'checkout_blocked', label: 'Blocked by readiness' },
+              { eventType: 'checkout_failed', label: 'Session errors' },
+              { eventType: 'subscription_started', label: 'Subscription starts' },
+            ].map((item) => ({ label: item.label, value: formatNumber((analytics.funnel || []).find((row) => row.eventType === item.eventType)?.events || 0) })))}
+            <p class="small muted">Diagnostics include test activity. Blocked/error records are deduplicated per workspace per UTC day; sessions per workspace, plan and day. Disabled buttons do not count as attempts. Blocked/error tracking starts with this release.</p>
+          </div>
           <div class="inline-split">
             <div>
               <p class="eyebrow">Top sources</p>
@@ -11775,7 +11788,7 @@ async function renderAdminView() {
               <div class="inline-field-stack">
                 <select id="billing-plan-select">
                   <option value="jobseeker" ${selected(billingSelectedPlanId, 'jobseeker')} ${stripeStatus.prices?.jobseeker ? '' : 'disabled'}>Job Seeker ($5 USD/mo)</option>
-                  <option value="sales" ${selected(billingSelectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Sales Professional ($10 USD/mo)</option>
+                  <option value="sales" ${selected(billingSelectedPlanId, 'sales')} ${stripeStatus.prices?.sales ? '' : 'disabled'}>Recruiter Pro ($10 USD/mo)</option>
                 </select>
                 <div class="button-row">
                   <button class="primary-button" type="button" data-action="${billingPrimaryAction}"${canChangeBilling && (stripeReady || billing.canManageBilling) ? '' : ' disabled'}>${escapeHtml(billingPrimaryLabel)}</button>

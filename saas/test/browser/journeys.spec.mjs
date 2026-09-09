@@ -14,6 +14,7 @@
  * - Outreach generation lives in a modal opened by [data-action="select-contact-outreach"].
  */
 import { test as base, expect } from '@playwright/test';
+import { applyCommercialCheckoutReadiness } from '../../src/production-readiness.js';
 
 const test = base.extend({
   page: async ({ page }, use) => {
@@ -570,6 +571,9 @@ test('analytics admin journey: campaign and activation milestones are visible', 
   await expect(sourceQuality).toBeVisible();
   await expect(sourceQuality.locator('[data-analytics-source="linkedin"]')).toBeVisible();
   await expect(analyticsSection).toContainText('not a person-level cohort report');
+  await expect(analyticsSection).toContainText('Visitor IDs 30d');
+  await expect(analyticsSection).toContainText('include internal/test activity');
+  await expect(analyticsSection).toContainText('Checkout diagnostics');
 });
 
 test('task journey: whitespace task is rejected visibly, valid task succeeds', async ({ page }) => {
@@ -733,6 +737,35 @@ test('billing journey: billing page opens from the account menu', async ({ page 
   await page.click('#cloud-avatar-btn');
   await page.click('#cloud-billing-btn');
   await expect(app.locator('body')).toContainText(/plan|billing|trial/i, { timeout: 15000 });
+});
+
+test('paused checkout explains the next step at desktop and mobile widths', async ({ page }, testInfo) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await page.route('**/api/admin/bootstrap*', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.billing.stripe = applyCommercialCheckoutReadiness({
+      ready: true, checkoutReady: true, commercialReady: true,
+      prices: { sales: true, jobseeker: true },
+    }, { NODE_ENV: 'production' });
+    await route.fulfill({ response, json: body });
+  });
+  await gotoAppRoute(page, '#/admin/billing');
+  const billing = app.locator('#admin-section-billing-subscription');
+  await expect(billing).toContainText('Paid upgrades are temporarily paused');
+  await expect(billing).toContainText('Contact support from the account menu');
+  await expect(billing.locator('[data-action="billing-checkout"]')).toBeDisabled();
+  await expect(billing.locator('select')).toContainText('Recruiter Pro');
+  await expect(billing.locator('select')).toHaveValue('sales');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await billing.scrollIntoViewIfNeeded();
+    await expect(billing).toBeVisible();
+    const frameOverflow = await app.locator('body').evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+    expect(frameOverflow).toBe(false);
+    await page.screenshot({ path: testInfo.outputPath(`paused-billing-${width}.png`) });
+  }
 });
 
 test('privacy journey: workspace data export responds from the account menu', async ({ page }) => {

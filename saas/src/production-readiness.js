@@ -50,7 +50,7 @@ export function assessProductionReadiness(env = process.env) {
     ['STRIPE_SECRET_KEY', 'paid checkout is unavailable'],
     ['STRIPE_WEBHOOK_SECRET', 'subscription state cannot be verified'],
     ['STRIPE_PRICE_JOBSEEKER', 'the Job Seeker plan cannot be purchased'],
-    ['STRIPE_PRICE_SALES', 'the Sales Professional plan cannot be purchased'],
+    ['STRIPE_PRICE_SALES', 'the Recruiter Pro plan cannot be purchased'],
     ['RESEND_API_KEY', 'password reset and customer email are unavailable'],
     ['BD_EMAIL_FROM', 'transactional email needs a verified sender'],
     ['BD_SUPPORT_ADMIN_EMAILS', 'support requests need an accountable recipient'],
@@ -141,5 +141,8 @@ export function applyCommercialCheckoutReadiness(stripeStatus = {}, env = proces
     checkoutReady: Boolean(stripeStatus.checkoutReady && commercialGateReady),
     commercialReady: Boolean(stripeStatus.commercialReady && commercialGateReady),
     commercialGateReady,
+    checkoutUnavailableMessage: !commercialGateReady
+      ? 'Paid upgrades are temporarily paused while account email and launch-readiness checks are completed. No payment can be taken. Contact support from the account menu for help.'
+      : '',
   };
 }

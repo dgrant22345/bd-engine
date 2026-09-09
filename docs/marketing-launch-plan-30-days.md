@@ -2,6 +2,8 @@
 
 Status: working launch plan
 
+7 September execution pack: [ready-to-use promotion kit](marketing-ready-to-use-2026-09-07.md). The owner reports the People introduction is published. The next founder post, tester invitation, organizer request and demo storyboard are prepared but not sent or scheduled. Keep the People-productivity experiment distinct from the staffing-BD positioning below.
+
 6 September checkpoint: follow the [current product-quality release gates](product-quality-audit-2026-09-06.md)
 before acquisition work. The live job-paging correction was deployed and passed
 read-only production checks; email and paid-launch gates remain open. See the

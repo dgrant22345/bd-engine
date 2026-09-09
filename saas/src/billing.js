@@ -142,8 +142,8 @@ export const PLANS = {
   },
   sales: {
     id: 'sales',
-    name: 'Sales Professional',
-    displayName: 'Sales Pro',
+    name: 'Recruiter Pro',
+    displayName: 'Recruiter Pro',
     price: 10,
     interval: 'month',
     stripePriceEnv: 'STRIPE_PRICE_SALES',
@@ -272,7 +272,7 @@ export function getUsageSummary(tenantId, planId, actualUsage = {}) {
 
 export function buildStripeCheckoutParams({ tenantId, userEmail, plan, successUrl, cancelUrl, metadata = {}, customerId = '' }) {
   if (!plan?.stripePriceEnv) {
-    throw new BillingError('Choose the Job Seeker or Sales Professional plan.', {
+    throw new BillingError('Choose the Job Seeker or Recruiter Pro plan.', {
       code: 'invalid_billing_plan',
       status: 400,
     });
@@ -322,7 +322,7 @@ export async function createStripeCheckoutSession(stripeClient, input) {
 export async function createCheckoutSession(tenantId, userEmail, planId, successUrl, cancelUrl, metadata = {}, options = {}) {
   const plan = PLANS[planId];
   if (!plan?.stripePriceEnv) {
-    throw new BillingError('Choose the Job Seeker or Sales Professional plan.', {
+    throw new BillingError('Choose the Job Seeker or Recruiter Pro plan.', {
       code: 'invalid_billing_plan',
       status: 400,
     });

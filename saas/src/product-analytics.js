@@ -17,6 +17,8 @@ export const PRODUCT_EVENT_TYPES = new Set([
   'client_won',
   'client_lost',
   'checkout_started',
+  'checkout_blocked',
+  'checkout_failed',
   'subscription_started',
   'subscription_canceled',
   'payment_failed',

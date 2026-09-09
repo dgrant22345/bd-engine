@@ -107,6 +107,8 @@ test('billing status reflects the commercial gate without hiding Stripe configur
   assert.equal(incompleteProduction.checkoutReady, false);
   assert.equal(incompleteProduction.commercialReady, false);
   assert.equal(incompleteProduction.commercialGateReady, false);
+  assert.match(incompleteProduction.checkoutUnavailableMessage, /Paid upgrades are temporarily paused/);
+  assert.doesNotMatch(incompleteProduction.checkoutUnavailableMessage, /RESEND|SECRET|DATABASE_URL/);
   assert.deepEqual(incompleteProduction.prices, stripeStatus.prices);
 
   const development = applyCommercialCheckoutReadiness(stripeStatus, {
@@ -123,4 +125,5 @@ test('billing status reflects the commercial gate without hiding Stripe configur
   assert.equal(completeProduction.checkoutReady, true);
   assert.equal(completeProduction.commercialReady, true);
   assert.equal(completeProduction.commercialGateReady, true);
+  assert.equal(completeProduction.checkoutUnavailableMessage, '');
 });

@@ -34,7 +34,7 @@ test('public product claims match implemented job-board coverage and team sync',
   assert.match(app, /Job search workspace/);
 });
 
-test('Sales Professional does not advertise unavailable login seats', () => {
+test('Recruiter Pro does not advertise unavailable login seats', () => {
   assert.equal(getPlan('sales').limits.users, 1);
 });
 
