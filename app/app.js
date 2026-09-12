@@ -7176,10 +7176,7 @@ async function openWarmStudioModal(jobId, contactId) {
   }
 
   const accountId = targetAccount?.id || targetJob?.accountId || '';
-  const [aiStatus, linkedTasks] = await Promise.all([
-    api('/api/outreach/ai-status').catch(() => ({ available: false })),
-    accountId ? api(`/api/tasks?status=pending&pageSize=100&accountId=${encodeURIComponent(accountId)}`).catch(() => ({ items: [], unavailable: true })) : Promise.resolve({ items: [] }),
-  ]);
+  const linkedTasks = accountId ? await api(`/api/tasks?status=pending&pageSize=100&accountId=${encodeURIComponent(accountId)}`).catch(() => ({ items: [], unavailable: true })) : { items: [] };
   if (appState.warmStudioRequest !== request || !appState.warmStudioModalOpen) return;
   appState.warmStudioData = {
     job: targetJob,
@@ -7190,9 +7187,8 @@ async function openWarmStudioModal(jobId, contactId) {
     selectedFormat: 'referral_dm',
     selectedTone: 'casual',
     goal: isJobSeekerPersona() ? 'job_search' : 'recruiting',
-    background: '',
+    background: readWarmStudioBackground(),
     drafts: {},
-    aiAvailable: aiStatus.available === true,
     linkedTasks: linkedTasks.items || [],
     tasksUnavailable: linkedTasks.unavailable,
     completeTaskId: '',
@@ -7231,6 +7227,16 @@ function switchWarmStudioTone(tone) {
   renderWarmStudioModal();
 }
 
+function warmStudioBackgroundKey(goal = isJobSeekerPersona() ? 'job_search' : 'recruiting') {
+  const session = appState.bootstrap?.session;
+  return session?.user?.id && session?.tenant?.id ? `bd-outreach-background:${session.tenant.id}:${session.user.id}:${goal}` : '';
+}
+
+function readWarmStudioBackground() {
+  const key = warmStudioBackgroundKey();
+  try { return key ? (localStorage.getItem(key) || '').slice(0, 1000) : ''; } catch { return ''; }
+}
+
 function generateWarmStudioCopy(data) {
   const { job, account, selectedContact, selectedTone, selectedStep = 1 } = data;
   const firstName = selectedContact?.firstName || selectedContact?.fullName?.split(' ')[0] || 'there';
@@ -7242,18 +7248,18 @@ function generateWarmStudioCopy(data) {
   const evidence = String(data.background || '').trim();
   const hiringContact = /recruit|talent|human resources|hiring/i.test(selectedContact?.title || '');
   const opening = selectedStep === 1
-    ? recruiting ? `I noticed the ${jobTitle} opening at ${companyName}.` : `I'm interested in the ${jobTitle} role at ${companyName}.`
+    ? recruiting ? `The ${jobTitle} opening at ${companyName} caught my attention${job?.location ? ` — especially the ${job.location} location` : ''}.` : `I'm interested in the ${jobTitle} role at ${companyName}.`
     : selectedStep === 2 ? `Following up on my message about the ${jobTitle} opening at ${companyName}.`
     : `I'll close the loop on my message about ${jobTitle} at ${companyName}. No reply needed if this isn't relevant.`;
   const nextStep = selectedStep === 3 ? '' : recruiting
-    ? hiringContact ? 'Is external recruiting support useful for this search?' : 'Who would be the right person to ask about recruiting support for this role?'
+    ? hiringContact ? `For the ${jobTitle} search, what experience has been hardest to find?` : `Are you the right person to ask about the ${jobTitle} search, or should I speak with someone else?`
     : hiringContact ? 'What experience matters most for this search?' : 'Would you be open to sharing some context about the team?';
   const personalizedAsk = String(data.ask || '').trim() || nextStep;
   const request = selectedTone === 'direct' ? personalizedAsk : selectedTone === 'professional'
     ? personalizedAsk ? `If appropriate, ${personalizedAsk.charAt(0).toLowerCase()}${personalizedAsk.slice(1)}` : '' : personalizedAsk;
   const relationship = String(data.relationship || '').trim();
   const body = [`${greeting} ${firstName},`, relationship, opening, evidence, selectedStep === 3 ? '' : request].filter(Boolean).join('\n\n');
-  const linkedinNote = `${greeting} ${firstName}, ${opening} ${recruiting ? 'Open to connecting about hiring priorities?' : 'Open to connecting about the team?'}`;
+  const linkedinNote = [`${greeting} ${firstName},`, relationship, `I noticed the ${jobTitle} role at ${companyName}.`, recruiting ? 'Open to connecting about this search?' : 'Open to connecting about the team?'].filter(Boolean).join(' ');
   return {
     linkedinNote,
     referralDm: body,
@@ -7328,6 +7334,8 @@ function renderWarmStudioModal() {
         </select>
         <label for="warm-studio-background">Your relevant context (optional)</label>
         <textarea id="warm-studio-background" rows="2" maxlength="1000" placeholder="Add a true, specific reason you can help. Avoid confidential candidate details.">${escapeHtml(data.background || '')}</textarea>
+        <div><button id="warm-save-background" class="secondary-button" type="button" ${warmStudioBackgroundKey() ? '' : 'disabled'}>Save my background on this browser</button> <button id="warm-forget-background" class="ghost-button" type="button">Forget saved background</button></div>
+        <p class="small muted">Optional: reuse your background for this account and workspace mode on this browser. Do not save sensitive candidate information.</p>
         <label for="warm-studio-relationship">Why this person? (optional, verified context)</label>
         <input id="warm-studio-relationship" maxlength="500" value="${escapeAttr(data.relationship || '')}" placeholder="For example: We spoke at the Toronto recruiting meetup about technical hiring.">
         <label for="warm-studio-ask">Your specific question or next step (optional)</label>
@@ -7409,14 +7417,7 @@ function renderWarmStudioModal() {
             </div>
           </div>
           <textarea id="warm-studio-textarea" aria-label="Editable outreach draft" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
-          <details class="workspace-disclosure">
-            <summary><span><strong>Improve this draft with AI</strong><small>Preview a suggestion without replacing your edits</small></span></summary>
-            <p class="small muted">${data.aiAvailable ? 'Only the current draft is sent to OpenAI. Remove confidential details first. AI may make mistakes; review every claim. Nothing is sent to the recipient.' : 'AI is not enabled for this server. Manual drafting remains available.'}</p>
-            <label><input type="checkbox" id="warm-ai-consent" ${data.aiAvailable ? '' : 'disabled'}> Share this draft with OpenAI to suggest a rewrite</label>
-            <button type="button" class="secondary-button" id="warm-ai-generate" ${data.aiAvailable ? '' : 'disabled'}>Suggest rewrite</button>
-            <p id="warm-ai-status" role="status"></p>
-            <div id="warm-ai-preview"></div>
-          </details>
+          <p class="small muted">Drafted locally from your context. No AI service or API charges.</p>
           <label for="warm-complete-task">When I confirm sent, also complete this task</label>
           <select id="warm-complete-task" ${data.sentActivityId ? 'disabled' : ''}>
             <option value="">Do not complete a task</option>
@@ -7467,31 +7468,19 @@ function renderWarmStudioModal() {
   };
   textarea.oninput = syncDraft;
   syncDraft();
-  document.getElementById('warm-complete-task').onchange = event => { data.completeTaskId = event.target.value; };
-  document.getElementById('warm-ai-generate').onclick = async event => {
-    const button = event.currentTarget;
-    const status = document.getElementById('warm-ai-status');
-    const preview = document.getElementById('warm-ai-preview');
-    if (!document.getElementById('warm-ai-consent').checked) { status.textContent = 'Confirm sharing this draft first.'; return; }
-    const original = textarea.value;
-    button.disabled = true;
-    status.textContent = 'Preparing an AI suggestion…';
-    preview.replaceChildren();
+  document.getElementById('warm-save-background').onclick = () => {
     try {
-      const result = await api('/api/outreach/ai-rewrite', { method: 'POST', body: JSON.stringify({ draft: original, consent: true }) });
-      if (!preview.isConnected || appState.warmStudioData !== data) return;
-      status.textContent = 'AI suggestion — check all facts before using.';
-      preview.innerHTML = `<textarea aria-label="AI draft suggestion" rows="7" readonly>${escapeHtml(result.text)}</textarea><button type="button" class="secondary-button">Use suggestion</button>`;
-      preview.querySelector('button').onclick = () => {
-        if (textarea.value !== original) { status.textContent = 'Your draft changed. Generate another suggestion to avoid overwriting your edits.'; return; }
-        textarea.value = result.text;
-        syncDraft();
-        preview.replaceChildren();
-        status.textContent = 'AI suggestion applied. Review before sending.';
-      };
-    } catch (error) { if (status.isConnected) status.textContent = error.message || 'Could not generate a suggestion. Your draft is unchanged.'; }
-    finally { if (button.isConnected) button.disabled = false; }
+      const key = warmStudioBackgroundKey(data.goal);
+      if (!key) return;
+      localStorage.setItem(key, data.background || '');
+      showToast('Background saved on this browser.', 'success');
+    } catch { showToast('Browser storage is unavailable. Your draft is unchanged.', 'error'); }
   };
+  document.getElementById('warm-forget-background').onclick = () => {
+    try { const key = warmStudioBackgroundKey(data.goal); if (key) localStorage.removeItem(key); showToast('Saved background removed; this draft is unchanged.', 'success'); }
+    catch { showToast('Could not clear browser storage.', 'error'); }
+  };
+  document.getElementById('warm-complete-task').onchange = event => { data.completeTaskId = event.target.value; };
   for (const field of ['goal', 'background', 'relationship', 'ask']) {
     document.getElementById(`warm-studio-${field}`).onchange = (event) => {
       data[field] = event.target.value;

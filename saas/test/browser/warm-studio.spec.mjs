@@ -8,8 +8,8 @@ test('outreach uses the exact role, preserves edits and offers distinct goals', 
   const app = page.frameLocator('iframe.cloud-app-frame');
   await expect(app.locator('#app')).toBeVisible();
   const frame = page.frames().find(item => item.url().includes('/app/'));
-  await page.route('**/api/outreach/ai-status', route => route.fulfill({ json: { available: true } }));
-  await page.route('**/api/outreach/ai-rewrite', route => route.fulfill({ json: { text: 'Hi Jamie, would a brief summary of my recruiting experience help?', generatedBy: 'ai' } }));
+  const aiRequests = [];
+  page.on('request', request => { if (request.url().includes('/api/outreach/ai-')) aiRequests.push(request.url()); });
   await page.route('**/api/jobs?ids=studio-test', route => route.fulfill({ json: {
     items: [{ id: 'studio-test', title: 'Talent Manager', companyName: 'Example Co', contacts: [{ id: 'c1', fullName: 'Jamie Test', title: 'Talent Lead', email: 'jamie@example.test' }] }],
   } }));
@@ -32,15 +32,12 @@ test('outreach uses the exact role, preserves edits and offers distinct goals', 
   await app.locator('#warm-studio-ask').press('Tab');
   await expect(draft).toHaveValue(/We discussed Toronto hiring last week/);
   await expect(draft).toHaveValue(/Would a short background summary be useful/);
-  await app.locator('summary').filter({ hasText: 'Improve this draft with AI' }).click();
-  await app.locator('#warm-ai-generate').click();
-  await expect(app.locator('#warm-ai-status')).toContainText('Confirm sharing');
-  await app.locator('#warm-ai-consent').check();
-  await app.locator('#warm-ai-generate').click();
-  await expect(app.locator('#warm-ai-preview')).toContainText('Hi Jamie');
-  await expect(draft).toHaveValue(/We discussed Toronto/);
-  await app.getByRole('button', { name: 'Use suggestion' }).click();
-  await expect(draft).toHaveValue('Hi Jamie, would a brief summary of my recruiting experience help?');
+  await expect(app.locator('#warm-ai-generate')).toHaveCount(0);
+  await app.locator('#warm-save-background').click();
+  expect(await frame.evaluate(() => Object.entries(localStorage).some(([key, value]) => key.startsWith('bd-outreach-background:') && value.includes('five years')))).toBe(true);
+  await app.locator('#warm-forget-background').click();
+  expect(await frame.evaluate(() => Object.keys(localStorage).some(key => key.startsWith('bd-outreach-background:')))).toBe(false);
+  expect(aiRequests).toEqual([]);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: 'test-results/warm-studio-mobile.png', fullPage: true });
