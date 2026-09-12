@@ -3298,6 +3298,10 @@ export function createStore() {
       // logged activity/follow-up would silently vanish.
       await ensureDataLoaded(tenantId, false);
       const createdAt = now();
+      const linkedTask = payload.completeTaskId ? tasksForTenant(tenantId).find(task => task.id === payload.completeTaskId) : null;
+      if (payload.completeTaskId && (!linkedTask || !payload.accountId || linkedTask.accountId !== payload.accountId || payload.type !== 'outreach')) {
+        throw new CommercialOutcomeValidationError('Choose an outreach task belonging to this account.');
+      }
       const activity = {
         id: `act-${Date.now()}-${randomUUID().slice(0, 12)}`,
         tenantId,
@@ -3333,6 +3337,14 @@ export function createStore() {
         }
         const mappedOutreachStatus = accountOutreachStatusForActivity(payload, itemAccount.outreachStatus);
         if (mappedOutreachStatus) itemAccount.outreachStatus = mappedOutreachStatus;
+      }
+
+      if (linkedTask && linkedTask.status === 'pending') {
+        linkedTask.status = 'completed';
+        linkedTask.updatedAt = createdAt;
+        const completion = { ...activity, id: `act-${randomUUID()}`, type: 'task_completed', summary: `Completed task: ${linkedTask.summary || 'Outreach'}`, notes: '', pipelineStage: '', metadata: { taskId: linkedTask.id, sourceActivityId: activity.id }, valueCents: null };
+        activities.unshift(completion);
+        getTenantArray(activitiesByTenant, tenantId).unshift(completion);
       }
 
       // Auto-create follow-up task if requested
@@ -3436,7 +3448,7 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
       const status = query.status || 'pending';
-      return paginate(tasksForTenant(tenantId).filter(t => t.status === status), query);
+      return paginate(tasksForTenant(tenantId).filter(t => t.status === status && (!query.accountId || t.accountId === query.accountId)), query);
     },
 
     async createTask(tenantId, payload = {}) {

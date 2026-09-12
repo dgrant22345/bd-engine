@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isOutreachAiConfigured, rewriteOutreach } from './outreach-ai.js';
 import { generateUserRecoveryCodes, recoverUserWithCode } from './recovery-codes.js';
 import { extname, join, normalize } from 'node:path';
 import { createServer } from 'node:http';
@@ -1750,6 +1751,18 @@ self.addEventListener('activate', (event) => {
   }
 
   const accountOutreachMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/generate-outreach$/);
+  if (pathname === '/api/outreach/ai-status' && req.method === 'GET') {
+    return sendJson(res, 200, { available: isOutreachAiConfigured() });
+  }
+  if (pathname === '/api/outreach/ai-rewrite' && req.method === 'POST') {
+    if (!await requireEntitlement(res, tenant, user, { feature: 'outreach_drafts' })) return;
+    if (!isOutreachAiConfigured()) return sendJson(res, 503, { error: 'AI drafting is not configured. Your existing draft is unchanged.' });
+    const payload = await readJson(req);
+    if (payload.consent !== true || typeof payload.draft !== 'string' || !payload.draft.trim() || payload.draft.length > 6000) return sendJson(res, 400, { error: 'Confirm sharing a draft of 1–6,000 characters.' });
+    if (await rateLimitExceeded(`outreach-ai:${tenantId}`, 20, 86400000) || await rateLimitExceeded('outreach-ai:global', 200, 86400000)) return sendJson(res, 429, { error: 'Daily AI drafting limit reached. You can still edit drafts manually.' });
+    try { return sendJson(res, 200, await rewriteOutreach(payload)); }
+    catch { return sendJson(res, 502, { error: 'AI drafting could not finish. Your existing draft is unchanged.' }); }
+  }
   if (accountOutreachMatch && req.method === 'POST') {
     if (!await requireEntitlement(res, tenant, user, { feature: 'outreach_drafts' })) return;
     const payload = await readJson(req);

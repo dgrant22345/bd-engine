@@ -7175,6 +7175,12 @@ async function openWarmStudioModal(jobId, contactId) {
     selectedContact = targetContacts[0];
   }
 
+  const accountId = targetAccount?.id || targetJob?.accountId || '';
+  const [aiStatus, linkedTasks] = await Promise.all([
+    api('/api/outreach/ai-status').catch(() => ({ available: false })),
+    accountId ? api(`/api/tasks?status=pending&pageSize=100&accountId=${encodeURIComponent(accountId)}`).catch(() => ({ items: [], unavailable: true })) : Promise.resolve({ items: [] }),
+  ]);
+  if (appState.warmStudioRequest !== request || !appState.warmStudioModalOpen) return;
   appState.warmStudioData = {
     job: targetJob,
     account: targetAccount,
@@ -7186,6 +7192,10 @@ async function openWarmStudioModal(jobId, contactId) {
     goal: isJobSeekerPersona() ? 'job_search' : 'recruiting',
     background: '',
     drafts: {},
+    aiAvailable: aiStatus.available === true,
+    linkedTasks: linkedTasks.items || [],
+    tasksUnavailable: linkedTasks.unavailable,
+    completeTaskId: '',
   };
 
   renderWarmStudioModal();
@@ -7304,7 +7314,7 @@ function renderWarmStudioModal() {
           <span class="modal-icon-badge" aria-hidden="true">💌</span>
           <div>
             <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
-            <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Context-based drafts, not AI-generated. Edits stay until you close.</p>
+            <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Editable drafts — review all facts before sending. Edits stay until you close.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-warm-studio" aria-label="Close modal">&times;</button>
@@ -7399,6 +7409,20 @@ function renderWarmStudioModal() {
             </div>
           </div>
           <textarea id="warm-studio-textarea" aria-label="Editable outreach draft" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
+          <details class="workspace-disclosure">
+            <summary><span><strong>Improve this draft with AI</strong><small>Preview a suggestion without replacing your edits</small></span></summary>
+            <p class="small muted">${data.aiAvailable ? 'Only the current draft is sent to OpenAI. Remove confidential details first. AI may make mistakes; review every claim. Nothing is sent to the recipient.' : 'AI is not enabled for this server. Manual drafting remains available.'}</p>
+            <label><input type="checkbox" id="warm-ai-consent" ${data.aiAvailable ? '' : 'disabled'}> Share this draft with OpenAI to suggest a rewrite</label>
+            <button type="button" class="secondary-button" id="warm-ai-generate" ${data.aiAvailable ? '' : 'disabled'}>Suggest rewrite</button>
+            <p id="warm-ai-status" role="status"></p>
+            <div id="warm-ai-preview"></div>
+          </details>
+          <label for="warm-complete-task">When I confirm sent, also complete this task</label>
+          <select id="warm-complete-task" ${data.sentActivityId ? 'disabled' : ''}>
+            <option value="">Do not complete a task</option>
+            ${(data.linkedTasks || []).map(task => `<option value="${escapeAttr(task.id)}" ${selected(data.completeTaskId, task.id)}>${escapeHtml(task.summary || task.title || 'Follow-up')}</option>`).join('')}
+          </select>
+          <p class="small muted">${data.tasksUnavailable ? 'Tasks could not load. Reopen the studio to retry.' : 'Choose the exact task this message fulfils. Only pending tasks for this account are listed (up to 100).'}</p>
         </div>
       </div>
 
@@ -7443,6 +7467,31 @@ function renderWarmStudioModal() {
   };
   textarea.oninput = syncDraft;
   syncDraft();
+  document.getElementById('warm-complete-task').onchange = event => { data.completeTaskId = event.target.value; };
+  document.getElementById('warm-ai-generate').onclick = async event => {
+    const button = event.currentTarget;
+    const status = document.getElementById('warm-ai-status');
+    const preview = document.getElementById('warm-ai-preview');
+    if (!document.getElementById('warm-ai-consent').checked) { status.textContent = 'Confirm sharing this draft first.'; return; }
+    const original = textarea.value;
+    button.disabled = true;
+    status.textContent = 'Preparing an AI suggestion…';
+    preview.replaceChildren();
+    try {
+      const result = await api('/api/outreach/ai-rewrite', { method: 'POST', body: JSON.stringify({ draft: original, consent: true }) });
+      if (!preview.isConnected || appState.warmStudioData !== data) return;
+      status.textContent = 'AI suggestion — check all facts before using.';
+      preview.innerHTML = `<textarea aria-label="AI draft suggestion" rows="7" readonly>${escapeHtml(result.text)}</textarea><button type="button" class="secondary-button">Use suggestion</button>`;
+      preview.querySelector('button').onclick = () => {
+        if (textarea.value !== original) { status.textContent = 'Your draft changed. Generate another suggestion to avoid overwriting your edits.'; return; }
+        textarea.value = result.text;
+        syncDraft();
+        preview.replaceChildren();
+        status.textContent = 'AI suggestion applied. Review before sending.';
+      };
+    } catch (error) { if (status.isConnected) status.textContent = error.message || 'Could not generate a suggestion. Your draft is unchanged.'; }
+    finally { if (button.isConnected) button.disabled = false; }
+  };
   for (const field of ['goal', 'background', 'relationship', 'ask']) {
     document.getElementById(`warm-studio-${field}`).onchange = (event) => {
       data[field] = event.target.value;
@@ -7488,6 +7537,7 @@ async function logWarmStudioSent(jobId, contactId) {
         contactId: data.selectedContact?.id || '',
         type: 'outreach',
         summary: `Sent outreach to ${data.selectedContact?.fullName || 'contact'} about ${data.job?.title || 'role'}`,
+        completeTaskId: data.completeTaskId || '',
         notes: document.getElementById('warm-studio-textarea')?.value || '',
         metadata: { jobId, format: data.selectedFormat, step: data.selectedStep, confirmation: 'user_confirmed_sent' },
       }) });
