@@ -2384,6 +2384,9 @@
         ? `<div class="cloud-account-notice" role="status"><span>${escapeHtml(state.verificationMessage)}</span><button class="cloud-notice-close" id="cloud-notice-close" type="button" aria-label="Dismiss message">Close</button></div>`
         : '';
       const emailVerified = Boolean(state.user?.emailVerifiedAt);
+      const recoveryReminderKey = `bd-recovery-reminder-dismissed:${state.user?.id}`;
+      let recoveryReminderDismissed = state.recoveryReminderDismissedFor === state.user?.id;
+      try { recoveryReminderDismissed ||= localStorage.getItem(recoveryReminderKey) === '1'; } catch {}
 
       root.innerHTML = `
         <div class="cloud-shell">
@@ -2410,6 +2413,7 @@
                   </div>
                   <hr>
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
+                  ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-recovery-menu-btn" type="button" role="menuitem">Recovery codes</button>'}
                   ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
                   <button class="cloud-menu-item" id="cloud-export-btn" type="button" role="menuitem">Privacy and data</button>
                   <button class="cloud-menu-item" id="cloud-support-btn" type="button" role="menuitem">Support center</button>
@@ -2421,7 +2425,7 @@
             </div>
           </div>
           ${trialUpgradeBanner}
-          ${!state.demo ? '<div class="cloud-trial-cta"><span>Email recovery may be unavailable. Save one-time recovery codes before losing access.</span><button class="btn btn-sm" id="cloud-save-recovery-btn">Save recovery codes</button></div>' : ''}
+          ${!state.demo && !recoveryReminderDismissed ? '<div class="cloud-trial-cta" id="cloud-recovery-reminder"><span>Email recovery may be unavailable. Save one-time recovery codes before losing access.</span><button class="btn btn-sm" id="cloud-save-recovery-btn">Save recovery codes</button><button class="cloud-notice-close" type="button" id="cloud-dismiss-recovery-btn" aria-label="Dismiss recovery codes reminder">Close</button></div>' : ''}
           ${verificationNotice}
           <div class="cloud-app-container">
             <iframe class="cloud-app-frame" title="BD Engine workspace" src="${escapeHtml(appFrameSrc).replace(/"/g, '&quot;')}"></iframe>
@@ -2480,6 +2484,13 @@
       });
       root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
       root.querySelector('#cloud-save-recovery-btn')?.addEventListener('click', () => { state.view = 'recovery-codes'; render(); });
+      root.querySelector('#cloud-recovery-menu-btn')?.addEventListener('click', () => { state.view = 'recovery-codes'; render(); });
+      root.querySelector('#cloud-dismiss-recovery-btn')?.addEventListener('click', () => {
+        state.recoveryReminderDismissedFor = state.user?.id;
+        try { localStorage.setItem(recoveryReminderKey, '1'); } catch {}
+        root.querySelector('#cloud-recovery-reminder')?.remove();
+        avatarBtn?.focus();
+      });
     }
 
     // ── Utility ───────────────────────────────────────────────────────────

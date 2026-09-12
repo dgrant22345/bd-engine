@@ -10050,6 +10050,10 @@ body.global-dragover::after {
   gap: 16px;
 }
 
+.warm-studio-body > * { flex-shrink: 0; }
+#warm-studio-goal { width: 100%; max-width: 100%; }
+#warm-studio-background { width: 100%; min-height: 76px; resize: vertical; }
+
 .warm-studio-context-bar {
   display: flex;
   flex-wrap: wrap;

@@ -7139,6 +7139,8 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
 async function openWarmStudioModal(jobId, contactId) {
   if (!warmStudioModalBackdrop) return;
   appState.warmStudioModalOpen = true;
+  const request = {};
+  appState.warmStudioRequest = request;
 
   let targetJob = null;
   let targetAccount = null;
@@ -7146,8 +7148,9 @@ async function openWarmStudioModal(jobId, contactId) {
 
   if (jobId) {
     try {
-      const res = await api(`/api/jobs?q=${encodeURIComponent(jobId)}`);
-      targetJob = res.items?.find((j) => j.id === jobId) || res.items?.[0] || null;
+      const res = await api(`/api/jobs?ids=${encodeURIComponent(jobId)}`);
+      targetJob = res.items?.find((j) => j.id === jobId) || null;
+      if (!targetJob) throw new Error('Role unavailable');
       if (targetJob?.accountId) {
         const accRes = await api(`/api/accounts/${targetJob.accountId}`);
         targetAccount = accRes?.account || null;
@@ -7156,10 +7159,14 @@ async function openWarmStudioModal(jobId, contactId) {
         targetContacts = targetJob.contacts;
       }
     } catch {
-      // Fallback
+      if (appState.warmStudioRequest !== request) return;
+      appState.warmStudioModalOpen = false;
+      showToast('Could not load this role and its contacts. Please try again.', 'error');
+      return;
     }
   }
 
+  if (appState.warmStudioRequest !== request || !appState.warmStudioModalOpen) return;
   let selectedContact = null;
   if (contactId && targetContacts.length) {
     selectedContact = targetContacts.find((c) => c.id === contactId || c.fullName === contactId) || null;
@@ -7176,6 +7183,9 @@ async function openWarmStudioModal(jobId, contactId) {
     selectedStep: 1,
     selectedFormat: 'referral_dm',
     selectedTone: 'casual',
+    goal: isJobSeekerPersona() ? 'job_search' : 'recruiting',
+    background: '',
+    drafts: {},
   };
 
   renderWarmStudioModal();
@@ -7186,6 +7196,7 @@ async function openWarmStudioModal(jobId, contactId) {
 function closeWarmStudioModal() {
   if (!warmStudioModalBackdrop) return;
   appState.warmStudioModalOpen = false;
+  appState.warmStudioRequest = null;
   appState.warmStudioData = null;
   warmStudioModalBackdrop.classList.add('hidden');
   warmStudioModalBackdrop.setAttribute('aria-hidden', 'true');
@@ -7216,21 +7227,32 @@ function generateWarmStudioCopy(data) {
   const companyName = job?.companyName || job?.company || account?.displayName || 'the company';
   const jobTitle = job?.title || '[role to discuss]';
   const myName = appState.bootstrap?.user?.name || '[your name]';
-  const greeting = selectedTone === 'executive' ? 'Hello' : 'Hi';
+  const greeting = selectedTone === 'professional' ? 'Hello' : 'Hi';
+  const recruiting = data.goal !== 'job_search';
+  const evidence = String(data.background || '').trim();
+  const hiringContact = /recruit|talent|human resources|hiring/i.test(selectedContact?.title || '');
   const opening = selectedStep === 1
-    ? `I'm interested in learning more about the ${jobTitle} role at ${companyName}.`
-    : selectedStep === 2 ? `[Confirm a previous message was sent.] I wanted to follow up on my enquiry about ${jobTitle}.`
-    : `Thank you for considering my enquiry about ${jobTitle}. I will leave this with you.`;
-  const nextStep = selectedStep === 3 ? '' : 'Would you be comfortable sharing more context, or pointing me to the appropriate person?';
-  const linkedinNote = `${greeting} ${firstName}, ${opening} ${nextStep}`.trim();
-  const body = `${greeting} ${firstName},\n\n${opening}\n\n${selectedStep === 1 ? '[Add your own relevant, verified background.]\n\n' : ''}${nextStep}\n\nBest,\n${myName}`;
+    ? recruiting ? `I noticed the ${jobTitle} opening at ${companyName}.` : `I'm interested in the ${jobTitle} role at ${companyName}.`
+    : selectedStep === 2 ? `Following up on my message about the ${jobTitle} opening at ${companyName}.`
+    : `I'll close the loop on my message about ${jobTitle} at ${companyName}. No reply needed if this isn't relevant.`;
+  const nextStep = selectedStep === 3 ? '' : recruiting
+    ? hiringContact ? 'Is external recruiting support useful for this search?' : 'Who would be the right person to ask about recruiting support for this role?'
+    : hiringContact ? 'What experience matters most for this search?' : 'Would you be open to sharing some context about the team?';
+  const request = selectedTone === 'direct' ? nextStep : selectedTone === 'professional'
+    ? `If appropriate, ${nextStep.charAt(0).toLowerCase()}${nextStep.slice(1)}` : nextStep;
+  const body = [`${greeting} ${firstName},`, opening, evidence, request].filter(Boolean).join('\n\n');
+  const linkedinNote = `${greeting} ${firstName}, ${opening} ${recruiting ? 'Open to connecting about hiring priorities?' : 'Open to connecting about the team?'}`;
   return {
-    linkedinNote: linkedinNote.length > 295 ? linkedinNote.slice(0, 292) + '...' : linkedinNote,
+    linkedinNote,
     referralDm: body,
-    emailPitch: body,
-    emailSubject: `Enquiry about ${jobTitle} at ${companyName}`,
-    recruiterPitch: body,
+    emailPitch: `${body}\n\n${selectedTone === 'professional' ? 'Kind regards' : 'Thanks'},\n${myName}`,
+    emailSubject: `${recruiting ? 'Recruiting support' : 'Question'}: ${jobTitle} at ${companyName}`,
+    recruiterPitch: `${body}\n\n${selectedStep === 3 ? '' : recruiting ? 'If useful, I can share how I would approach the search before arranging a call.' : 'If useful, I can send a short summary of my relevant experience.'}`.trim(),
   };
+}
+
+function warmStudioDraftKey(data) {
+  return JSON.stringify([data.selectedContact?.id || data.selectedContact?.fullName || '', data.selectedStep, data.selectedFormat, data.selectedTone, data.goal, data.background]);
 }
 
 function renderWarmStudioModal() {
@@ -7250,7 +7272,7 @@ function renderWarmStudioModal() {
     charLimit = 300;
   } else if (selectedFormat === 'referral_dm') {
     activeText = copyObj.referralDm;
-    activeTitle = `Step ${selectedStep}: 1st-Degree Colleague Referral DM`;
+    activeTitle = `Step ${selectedStep}: Direct message`;
   } else if (selectedFormat === 'email_pitch') {
     activeText = `Subject: ${copyObj.emailSubject}\n\n${copyObj.emailPitch}`;
     activeTitle = `Step ${selectedStep}: Direct Email Pitch`;
@@ -7259,6 +7281,8 @@ function renderWarmStudioModal() {
     activeTitle = `Step ${selectedStep}: Recruiter Outreach`;
   }
 
+  const draftKey = warmStudioDraftKey(data);
+  activeText = data.drafts?.[draftKey] ?? activeText;
   const charCount = activeText.length;
   const isOverLimit = charLimit && charCount > charLimit;
   const mailtoSubject = copyObj.emailSubject || `${job?.title || 'Role'} Inquiry`;
@@ -7266,10 +7290,10 @@ function renderWarmStudioModal() {
   const mailtoHref = `mailto:${encodeURIComponent(recipientEmail)}?subject=${encodeURIComponent(mailtoSubject)}&body=${encodeURIComponent(mailtoBody)}`;
 
   const stepGuidance = selectedStep === 1
-    ? '💡 <strong>Step 1 (Day 1)</strong>: Hook the hiring signal and ask for advice or internal referral.'
+    ? '<strong>First contact:</strong> Verify the opening is current. Ask one small question; do not assume a relationship or an active hiring need.'
     : selectedStep === 2
-      ? '💡 <strong>Step 2 (Day 4)</strong>: Provide concrete candidate/project highlights to make forwarding easy.'
-      : '💡 <strong>Step 3 (Day 8)</strong>: Low-friction check-in; keeps you on radar without pressure.';
+      ? '<strong>Follow-up:</strong> Use only after actually sending the first message and receiving no reply. Add new, verified context. Suggested wait: 4–7 business days.'
+      : '<strong>Close the loop:</strong> Use only after a previous message. Stop if they declined or asked not to be contacted; do not keep following up.';
 
   warmStudioModalBackdrop.innerHTML = `
     <div class="modal-dialog modal-dialog--lg warm-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="warm-studio-title">
@@ -7278,13 +7302,21 @@ function renderWarmStudioModal() {
           <span class="modal-icon-badge" aria-hidden="true">💌</span>
           <div>
             <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
-            <p class="muted small">Generate 3-step tailored sequences for <strong>${escapeHtml(job?.title || 'Open Role')}</strong> at <strong>${escapeHtml(job?.companyName || job?.company || 'Company')}</strong>.</p>
+            <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Context-based drafts, not AI-generated. Edits stay until you close.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-warm-studio" aria-label="Close modal">&times;</button>
       </div>
 
       <div class="modal-body warm-studio-body">
+        <label for="warm-studio-goal">Outreach goal</label>
+        <select id="warm-studio-goal" class="compact-select">
+          <option value="recruiting" ${selected(data.goal, 'recruiting')}>Offer recruiting support</option>
+          <option value="job_search" ${selected(data.goal, 'job_search')}>Explore this role for myself</option>
+        </select>
+        <label for="warm-studio-background">Your relevant context (optional)</label>
+        <textarea id="warm-studio-background" rows="2" maxlength="1000" placeholder="Add a true, specific reason you can help. Avoid confidential candidate details.">${escapeHtml(data.background || '')}</textarea>
+        <p class="small muted">${escapeHtml(selectedContact ? /recruit|talent|human resources|hiring/i.test(selectedContact.title || '') ? 'Their title suggests a hiring contact: ask about search priorities, not an immediate meeting.' : 'Hiring responsibility is unconfirmed: ask for the right person before pitching.' : 'No contact is linked. Identify a recipient before sending.')} Connection strength is not verified. Nothing is sent automatically.</p>
         <!-- Sequence Step Switcher -->
         <div class="warm-studio-sequence-bar">
           <div class="sequence-timeline-header">
@@ -7294,18 +7326,18 @@ function renderWarmStudioModal() {
           <div class="sequence-steps-grid">
             <button class="sequence-step-btn ${selectedStep === 1 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="1">
               <span class="step-num-badge">Step 1</span>
-              <span class="step-title-text">Warm Intro / Signal Pitch</span>
-              <span class="step-day-meta">Day 1 · Hook</span>
+              <span class="step-title-text">First contact</span>
+              <span class="step-day-meta">Verify the hiring signal</span>
             </button>
             <button class="sequence-step-btn ${selectedStep === 2 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="2">
               <span class="step-num-badge">Step 2</span>
               <span class="step-title-text">Value-Add Perspective</span>
-              <span class="step-day-meta">Day 4 · Proof</span>
+              <span class="step-day-meta">After sending · No reply</span>
             </button>
             <button class="sequence-step-btn ${selectedStep === 3 ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-step" data-step="3">
               <span class="step-num-badge">Step 3</span>
               <span class="step-title-text">Polite Closeout</span>
-              <span class="step-day-meta">Day 8 · Frictionless</span>
+              <span class="step-day-meta">Final follow-up only</span>
             </button>
           </div>
           <div class="sequence-guidance-box">
@@ -7332,9 +7364,9 @@ function renderWarmStudioModal() {
           </div>
         </div>
 
-        <div class="warm-studio-format-tabs" role="tablist">
+        <div class="warm-studio-format-tabs" role="group" aria-label="Message format">
           <button class="format-tab-btn ${selectedFormat === 'referral_dm' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="referral_dm">
-            💌 1st-Degree Referral DM
+            💌 Direct message
           </button>
           <button class="format-tab-btn ${selectedFormat === 'linkedin_note' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="linkedin_note">
             💬 LinkedIn Note (<300 chars)
@@ -7360,14 +7392,14 @@ function renderWarmStudioModal() {
               </button>
             </div>
           </div>
-          <textarea id="warm-studio-textarea" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
+          <textarea id="warm-studio-textarea" aria-label="Editable outreach draft" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
         </div>
       </div>
 
       <div class="modal-footer">
         <div class="modal-footer-left">
-          ${selectedContact?.linkedinUrl ? `
-            <a class="secondary-button secondary-button--sm" href="${escapeAttr(selectedContact.linkedinUrl)}" target="_blank" rel="noopener noreferrer">
+          ${safeExternalHref(selectedContact?.linkedinUrl) ? `
+            <a class="secondary-button secondary-button--sm" href="${escapeAttr(safeExternalHref(selectedContact.linkedinUrl))}" target="_blank" rel="noopener noreferrer">
               Open ${escapeHtml(selectedContact.firstName || 'Contact')}'s LinkedIn &nearr;
             </a>
           ` : `
@@ -7375,8 +7407,8 @@ function renderWarmStudioModal() {
               Search Contact on LinkedIn &nearr;
             </a>
           `}
-          ${job?.url || job?.jobUrl ? `
-            <a class="ghost-button ghost-button--sm" href="${escapeAttr(job.url || job.jobUrl)}" target="_blank" rel="noopener noreferrer">
+          ${safeExternalHref(job?.url || job?.jobUrl) ? `
+            <a class="ghost-button ghost-button--sm" href="${escapeAttr(safeExternalHref(job.url || job.jobUrl))}" target="_blank" rel="noopener noreferrer">
               View Careers Board Posting &nearr;
             </a>
           ` : ''}
@@ -7384,13 +7416,37 @@ function renderWarmStudioModal() {
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-warm-studio">Done</button>
           <button class="primary-button" type="button" data-action="warm-studio-log-sent" data-job-id="${escapeAttr(job?.id || '')}" data-contact-id="${escapeAttr(selectedContact?.id || '')}">
-            ✓ Mark Intro Sent (Advance Pipeline)
+            ✓ I sent this · Mark role contacted
           </button>
         </div>
       </div>
     </div>
   `;
 
+  const textarea = document.getElementById('warm-studio-textarea');
+  const syncDraft = () => {
+    data.drafts ||= {};
+    data.drafts[draftKey] = textarea.value;
+    const meter = warmStudioModalBackdrop.querySelector('.char-count-meter');
+    meter.textContent = `${textarea.value.length}${charLimit ? ` / ${charLimit}` : ''} chars`;
+    meter.classList.toggle('is-overflow', Boolean(charLimit && textarea.value.length > charLimit));
+    const mail = warmStudioModalBackdrop.querySelector('.mailto-draft-btn');
+    const emailParts = selectedFormat === 'email_pitch' && textarea.value.startsWith('Subject: ')
+      ? textarea.value.match(/^Subject: ([^\n]*)\n\n([\s\S]*)$/) : null;
+    mail.href = `mailto:${encodeURIComponent(recipientEmail)}?subject=${encodeURIComponent(emailParts?.[1] || mailtoSubject)}&body=${encodeURIComponent(emailParts?.[2] ?? textarea.value)}`;
+  };
+  textarea.oninput = syncDraft;
+  syncDraft();
+  for (const field of ['goal', 'background']) {
+    document.getElementById(`warm-studio-${field}`).onchange = (event) => {
+      data[field] = event.target.value;
+      renderWarmStudioModal();
+      document.getElementById(`warm-studio-${field}`).focus();
+    };
+  }
+  warmStudioModalBackdrop.querySelectorAll('[data-tone], [data-format], [data-step]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.classList.contains('is-active')));
+  });
   const contactSelect = document.getElementById('warm-studio-contact-select');
   if (contactSelect) {
     contactSelect.onchange = () => {
@@ -10094,6 +10150,7 @@ async function openReferralShareModal() {
       </div>
     </div>
   `;
+
 
   referralShareModalBackdrop.classList.remove('hidden');
   referralShareModalBackdrop.setAttribute('aria-hidden', 'false');

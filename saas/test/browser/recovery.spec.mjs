@@ -12,7 +12,13 @@ test('saved recovery code resets a password once and revokes the signed-in sessi
   await page.locator('#signup-workspace').fill('Recovery Test');
   await page.locator('#signup-legal-consent').check();
   await page.locator('#signup-form button[type="submit"]').click();
-  await page.locator('#cloud-save-recovery-btn').click();
+  await page.locator('#cloud-dismiss-recovery-btn').click();
+  await expect(page.locator('#cloud-recovery-reminder')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('#cloud-avatar-btn')).toBeVisible();
+  await expect(page.locator('#cloud-recovery-reminder')).toHaveCount(0);
+  await page.locator('#cloud-avatar-btn').click();
+  await page.locator('#cloud-recovery-menu-btn').click();
   await page.locator('#recovery-password').fill('wrong-password');
   await page.getByRole('button', { name: 'Generate new recovery codes' }).click();
   await expect(page.locator('#recovery-status')).toContainText('incorrect');
