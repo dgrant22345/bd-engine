@@ -4353,6 +4353,8 @@ a {
 .billing-notice { display: grid; gap: 4px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); font-size: 0.86rem; }
 .billing-notice--warning { border-color: color-mix(in srgb, var(--warning) 55%, var(--line)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
 .billing-notice span { color: var(--muted); }
+.billing-return-notice { margin: 16px 20px; padding: 16px; background: var(--surface); }
+.billing-return-notice p { margin: 6px 0 12px; }
 
 .source-support-note {
   display: grid;

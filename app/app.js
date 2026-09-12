@@ -2429,6 +2429,7 @@ function finishWorkspaceLoadProgress() {
 
 async function init() {
   bindEvents();
+  initCheckoutReturnNotice();
   window.bdLocalApi.setAlert('', appAlert);
   trackAppVisit().catch(() => {});
   renderLoadingState('Dashboard', 'Building your operating view...');
@@ -2513,6 +2514,81 @@ async function init() {
     window.bdLocalApi.handleError(error, appAlert);
     appRoot.innerHTML = `<div class="empty-state">Unable to load the BD Engine data. ${escapeHtml(error.message || String(error))}</div>`;
   }
+}
+
+function initCheckoutReturnNotice() {
+  const outcome = new URLSearchParams(location.search).get('checkout');
+  if (!['returned', 'canceled'].includes(outcome)) return;
+  const notice = document.createElement('section');
+  notice.className = 'billing-notice billing-return-notice';
+  notice.setAttribute('aria-label', 'Checkout status');
+  notice.innerHTML = `<div role="status" aria-live="polite"><strong></strong><p class="small"></p></div><div class="button-row"><button type="button" class="secondary-button" data-check-billing>Check subscription status</button><a class="secondary-button hidden" data-reload-billing href="${escapeAttr(location.pathname)}#/admin/billing-subscription">Reload workspace</a><a class="secondary-button hidden" data-billing-support href="mailto:dgfinance15@gmail.com?subject=BD%20Engine%20billing%20support">Email billing support</a><button type="button" class="ghost-button" data-dismiss-billing>Dismiss</button></div>`;
+  appRoot.before(notice);
+  const heading = notice.querySelector('strong');
+  const copy = notice.querySelector('p');
+  const check = notice.querySelector('[data-check-billing]');
+  const reload = notice.querySelector('[data-reload-billing]');
+  const support = notice.querySelector('[data-billing-support]');
+  let attempts = 0;
+  let timer = null;
+  let checking = false;
+  const show = (title, message) => { heading.textContent = title; copy.textContent = message; };
+  const checkStatus = async () => {
+    if (checking || !notice.isConnected) return;
+    clearTimeout(timer);
+    checking = true;
+    check.disabled = true;
+    check.textContent = 'Checking subscription…';
+    attempts += 1;
+    const startedAt = performance.now();
+    try {
+      // A return URL is not payment evidence. Only persisted server billing state
+      // may confirm access; never change a plan or infer a successful charge here.
+      const billing = await api('/api/billing', { skipCache: true, signal: AbortSignal.timeout(10000) });
+      if (!notice.isConnected) return;
+      const active = ['sales', 'jobseeker'].includes(billing.plan?.id)
+        && billing.tenant?.status === 'active'
+        && !billing.billingAccess?.paymentAttentionRequired;
+      if (active) {
+        show('Your paid plan is active', `${billing.plan.displayName || billing.plan.name} is active for this workspace. Reload to use your current plan limits.`);
+        reload.classList.remove('hidden');
+        check.classList.add('hidden');
+        support.classList.add('hidden');
+      } else if (billing.billingAccess?.paymentAttentionRequired) {
+        show('Payment needs attention', 'Your workspace reports a payment issue. Review your billing details below; this return page does not confirm a new payment.');
+        support.classList.remove('hidden');
+      } else if (outcome === 'canceled') {
+        show('Checkout closed', `Your workspace is currently on the ${billing.plan?.displayName || 'current'} plan. Review Billing below when you are ready.`);
+      } else if (attempts < 6) {
+        show('Waiting for subscription confirmation', 'Your paid plan is not active in the workspace yet. We will check again shortly. If Stripe showed a completed payment, do not pay again.');
+        timer = setTimeout(checkStatus, 2000);
+      } else {
+        show('Subscription not confirmed yet', 'Automatic checks have paused. Check again in a moment. If Stripe showed a completed payment, contact support before trying another payment.');
+        support.classList.remove('hidden');
+      }
+    } catch (_error) {
+      if (notice.isConnected) {
+        show('Subscription status unavailable', 'We could not refresh your billing status. Check your connection and try again. This does not mean that a payment failed.');
+        support.classList.remove('hidden');
+      }
+    } finally {
+      checking = false;
+      check.disabled = false;
+      check.textContent = 'Check subscription status';
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 2000) console.warn(`Slow billing status: app/app.js initCheckoutReturnNotice ${elapsedMs}ms`);
+    }
+  };
+  check.onclick = () => { attempts = 0; checkStatus(); };
+  notice.querySelector('[data-dismiss-billing]').onclick = () => {
+    clearTimeout(timer);
+    const cleanUrl = new URL(location.href);
+    cleanUrl.searchParams.delete('checkout');
+    history.replaceState(history.state, '', cleanUrl);
+    notice.remove();
+  };
+  show(outcome === 'canceled' ? 'Checkout closed' : 'Checking your subscription', 'Loading the current plan status for this workspace…');
+  checkStatus();
 }
 
 function bindEvents() {
@@ -11638,6 +11714,13 @@ function openAdminSection(sectionId, focusKey = '') {
   const header = section?.querySelector('.collapsible-header[data-collapse-id]');
   if (header) {
     setCollapsibleState(header, false);
+    const returnNotice = document.querySelector('.billing-return-notice');
+    if (sectionId === 'billing-subscription' && returnNotice && !returnNotice.dataset.guided) {
+      returnNotice.dataset.guided = 'true';
+      returnNotice.tabIndex = -1;
+      focusGuidedControl(returnNotice, returnNotice);
+      return;
+    }
     const focusSelectors = {
       contacts: '#connections-csv-file',
       discovery: '[data-action="run-discovery"]',

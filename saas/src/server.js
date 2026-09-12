@@ -1313,12 +1313,12 @@ self.addEventListener('activate', (event) => {
     const planId = body.planId;
     try {
       const origin = getRequestOrigin(req);
-      const successUrl = `${origin}/app/#/admin`;
-      const cancelUrl = `${origin}/app/#/admin`;
+      const successUrl = `${origin}/app/?checkout=returned#/admin/billing-subscription`;
+      const cancelUrl = `${origin}/app/?checkout=canceled#/admin/billing-subscription`;
       const customerId = tenant.stripeCustomerId || tenant.stripe_customer_id || '';
       const subscriptionId = tenant.stripeSubscriptionId || tenant.stripe_subscription_id || '';
       if (customerId && subscriptionId) {
-        const portalUrl = await createBillingPortalSession(customerId, `${origin}/app/#/admin`);
+        const portalUrl = await createBillingPortalSession(customerId, `${origin}/app/#/admin/billing-subscription`);
         return sendJson(res, 200, {
           url: portalUrl,
           mode: 'portal',
@@ -1365,7 +1365,7 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 400, { error: 'No Stripe customer is attached to this workspace yet. Complete checkout first.' });
     }
     try {
-      const portalUrl = await createBillingPortalSession(customerId, `${getRequestOrigin(req)}/app/#/admin`);
+      const portalUrl = await createBillingPortalSession(customerId, `${getRequestOrigin(req)}/app/#/admin/billing-subscription`);
       return sendJson(res, 200, { url: portalUrl });
     } catch (err) {
       const failure = getBillingErrorResponse(err, 'portal');
