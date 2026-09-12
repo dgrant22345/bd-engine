@@ -38,6 +38,9 @@ test('outreach uses the exact role, preserves edits and offers distinct goals', 
   await app.locator('#warm-forget-background').click();
   expect(await frame.evaluate(() => Object.keys(localStorage).some(key => key.startsWith('bd-outreach-background:')))).toBe(false);
   expect(aiRequests).toEqual([]);
+  await draft.fill('Saved draft that must survive closing the studio.');
+  await app.locator('#warm-save-draft').click();
+  await expect(app.locator('#warm-draft-status')).toContainText('Draft saved');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: 'test-results/warm-studio-mobile.png', fullPage: true });
@@ -45,5 +48,11 @@ test('outreach uses the exact role, preserves edits and offers distinct goals', 
   await page.screenshot({ path: 'test-results/warm-studio-desktop.png', fullPage: true });
   await app.locator('[data-action="close-warm-studio"]').first().click();
   await expect(draft).toHaveCount(0);
+  await frame.evaluate(() => window.openWarmStudioModal('studio-test', 'c1'));
+  await app.locator('#warm-restore-draft').click();
+  await expect(draft).toHaveValue('Saved draft that must survive closing the studio.');
+  await app.locator('#warm-delete-draft').click();
+  await expect(draft).toHaveValue('Saved draft that must survive closing the studio.');
+  await app.locator('[data-action="close-warm-studio"]').first().click();
   expect(errors).toEqual([]);
 });

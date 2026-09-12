@@ -14,12 +14,12 @@ internal `sales` identifier and entitlements remain unchanged.
 
 ## Gate before asking anyone to pay
 
-Production currently blocks new checkout because the full commercial readiness
-gate fails on email configuration. Do not describe paid checkout as available.
-Configure RESEND_API_KEY and a verified BD_EMAIL_FROM securely, test password
-reset, verification and support delivery with an owner-controlled inbox, then
-enable BD_REQUIRE_EMAIL_VERIFICATION and test both blocked/unblocked imports.
-Never enable verification first or bypass the commercial gate to increase sales.
+Updated September 12: the owner-approved recovery-code release removed the
+email-only checkout blocker. Live Stripe catalog verification passes for both
+plans and the configured webhook. Email delivery remains unconfigured; one-time
+recovery codes are available. Do not enable mandatory email verification before
+configuring and testing delivery. Catalog readiness is not proof of a completed
+payment or subscription activation.
 Check live purchase, webhook entitlement, billing portal and cancellation in a
 controlled owner-approved transaction before broad paid promotion. Automated
 Stripe contracts do not substitute for that live evidence.

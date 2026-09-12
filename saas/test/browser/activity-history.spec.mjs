@@ -19,4 +19,8 @@ test('Follow-ups exposes searchable activity history', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: 'test-results/activity-history-mobile.png', fullPage: true });
+  await frame.evaluate(() => { window.location.hash = '#/jobs'; });
+  await app.locator('#job-filter-explanation summary').click();
+  await expect(app.locator('#job-filter-explanation')).toContainText('Import coverage and shortlist filters are different');
+  expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });

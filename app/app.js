@@ -7273,6 +7273,12 @@ function warmStudioDraftKey(data) {
   return JSON.stringify([data.selectedContact?.id || data.selectedContact?.fullName || '', data.selectedStep, data.selectedFormat, data.selectedTone, data.goal, data.background, data.relationship, data.ask]);
 }
 
+function warmStudioSavedDraftKey(data) {
+  const session = appState.bootstrap?.session;
+  if (!session?.tenant?.id || !session?.user?.id || !data.job?.id) return '';
+  return `bd-saved-outreach:${JSON.stringify([session.tenant.id, session.user.id, data.job.id, data.selectedContact?.id || data.selectedContact?.fullName || ''])}`;
+}
+
 function renderWarmStudioModal() {
   if (!warmStudioModalBackdrop || !appState.warmStudioData) return;
   const data = appState.warmStudioData;
@@ -7320,7 +7326,7 @@ function renderWarmStudioModal() {
           <span class="modal-icon-badge" aria-hidden="true">💌</span>
           <div>
             <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
-            <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Editable drafts — review all facts before sending. Edits stay until you close.</p>
+            <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Review all facts before sending. Save your draft to keep it after closing.</p>
           </div>
         </div>
         <button class="modal-close-btn" type="button" data-action="close-warm-studio" aria-label="Close modal">&times;</button>
@@ -7417,6 +7423,8 @@ function renderWarmStudioModal() {
             </div>
           </div>
           <textarea id="warm-studio-textarea" aria-label="Editable outreach draft" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
+          <div><button type="button" class="secondary-button" id="warm-save-draft">Save draft</button> <button type="button" class="ghost-button" id="warm-restore-draft">Restore saved draft</button> <button type="button" class="ghost-button" id="warm-delete-draft">Forget saved draft</button></div>
+          <p class="small muted" id="warm-draft-status" role="status">One saved draft per role and recipient, on this browser only. Saving replaces that saved draft; no cross-device sync.</p>
           <p class="small muted">Drafted locally from your context. No AI service or API charges.</p>
           <label for="warm-complete-task">When I confirm sent, also complete this task</label>
           <select id="warm-complete-task" ${data.sentActivityId ? 'disabled' : ''}>
@@ -7468,6 +7476,34 @@ function renderWarmStudioModal() {
   };
   textarea.oninput = syncDraft;
   syncDraft();
+  const savedDraftKey = warmStudioSavedDraftKey(data);
+  const draftStatus = document.getElementById('warm-draft-status');
+  for (const id of ['warm-save-draft', 'warm-restore-draft', 'warm-delete-draft']) document.getElementById(id).disabled = !savedDraftKey;
+  document.getElementById('warm-save-draft').onclick = () => {
+    try {
+      if (textarea.value.length > 12000) { draftStatus.textContent = 'Draft is too long to save (maximum 12,000 characters).'; return; }
+      const saved = { text: textarea.value, selectedFormat, selectedTone, selectedStep, goal: data.goal, background: data.background || '', relationship: data.relationship || '', ask: data.ask || '' };
+      localStorage.setItem(savedDraftKey, JSON.stringify(saved));
+      draftStatus.textContent = 'Draft saved on this browser. You can close the studio and restore it later.';
+    } catch { draftStatus.textContent = 'Could not save: browser storage is unavailable or full. Copy your draft before closing.'; }
+  };
+  document.getElementById('warm-restore-draft').onclick = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(savedDraftKey) || 'null');
+      if (!saved || typeof saved.text !== 'string' || saved.text.length > 12000) { draftStatus.textContent = 'No valid saved draft for this role and recipient.'; return; }
+      if (!['referral_dm', 'linkedin_note', 'email_pitch', 'recruiter_pitch'].includes(saved.selectedFormat) || !['casual', 'direct', 'professional'].includes(saved.selectedTone) || ![1, 2, 3].includes(saved.selectedStep) || !['recruiting', 'job_search'].includes(saved.goal)) throw new Error('Invalid saved draft');
+      if (typeof saved.background !== 'string' || typeof saved.relationship !== 'string' || typeof saved.ask !== 'string') throw new Error('Invalid context');
+      Object.assign(data, { selectedFormat: saved.selectedFormat, selectedTone: saved.selectedTone, selectedStep: saved.selectedStep, goal: saved.goal, background: saved.background.slice(0, 1000), relationship: saved.relationship.slice(0, 500), ask: saved.ask.slice(0, 300) });
+      data.drafts[warmStudioDraftKey(data)] = saved.text;
+      renderWarmStudioModal();
+      document.getElementById('warm-draft-status').textContent = 'Saved draft restored.';
+      document.getElementById('warm-studio-textarea').focus();
+    } catch { draftStatus.textContent = 'Saved draft could not be restored. Your current draft is unchanged.'; }
+  };
+  document.getElementById('warm-delete-draft').onclick = () => {
+    try { localStorage.removeItem(savedDraftKey); draftStatus.textContent = 'Saved copy removed. Your current draft is unchanged.'; }
+    catch { draftStatus.textContent = 'Could not remove the saved copy from browser storage.'; }
+  };
   document.getElementById('warm-save-background').onclick = () => {
     try {
       const key = warmStudioBackgroundKey(data.goal);
@@ -11466,6 +11502,13 @@ async function renderJobsView() {
 
   appRoot.innerHTML = `
     <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${formatNumber(result.total)} results</strong></div>
+    <details class="form-card workspace-disclosure" id="job-filter-explanation">
+      <summary><span><strong>Why am I seeing these jobs?</strong><small>Import coverage and shortlist filters are different</small></span></summary>
+      <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
+      <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
+      <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>
+      <p>Open a job’s relevance reasons to understand its score. Excluded title phrases lower relevance; they are not proof of a failed import. Adjust your <a href="#/admin/search-focus">saved focus</a>, use <strong>All Roles</strong> below to broaden the list, or <a href="#/admin/jobs">check source coverage and refresh errors</a>.</p>
+    </details>
 
     <section class="table-card">
       <div class="panel-header">
