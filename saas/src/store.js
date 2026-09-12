@@ -3270,9 +3270,18 @@ export function createStore() {
       };
     },
 
-    getActivity(tenantId, query) {
+    getActivity(tenantId, query = {}) {
       assertTenant(tenantId);
-      return paginate(activitiesForTenant(tenantId), query);
+      const q = String(query.q || '').toLowerCase();
+      const items = activitiesForTenant(tenantId).filter(item =>
+        (!query.type || item.type === query.type)
+        && (!query.accountId || item.accountId === query.accountId)
+        && (!q || `${item.summary || ''} ${item.notes || ''} ${item.normalizedCompanyName || ''}`.toLowerCase().includes(q))
+      ).slice().sort((a, b) => {
+        const direction = query.sort === 'oldest' ? 1 : -1;
+        return direction * (String(a.occurredAt || a.createdAt).localeCompare(String(b.occurredAt || b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+      });
+      return paginate(items, query);
     },
 
     async addActivity(tenantId, userId, payload = {}) {
@@ -3316,7 +3325,7 @@ export function createStore() {
       const itemAccount = activity.accountId
         ? accountsForTenant(tenantId).find((item) => item.id === activity.accountId)
         : null;
-      if (itemAccount) {
+      if (itemAccount && activity.type !== 'task_completed') {
         const currentLastContactedAt = new Date(itemAccount.lastContactedAt || 0).getTime();
         const activityOccurredAt = new Date(activity.occurredAt).getTime();
         if (!Number.isFinite(currentLastContactedAt) || activityOccurredAt >= currentLastContactedAt) {
@@ -3413,9 +3422,14 @@ export function createStore() {
       return dbGetCommercialOutcomeSummary(tenantId, normalizedQuery);
     },
 
-    findActivities(tenantId, query) {
+    async findActivities(tenantId, query) {
       assertTenant(tenantId);
-      return paginate(activitiesForTenant(tenantId), query);
+      const startedAt = performance.now();
+      await ensureDataLoaded(tenantId, false);
+      const result = this.getActivity(tenantId, query);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 150) console.warn(`Slow activity history: saas/src/store.js findActivities ${elapsedMs}ms`);
+      return result;
     },
 
     async findTasks(tenantId, query) {
@@ -3448,14 +3462,19 @@ export function createStore() {
       return task;
     },
 
-    async completeTask(tenantId, taskId) {
+    async completeTask(tenantId, taskId, userId = '') {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
       const task = tasksForTenant(tenantId).find((item) => item.id === taskId);
-      if (task) {
+      if (task && task.status !== 'completed') {
         task.status = 'completed';
         task.updatedAt = now();
-        persistTenant(tenantId);
+        await this.addActivity(tenantId, userId, {
+          accountId: task.accountId || '',
+          type: 'task_completed',
+          summary: `Completed task: ${task.summary || task.title || 'Follow-up'}`,
+          metadata: { taskId: task.id },
+        });
       }
       return task;
     },

@@ -7238,9 +7238,11 @@ function generateWarmStudioCopy(data) {
   const nextStep = selectedStep === 3 ? '' : recruiting
     ? hiringContact ? 'Is external recruiting support useful for this search?' : 'Who would be the right person to ask about recruiting support for this role?'
     : hiringContact ? 'What experience matters most for this search?' : 'Would you be open to sharing some context about the team?';
-  const request = selectedTone === 'direct' ? nextStep : selectedTone === 'professional'
-    ? `If appropriate, ${nextStep.charAt(0).toLowerCase()}${nextStep.slice(1)}` : nextStep;
-  const body = [`${greeting} ${firstName},`, opening, evidence, request].filter(Boolean).join('\n\n');
+  const personalizedAsk = String(data.ask || '').trim() || nextStep;
+  const request = selectedTone === 'direct' ? personalizedAsk : selectedTone === 'professional'
+    ? personalizedAsk ? `If appropriate, ${personalizedAsk.charAt(0).toLowerCase()}${personalizedAsk.slice(1)}` : '' : personalizedAsk;
+  const relationship = String(data.relationship || '').trim();
+  const body = [`${greeting} ${firstName},`, relationship, opening, evidence, selectedStep === 3 ? '' : request].filter(Boolean).join('\n\n');
   const linkedinNote = `${greeting} ${firstName}, ${opening} ${recruiting ? 'Open to connecting about hiring priorities?' : 'Open to connecting about the team?'}`;
   return {
     linkedinNote,
@@ -7252,7 +7254,7 @@ function generateWarmStudioCopy(data) {
 }
 
 function warmStudioDraftKey(data) {
-  return JSON.stringify([data.selectedContact?.id || data.selectedContact?.fullName || '', data.selectedStep, data.selectedFormat, data.selectedTone, data.goal, data.background]);
+  return JSON.stringify([data.selectedContact?.id || data.selectedContact?.fullName || '', data.selectedStep, data.selectedFormat, data.selectedTone, data.goal, data.background, data.relationship, data.ask]);
 }
 
 function renderWarmStudioModal() {
@@ -7316,6 +7318,10 @@ function renderWarmStudioModal() {
         </select>
         <label for="warm-studio-background">Your relevant context (optional)</label>
         <textarea id="warm-studio-background" rows="2" maxlength="1000" placeholder="Add a true, specific reason you can help. Avoid confidential candidate details.">${escapeHtml(data.background || '')}</textarea>
+        <label for="warm-studio-relationship">Why this person? (optional, verified context)</label>
+        <input id="warm-studio-relationship" maxlength="500" value="${escapeAttr(data.relationship || '')}" placeholder="For example: We spoke at the Toronto recruiting meetup about technical hiring.">
+        <label for="warm-studio-ask">Your specific question or next step (optional)</label>
+        <input id="warm-studio-ask" maxlength="300" value="${escapeAttr(data.ask || '')}" placeholder="For example: Is backend hiring the priority, or are you focused on data engineering?">
         <p class="small muted">${escapeHtml(selectedContact ? /recruit|talent|human resources|hiring/i.test(selectedContact.title || '') ? 'Their title suggests a hiring contact: ask about search priorities, not an immediate meeting.' : 'Hiring responsibility is unconfirmed: ask for the right person before pitching.' : 'No contact is linked. Identify a recipient before sending.')} Connection strength is not verified. Nothing is sent automatically.</p>
         <!-- Sequence Step Switcher -->
         <div class="warm-studio-sequence-bar">
@@ -7437,7 +7443,7 @@ function renderWarmStudioModal() {
   };
   textarea.oninput = syncDraft;
   syncDraft();
-  for (const field of ['goal', 'background']) {
+  for (const field of ['goal', 'background', 'relationship', 'ask']) {
     document.getElementById(`warm-studio-${field}`).onchange = (event) => {
       data[field] = event.target.value;
       renderWarmStudioModal();
@@ -7472,12 +7478,30 @@ async function copyWarmStudioText(buttonEl) {
 }
 
 async function logWarmStudioSent(jobId, contactId) {
+  const data = appState.warmStudioData;
+  if (!data || data.loggingSent) return;
+  data.loggingSent = true;
+  try {
+    if (!data.sentActivityId) {
+      const activity = await api('/api/activity', { method: 'POST', body: JSON.stringify({
+        accountId: data.account?.id || data.job?.accountId || '',
+        contactId: data.selectedContact?.id || '',
+        type: 'outreach',
+        summary: `Sent outreach to ${data.selectedContact?.fullName || 'contact'} about ${data.job?.title || 'role'}`,
+        notes: document.getElementById('warm-studio-textarea')?.value || '',
+        metadata: { jobId, format: data.selectedFormat, step: data.selectedStep, confirmation: 'user_confirmed_sent' },
+      }) });
+      data.sentActivityId = activity.id || 'recorded';
+    }
   if (jobId) {
     await updateJobPipelineStage(jobId, 'contacted', { skipRender: true });
-    showToast('✓ Pipeline updated: Marked as Warm Intro Sent!', 'success');
+    showToast('Outreach recorded. View it in Follow-ups → Activity history.', 'success');
   }
   closeWarmStudioModal();
   if (getRouteRoot() === 'jobs') await renderJobsView();
+  } catch (error) {
+    showToast(data.sentActivityId ? 'Outreach was recorded, but the role status could not update. Retry to update the status.' : `Could not record outreach: ${error.message || error}`, 'error');
+  } finally { data.loggingSent = false; }
 }
 
 /* ══════════════════════════════════════════════════
@@ -14829,6 +14853,16 @@ async function renderTasksView() {
 
     appRoot.innerHTML = `
       <section class="tasks-view">
+        <details class="form-card workspace-disclosure" id="activity-history">
+          <summary><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
+          <form id="activity-history-form" class="task-create-form">
+            <label>Search<input name="q" placeholder="Message, company or notes"></label>
+            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="note">Notes</option></select></label>
+            <label>Order<select name="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <button class="secondary-button" type="submit">Apply filters</button>
+          </form>
+          <div id="activity-history-results" aria-live="polite"></div>
+        </details>
         <div class="panel-header tasks-header">
           <div>
             <p class="eyebrow">Follow-up queue</p>
@@ -14872,6 +14906,28 @@ async function renderTasksView() {
         </div>
       </section>
     `;
+    const history = document.getElementById('activity-history');
+    const historyForm = document.getElementById('activity-history-form');
+    let historyRequest = 0;
+    const loadHistory = async (page = 1) => {
+      const request = ++historyRequest;
+      const results = document.getElementById('activity-history-results');
+      results.textContent = 'Loading activity…';
+      try {
+        const query = new URLSearchParams(new FormData(historyForm));
+        query.set('page', page);
+        query.set('pageSize', '25');
+        const response = await api(`/api/activity?${query}`);
+        if (request !== historyRequest || !results.isConnected) return;
+        results.innerHTML = response.items.map(item => `<article class="task-item"><div><strong>${escapeHtml(item.summary)}</strong><div class="small muted">${escapeHtml(item.type === 'task_completed' ? 'Task completed' : item.type)} · ${escapeHtml(formatDate(item.occurredAt || item.createdAt))}</div>${item.notes ? `<details><summary>Details</summary><p style="white-space:pre-wrap">${escapeHtml(item.notes)}</p></details>` : ''}</div></article>`).join('') || '<p>No activity matches these filters.</p>';
+        results.insertAdjacentHTML('beforeend', `<div class="tasks-tabs"><button type="button" class="secondary-button" data-history-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button><span>Page ${page} · ${response.total} activities</span><button type="button" class="secondary-button" data-history-page="${page + 1}" ${page * 25 >= response.total ? 'disabled' : ''}>Next</button></div>`);
+        results.querySelectorAll('[data-history-page]').forEach(button => { button.onclick = () => loadHistory(Number(button.dataset.historyPage)); });
+      } catch {
+        if (request === historyRequest && results.isConnected) results.textContent = 'Could not load activity. Apply filters to try again.';
+      }
+    };
+    history.ontoggle = () => { if (history.open) loadHistory(); };
+    historyForm.onsubmit = event => { event.preventDefault(); loadHistory(); };
   } catch (error) {
     if (!isCurrent()) return;
     appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;

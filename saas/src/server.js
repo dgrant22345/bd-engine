@@ -1920,7 +1920,7 @@ self.addEventListener('activate', (event) => {
 
   if (pathname === '/api/activity') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, store.getActivity(tenantId, Object.fromEntries(url.searchParams)));
+      return sendJson(res, 200, await store.findActivities(tenantId, Object.fromEntries(url.searchParams)));
     }
     if (req.method === 'POST') {
       const payload = await readJson(req);
@@ -1960,7 +1960,7 @@ self.addEventListener('activate', (event) => {
     }
     const match = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
     if (match && req.method === 'POST') {
-      const task = await store.completeTask(tenantId, match[1]);
+      const task = await store.completeTask(tenantId, match[1], user.id);
       if (!task) return sendJson(res, 404, { error: 'Task not found' });
       return sendJson(res, 200, task);
     }

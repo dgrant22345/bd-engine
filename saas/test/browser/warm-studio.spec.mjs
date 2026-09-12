@@ -24,6 +24,12 @@ test('outreach uses the exact role, preserves edits and offers distinct goals', 
   await app.locator('#warm-studio-background').fill('I have five years of recruiting experience.');
   await app.locator('#warm-studio-background').press('Tab');
   await expect(draft).toHaveValue(/five years/);
+  await app.locator('#warm-studio-relationship').fill('We discussed Toronto hiring last week.');
+  await app.locator('#warm-studio-relationship').press('Tab');
+  await app.locator('#warm-studio-ask').fill('Would a short background summary be useful?');
+  await app.locator('#warm-studio-ask').press('Tab');
+  await expect(draft).toHaveValue(/We discussed Toronto hiring last week/);
+  await expect(draft).toHaveValue(/Would a short background summary be useful/);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: 'test-results/warm-studio-mobile.png', fullPage: true });
