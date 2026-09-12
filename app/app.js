@@ -3035,6 +3035,7 @@ function bindEvents() {
       if (view === 'accounts') appState.accountQuery.page = page;
       if (view === 'contacts') appState.contactQuery.page = page;
       if (view === 'jobs') appState.jobQuery.page = page;
+      if (view === 'tasks') appState.taskQuery.page = page;
       if (view === 'configs') appState.configQuery.page = page;
       if (view === 'enrichmentQueue') {
         appState.enrichmentQuery.page = page;
@@ -14922,6 +14923,7 @@ async function renderTasksView() {
   try {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
     if (!isCurrent()) return;
+    appState.taskQuery.page = tasks.page;
     setViewTitle('Follow-ups');
 
     const todayKey = toLocalDateInputValue(new Date());
@@ -14932,11 +14934,12 @@ async function renderTasksView() {
     const today = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) === todayKey);
     const upcoming = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) > todayKey);
     const completed = tasks.items.filter(t => t.status === 'completed');
+    const undated = tasks.items.filter(t => t.status === 'pending' && !calendarDateKey(t.dueDate));
 
     appRoot.innerHTML = `
       <section class="tasks-view">
         <details class="form-card workspace-disclosure" id="activity-history">
-          <summary><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
+          <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
           <form id="activity-history-form" class="task-create-form">
             <label>Search<input name="q" placeholder="Message, company or notes"></label>
             <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="note">Notes</option></select></label>
@@ -14949,7 +14952,7 @@ async function renderTasksView() {
           <div>
             <p class="eyebrow">Follow-up queue</p>
             <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : 'Completed work'}</h3>
-            <p class="muted small">Keep the next commitment visible; create another only when you need it.</p>
+            <p class="muted small">${formatNumber(tasks.total)} matching tasks. ${appState.taskQuery.status === 'pending' ? 'Earliest due dates first by default, across the entire queue.' : 'Most recently completed first by default.'} Section counts refer to this page.</p>
           </div>
           <div class="tasks-tabs" role="tablist" aria-label="Task status">
             <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" id="tasks-tab-pending" role="tab" aria-selected="${String(appState.taskQuery.status === 'pending')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'pending' ? '0' : '-1'}" data-action="filter-tasks" data-status="pending">Pending</button>
@@ -14975,19 +14978,40 @@ async function renderTasksView() {
           </form>
         </details>
 
+        <form id="task-search-form" class="task-create-form task-search-form">
+          <label><span>Search tasks or company</span><input name="q" maxlength="240" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Follow-up, company or task title"></label>
+          <label><span>Sort</span><select name="sort"><option value="">${appState.taskQuery.status === 'pending' ? 'Due date — earliest first' : 'Completed — newest first'}</option><option value="name" ${selected(appState.taskQuery.sort, 'name')}>Task title A–Z</option></select></label>
+          <button class="secondary-button" type="submit">Search tasks</button>
+          <button class="ghost-button" id="task-search-clear" type="button">Clear search</button>
+        </form>
+
         <div class="tasks-content" id="tasks-panel" role="tabpanel" aria-labelledby="tasks-tab-${escapeAttr(appState.taskQuery.status)}">
           ${appState.taskQuery.status === 'pending' ? `
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
+            ${renderTaskSection('No due date', undated, 'neutral')}
+            ${!tasks.items.length ? renderEmptyState({ icon: 'OK', title: appState.taskQuery.q ? 'No tasks match your search' : 'No pending tasks', copy: appState.taskQuery.q ? 'Clear or change your search to see other tasks.' : 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
-            ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
+            ${!completed.length ? renderEmptyState({ icon: 'Done', title: appState.taskQuery.q ? 'No tasks match your search' : 'No completed tasks yet', copy: appState.taskQuery.q ? 'Clear or change your search to see other completed tasks.' : 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
           `}
         </div>
+        ${renderPagination('tasks', tasks.page, tasks.pageSize, tasks.total)}
       </section>
     `;
+    document.getElementById('task-search-form').onsubmit = async event => {
+      event.preventDefault();
+      const fields = new FormData(event.currentTarget);
+      appState.taskQuery = { ...appState.taskQuery, q: String(fields.get('q') || '').trim(), sort: String(fields.get('sort') || ''), page: 1 };
+      await renderTasksView();
+      document.querySelector('#task-search-form input')?.focus();
+    };
+    document.getElementById('task-search-clear').onclick = async () => {
+      appState.taskQuery = { ...appState.taskQuery, q: '', sort: '', page: 1 };
+      await renderTasksView();
+      document.querySelector('#task-search-form input')?.focus();
+    };
     const history = document.getElementById('activity-history');
     const historyForm = document.getElementById('activity-history-form');
     let historyRequest = 0;
@@ -15035,7 +15059,7 @@ function renderTaskItem(task) {
       <div class="task-item-main">
         <div class="task-item-info">
           <strong>${escapeHtml(summary)}</strong>
-          <div class="small muted">Due ${formatCalendarDate(task.dueDate)}</div>
+          <div class="small muted">${task.status === 'completed' ? `Completed ${formatDate(task.updatedAt || task.createdAt)}` : task.dueDate ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date'}${task.accountName ? ` · ${escapeHtml(task.accountName)}` : ''}</div>
         </div>
         <div class="task-item-actions">
           ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
@@ -15053,30 +15077,17 @@ async function completeTask(taskId, buttonEl) {
   try {
     await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
     invalidateAppData();
-    const taskItem = button?.closest('.task-item') || document.querySelector(`.task-item[data-task-id="${CSS.escape(taskId)}"]`);
-    if (appState.taskQuery.status === 'pending' && taskItem) {
-      const section = taskItem.closest('.task-section');
-      taskItem.classList.add('task-item--leaving');
-      await new Promise((resolve) => window.setTimeout(resolve, 150));
-      taskItem.remove();
-      const remaining = section?.querySelectorAll('.task-item').length || 0;
-      if (!remaining) {
-        section?.remove();
-      } else {
-        const heading = section.querySelector('[data-section-title]');
-        if (heading) heading.textContent = `${heading.dataset.sectionTitle} (${remaining})`;
-      }
-      const content = document.querySelector('.tasks-content');
-      if (content && !content.querySelector('.task-item')) {
-        content.innerHTML = renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' });
-      }
-    } else {
+    // Scoped task read fills the freed row, updates totals and clamps a now-empty last page.
+    if (getRouteRoot() === 'tasks') {
+      const historyOpen = document.getElementById('activity-history')?.open;
       await renderTasksView();
+      if (historyOpen && document.getElementById('activity-history')) document.getElementById('activity-history').open = true;
+      document.querySelector('.task-item [data-action="complete-task"]')?.focus();
     }
-    showToast('Task completed.', 'success');
+    showToast('Task completed. Recorded in Activity history.', 'success');
   } catch (error) {
     showToast('Failed to complete task: ' + error.message, 'error');
-    if (button) { button.disabled = false; button.textContent = originalLabel; }
+    if (button?.isConnected) { button.disabled = false; button.textContent = originalLabel; }
   }
 }
 

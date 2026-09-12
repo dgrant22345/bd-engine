@@ -3444,11 +3444,31 @@ export function createStore() {
       return result;
     },
 
-    async findTasks(tenantId, query) {
+    async findTasks(tenantId, query = {}) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
       await ensureDataLoaded(tenantId, false);
       const status = query.status || 'pending';
-      return paginate(tasksForTenant(tenantId).filter(t => t.status === status && (!query.accountId || t.accountId === query.accountId)), query);
+      const search = String(query.q || '').trim().toLowerCase().slice(0, 240);
+      const accountNames = new Map(accountsForTenant(tenantId).map(account => [account.id, account.displayName || account.companyName || '']));
+      const dateValue = (value, fallback) => { const parsed = Date.parse(value || ''); return Number.isFinite(parsed) ? parsed : fallback; };
+      const items = tasksForTenant(tenantId).filter(task => task.status === status
+        && (!query.accountId || task.accountId === query.accountId)
+        && (!search || `${task.summary || task.title || ''} ${accountNames.get(task.accountId) || ''}`.toLowerCase().includes(search)))
+        .slice().sort((a, b) => {
+          if (query.sort === 'name') return String(a.summary || a.title || '').localeCompare(String(b.summary || b.title || '')) || String(a.id).localeCompare(String(b.id));
+          const difference = status === 'completed'
+            ? dateValue(b.updatedAt || b.createdAt, 0) - dateValue(a.updatedAt || a.createdAt, 0)
+            : dateValue(a.dueDate, Number.MAX_SAFE_INTEGER) - dateValue(b.dueDate, Number.MAX_SAFE_INTEGER);
+          return difference || String(a.id).localeCompare(String(b.id));
+        });
+      const pageSize = Math.max(1, Math.min(10000, Math.floor(Number(query.pageSize) || 25)));
+      const page = Math.min(Math.max(1, Math.floor(Number(query.page) || 1)), Math.max(1, Math.ceil(items.length / pageSize)));
+      const result = paginate(items, { ...query, page, pageSize });
+      result.items = result.items.map(task => ({ ...task, accountName: accountNames.get(task.accountId) || '' }));
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 150) console.warn(`Slow task queue: saas/src/store.js findTasks ${elapsedMs}ms`);
+      return result;
     },
 
     async createTask(tenantId, payload = {}) {

@@ -609,6 +609,10 @@ test('task journey: whitespace task is rejected visibly, valid task succeeds', a
   await createdTask.getByRole('button', { name: 'Mark Done' }).click();
   await expect(app.locator('.loading-shell')).toHaveCount(0);
   await expect(createdTask).toHaveCount(0, { timeout: 5000 });
+  await app.getByRole('tab', { name: 'Completed', exact: true }).click();
+  await expect(app.locator('.tasks-content')).toContainText('Follow up with journey account');
+  await app.locator('#activity-history summary').click();
+  await expect(app.locator('#activity-history-results')).toContainText('Completed task: Follow up with journey account');
 });
 
 test('filter journey: contacts filter narrows results without errors', async ({ page }) => {
