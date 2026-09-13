@@ -65,10 +65,21 @@
     const element = dialog(kind === 'draft' ? 'My saved drafts' : 'My saved People views', `<p class="people-provenance">Private to your login in this workspace. Available on your other signed-in devices.</p><form data-search><label class="people-field">Search saved ${kind === 'draft' ? 'drafts' : 'views'}<input name="q" type="search" maxlength="240"></label><button class="secondary-button">Search</button></form><p role="status" data-feedback></p><div data-items></div><footer><button class="secondary-button" data-prev>Previous</button><span data-page></span><button class="secondary-button" data-next>Next</button></footer>`);
     const feedback = element.querySelector('[data-feedback]');
     const items = element.querySelector('[data-items]');
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.className = 'secondary-button'; retry.textContent = 'Try again'; retry.hidden = true;
+    feedback.after(retry);
+    retry.onclick = () => refresh();
     async function refresh() {
       const current = ++request;
+      feedback.setAttribute('role', 'status');
       feedback.textContent = 'Loading…';
+      retry.hidden = true;
+      items.replaceChildren();
       items.inert = true;
+      items.setAttribute('aria-busy', 'true');
+      element.querySelector('[data-prev]').disabled = true;
+      element.querySelector('[data-next]').disabled = true;
+      element.querySelector('[data-page]').textContent = '';
       try {
         const result = await api(`/api/saved-work/${kind}?${new URLSearchParams({ page, q: search })}`);
         if (!element.isConnected || current !== request) return;
@@ -76,6 +87,7 @@
         if (!result.items.length && page > 1) { page -= 1; return refresh(); }
         feedback.textContent = result.items.length ? '' : 'Nothing saved here yet.';
         items.innerHTML = result.items.map((item, index) => `<article class="person-section"><strong>${escape(item.title)}</strong><p class="small muted">Saved ${escape(new Date(item.updatedAt).toLocaleString())}</p><div class="button-row"><button class="secondary-button" data-open="${index}">${kind === 'draft' ? 'Open draft' : 'Apply view'}</button><button class="ghost-button" data-delete="${index}">Delete</button></div></article>`).join('');
+        items.inert = false;
         element.querySelector('[data-prev]').disabled = page <= 1;
         element.querySelector('[data-next]').disabled = result.items.length < result.pageSize || page * result.pageSize >= result.total;
         element.querySelector('[data-page]').textContent = `Page ${page}`;
@@ -91,8 +103,14 @@
           try { await api(`${path(kind, item.id)}?version=${item.version}`, { method: 'DELETE' }); await refresh(); }
           catch (error) { feedback.textContent = error.message; button.disabled = false; }
         };
-      } catch (error) { if (current === request) feedback.textContent = `Could not load saved work. ${error.message} Search again to retry.`; }
-      finally { if (current === request) items.inert = false; }
+      } catch (error) {
+        if (current === request && element.isConnected) {
+          feedback.setAttribute('role', 'alert');
+          feedback.textContent = `Could not load saved work. ${error.message} Your saved items are unchanged.`;
+          retry.hidden = false;
+        }
+      }
+      finally { if (current === request) items.setAttribute('aria-busy', 'false'); }
     }
     function openDraft(item) {
       const editor = dialog(item.title, `<form><p class="people-provenance">Saved draft, not a sent message. Review every claim before using it.</p><label class="people-field">Message<textarea name="text" rows="10" maxlength="12000" required>${escape(item.body.text)}</textarea></label><p data-status role="status"></p><div class="button-row"><button class="primary-button" type="submit">Save changes</button><button class="secondary-button" type="button" data-copy>Copy message</button>${item.body.contactId ? `<a class="secondary-button" href="#/contacts?person=${encodeURIComponent(item.body.contactId)}" data-person>Open person</a>` : ''}</div></form>`);

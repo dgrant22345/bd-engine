@@ -15058,6 +15058,14 @@ async function renderTasksView() {
   const contactId = new URLSearchParams(location.hash.split('?')[1] || '').get('contactId') || '';
   if (contactId !== (appState.taskQuery.contactId || '')) appState.taskQuery = { ...appState.taskQuery, q: '', page: 1, status: 'pending', sort: '' };
   appState.taskQuery.contactId = contactId;
+  const session = appState.bootstrap?.session;
+  // Completing a task invalidates bootstrap, not the signed-in identity.
+  const historyIdentity = session?.tenant?.id && session?.user?.id ? JSON.stringify([session.tenant.id, session.user.id]) : appState.activityHistory?.identity || '';
+  const historyScope = JSON.stringify([historyIdentity, contactId]);
+  if (appState.activityHistory?.scope !== historyScope) {
+    appState.activityHistory = { identity: historyIdentity, scope: historyScope, open: false, page: 1, query: { q: '', type: '', sort: 'newest' }, fields: { q: '', type: '', sort: 'newest' } };
+  }
+  const historyState = appState.activityHistory;
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
@@ -15157,27 +15165,39 @@ async function renderTasksView() {
     };
     const history = document.getElementById('activity-history');
     const historyForm = document.getElementById('activity-history-form');
+    for (const [name, value] of Object.entries(historyState.fields)) historyForm.elements[name].value = value;
+    const rememberHistoryFields = () => { historyState.fields = Object.fromEntries(new FormData(historyForm)); };
+    historyForm.oninput = rememberHistoryFields;
+    historyForm.onchange = rememberHistoryFields;
     let historyRequest = 0;
-    const loadHistory = async (page = 1) => {
+    const loadHistory = async (page = historyState.page) => {
+      const startedAt = performance.now();
       const request = ++historyRequest;
       const results = document.getElementById('activity-history-results');
       results.textContent = 'Loading activity…';
+      historyState.page = page;
       try {
-        const query = new URLSearchParams(new FormData(historyForm));
-        if (appState.taskQuery.contactId) query.set('contactId', appState.taskQuery.contactId);
+        const query = new URLSearchParams(historyState.query);
+        if (contactId) query.set('contactId', contactId);
         query.set('page', page);
         query.set('pageSize', '25');
-        const response = await api(`/api/activity?${query}`);
-        if (request !== historyRequest || !results.isConnected) return;
+        const response = await api(`/api/activity?${query}`, { skipCache: true });
+        if (request !== historyRequest || !results.isConnected || !isCurrent()) return;
+        const lastPage = Math.max(1, Math.ceil(response.total / 25));
+        if (!response.items.length && page > lastPage) return loadHistory(lastPage);
         results.innerHTML = response.items.map(item => `<article class="task-item"><div><strong>${escapeHtml(item.summary)}</strong><div class="small muted">${escapeHtml(item.type === 'task_completed' ? 'Task completed' : item.type)} · ${escapeHtml(formatDate(item.occurredAt || item.createdAt))}</div>${item.notes ? `<details><summary>Details</summary><p style="white-space:pre-wrap">${escapeHtml(item.notes)}</p></details>` : ''}</div></article>`).join('') || '<p>No activity matches these filters.</p>';
         results.insertAdjacentHTML('beforeend', `<div class="tasks-tabs"><button type="button" class="secondary-button" data-history-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button><span>Page ${page} · ${response.total} activities</span><button type="button" class="secondary-button" data-history-page="${page + 1}" ${page * 25 >= response.total ? 'disabled' : ''}>Next</button></div>`);
         results.querySelectorAll('[data-history-page]').forEach(button => { button.onclick = () => loadHistory(Number(button.dataset.historyPage)); });
       } catch {
-        if (request === historyRequest && results.isConnected) results.textContent = 'Could not load activity. Apply filters to try again.';
+        if (request === historyRequest && results.isConnected && isCurrent()) results.textContent = 'Could not load activity. Apply filters to try again.';
+      } finally {
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        if (elapsedMs > 250) console.info(`Activity history: app/app.js renderTasksView.loadHistory ${elapsedMs}ms`);
       }
     };
-    history.ontoggle = () => { if (history.open) loadHistory(); };
-    historyForm.onsubmit = event => { event.preventDefault(); loadHistory(); };
+    history.ontoggle = () => { if (!isCurrent()) return; historyState.open = history.open; if (history.open) loadHistory(); };
+    historyForm.onsubmit = event => { event.preventDefault(); rememberHistoryFields(); historyState.query = { ...historyState.fields }; loadHistory(1); };
+    history.open = historyState.open;
   } catch (error) {
     if (!isCurrent()) return;
     appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;
@@ -15245,9 +15265,7 @@ async function completeTask(taskId, buttonEl) {
     invalidateAppData();
     // Scoped task read fills the freed row, updates totals and clamps a now-empty last page.
     if (getRouteRoot() === 'tasks') {
-      const historyOpen = document.getElementById('activity-history')?.open;
       await renderTasksView();
-      if (historyOpen && document.getElementById('activity-history')) document.getElementById('activity-history').open = true;
       document.querySelector('.task-item [data-action="complete-task"]')?.focus();
     }
     showToast('Task completed. Recorded in Activity history.', 'success');

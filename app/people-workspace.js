@@ -19,7 +19,8 @@
     let savedFormValues = {};
     let savedDraft = null;
     let savedDraftText = '';
-    const updateDirty = () => { state.dirty = Boolean(root.querySelector('#person-draft') && root.querySelector('#person-draft').value !== savedDraftText) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
+    const hasFollowUpDraft = () => [...(root.querySelector('[data-people-form="follow-up"]')?.elements || [])].some(input => input.name && input.value.trim());
+    const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && root.querySelector('#person-draft').value !== savedDraftText) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
     const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"], [data-people-form="log-outreach"]') && [...state.dialog.querySelectorAll('input, textarea')].some(input => input.value.trim()));
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
@@ -35,7 +36,7 @@
     function allowLeave() {
       if (state.busy) return false;
       if (!state.dirty) return true;
-      if (!window.confirm('Discard unsaved changes to this person? Your saved information will stay unchanged.')) return false;
+      if (!window.confirm(hasFollowUpDraft() ? 'Discard the unfinished follow-up and any unsaved changes to this person? Your saved information will stay unchanged.' : 'Discard unsaved changes to this person? Your saved information will stay unchanged.')) return false;
       state.dirty = false;
       return true;
     }
@@ -227,7 +228,7 @@
       try {
         const [tasks, history] = await Promise.all([api(`/api/tasks?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true }), api(`/api/activity?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true })]);
         if (ticket !== state.sequence || state.selected !== contactId || !active()) return;
-        root.querySelector('[data-person-work]').innerHTML = `<h4>Pending follow-ups</h4>${tasks.items.length ? tasks.items.map(task => `<p>${escape(task.summary)} · ${escape(date(task.dueDate))}</p>`).join('') : '<p>No pending follow-ups.</p>'}<a href="#/tasks?contactId=${encodeURIComponent(contactId)}">Open this person’s follow-ups</a><h4>Recent activity</h4>${history.items.length ? history.items.map(item => `<p>${escape(item.summary)} <span class="muted small">${escape(date(item.occurredAt))}</span></p>`).join('') : '<p>No activity recorded for this person yet.</p>'}`;
+        root.querySelector('[data-person-work]').innerHTML = `<h4>Pending follow-ups</h4>${tasks.items.length ? tasks.items.map(task => `<p>${escape(task.summary)} · ${escape(date(task.dueDate))}</p>`).join('') : '<p>No pending follow-ups.</p>'}<a href="#/tasks?contactId=${encodeURIComponent(contactId)}">Open this person’s follow-ups</a><h4>Recent activity</h4>${history.items.length ? history.items.map(item => `<div class="person-activity"><p>${escape(item.summary)} <span class="muted small">${escape(date(item.occurredAt))}</span></p>${item.notes ? `<details><summary>${item.type === 'outreach' ? 'Read sent message' : 'Read activity details'}</summary><p class="person-activity-text">${escape(item.notes)}</p></details>` : ''}</div>`).join('') : '<p>No activity recorded for this person yet.</p>'}`;
       } catch (error) { if (ticket === state.sequence && active()) message(`Could not load linked work. ${error.message}`, true, root.querySelector('[data-person-work]')); }
     }
     async function savePerson(form) {
@@ -319,13 +320,14 @@
       if (form.dataset.peopleForm === 'follow-up') {
         if (state.busy) return;
         const contactId = state.person.id;
-        const submit = form.querySelector('button'); submit.disabled = true; state.busy = true;
+        const payload = { ...Object.fromEntries(new FormData(form)), contactId };
+        const controls = [...form.elements]; controls.forEach(input => input.disabled = true); state.busy = true;
         try {
-          await api('/api/tasks', { method: 'POST', body: JSON.stringify({ ...Object.fromEntries(new FormData(form)), contactId }) });
-          form.reset(); message('Follow-up saved for this person.', false, form.querySelector('[data-task-feedback]'));
+          await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+          form.reset(); updateDirty(); message('Follow-up saved for this person.', false, form.querySelector('[data-task-feedback]'));
           await loadPersonWork(contactId);
         } catch (error) { message(error.message, true, form.querySelector('[data-task-feedback]')); }
-        finally { state.busy = false; submit.disabled = false; }
+        finally { state.busy = false; controls.forEach(input => input.disabled = false); }
         return;
       }
       if (form.dataset.peopleForm !== 'add') return;
@@ -449,6 +451,7 @@
     });
     root.addEventListener('input', event => {
       if (event.target.closest('.person-edit-form') || event.target.id === 'person-draft') { updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved'); }
+      if (event.target.closest('[data-people-form="follow-up"]')) { updateDirty(); message(hasFollowUpDraft() ? 'Unfinished follow-up' : '', false, root.querySelector('[data-task-feedback]')); }
     });
     // Guard navigation to legacy routes too, without taking over the router.
     document.addEventListener('click', event => {

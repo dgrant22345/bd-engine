@@ -12,6 +12,151 @@ async function workspace(page) {
   return person;
 }
 
+test('unfinished person follow-ups survive canceled navigation, note saves and failed submission', async ({ page }) => {
+  await workspace(page);
+  await page.request.post('/api/contacts', { data: { fullName: 'Robin Second', companyName: 'Example Co' } });
+  await page.reload();
+  await page.getByText('Follow-ups and activity', { exact: true }).click();
+  await page.getByLabel('Next step', { exact: true }).fill('Ask about timing next week');
+  await page.getByLabel('Due date', { exact: true }).fill('2027-05-01');
+  await page.getByLabel('Notes', { exact: true }).fill('A saved note must not discard the task');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.locator('[data-person-feedback]')).toHaveText('Saved.');
+  page.once('dialog', dialog => { expect(dialog.message()).toContain('unfinished follow-up'); dialog.dismiss(); });
+  await page.getByRole('button', { name: 'Next person', exact: true }).click();
+  await expect(page.locator('#person-heading')).toHaveText('Jamie Recruiter');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('link', { name: 'Follow-ups', exact: true }).click();
+  await expect(page.getByLabel('Next step', { exact: true })).toHaveValue('Ask about timing next week');
+  expect(await page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(true);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/tasks', async route => { await gate; await route.fulfill({ status: 503, json: { error: 'Temporary save failure' } }); });
+  try {
+    await page.getByRole('button', { name: 'Add follow-up', exact: true }).click();
+    await expect(page.getByLabel('Next step', { exact: true })).toBeDisabled();
+    await expect(page.getByLabel('Due date', { exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Next person', exact: true }).click();
+    await expect(page.locator('#person-heading')).toHaveText('Jamie Recruiter');
+    release();
+    await expect(page.locator('[data-task-feedback]')).toContainText('Temporary save failure');
+    await expect(page.getByLabel('Next step', { exact: true })).toHaveValue('Ask about timing next week');
+  } finally { release(); await page.unroute('**/api/tasks'); }
+  await page.getByRole('button', { name: 'Add follow-up', exact: true }).click();
+  await expect(page.locator('[data-task-feedback]')).toContainText('Follow-up saved');
+  await page.getByRole('button', { name: 'Next person', exact: true }).click();
+  await expect(page.locator('#person-heading')).toHaveText('Robin Second');
+  await page.getByText('Follow-ups and activity', { exact: true }).click();
+  await page.getByLabel('Due date', { exact: true }).fill('2027-05-02');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Previous person', exact: true }).click();
+  await expect(page.locator('#person-heading')).toHaveText('Jamie Recruiter');
+  await page.getByText('Follow-ups and activity', { exact: true }).click();
+  await expect(page.getByLabel('Due date', { exact: true })).toHaveValue('');
+});
+
+for (const kind of ['draft', 'view']) test(`failed ${kind} searches retire old actions and retry the same query`, async ({ page }) => {
+  await workspace(page);
+  for (const title of ['Alpha', 'Beta']) {
+    expect((await page.request.put(`/api/saved-work/${kind}/${title}`, { data: { title, body: kind === 'draft' ? { text: `${title} message` } : { q: title }, version: 0 } })).ok()).toBe(true);
+  }
+  await page.getByRole('button', { name: kind === 'draft' ? 'My drafts' : 'My views', exact: true }).click();
+  const library = page.getByRole('dialog', { name: kind === 'draft' ? 'My saved drafts' : 'My saved People views', exact: true });
+  await expect(library.locator('[data-items]')).toContainText('Alpha');
+  await page.route(`**/api/saved-work/${kind}?**`, route => route.fulfill({ status: 503, json: { error: 'Search temporarily unavailable' } }));
+  await library.locator('[name="q"]').fill('Beta');
+  await library.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(library.getByRole('alert')).toContainText('Your saved items are unchanged');
+  await expect(library.locator('[data-items] button')).toHaveCount(0);
+  await expect(library.getByRole('button', { name: 'Next', exact: true })).toBeDisabled();
+  await expect(library.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled();
+  await page.unroute(`**/api/saved-work/${kind}?**`);
+  await library.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect(library.locator('[data-items]')).toContainText('Beta');
+  await expect(library.locator('[data-items]')).not.toContainText('Alpha');
+  await expect(library.locator('[name="q"]')).toHaveValue('Beta');
+  await expect(library.getByRole('button', { name: 'Try again', exact: true })).toBeHidden();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route(`**/api/saved-work/${kind}?**`, async route => {
+    if (new URL(route.request().url()).searchParams.get('q') !== 'Alpha') return route.continue();
+    await gate;
+    await route.fulfill({ status: 503, json: { error: 'Late failure from an older search' } });
+  });
+  try {
+    await library.locator('[name="q"]').fill('Alpha');
+    await library.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(library.locator('[data-items] button')).toHaveCount(0);
+    await library.locator('[name="q"]').fill('Beta');
+    await library.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(library.locator('[data-items]')).toContainText('Beta');
+    const response = page.waitForResponse(r => r.url().includes(`/api/saved-work/${kind}?`) && new URL(r.url()).searchParams.get('q') === 'Alpha');
+    release(); await response;
+    await expect(library.locator('[data-items]')).toContainText('Beta');
+    await expect(library.getByRole('alert')).toHaveCount(0);
+  } finally { release(); await page.unroute(`**/api/saved-work/${kind}?**`); }
+});
+
+test('activity filters, pagination and disclosure survive task changes without crossing person scopes', async ({ page }) => {
+  const person = await workspace(page);
+  for (let index = 0; index < 26; index++) await page.request.post('/api/activity', { data: { type: 'note', contactId: person.id, summary: `Preserve note ${index}` } });
+  for (const summary of ['First follow-up', 'Second follow-up']) await page.request.post('/api/tasks', { data: { contactId: person.id, summary } });
+  await page.evaluate(id => { location.hash = `#/tasks?contactId=${id}`; }, person.id);
+  await page.locator('#activity-history summary').first().click();
+  const form = page.locator('#activity-history-form');
+  await form.locator('[name="q"]').fill('Preserve');
+  await form.locator('[name="type"]').selectOption('note');
+  await form.locator('[name="sort"]').selectOption('oldest');
+  await form.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.locator('#activity-history-results')).toContainText('26 activities');
+  await page.locator('#activity-history-results').getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.locator('#activity-history-results')).toContainText('Page 2');
+  const preserved = async () => {
+    await expect(page.locator('#activity-history')).toHaveAttribute('open', '');
+    await expect(form.locator('[name="q"]')).toHaveValue('Preserve');
+    await expect(form.locator('[name="type"]')).toHaveValue('note');
+    await expect(form.locator('[name="sort"]')).toHaveValue('oldest');
+    await expect(page.locator('#activity-history-results')).toContainText('Page 2');
+  };
+  await page.getByRole('button', { name: 'Mark Done', exact: true }).first().click();
+  await preserved();
+  await page.getByRole('button', { name: 'Reschedule', exact: true }).click();
+  await page.getByLabel('New due date').fill('2027-05-01');
+  await page.getByRole('button', { name: 'Save date', exact: true }).click();
+  await preserved();
+  await page.getByRole('tab', { name: 'Completed', exact: true }).click();
+  await page.getByRole('button', { name: 'Undo completion', exact: true }).click();
+  await page.getByRole('button', { name: 'Reopen task', exact: true }).click();
+  await preserved();
+  // Preserve in-progress filter text without applying it implicitly on a task refresh.
+  await form.locator('[name="q"]').fill('Not applied yet');
+  await page.getByRole('tab', { name: 'Pending', exact: true }).click();
+  await expect(form.locator('[name="q"]')).toHaveValue('Not applied yet');
+  await expect(page.locator('#activity-history-results')).toContainText('Page 2');
+  await page.getByRole('link', { name: 'Show everyone', exact: true }).click();
+  await expect(page.locator('#activity-history')).not.toHaveAttribute('open', '');
+  await expect(form.locator('[name="q"]')).toHaveValue('');
+});
+
+test('person activity expands the exact sent message safely at each viewport', async ({ page }) => {
+  const person = await workspace(page);
+  const text = `Hello Jamie,\n\nThe details are below.\n<img src=x onerror="alert('unsafe')">\n${'long-word-'.repeat(40)}`;
+  expect((await page.request.post(`/api/contacts/${person.id}/outreach`, { data: { text, confirmed: true, requestId: 'inline-history-browser-test' } })).ok()).toBe(true);
+  await page.reload();
+  await page.getByText('Follow-ups and activity', { exact: true }).click();
+  await page.getByText('Read sent message', { exact: true }).click();
+  await expect(page.locator('.person-activity-text')).toHaveText(text);
+  await expect(page.locator('.person-activity-text img')).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
+  for (const width of [1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.locator('.person-activity').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/person-history-${width}.png` });
+  }
+  await expect(page.locator('#person-heading')).toHaveText('Jamie Recruiter');
+});
+
 test('person queue clears unrelated filters, links new tasks, reschedules and undoes completion', async ({ page }) => {
   const person = await workspace(page);
   await page.evaluate(() => { location.hash = '#/tasks'; });
