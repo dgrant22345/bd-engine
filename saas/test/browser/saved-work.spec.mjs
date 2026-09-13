@@ -12,6 +12,61 @@ async function workspace(page) {
   return person;
 }
 
+test('person queue clears unrelated filters, links new tasks, reschedules and undoes completion', async ({ page }) => {
+  const person = await workspace(page);
+  await page.evaluate(() => { location.hash = '#/tasks'; });
+  await page.locator('#task-search-form input').fill('Unrelated search');
+  await page.getByRole('button', { name: 'Search tasks', exact: true }).click();
+  await page.getByRole('tab', { name: 'Completed', exact: true }).click();
+  await page.evaluate(id => { location.hash = `#/tasks?contactId=${id}`; }, person.id);
+  await expect(page.locator('#task-search-form input')).toHaveValue('');
+  await expect(page.getByRole('tab', { name: 'Pending', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.locator('.task-create-disclosure summary').click();
+  await page.getByLabel('What needs to happen?').fill('New task inside person queue');
+  await page.getByRole('button', { name: 'Add task', exact: true }).click();
+  await expect(page.locator('.task-item')).toContainText('Jamie Recruiter');
+  await page.getByRole('button', { name: 'Reschedule', exact: true }).click();
+  const schedule = page.getByRole('dialog', { name: 'Reschedule follow-up', exact: true });
+  await schedule.getByLabel('New due date').fill('2027-04-10');
+  await schedule.getByRole('button', { name: 'Save date', exact: true }).click();
+  await expect(schedule).toHaveCount(0);
+  expect((await (await page.request.get(`/api/tasks?contactId=${person.id}`)).json()).items[0].dueDate).toBe('2027-04-10T00:00:00.000Z');
+  await page.getByRole('button', { name: 'Mark Done', exact: true }).click();
+  await expect(page.locator('.tasks-content')).toContainText('No pending tasks');
+  await page.getByRole('tab', { name: 'Completed', exact: true }).click();
+  await page.getByRole('button', { name: 'Undo completion', exact: true }).click();
+  await page.getByRole('button', { name: 'Reopen task', exact: true }).click();
+  await page.getByRole('tab', { name: 'Pending', exact: true }).click();
+  await expect(page.locator('.task-item')).toContainText('New task inside person queue');
+  await page.locator('#activity-history summary').click();
+  await page.getByRole('combobox', { name: 'Activity type', exact: true }).selectOption('task_reopened');
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.locator('#activity-history-results')).toContainText('Reopened task');
+});
+
+test('confirmed People outreach records the sent message and optional person follow-up', async ({ page }) => {
+  const person = await workspace(page);
+  await page.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  await page.locator('#person-draft').fill('Jamie, I sent this relevant message on LinkedIn.');
+  await page.getByRole('button', { name: 'Mark as contacted', exact: true }).click();
+  const log = page.getByRole('dialog', { name: 'Log sent outreach', exact: true });
+  await log.getByLabel('Schedule follow-up').selectOption('3');
+  await log.getByLabel('I already sent this message outside the app').check();
+  expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
+  for (const width of [1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: `test-results/log-outreach-${width}.png` });
+  }
+  await log.getByRole('button', { name: 'Record outreach', exact: true }).click();
+  await expect(log).toHaveCount(0);
+  await expect(page.locator('#person-outreachStatus')).toHaveValue('contacted');
+  const activity = await (await page.request.get(`/api/activity?contactId=${person.id}`)).json();
+  expect(activity.total).toBe(1); expect(activity.items[0].notes).toContain('sent this relevant message');
+  const tasks = await (await page.request.get(`/api/tasks?contactId=${person.id}`)).json();
+  expect(tasks.total).toBe(1); expect(tasks.items[0].contactId).toBe(person.id);
+});
+
 test('People drafts persist on another device and appear in the draft library', async ({ page, browser }) => {
   const errors = []; page.on('pageerror', error => errors.push(String(error)));
   const person = await workspace(page);
@@ -88,6 +143,14 @@ test('stale library edits show a conflict without losing the current text', asyn
   await editor.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(editor).toContainText('changed on another device');
   await expect(editor.getByLabel('Message')).toHaveValue('My unsaved edits');
+  const conflict = page.getByRole('dialog', { name: 'Resolve draft conflict', exact: true });
+  await conflict.getByRole('button', { name: 'Save as a separate draft' }).click();
+  await expect(conflict).toContainText('Separate draft saved');
+  const copies = await (await page.request.get('/api/saved-work/draft')).json();
+  expect(copies.items.find(item => item.title === 'Conflict test (copy)').body.text).toBe('My unsaved edits');
+  page.once('dialog', dialog => dialog.accept());
+  await conflict.getByRole('button', { name: 'Load latest', exact: true }).click();
+  await expect(editor.getByLabel('Message')).toHaveValue('Other device saved');
 });
 
 test('Warm Studio saves to the shared private draft library and the quick start reflects it', async ({ page }) => {
@@ -97,6 +160,10 @@ test('Warm Studio saves to the shared private draft library and the quick start 
   await page.locator('#warm-studio-textarea').fill('Jamie, could we discuss your Talent Manager search?');
   await page.getByRole('button', { name: 'Save to my account', exact: true }).click();
   await expect(page.locator('#warm-account-draft-status')).toContainText('Saved to your account');
+  await page.locator('#warm-studio-textarea').fill('Temporary unsaved replacement');
+  await page.getByRole('button', { name: 'Resume saved draft', exact: true }).click();
+  await page.getByRole('button', { name: 'Load saved draft', exact: true }).click();
+  await expect(page.locator('#warm-studio-textarea')).toHaveValue('Jamie, could we discuss your Talent Manager search?');
   await page.getByRole('button', { name: 'My saved drafts', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'My saved drafts', exact: true })).toContainText('Jamie Recruiter · Talent Manager');
   const exported = await (await page.request.get('/api/privacy/export')).json();

@@ -1988,6 +1988,13 @@ self.addEventListener('activate', (event) => {
     }
   }
 
+  const personOutreachMatch = pathname.match(/^\/api\/contacts\/([^/]+)\/outreach$/);
+  if (personOutreachMatch && req.method === 'POST') {
+    const result = await store.logPersonOutreach(tenantId, user.id, personOutreachMatch[1], await readJson(req));
+    const bridgeResult = await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity: result.activity, payload: { type: 'outreach' } });
+    return sendJson(res, 201, { ...result, activity: buildActivityApiResponse(result.activity, bridgeResult) });
+  }
+
   if (pathname.startsWith('/api/tasks')) {
     if (pathname === '/api/tasks' && req.method === 'GET') {
       return sendJson(res, 200, await store.findTasks(tenantId, Object.fromEntries(url.searchParams)));
@@ -2000,6 +2007,11 @@ self.addEventListener('activate', (event) => {
       const task = await store.completeTask(tenantId, match[1], user.id);
       if (!task) return sendJson(res, 404, { error: 'Task not found' });
       return sendJson(res, 200, task);
+    }
+    const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (taskMatch && req.method === 'PATCH') {
+      const task = await store.updateTask(tenantId, taskMatch[1], user.id, await readJson(req));
+      return sendJson(res, task ? 200 : 404, task || { error: 'Task not found' });
     }
   }
 

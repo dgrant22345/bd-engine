@@ -21,6 +21,6 @@ test('people review keeps unsupported assessment and outreach claims out of defa
   assert.match(people, /No candidate fit assessment has been made/);
   assert.match(people, /Saving and copying do not send anything/);
   assert.match(people, /Replace the placeholders/);
-  assert.match(people, /Have you actually sent your message/);
+  assert.match(people, /I already sent this message outside the app/);
   assert.doesNotMatch(people, /pre-vetted|Verified & Available|\/api\/bootstrap/);
 });

@@ -272,25 +272,26 @@ test('confirmed discard restores saved notes and new result pages start at the t
   await expect.poll(() => scroll.evaluate(el => el.scrollTop)).toBe(0);
 });
 
-test('updating outreach stage prevents conflicting saves without losing notes', async ({ page }) => {
+test('recording confirmed outreach prevents duplicate submits without losing notes', async ({ page }) => {
   const { app } = await workspace(page, { count: 1 });
   await app.locator('.person-name').first().click();
   await app.getByRole('button', { name: 'Prepare outreach' }).click();
+  await app.locator('#person-draft').fill('A verified message sent outside this app.');
+  await app.getByLabel('Notes', { exact: true }).fill('Keep these unsaved notes');
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  await page.route('**/api/contacts/*', async route => { await gate; await route.continue(); });
+  await page.route('**/api/contacts/*/outreach', async route => { await gate; await route.continue(); });
   try {
-    page.once('dialog', prompt => prompt.accept());
     await app.getByRole('button', { name: 'Mark as contacted' }).click();
-    await expect(app.locator('#person-outreachStatus')).toBeDisabled();
-    await expect(app.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-    await app.getByLabel('Notes', { exact: true }).fill('Keep typing while the stage saves');
+    await app.getByLabel('I already sent this message outside the app').check();
+    await app.getByRole('button', { name: 'Record outreach', exact: true }).click();
+    await expect(app.getByRole('button', { name: 'Record outreach', exact: true })).toBeDisabled();
     release();
-    await expect(app.locator('[data-draft-feedback]')).toContainText('Stage updated to Contacted');
+    await expect(app.locator('[data-draft-feedback]')).toContainText('Outreach recorded');
     await expect(app.locator('#person-outreachStatus')).toHaveValue('contacted');
     await expect(app.locator('#person-outreachStatus')).toBeEnabled();
-    await expect(app.getByLabel('Notes', { exact: true })).toHaveValue('Keep typing while the stage saves');
-  } finally { release(); await page.unroute('**/api/contacts/*'); }
+    await expect(app.getByLabel('Notes', { exact: true })).toHaveValue('Keep these unsaved notes');
+  } finally { release(); await page.unroute('**/api/contacts/*/outreach'); }
   await app.getByRole('button', { name: 'Save changes' }).click();
   await expect(app.locator('[data-person-feedback]')).toHaveText('Saved.');
 });

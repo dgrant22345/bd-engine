@@ -4032,6 +4032,7 @@ function bindEvents() {
 
     if (form.id === 'task-create-form') {
       const payload = getFormValues(form);
+      if (appState.taskQuery.contactId) payload.contactId = appState.taskQuery.contactId;
       if (!payload.summary?.trim()) {
         showToast('Add a short description for the task.', 'warning');
         return;
@@ -4040,7 +4041,8 @@ function bindEvents() {
       if (submitButton) submitButton.disabled = true;
       try {
         await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
-        showToast('Task added to the workspace.', 'success');
+        showToast(payload.contactId ? 'Follow-up added for this person.' : 'Task added to the workspace.', 'success');
+        appState.taskQuery = { ...appState.taskQuery, status: 'pending', q: '', page: 1 };
         await renderTasksView();
       } catch (error) {
         showToast(`Could not add task: ${error.message || error}`, 'error', 7000);
@@ -7587,6 +7589,10 @@ function renderWarmStudioModal() {
   document.getElementById('warm-draft-library').onclick = () => window.bdSavedWork.openLibrary('draft');
   const saveAccountButton = document.getElementById('warm-save-account');
   const accountDraftStatus = document.getElementById('warm-account-draft-status');
+  const resumeAccountButton = document.createElement('button');
+  resumeAccountButton.type = 'button'; resumeAccountButton.className = 'secondary-button';
+  resumeAccountButton.textContent = 'Resume saved draft'; resumeAccountButton.disabled = true;
+  saveAccountButton.after(resumeAccountButton);
   (async () => {
     try {
       const cloudKey = await window.bdSavedWork.keyFor(JSON.stringify(['warm', data.job?.id, data.selectedContact?.id || data.selectedContact?.fullName || '']));
@@ -7594,14 +7600,35 @@ function renderWarmStudioModal() {
       if (!(cloudKey in data.accountDrafts)) data.accountDrafts[cloudKey] = await window.bdSavedWork.load('draft', cloudKey);
       if (!saveAccountButton.isConnected) return;
       saveAccountButton.disabled = false;
-      accountDraftStatus.textContent = data.accountDrafts[cloudKey] ? 'Saved copy available in My saved drafts. Saving here replaces that copy.' : 'Private to your login in this workspace. Available across signed-in devices.';
-      saveAccountButton.onclick = async () => {
-        saveAccountButton.disabled = true;
+      resumeAccountButton.disabled = !data.accountDrafts[cloudKey];
+      const restore = latest => {
+        data.accountDrafts[cloudKey] = latest; textarea.value = latest.body.text;
+        data.drafts[warmStudioDraftKey(data)] = latest.body.text;
+        accountDraftStatus.textContent = 'Latest saved copy loaded. Nothing was sent.';
+      };
+      resumeAccountButton.onclick = async () => {
+        if (!await showAppDialog({ title: 'Resume saved draft?', message: 'Replace the current editor text with your saved draft? Save or copy any edits you want to keep first.', confirmLabel: 'Load saved draft' })) return;
+        if (!textarea.isConnected) return;
+        resumeAccountButton.disabled = saveAccountButton.disabled = true;
         try {
-          data.accountDrafts[cloudKey] = await window.bdSavedWork.save('draft', cloudKey, { version: data.accountDrafts[cloudKey]?.version || 0, title: `${data.selectedContact?.fullName || 'Outreach'} · ${data.job?.title || 'Role'}`.slice(0, 160), body: { text: textarea.value, contactId: data.selectedContact?.id || '', accountId: data.account?.id || '', jobId: data.job?.id || '', recipient: data.selectedContact?.fullName || '' } });
+          const latest = await window.bdSavedWork.load('draft', cloudKey);
+          if (!latest) throw new Error('The saved draft was removed. Your current text is unchanged.');
+          if (textarea.isConnected) restore(latest);
+        } catch (error) { accountDraftStatus.textContent = error.message; }
+        finally { resumeAccountButton.disabled = saveAccountButton.disabled = false; }
+      };
+      accountDraftStatus.textContent = data.accountDrafts[cloudKey] ? 'Resume your saved draft here. Saving replaces that copy.' : 'Private to your login in this workspace. Available across signed-in devices.';
+      saveAccountButton.onclick = async () => {
+        resumeAccountButton.disabled = saveAccountButton.disabled = true;
+        const item = { version: data.accountDrafts[cloudKey]?.version || 0, title: `${data.selectedContact?.fullName || 'Outreach'} · ${data.job?.title || 'Role'}`.slice(0, 160), body: { text: textarea.value, contactId: data.selectedContact?.id || '', accountId: data.account?.id || '', jobId: data.job?.id || '', recipient: data.selectedContact?.fullName || '' } };
+        try {
+          data.accountDrafts[cloudKey] = await window.bdSavedWork.save('draft', cloudKey, item);
           accountDraftStatus.textContent = 'Saved to your account. Nothing was sent.';
-        } catch (error) { accountDraftStatus.textContent = `${error.message} Your current text is unchanged.`; }
-        finally { saveAccountButton.disabled = false; }
+        } catch (error) {
+          accountDraftStatus.textContent = `${error.message} Your current text is unchanged.`;
+          if (error.status === 409 && textarea.isConnected) window.bdSavedWork.resolveConflict(cloudKey, { ...item, body: { ...item.body, text: textarea.value } }, restore);
+        }
+        finally { saveAccountButton.disabled = false; resumeAccountButton.disabled = !data.accountDrafts[cloudKey]; }
       };
     } catch (error) { if (accountDraftStatus.isConnected) accountDraftStatus.textContent = `Saved drafts unavailable. ${error.message} You can still copy your message or use a browser-only copy.`; }
   })();
@@ -15028,7 +15055,9 @@ function endTour(options = {}) {
 
 async function renderTasksView() {
   const isCurrent = beginViewRender();
-  appState.taskQuery.contactId = new URLSearchParams(location.hash.split('?')[1] || '').get('contactId') || '';
+  const contactId = new URLSearchParams(location.hash.split('?')[1] || '').get('contactId') || '';
+  if (contactId !== (appState.taskQuery.contactId || '')) appState.taskQuery = { ...appState.taskQuery, q: '', page: 1, status: 'pending', sort: '' };
+  appState.taskQuery.contactId = contactId;
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
@@ -15053,7 +15082,7 @@ async function renderTasksView() {
           <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
           <form id="activity-history-form" class="task-create-form">
             <label>Search<input name="q" placeholder="Message, company or notes"></label>
-            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="note">Notes</option></select></label>
+            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="task_reopened">Reopened tasks</option><option value="task_rescheduled">Rescheduled tasks</option><option value="note">Notes</option></select></label>
             <label>Order<select name="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
             <button class="secondary-button" type="submit">Apply filters</button>
           </form>
@@ -15074,7 +15103,7 @@ async function renderTasksView() {
         <details class="form-card workspace-disclosure task-create-disclosure">
           <summary>
             <span class="workspace-disclosure__icon" aria-hidden="true">+</span>
-            <span><strong>New task</strong><small>Add a dated follow-up or reminder.</small></span>
+            <span><strong>New task</strong><small>${contactId ? 'Add a follow-up linked to this person.' : 'Add a dated follow-up or reminder.'}</small></span>
           </summary>
           <form id="task-create-form" class="task-create-form">
             <label>
@@ -15118,6 +15147,9 @@ async function renderTasksView() {
       await renderTasksView();
       document.querySelector('#task-search-form input')?.focus();
     };
+    appRoot.querySelectorAll('[data-task-edit]').forEach(button => {
+      button.onclick = () => editTask(tasks.items.find(task => task.id === button.dataset.taskEdit));
+    });
     document.getElementById('task-search-clear').onclick = async () => {
       appState.taskQuery = { ...appState.taskQuery, q: '', sort: '', page: 1 };
       await renderTasksView();
@@ -15176,10 +15208,32 @@ function renderTaskItem(task) {
         <div class="task-item-actions">
           ${task.contactId ? `<a href="#/contacts?person=${encodeURIComponent(task.contactId)}" class="ghost-button micro-button">Open person</a>` : task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
           ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
+          <button type="button" class="ghost-button micro-button" data-task-edit="${escapeAttr(task.id)}">${task.status === 'pending' ? 'Reschedule' : 'Undo completion'}</button>
         </div>
       </div>
     </article>
   `;
+}
+
+function editTask(task) {
+  if (!task) return;
+  const reopening = task.status === 'completed';
+  const dialog = window.bdSavedWork.dialog(reopening ? 'Undo task completion' : 'Reschedule follow-up', `<form><p>${escapeHtml(task.summary || task.title || 'Follow-up')}</p>${reopening ? '<p>Return this task to Pending. The original completion and this correction stay in activity history. Logged outreach is not undone.</p>' : `<label class="people-field">New due date<input name="dueDate" type="date" required value="${escapeAttr(calendarDateKey(task.dueDate) || '')}"></label>`}<p role="status" data-feedback></p><button class="primary-button" type="submit">${reopening ? 'Reopen task' : 'Save date'}</button></form>`);
+  let busy = false;
+  dialog.querySelector('[data-close]').onclick = () => { if (!busy) dialog.close(); };
+  dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+  dialog.querySelector('form').onsubmit = async event => {
+    event.preventDefault(); if (busy) return; busy = true;
+    const button = dialog.querySelector('[type="submit"]'); button.disabled = true;
+    try {
+      const payload = { expectedUpdatedAt: task.updatedAt || task.createdAt, ...(reopening ? { status: 'pending' } : { dueDate: event.target.elements.dueDate.value }) };
+      await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      dialog.close();
+      if (getRouteRoot() === 'tasks') await renderTasksView();
+      showToast(reopening ? 'Task reopened. Correction recorded in activity history.' : 'Follow-up rescheduled.', 'success');
+    } catch (error) { dialog.querySelector('[data-feedback]').textContent = error.message; }
+    finally { busy = false; button.disabled = false; }
+  };
 }
 
 async function completeTask(taskId, buttonEl) {

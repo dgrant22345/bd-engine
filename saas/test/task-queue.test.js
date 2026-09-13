@@ -2,6 +2,46 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.js';
 
+test('person outreach records one message and linked follow-up even with concurrent retries', async () => {
+  const store = createStore(); const tenantId = store.getSession().tenant.id;
+  const person = await store.addContact(tenantId, { fullName: 'Outreach recipient', companyName: 'Example' });
+  const payload = { text: 'The actual sent message', confirmed: true, followUpDays: 3, requestId: 'outreach-idempotency-test' };
+  await assert.rejects(store.logPersonOutreach(tenantId, 'user', person.id, { ...payload, confirmed: false }));
+  await assert.rejects(store.logPersonOutreach(tenantId, 'user', 'other-tenant-contact', payload));
+  await assert.rejects(store.addActivity(tenantId, 'user', { type: 'outreach', summary: 'Invalid follow-up link', contactId: 'other-tenant-contact', followUpDays: 3 }));
+  await assert.rejects(store.logPersonOutreach(tenantId, 'user', person.id, { ...payload, followUpDays: -1 }));
+  const [a, b] = await Promise.all([store.logPersonOutreach(tenantId, 'user', person.id, payload), store.logPersonOutreach(tenantId, 'user', person.id, payload)]);
+  assert.equal(a.activity.id, b.activity.id);
+  await assert.rejects(store.logPersonOutreach(tenantId, 'user', person.id, { ...payload, text: 'Changed after an uncertain response' }), { status: 409 });
+  assert.equal(a.person.outreachStatus, 'contacted');
+  const history = await store.findActivities(tenantId, { contactId: person.id });
+  assert.equal(history.total, 1); assert.equal(history.items[0].notes, payload.text);
+  const tasks = await store.findTasks(tenantId, { contactId: person.id });
+  assert.equal(tasks.total, 1); assert.equal(tasks.items[0].contactName, person.fullName);
+  await store.patchContact(tenantId, person.id, { outreachStatus: 'replied' });
+  const next = await store.logPersonOutreach(tenantId, 'user', person.id, { ...payload, requestId: 'another-sent-message', followUpDays: 0 });
+  assert.equal(next.person.outreachStatus, 'replied');
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id })).total, 1);
+});
+
+test('reschedule and undo preserve history, reject stale edits and never mark a company contacted', async () => {
+  const store = createStore(); const tenantId = store.getSession().tenant.id;
+  const company = await store.addAccount(tenantId, { displayName: 'Task corrections company' });
+  const before = company.lastContactedAt;
+  const task = await store.createTask(tenantId, { accountId: company.id, summary: 'Correction fixture' });
+  const oldVersion = task.updatedAt;
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, dueDate: '2027-02-30' }));
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, dueDate: '2027-02-28' });
+  assert.equal(task.dueDate, '2027-02-28T00:00:00.000Z');
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, dueDate: '2027-03-01' }), { status: 409 });
+  await store.completeTask(tenantId, task.id, 'user');
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: task.updatedAt, status: 'pending' });
+  assert.equal(task.status, 'pending'); assert.equal(company.lastContactedAt, before);
+  assert.equal(await store.updateTask(tenantId, 'other-workspace-task', 'user', {}), null);
+  const history = await store.findActivities(tenantId, { accountId: company.id });
+  assert.deepEqual(new Set(history.items.map(item => item.type)), new Set(['task_rescheduled', 'task_completed', 'task_reopened']));
+});
+
 test('task queue sorts before pagination and clamps pages after completion', async () => {
   const store = createStore();
   const tenantId = store.getSession().tenant.id;

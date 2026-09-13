@@ -3297,8 +3297,19 @@ export function createStore() {
       // single-item tenant array, persistTenant skips it (status.core false ->
       // COALESCE keeps old DB rows), and the next load overwrites it — the
       // logged activity/follow-up would silently vanish.
-      await ensureDataLoaded(tenantId, false);
+      await ensureDataLoaded(tenantId, Boolean(payload.contactId && payload.followUpDays));
+      const followUpContact = payload.contactId && payload.followUpDays ? contactsForTenant(tenantId).find(item => item.id === payload.contactId) : null;
+      if (payload.contactId && payload.followUpDays && (!followUpContact || (payload.accountId && followUpContact.accountId !== payload.accountId))) {
+        throw new CommercialOutcomeValidationError('Choose a follow-up person belonging to this workspace and company.');
+      }
       const createdAt = now();
+      if (payload.metadata?.source === 'people' && payload.metadata?.outreachRequestId) {
+        const previous = activitiesForTenant(tenantId).find(item => item.contactId === payload.contactId && item.createdByUserId === userId && item.metadata?.outreachRequestId === payload.metadata.outreachRequestId);
+        if (previous) {
+          if (previous.notes !== payload.notes || previous.metadata.followUpDays !== payload.metadata.followUpDays) throw new CommercialOutcomeValidationError('The original outreach was already recorded. Review activity history before logging a different message.', 409);
+          return previous;
+        }
+      }
       const linkedTask = payload.completeTaskId ? tasksForTenant(tenantId).find(task => task.id === payload.completeTaskId) : null;
       if (payload.completeTaskId && (!linkedTask || !payload.accountId || linkedTask.accountId !== payload.accountId || payload.type !== 'outreach')) {
         throw new CommercialOutcomeValidationError('Choose an outreach task belonging to this account.');
@@ -3330,7 +3341,7 @@ export function createStore() {
       const itemAccount = activity.accountId
         ? accountsForTenant(tenantId).find((item) => item.id === activity.accountId)
         : null;
-      if (itemAccount && activity.type !== 'task_completed') {
+      if (itemAccount && !['task_completed', 'task_rescheduled', 'task_reopened'].includes(activity.type)) {
         const currentLastContactedAt = new Date(itemAccount.lastContactedAt || 0).getTime();
         const activityOccurredAt = new Date(activity.occurredAt).getTime();
         if (!Number.isFinite(currentLastContactedAt) || activityOccurredAt >= currentLastContactedAt) {
@@ -3356,6 +3367,8 @@ export function createStore() {
             id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
             tenantId,
             accountId: payload.accountId,
+            contactId: followUpContact?.id || '',
+            contactName: followUpContact?.fullName || '',
             type: 'follow_up',
             status: 'pending',
             summary: buildActivityFollowUpSummary(activity, payload),
@@ -3369,6 +3382,34 @@ export function createStore() {
 
       persistTenant(tenantId);
       return activity;
+    },
+
+    async logPersonOutreach(tenantId, userId, contactId, payload = {}) {
+      assertTenant(tenantId);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new CommercialOutcomeValidationError('Provide outreach details.');
+      const startedAt = performance.now();
+      await ensureDataLoaded(tenantId, true);
+      const person = contactsForTenant(tenantId).find(item => item.id === contactId);
+      if (!person) throw new CommercialOutcomeValidationError('Person not found.', 404);
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      const requestId = String(payload.requestId || '');
+      const days = Number(payload.followUpDays || 0);
+      if (!text || text.length > 12000 || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestId) || !Number.isInteger(days) || days < 0 || days > 365) {
+        throw new CommercialOutcomeValidationError('Provide the sent message, a request ID and a valid follow-up interval.');
+      }
+      if (payload.confirmed !== true) throw new CommercialOutcomeValidationError('Confirm that you sent this message outside the app.');
+      const activity = await this.addActivity(tenantId, userId, {
+        type: 'outreach', accountId: person.accountId || '', contactId, contactName: person.fullName,
+        summary: `Outreach sent to ${person.fullName}`, notes: text, followUpDays: days,
+        metadata: { outreachRequestId: requestId, source: 'people', confirmedSent: true, followUpDays: days },
+      });
+      // Preserve later stages rather than moving a replied/opportunity person backwards.
+      if (!['replied', 'opportunity'].includes(person.outreachStatus)) person.outreachStatus = 'contacted';
+      person.updatedAt = now();
+      persistTenant(tenantId);
+      const elapsed = Math.round(performance.now() - startedAt);
+      if (elapsed > 150) console.warn(`Slow person outreach: saas/src/store.js logPersonOutreach ${elapsed}ms`);
+      return { person, activity };
     },
 
     async createCommercialOutcome(tenantId, userId, payload = {}) {
@@ -3516,6 +3557,33 @@ export function createStore() {
           metadata: { taskId: task.id },
         });
       }
+      return task;
+    },
+
+    async updateTask(tenantId, taskId, userId, payload = {}) {
+      assertTenant(tenantId);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.status !== undefined && payload.status !== 'pending')) throw new CommercialOutcomeValidationError('Provide a new due date or reopen the completed task.');
+      await ensureDataLoaded(tenantId, false);
+      const task = tasksForTenant(tenantId).find(item => item.id === taskId);
+      if (!task) return null;
+      if (!payload.expectedUpdatedAt || payload.expectedUpdatedAt !== (task.updatedAt || task.createdAt)) {
+        throw new CommercialOutcomeValidationError('This task changed. Reload the queue before editing it.', 409);
+      }
+      const reopening = payload.status === 'pending';
+      const dueDate = String(payload.dueDate || '');
+      if (reopening ? task.status !== 'completed' || Boolean(dueDate) : task.status !== 'pending' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || !Number.isFinite(Date.parse(dueDate)) || new Date(dueDate).toISOString().slice(0, 10) !== dueDate) {
+        throw new CommercialOutcomeValidationError('Choose a valid date for a pending task, or reopen a completed task.');
+      }
+      const previousDueDate = task.dueDate;
+      if (reopening) task.status = 'pending';
+      else task.dueDate = new Date(dueDate).toISOString();
+      task.updatedAt = new Date(Math.max(Date.now(), Date.parse(task.updatedAt || task.createdAt) + 1)).toISOString();
+      await this.addActivity(tenantId, userId, {
+        accountId: task.accountId || '', contactId: task.contactId || '',
+        type: reopening ? 'task_reopened' : 'task_rescheduled',
+        summary: `${reopening ? 'Reopened task' : 'Rescheduled task'}: ${task.summary || task.title || 'Follow-up'}`,
+        metadata: { taskId, previousDueDate, dueDate: task.dueDate },
+      });
       return task;
     },
 

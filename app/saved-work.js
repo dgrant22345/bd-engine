@@ -31,6 +31,33 @@
       finally { button.disabled = false; }
     };
   }
+  function resolveConflict(id, current, onLoad) {
+    const element = dialog('Resolve draft conflict', '<p>Your text is still in the editor. Save it separately to keep both versions, or load the latest saved copy.</p><div class="button-row"><button type="button" class="primary-button" data-separate>Save as a separate draft</button><button type="button" class="secondary-button" data-latest>Load latest</button></div><p role="status" data-feedback></p>');
+    let busy = false;
+    const feedback = element.querySelector('[data-feedback]');
+    element.querySelector('[data-close]').onclick = () => { if (!busy) element.close(); };
+    element.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+    async function run(action) {
+      if (busy) return; busy = true;
+      for (const button of element.querySelectorAll('button')) button.disabled = true;
+      try { await action(); }
+      catch (error) { feedback.textContent = error.message; }
+      finally { busy = false; for (const button of element.querySelectorAll('button')) button.disabled = false; }
+    }
+    element.querySelector('[data-separate]').onclick = () => run(async () => {
+      await save('draft', crypto.randomUUID(), { ...current, title: `${current.title.slice(0, 150)} (copy)`, version: 0 });
+      feedback.textContent = 'Separate draft saved in My saved drafts. Your original editor is unchanged.';
+      element.querySelector('[data-separate]').hidden = true;
+    });
+    element.querySelector('[data-latest]').onclick = () => {
+      if (!confirm('Replace the text in this editor with the latest saved copy? Save a separate draft first if you want to keep your edits.')) return;
+      run(async () => {
+        const latest = await load('draft', id);
+        if (!latest) throw new Error('The saved copy was removed. You can save your edits as a separate draft.');
+        onLoad(latest); element.close();
+      });
+    };
+  }
   function openLibrary(kind = 'draft', onSelect) {
     let page = 1;
     let search = '';
@@ -88,7 +115,10 @@
         const submit = editor.querySelector('[type="submit"]'); submit.disabled = true;
         const text = textarea.value;
         try { item = await save('draft', item.id, { ...item, body: { ...item.body, text } }); savedText = text; editor.querySelector('[data-status]').textContent = 'Saved to your account.'; }
-        catch (error) { editor.querySelector('[data-status]').textContent = `${error.message} Copy your current text before reopening the latest saved draft.`; }
+        catch (error) {
+          editor.querySelector('[data-status]').textContent = error.message;
+          if (error.status === 409) resolveConflict(item.id, { ...item, body: { ...item.body, text: textarea.value } }, latest => { item = latest; textarea.value = savedText = latest.body.text; editor.querySelector('[data-status]').textContent = 'Latest saved copy loaded.'; });
+        }
         finally { busy = false; submit.disabled = false; }
       };
     }
@@ -97,5 +127,5 @@
     element.querySelector('[data-next]').onclick = () => { page += 1; refresh(); };
     refresh();
   }
-  window.bdSavedWork = { keyFor, load, save, saveView, openLibrary };
+  window.bdSavedWork = { keyFor, load, save, saveView, openLibrary, resolveConflict, dialog };
 })();

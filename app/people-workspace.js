@@ -20,7 +20,7 @@
     let savedDraft = null;
     let savedDraftText = '';
     const updateDirty = () => { state.dirty = Boolean(root.querySelector('#person-draft') && root.querySelector('#person-draft').value !== savedDraftText) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
-    const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"]') && [...state.dialog.querySelectorAll('input')].some(input => input.value.trim()));
+    const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"], [data-people-form="log-outreach"]') && [...state.dialog.querySelectorAll('input, textarea')].some(input => input.value.trim()));
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
     const readQuery = () => {
@@ -297,6 +297,25 @@
       event.preventDefault(); event.stopPropagation();
       if (form.dataset.peopleForm === 'filters') return navigate({ ...state.query, ...Object.fromEntries(new FormData(form)), page: 1 });
       if (form.dataset.peopleForm === 'person') return savePerson(form);
+      if (form.dataset.peopleForm === 'log-outreach') {
+        if (state.busy) return;
+        const values = Object.fromEntries(new FormData(form));
+        if (/\[(?:add|Add)/.test(values.text)) return message('Replace the placeholders with the message you actually sent.', true, form.querySelector('[data-log-feedback]'));
+        state.busy = true;
+        const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+        try {
+          const result = await api(`/api/contacts/${encodeURIComponent(state.person.id)}/outreach`, { method: 'POST', body: JSON.stringify({ text: values.text, followUpDays: Number(values.followUpDays), confirmed: values.confirmed === 'on', requestId: state.outreachRequest }) });
+          state.person = result.person; updateRow(result.person);
+          savedFormValues.outreachStatus = result.person.outreachStatus;
+          root.querySelector('#person-outreachStatus').value = result.person.outreachStatus;
+          state.outreachRequest = null;
+          closeDialog({ saved: true }); updateDirty();
+          message(`Outreach recorded in activity history. No message was sent by this app.${result.activity?.warning ? ' ' + result.activity.warning.message : ''}`, Boolean(result.activity?.warning), root.querySelector('[data-draft-feedback]'));
+          await loadPersonWork(result.person.id);
+        } catch (error) { message(error.message, true, form.querySelector('[data-log-feedback]')); }
+        finally { state.busy = false; submit.disabled = false; }
+        return;
+      }
       if (form.dataset.peopleForm === 'follow-up') {
         if (state.busy) return;
         const contactId = state.person.id;
@@ -387,7 +406,10 @@
         try {
           savedDraft = await window.bdSavedWork.save('draft', `person-${state.person.id}`, { title: `Outreach to ${state.person.fullName}`.slice(0, 160), body: { text, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName }, version: savedDraft?.version || 0 });
           savedDraftText = text; updateDirty(); message(state.dirty ? 'Unsaved contact changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
-        } catch (error) { message(`${error.message} Your text is still here; copy it before reopening the saved draft.`, true, root.querySelector('[data-draft-feedback]')); }
+        } catch (error) {
+          message(error.message, true, root.querySelector('[data-draft-feedback]'));
+          if (error.status === 409) window.bdSavedWork.resolveConflict(`person-${state.person.id}`, { title: `Outreach to ${state.person.fullName}`.slice(0, 160), body: { text: textarea.value, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName } }, latest => { savedDraft = latest; textarea.value = savedDraftText = latest.body.text; updateDirty(); message('Latest saved copy loaded.', false, root.querySelector('[data-draft-feedback]')); });
+        }
         finally { control.disabled = false; state.busy = false; }
       }
       if (action === 'copy-draft') {
@@ -398,20 +420,9 @@
         catch { textarea.select(); message('Clipboard access unavailable. The message is selected; use your copy shortcut.', true, target); }
       }
       if (action === 'mark-contacted') {
-        if (state.busy || !window.confirm(`Have you actually sent your message to ${state.person.fullName}? This changes the outreach stage to Contacted; it does not send anything.`)) return;
-        const stage = root.querySelector('#person-outreachStatus');
-        const save = root.querySelector('.person-edit-form [type="submit"]');
-        state.busy = true; control.disabled = true;
-        stage.disabled = true; save.disabled = true;
-        message('Updating stage…', false, root.querySelector('[data-draft-feedback]'));
-        try {
-          const updated = await api(`/api/contacts/${encodeURIComponent(state.person.id)}`, { method: 'PATCH', body: JSON.stringify({ outreachStatus: 'contacted' }) });
-          state.person = updated; updateRow(updated);
-          root.querySelector('#person-outreachStatus').value = 'contacted';
-          savedFormValues.outreachStatus = 'contacted';
-          message('Stage updated to Contacted. No message was sent by this app.', false, root.querySelector('[data-draft-feedback]'));
-        } catch (error) { message(`Stage was not changed. ${error.message}`, true, root.querySelector('[data-draft-feedback]')); }
-        finally { state.busy = false; control.disabled = false; stage.disabled = false; save.disabled = false; }
+        if (state.busy) return;
+        state.outreachRequest ||= crypto.randomUUID();
+        openDialog('Log sent outreach', `<form data-people-form="log-outreach"><p>Record what you sent to ${escape(state.person.fullName)}. This app does not send messages. Later outreach stages are preserved.</p><label class="people-field">Sent message<textarea name="text" rows="7" maxlength="12000" required>${escape(root.querySelector('#person-draft').value)}</textarea></label><label class="people-field">Schedule follow-up<select name="followUpDays"><option value="0">No follow-up</option><option value="3">In 3 days</option><option value="7">In 7 days</option><option value="14">In 14 days</option></select></label><label><input name="confirmed" type="checkbox" required> I already sent this message outside the app</label><p role="status" data-log-feedback></p><button class="primary-button" type="submit">Record outreach</button></form>`);
       }
     }
     function move(direction) {
