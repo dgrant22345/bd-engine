@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "44382fe27d00ab26c1bafb0fd308ec3ed15aff32d79d18277f4708a6fff5b44e",
+  "sourceSha256": "658b4e5700a70e7e27f0ffa19f2a42a39c0429b82b5c0e2a29d738ccad01504a",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -49,6 +49,10 @@
     {
       "id": "20260821_legal_consents",
       "description": "Add durable versioned legal consent evidence"
+    },
+    {
+      "id": "20260912_saved_work",
+      "description": "Persist private outreach drafts and People views"
     }
   ],
   "tables": [
@@ -70,6 +74,7 @@
     "memberships",
     "password_reset_tokens",
     "rate_limit_buckets",
+    "saved_work",
     "schema_migrations",
     "sessions",
     "stripe_webhook_events",
@@ -133,6 +138,7 @@
     "password_reset_tokens_expires_idx",
     "password_reset_tokens_user_idx",
     "rate_limit_buckets_expires_idx",
+    "saved_work_owner_updated_idx",
     "sessions_expires_idx",
     "stripe_webhook_events_status_updated_idx",
     "support_ticket_messages_ticket_created_idx",

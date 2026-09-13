@@ -3276,6 +3276,7 @@ export function createStore() {
       const items = activitiesForTenant(tenantId).filter(item =>
         (!query.type || item.type === query.type)
         && (!query.accountId || item.accountId === query.accountId)
+        && (!query.contactId || item.contactId === query.contactId)
         && (!q || `${item.summary || ''} ${item.notes || ''} ${item.normalizedCompanyName || ''}`.toLowerCase().includes(q))
       ).slice().sort((a, b) => {
         const direction = query.sort === 'oldest' ? 1 : -1;
@@ -3454,7 +3455,8 @@ export function createStore() {
       const dateValue = (value, fallback) => { const parsed = Date.parse(value || ''); return Number.isFinite(parsed) ? parsed : fallback; };
       const items = tasksForTenant(tenantId).filter(task => task.status === status
         && (!query.accountId || task.accountId === query.accountId)
-        && (!search || `${task.summary || task.title || ''} ${accountNames.get(task.accountId) || ''}`.toLowerCase().includes(search)))
+        && (!query.contactId || task.contactId === query.contactId)
+        && (!search || `${task.summary || task.title || ''} ${task.contactName || ''} ${accountNames.get(task.accountId) || ''}`.toLowerCase().includes(search)))
         .slice().sort((a, b) => {
           if (query.sort === 'name') return String(a.summary || a.title || '').localeCompare(String(b.summary || b.title || '')) || String(a.id).localeCompare(String(b.id));
           const difference = status === 'completed'
@@ -3473,14 +3475,19 @@ export function createStore() {
 
     async createTask(tenantId, payload = {}) {
       assertTenant(tenantId);
-      await ensureDataLoaded(tenantId, false);
+      await ensureDataLoaded(tenantId, Boolean(payload.contactId));
+      const person = payload.contactId ? contactsForTenant(tenantId).find(item => item.id === payload.contactId) : null;
+      if (payload.contactId && !person) throw new CommercialOutcomeValidationError('This person is not available in this workspace.');
+      if (person && payload.accountId && payload.accountId !== person.accountId) throw new CommercialOutcomeValidationError('The follow-up company must match this person.');
       const summary = String(payload.summary || '').trim().slice(0, 240);
       if (!summary) throw new Error('Task summary is required');
       const requestedDueDate = new Date(payload.dueDate || Date.now() + 24 * 60 * 60 * 1000);
       const task = {
         id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
-        accountId: String(payload.accountId || '').slice(0, 120),
+        accountId: String(person?.accountId || payload.accountId || '').slice(0, 120),
+        contactId: person?.id || '',
+        contactName: person?.fullName || '',
         type: String(payload.type || 'follow_up').slice(0, 60),
         status: 'pending',
         summary,
@@ -3503,6 +3510,7 @@ export function createStore() {
         task.updatedAt = now();
         await this.addActivity(tenantId, userId, {
           accountId: task.accountId || '',
+          contactId: task.contactId || '',
           type: 'task_completed',
           summary: `Completed task: ${task.summary || task.title || 'Follow-up'}`,
           metadata: { taskId: task.id },

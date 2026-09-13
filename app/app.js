@@ -5044,16 +5044,17 @@ function renderDeferredTargetNotice() {
 }
 
 function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCopy()) {
+  if (appState.bootstrap?.session?.readOnly) return '';
   const readinessMetrics = dashboard.readiness?.metrics || {};
   const summary = dashboard.summary || {};
   const jobSeeker = personaCopy.persona === 'jobseeker';
   const steps = [
     {
       id: 'target',
-      title: jobSeeker ? 'Add a target company' : 'Add a target account',
+      title: 'Add a target company',
       description: jobSeeker
         ? 'Choose a real company you would apply to so BD Engine has a useful ranking candidate.'
-        : 'Choose a real account you want to reach so BD Engine has a useful ranking candidate.',
+        : 'Start with one company you want to recruit for. A large contact import is optional.',
       value: Number(readinessMetrics.accountCount ?? summary.accountCount ?? 0),
       valueLabel: jobSeeker ? 'target company' : 'target account',
       cta: jobSeeker ? 'Add company' : 'Add account',
@@ -5088,14 +5089,14 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
       cta: jobSeeker ? 'Import roles' : 'Import jobs',
       href: '#/admin/pipeline-ops/jobs',
     },
-    jobSeeker || !supportsCommercialOutcomes() ? null : {
+    jobSeeker ? null : {
       id: 'action',
-      title: 'Work the first signal',
-      description: 'Open the recommended account, log the outreach, and schedule the next follow-up.',
-      value: getCommercialOutcomeCount(appState.outcomeSummary || {}, 'outreach_logged'),
-      valueLabel: 'outreach action',
-      cta: 'Open account queue',
-      href: '#/accounts',
+      title: Number(dashboard.savedDraftCount) > 0 ? 'Draft saved to your account' : 'Choose a person and save a message',
+      description: 'Review a relevant person and the hiring evidence, prepare a specific message, then save it. Saving is not sending. Add a follow-up when you have a next step.',
+      value: Number(dashboard.savedDraftCount || 0),
+      valueLabel: 'saved draft',
+      cta: 'Choose a person',
+      href: '#/contacts',
     },
   ].filter(Boolean).map((step) => ({ ...step, complete: step.value > 0 }));
   const completeCount = steps.filter((step) => step.complete).length;
@@ -5103,14 +5104,14 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
   const progress = Math.round((completeCount / steps.length) * 100);
   const summaryCopy = jobSeeker
     ? 'Complete these four steps so BD Engine can rank a company using live roles and your existing network.'
-    : 'Complete the signal-to-action loop using a real account. Contacts can be added later when a warm path is useful.';
+    : 'One company → hiring evidence → a relevant person → your first saved message. Complete one useful workflow before expanding your target list.';
 
   return `
     <section class="detail-card activation-path" data-first-value-checklist aria-labelledby="first-value-title">
       <div class="activation-path__header">
         <div>
           <p class="eyebrow">First value</p>
-          <h3 id="first-value-title">Get to your first ranked recommendation</h3>
+          <h3 id="first-value-title">${jobSeeker ? 'Get to your first ranked recommendation' : 'Prepare your first useful outreach draft'}</h3>
           <p class="muted small">${escapeHtml(summaryCopy)}</p>
           <button class="ghost-button ghost-button--xs activation-path__tour" type="button" data-action="start-product-tour">Quick tour</button>
         </div>
@@ -7500,8 +7501,9 @@ function renderWarmStudioModal() {
             </div>
           </div>
           <textarea id="warm-studio-textarea" aria-label="Editable outreach draft" class="warm-studio-textarea" rows="7">${escapeHtml(activeText)}</textarea>
-          <div><button type="button" class="secondary-button" id="warm-save-draft">Save draft</button> <button type="button" class="ghost-button" id="warm-restore-draft">Restore saved draft</button> <button type="button" class="ghost-button" id="warm-delete-draft">Forget saved draft</button></div>
-          <p class="small muted" id="warm-draft-status" role="status">One saved draft per role and recipient, on this browser only. Saving replaces that saved draft; no cross-device sync.</p>
+          <div class="button-row"><button type="button" class="secondary-button" id="warm-save-account" disabled>Save to my account</button><button type="button" class="ghost-button" id="warm-draft-library">My saved drafts</button></div><p class="small muted" id="warm-account-draft-status" role="status">Checking saved draft…</p>
+          <details><summary>Browser-only copies</summary><div><button type="button" class="secondary-button" id="warm-save-draft">Save draft</button> <button type="button" class="ghost-button" id="warm-restore-draft">Restore saved draft</button> <button type="button" class="ghost-button" id="warm-delete-draft">Forget saved draft</button></div>
+          <p class="small muted" id="warm-draft-status" role="status">One saved draft per role and recipient, on this browser only. Saving replaces that saved draft; no cross-device sync.</p></details>
           <p class="small muted">Drafted locally from your context. No AI service or API charges.</p>
           <label for="warm-complete-task">When I confirm sent, also complete this task</label>
           <select id="warm-complete-task" ${data.sentActivityId ? 'disabled' : ''}>
@@ -7574,6 +7576,7 @@ function renderWarmStudioModal() {
       data.drafts[warmStudioDraftKey(data)] = saved.text;
       renderWarmStudioModal();
       document.getElementById('warm-draft-status').textContent = 'Saved draft restored.';
+      document.getElementById('warm-draft-status').closest('details').open = true;
       document.getElementById('warm-studio-textarea').focus();
     } catch { draftStatus.textContent = 'Saved draft could not be restored. Your current draft is unchanged.'; }
   };
@@ -7581,6 +7584,27 @@ function renderWarmStudioModal() {
     try { localStorage.removeItem(savedDraftKey); draftStatus.textContent = 'Saved copy removed. Your current draft is unchanged.'; }
     catch { draftStatus.textContent = 'Could not remove the saved copy from browser storage.'; }
   };
+  document.getElementById('warm-draft-library').onclick = () => window.bdSavedWork.openLibrary('draft');
+  const saveAccountButton = document.getElementById('warm-save-account');
+  const accountDraftStatus = document.getElementById('warm-account-draft-status');
+  (async () => {
+    try {
+      const cloudKey = await window.bdSavedWork.keyFor(JSON.stringify(['warm', data.job?.id, data.selectedContact?.id || data.selectedContact?.fullName || '']));
+      data.accountDrafts ||= {};
+      if (!(cloudKey in data.accountDrafts)) data.accountDrafts[cloudKey] = await window.bdSavedWork.load('draft', cloudKey);
+      if (!saveAccountButton.isConnected) return;
+      saveAccountButton.disabled = false;
+      accountDraftStatus.textContent = data.accountDrafts[cloudKey] ? 'Saved copy available in My saved drafts. Saving here replaces that copy.' : 'Private to your login in this workspace. Available across signed-in devices.';
+      saveAccountButton.onclick = async () => {
+        saveAccountButton.disabled = true;
+        try {
+          data.accountDrafts[cloudKey] = await window.bdSavedWork.save('draft', cloudKey, { version: data.accountDrafts[cloudKey]?.version || 0, title: `${data.selectedContact?.fullName || 'Outreach'} · ${data.job?.title || 'Role'}`.slice(0, 160), body: { text: textarea.value, contactId: data.selectedContact?.id || '', accountId: data.account?.id || '', jobId: data.job?.id || '', recipient: data.selectedContact?.fullName || '' } });
+          accountDraftStatus.textContent = 'Saved to your account. Nothing was sent.';
+        } catch (error) { accountDraftStatus.textContent = `${error.message} Your current text is unchanged.`; }
+        finally { saveAccountButton.disabled = false; }
+      };
+    } catch (error) { if (accountDraftStatus.isConnected) accountDraftStatus.textContent = `Saved drafts unavailable. ${error.message} You can still copy your message or use a browser-only copy.`; }
+  })();
   document.getElementById('warm-save-background').onclick = () => {
     try {
       const key = warmStudioBackgroundKey(data.goal);
@@ -10627,7 +10651,8 @@ async function renderDashboardView(options = {}) {
           return { unavailable: true };
         })
       : Promise.resolve({}));
-  const [dashboardPayload, outcomeSummary] = await Promise.all([dashboardPromise, outcomePromise]);
+  const savedDraftPromise = isJobSeekerPersona() || appState.bootstrap?.session?.readOnly ? Promise.resolve(null) : api('/api/saved-work/draft?summary=1', { skipCache: true }).catch(() => null);
+  const [dashboardPayload, outcomeSummary, savedDrafts] = await Promise.all([dashboardPromise, outcomePromise, savedDraftPromise]);
   // A slow overview response must not replace the newer People/Follow-ups view.
   if (!isCurrent()) return;
   appState.outcomeSummary = outcomeSummary || {};
@@ -10635,6 +10660,7 @@ async function renderDashboardView(options = {}) {
   if (outcomeElapsedMs > 250) console.info(`BD Engine outcome summary load: ${outcomeElapsedMs}ms`);
   const extendedPayload = options.extendedPayload || null;
   const dashboard = dashboardPayload || {};
+  dashboard.savedDraftCount = savedDrafts?.total;
   dashboard.todayQueue = (Array.isArray(dashboard.todayQueue) ? dashboard.todayQueue : []).slice(0, DASHBOARD_RENDER_LIMITS.todayQueue);
   dashboard.followUpAccounts = (Array.isArray(dashboard.followUpAccounts) ? dashboard.followUpAccounts : []).slice(0, DASHBOARD_RENDER_LIMITS.followUps);
   dashboard.newJobsToday = (Array.isArray(dashboard.newJobsToday) ? dashboard.newJobsToday : []).slice(0, DASHBOARD_RENDER_LIMITS.recentJobs);
@@ -15002,6 +15028,7 @@ function endTour(options = {}) {
 
 async function renderTasksView() {
   const isCurrent = beginViewRender();
+  appState.taskQuery.contactId = new URLSearchParams(location.hash.split('?')[1] || '').get('contactId') || '';
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
     const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
@@ -15021,6 +15048,7 @@ async function renderTasksView() {
 
     appRoot.innerHTML = `
       <section class="tasks-view">
+        ${appState.taskQuery.contactId ? '<p class="small">Showing follow-ups for one person. <a href="#/tasks">Show everyone</a></p>' : ''}
         <details class="form-card workspace-disclosure" id="activity-history">
           <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
           <form id="activity-history-form" class="task-create-form">
@@ -15062,7 +15090,7 @@ async function renderTasksView() {
         </details>
 
         <form id="task-search-form" class="task-create-form task-search-form">
-          <label><span>Search tasks or company</span><input name="q" maxlength="240" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Follow-up, company or task title"></label>
+          <label><span>Search tasks, people or companies</span><input name="q" maxlength="240" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Person, company or task title"></label>
           <label><span>Sort</span><select name="sort"><option value="">${appState.taskQuery.status === 'pending' ? 'Due date — earliest first' : 'Completed — newest first'}</option><option value="name" ${selected(appState.taskQuery.sort, 'name')}>Task title A–Z</option></select></label>
           <button class="secondary-button" type="submit">Search tasks</button>
           <button class="ghost-button" id="task-search-clear" type="button">Clear search</button>
@@ -15104,6 +15132,7 @@ async function renderTasksView() {
       results.textContent = 'Loading activity…';
       try {
         const query = new URLSearchParams(new FormData(historyForm));
+        if (appState.taskQuery.contactId) query.set('contactId', appState.taskQuery.contactId);
         query.set('page', page);
         query.set('pageSize', '25');
         const response = await api(`/api/activity?${query}`);
@@ -15142,10 +15171,10 @@ function renderTaskItem(task) {
       <div class="task-item-main">
         <div class="task-item-info">
           <strong>${escapeHtml(summary)}</strong>
-          <div class="small muted">${task.status === 'completed' ? `Completed ${formatDate(task.updatedAt || task.createdAt)}` : task.dueDate ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date'}${task.accountName ? ` · ${escapeHtml(task.accountName)}` : ''}</div>
+          <div class="small muted">${task.status === 'completed' ? `Completed ${formatDate(task.updatedAt || task.createdAt)}` : task.dueDate ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date'}${task.contactName ? ` · ${escapeHtml(task.contactName)}` : ''}${task.accountName ? ` · ${escapeHtml(task.accountName)}` : ''}</div>
         </div>
         <div class="task-item-actions">
-          ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
+          ${task.contactId ? `<a href="#/contacts?person=${encodeURIComponent(task.contactId)}" class="ghost-button micro-button">Open person</a>` : task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
           ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
         </div>
       </div>

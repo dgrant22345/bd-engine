@@ -488,7 +488,7 @@ test('first-value checklist routes an empty workspace to the exact setup control
   await expect(checklist.getByRole('link', { name: 'Add account' })).toHaveAttribute('href', '#/accounts/new');
   await expect(checklist.getByRole('link', { name: 'Find board' })).toHaveAttribute('href', '#/admin/pipeline-ops/discovery');
   await expect(checklist.getByRole('link', { name: 'Import jobs' })).toHaveAttribute('href', '#/admin/pipeline-ops/jobs');
-  await expect(checklist.getByRole('link', { name: 'Open account queue' })).toHaveAttribute('href', '#/accounts');
+  await expect(checklist.getByRole('link', { name: 'Choose a person' })).toHaveAttribute('href', '#/contacts');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await checklist.scrollIntoViewIfNeeded();

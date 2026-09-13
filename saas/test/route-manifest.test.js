@@ -80,13 +80,14 @@ function isImplemented(path, routes) {
 }
 
 async function buildManifest() {
-  const [app, shell, server, people] = await Promise.all([
+  const [app, shell, server, people, savedWork] = await Promise.all([
     readFile(appPath, 'utf8'),
     readFile(shellPath, 'utf8'),
     readFile(serverPath, 'utf8'),
     readFile(new URL('../../app/people-workspace.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../app/saved-work.js', import.meta.url), 'utf8'),
   ]);
-  const frontendPaths = extractFrontendPaths(app + '\n' + shell + '\n' + people);
+  const frontendPaths = extractFrontendPaths(app + '\n' + shell + '\n' + people + '\n' + savedWork);
   const routes = extractServerRoutes(server);
   return { frontendPaths, routes };
 }

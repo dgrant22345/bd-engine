@@ -891,6 +891,23 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
       `);
     });
 
+    await runSchemaMigration('20260912_saved_work', 'Persist private outreach drafts and People views', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS saved_work (
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN ('draft', 'view')),
+          id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body JSONB NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, user_id, kind, id)
+        );
+        CREATE INDEX IF NOT EXISTS saved_work_owner_updated_idx ON saved_work (tenant_id, user_id, kind, updated_at DESC, id);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;

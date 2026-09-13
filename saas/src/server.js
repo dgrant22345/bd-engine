@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { gzip, createGzip } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
+import { createSavedWorkStore } from './saved-work.js';
 import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
@@ -38,6 +39,7 @@ const publicDir = join(rootDir, 'public');
 const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
+const savedWork = createSavedWorkStore();
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
@@ -1509,6 +1511,7 @@ self.addEventListener('activate', (event) => {
       user: safeUser(user),
       membership: session.membership,
     });
+    payload.savedWork = await savedWork.export(tenantId, user.id);
     const slug = String(tenant.slug || tenant.name || tenant.id || 'workspace')
       .toLowerCase()
       .replace(/[^a-z0-9-]+/g, '-')
@@ -1535,6 +1538,7 @@ self.addEventListener('activate', (event) => {
       });
     }
     const result = await store.clearTenantWorkspaceData(tenantId);
+    await savedWork.clearTenant(tenantId);
     return sendJson(res, 200, {
       ...result,
       message: 'Workspace data deleted. Your account and workspace shell remain available.',
@@ -1961,6 +1965,26 @@ self.addEventListener('activate', (event) => {
       const outcome = await store.createCommercialOutcome(tenantId, user.id, await readJson(req));
       await recordCommercialOutcomeMilestone(outcome, tenant, user);
       return sendJson(res, 201, outcome);
+    }
+  }
+
+  if ((pathname === '/api/saved-work/draft' || pathname === '/api/saved-work/view') && req.method === 'GET') {
+    return sendJson(res, 200, await savedWork.list(tenantId, user.id, pathname.endsWith('/draft') ? 'draft' : 'view', Object.fromEntries(url.searchParams)));
+  }
+  const savedWorkMatch = pathname.match(/^\/api\/saved-work\/([^/]+)(?:\/([a-zA-Z0-9_-]{1,160}))?$/);
+  if (savedWorkMatch) {
+    const [, kind, id] = savedWorkMatch;
+    try {
+      if (req.method === 'GET') {
+        const result = id ? await savedWork.get(tenantId, user.id, kind, id) : await savedWork.list(tenantId, user.id, kind, Object.fromEntries(url.searchParams));
+        return sendJson(res, result ? 200 : 404, result || { error: 'Saved item not found.' });
+      }
+      if (id && req.method === 'PUT') return sendJson(res, 200, await savedWork.put(tenantId, user.id, kind, id, await readJson(req)));
+      if (id && req.method === 'DELETE') return sendJson(res, 200, await savedWork.remove(tenantId, user.id, kind, id, Number(url.searchParams.get('version'))));
+      return sendJson(res, 405, { error: 'Method not allowed.' });
+    } catch (error) {
+      if ([400, 409].includes(error.status)) return sendJson(res, error.status, { error: error.message });
+      throw error;
     }
   }
 

@@ -7,6 +7,7 @@ const SHELL_FILES = [
   `/palette.css?v=${ASSET_VERSION}`,
   `/workspace.css?v=${ASSET_VERSION}`,
   `/people-workspace.js?v=${ASSET_VERSION}`,
+  `/saved-work.js?v=${ASSET_VERSION}`,
   `/app.js?v=${ASSET_VERSION}`,
   `/local-api.js?v=${ASSET_VERSION}`,
   '/manifest.json',

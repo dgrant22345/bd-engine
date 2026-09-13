@@ -17,6 +17,9 @@
     let lastHash = location.hash;
     let returnFocus = null;
     let savedFormValues = {};
+    let savedDraft = null;
+    let savedDraftText = '';
+    const updateDirty = () => { state.dirty = Boolean(root.querySelector('#person-draft') && root.querySelector('#person-draft').value !== savedDraftText) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
     const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"]') && [...state.dialog.querySelectorAll('input')].some(input => input.value.trim()));
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
@@ -108,7 +111,7 @@
       root.innerHTML = `<section class="people-workspace${state.selected ? ' has-person' : ''}" aria-label="People workspace">
         <div class="people-toolbar">
           <div class="people-count"><strong>${result.total.toLocaleString()}</strong> ${filtered ? 'matching' : 'saved'} people<span>Review your network, one person at a time.</span></div>
-          <div class="people-toolbar-actions"><button type="button" class="primary-button" data-people="add">Add person</button><button type="button" class="secondary-button" data-action="open-network-import-modal">Import CSV</button>${exportOptions()}</div>
+          <div class="people-toolbar-actions"><button type="button" class="primary-button" data-people="add">Add person</button><button type="button" class="secondary-button" data-action="open-network-import-modal">Import CSV</button>${button('drafts', 'My drafts')}${exportOptions()}</div>
         </div>
         <div class="people-layout">
           <div class="people-master">
@@ -118,7 +121,7 @@
               <label><span class="visually-hidden">Sort people</span><select name="sortBy" aria-label="Sort people">${options({ name: 'Name A–Z', name_desc: 'Name Z–A', company: 'Company A–Z', recent: 'Recently updated', priority: 'Relationship priority' }, query.sortBy)}</select></label>
               ${filtered ? button('clear', 'Clear filters') : ''}
             </form>
-            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>Open a name to review</span></div>
+            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
             <div class="people-feedback" data-people-feedback role="status"></div>
             <div class="people-selection" data-people-selection hidden></div>
             ${result.items.length ? table() : `<div class="people-empty"><h3>${filtered ? 'No people match these filters' : 'Your people workspace starts here'}</h3><p>${filtered ? 'Try another name, role or company, or clear the filters to see your saved people.' : 'Add someone you want to review, or import your LinkedIn connections. CSV imports include connection details—not complete candidate profiles.'}</p>${filtered ? button('clear', 'Clear filters') : `${button('add', 'Add your first person')}<button class="secondary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button>`}</div>`}
@@ -183,6 +186,7 @@
         state.person = person;
         state.dirty = false;
         drawPerson();
+        loadPersonWork(person.id, ticket);
         if (focus) root.querySelector('#person-heading')?.focus({ preventScroll: true });
       } catch (error) {
         if (ticket !== state.sequence || !active()) return;
@@ -190,6 +194,7 @@
       }
     }
     function drawPerson() {
+      savedDraft = null; savedDraftText = '';
       const person = state.person;
       const panel = root.querySelector('.person-panel');
       const index = state.result.items.findIndex(item => item.id === person.id);
@@ -212,10 +217,18 @@
             </details>
             <div class="person-save-row"><button class="primary-button" type="submit">Save changes</button><span class="people-feedback" data-person-feedback role="status">${escape(state.notice)}</span></div>
           </form>
-          <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">A starting point, not a sent message. Add the opportunity and check every claim before copying. Drafts are not saved.</p><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8"></textarea></label><div class="person-links">${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
+          <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Review every claim. Save privately to your account to resume on another device. Saving and copying do not send anything.</p><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000"></textarea></label><div class="person-links">${button('save-draft', 'Save draft')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
+          <details class="person-section"><summary>Follow-ups and activity</summary><form data-people-form="follow-up"><label class="people-field">Next step<input name="summary" required maxlength="240" placeholder="Follow up on our conversation"></label><label class="people-field">Due date<input name="dueDate" type="date" required></label><button class="secondary-button" type="submit">Add follow-up</button><p role="status" data-task-feedback></p></form><div data-person-work role="status">Loading linked work…</div></details>
           <footer class="person-review-footer">${index >= 0 ? `${index + 1} of ${state.result.items.length} on this page · J / K to move when not typing` : 'Opened directly · Not in the current results'}</footer>
         </div>`;
       savedFormValues = Object.fromEntries(new FormData(panel.querySelector('.person-edit-form')));
+    }
+    async function loadPersonWork(contactId, ticket = state.sequence) {
+      try {
+        const [tasks, history] = await Promise.all([api(`/api/tasks?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true }), api(`/api/activity?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true })]);
+        if (ticket !== state.sequence || state.selected !== contactId || !active()) return;
+        root.querySelector('[data-person-work]').innerHTML = `<h4>Pending follow-ups</h4>${tasks.items.length ? tasks.items.map(task => `<p>${escape(task.summary)} · ${escape(date(task.dueDate))}</p>`).join('') : '<p>No pending follow-ups.</p>'}<a href="#/tasks?contactId=${encodeURIComponent(contactId)}">Open this person’s follow-ups</a><h4>Recent activity</h4>${history.items.length ? history.items.map(item => `<p>${escape(item.summary)} <span class="muted small">${escape(date(item.occurredAt))}</span></p>`).join('') : '<p>No activity recorded for this person yet.</p>'}`;
+      } catch (error) { if (ticket === state.sequence && active()) message(`Could not load linked work. ${error.message}`, true, root.querySelector('[data-person-work]')); }
     }
     async function savePerson(form) {
       if (state.busy) return;
@@ -233,7 +246,7 @@
         updateRow(updated);
         for (const field of fields) field.value = updated[field.name] ?? (field.name === 'outreachStatus' ? 'not_started' : '');
         savedFormValues = Object.fromEntries(fields.map(field => [field.name, field.value]));
-        state.dirty = Boolean(root.querySelector('#person-draft')?.value);
+        updateDirty();
         // Keep the form and focus intact; update identity separately.
         root.querySelector('#person-heading').textContent = updated.fullName;
         root.querySelector('.person-current-role').textContent = updated.title || 'Role not provided';
@@ -284,6 +297,18 @@
       event.preventDefault(); event.stopPropagation();
       if (form.dataset.peopleForm === 'filters') return navigate({ ...state.query, ...Object.fromEntries(new FormData(form)), page: 1 });
       if (form.dataset.peopleForm === 'person') return savePerson(form);
+      if (form.dataset.peopleForm === 'follow-up') {
+        if (state.busy) return;
+        const contactId = state.person.id;
+        const submit = form.querySelector('button'); submit.disabled = true; state.busy = true;
+        try {
+          await api('/api/tasks', { method: 'POST', body: JSON.stringify({ ...Object.fromEntries(new FormData(form)), contactId }) });
+          form.reset(); message('Follow-up saved for this person.', false, form.querySelector('[data-task-feedback]'));
+          await loadPersonWork(contactId);
+        } catch (error) { message(error.message, true, form.querySelector('[data-task-feedback]')); }
+        finally { state.busy = false; submit.disabled = false; }
+        return;
+      }
       if (form.dataset.peopleForm !== 'add') return;
       const submit = form.querySelector('[type="submit"]');
       if (submit.disabled || state.busy) return;
@@ -332,14 +357,38 @@
       if (action === 'sort-company') navigate({ ...state.query, sortBy: 'company', page: 1 });
       if (action === 'next-person' || action === 'previous-person') move(action === 'next-person' ? 1 : -1);
       if (action === 'add') addPerson();
+      if (action === 'drafts') window.bdSavedWork.openLibrary('draft');
+      if (action === 'save-view') window.bdSavedWork.saveView(state.query);
+      if (action === 'views') window.bdSavedWork.openLibrary('view', query => navigate({ ...query, page: 1, pageSize: 20 }));
       if (action === 'compare') compare();
       if (action === 'close-dialog') closeDialog();
       if (action === 'clear-selection') { state.checked.clear(); root.querySelectorAll('[data-people="select-person"]').forEach(el => el.checked = false); updateSelection(); }
       if (action === 'prepare') {
+        if (state.busy) return;
         const section = root.querySelector('.person-outreach'); section.hidden = false;
         const textarea = section.querySelector('textarea');
+        if (!textarea.value) {
+          control.disabled = true; state.busy = true;
+          try {
+            savedDraft = await window.bdSavedWork.load('draft', `person-${state.person.id}`);
+            savedDraftText = savedDraft?.body.text || '';
+            if (savedDraft) textarea.value = savedDraftText;
+          } catch (error) { message(`Could not load the saved draft. ${error.message} Retry before editing.`, true, root.querySelector('[data-draft-feedback]')); return; }
+          finally { control.disabled = false; state.busy = false; }
+        }
         if (!textarea.value) textarea.value = `Hi ${state.person.fullName?.trim().split(/\s+/)[0] || state.person.firstName || 'there'},\n\nI'm reaching out about [add the role or reason for contacting this person].\n\n[Add relevant, verified details and a clear next step.]\n\nWould you be open to a brief conversation?`;
         textarea.focus();
+      }
+      if (action === 'save-draft') {
+        if (state.busy) return;
+        const textarea = root.querySelector('#person-draft');
+        const text = textarea.value;
+        control.disabled = true; state.busy = true;
+        try {
+          savedDraft = await window.bdSavedWork.save('draft', `person-${state.person.id}`, { title: `Outreach to ${state.person.fullName}`.slice(0, 160), body: { text, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName }, version: savedDraft?.version || 0 });
+          savedDraftText = text; updateDirty(); message(state.dirty ? 'Unsaved contact changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
+        } catch (error) { message(`${error.message} Your text is still here; copy it before reopening the saved draft.`, true, root.querySelector('[data-draft-feedback]')); }
+        finally { control.disabled = false; state.busy = false; }
       }
       if (action === 'copy-draft') {
         const textarea = root.querySelector('#person-draft');
@@ -388,7 +437,7 @@
       }
     });
     root.addEventListener('input', event => {
-      if (event.target.closest('.person-edit-form') || event.target.id === 'person-draft') { state.dirty = true; message('Unsaved changes'); }
+      if (event.target.closest('.person-edit-form') || event.target.id === 'person-draft') { updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved'); }
     });
     // Guard navigation to legacy routes too, without taking over the router.
     document.addEventListener('click', event => {

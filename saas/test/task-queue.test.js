@@ -40,3 +40,18 @@ test('task search includes company context and completed work supports name sort
   assert.deepEqual(done.items.map(item => item.id), [earlier.id, later.id]);
   assert.equal((await store.findTasks(tenantId, { status: 'completed', q: 'queue search company' })).total, 2);
 });
+
+test('person follow-ups validate links and completion remains in person history', async () => {
+  const store = createStore();
+  const tenantId = store.getSession().tenant.id;
+  const person = await store.addContact(tenantId, { fullName: 'Person with follow-up', companyName: 'Example' });
+  const task = await store.createTask(tenantId, { contactId: person.id, summary: 'Ask about timing', dueDate: '2027-01-01' });
+  assert.equal(task.contactId, person.id);
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id })).total, 1);
+  await assert.rejects(store.createTask(tenantId, { contactId: 'other-tenant-person', summary: 'Invalid link' }));
+  await store.completeTask(tenantId, task.id);
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id })).total, 0);
+  const history = await store.findActivities(tenantId, { contactId: person.id });
+  assert.equal(history.total, 1);
+  assert.match(history.items[0].summary, /Ask about timing/);
+});
