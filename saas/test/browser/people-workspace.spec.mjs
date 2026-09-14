@@ -136,9 +136,10 @@ test('quick start and manual add work without companies; drafts do not send or c
   await expect(app.locator('[data-person-email]')).toHaveText('jordan@example.com');
   await expect(app.getByRole('link', { name: 'Open profile' })).toHaveAttribute('href', 'https://www.linkedin.com/in/synthetic-jordan');
   await app.getByRole('button', { name: 'Prepare outreach' }).click();
-  await expect(app.getByLabel('Message', { exact: true })).toHaveValue(/^Hi Jordan,/);
+  await expect(app.getByLabel('Message', { exact: true })).toHaveValue('');
+  await expect(app.getByRole('button', { name: 'Generate draft', exact: true })).toBeDisabled();
   await app.getByRole('button', { name: 'Copy message' }).click();
-  await expect(app.locator('[data-draft-feedback]')).toContainText('Replace the placeholders');
+  await expect(app.locator('[data-draft-feedback]')).toContainText('Write a message before copying');
   await expect(app.getByLabel('Outreach stage', { exact: true }).last()).toHaveValue('not_started');
   const requests = []; page.on('request', request => { if (request.method() !== 'GET') requests.push(request.url()); });
   await app.getByLabel('Message', { exact: true }).fill('Hi Alex, would you be open to hearing about a sourcing role in Toronto?');

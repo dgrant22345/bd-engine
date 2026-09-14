@@ -19,6 +19,9 @@ export function validateSavedWork(kind, input = {}) {
     body = { text: text(source.text, 12000) };
     if (!body.text.trim()) throw fail('Write a message before saving.');
     for (const key of ['contactId', 'accountId', 'jobId', 'recipient']) body[key] = text(source[key] || '', 300);
+    for (const [key, max] of [['roleTitle', 500], ['companyName', 300], ['goal', 60], ['background', 1000]]) {
+      if (source[key] !== undefined) body[key] = text(source[key], max);
+    }
   } else {
     const allowedSorts = ['name', 'name_desc', 'company', 'recent', 'priority'];
     const allowedStages = ['', 'not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];

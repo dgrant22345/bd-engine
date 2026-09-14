@@ -3,6 +3,20 @@ import assert from 'node:assert/strict';
 import { createSavedWorkStore, validateSavedWork } from '../src/saved-work.js';
 
 const draft = { title: 'Message to Jamie', body: { text: 'A specific, reviewed message.', contactId: 'person-1' }, version: 0 };
+test('draft names and optional role context persist with bounds and optimistic rename protection', async () => {
+  const store = createSavedWorkStore({ enabled: () => false });
+  const body = { ...draft.body, roleTitle: 'Talent Manager', companyName: 'Example', goal: 'recruiting_follow_up', background: 'Ten years of recruiting experience', ignored: 'never saved' };
+  const first = await store.put('t', 'u', 'draft', 'named', { ...draft, body });
+  assert.equal(first.body.roleTitle, body.roleTitle); assert.equal(first.body.background, body.background);
+  assert.equal(first.body.ignored, undefined);
+  const renamed = await store.put('t', 'u', 'draft', 'named', { ...first, title: 'Canada hiring conversation' });
+  assert.deepEqual(renamed.body, first.body);
+  assert.equal((await store.list('t', 'u', 'draft', { q: 'Canada hiring' })).total, 1);
+  await assert.rejects(store.put('t', 'u', 'draft', 'named', { ...first, title: 'Stale rename' }), { status: 409 });
+  for (const [key, length] of [['roleTitle', 501], ['companyName', 301], ['background', 1001], ['goal', 61]]) {
+    assert.throws(() => validateSavedWork('draft', { ...draft, body: { ...body, [key]: 'x'.repeat(length) } }), { status: 400 });
+  }
+});
 test('saved drafts survive fresh reads and are isolated by user and tenant', async () => {
   const store = createSavedWorkStore({ enabled: () => false });
   const item = await store.put('tenant-a', 'user-a', 'draft', 'draft-1', draft);

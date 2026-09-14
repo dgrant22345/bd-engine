@@ -86,7 +86,7 @@
         page = result.page;
         if (!result.items.length && page > 1) { page -= 1; return refresh(); }
         feedback.textContent = result.items.length ? '' : 'Nothing saved here yet.';
-        items.innerHTML = result.items.map((item, index) => `<article class="person-section"><strong>${escape(item.title)}</strong><p class="small muted">Saved ${escape(new Date(item.updatedAt).toLocaleString())}</p><div class="button-row"><button class="secondary-button" data-open="${index}">${kind === 'draft' ? 'Open draft' : 'Apply view'}</button><button class="ghost-button" data-delete="${index}">Delete</button></div></article>`).join('');
+        items.innerHTML = result.items.map((item, index) => `<article class="person-section saved-work-item"><strong>${escape(item.title)}</strong>${kind === 'draft' ? `<p class="small muted">${escape([item.body.recipient, item.body.roleTitle, item.body.companyName].filter(Boolean).join(' · ') || 'No recipient or role saved')}</p><p class="saved-draft-preview">${escape(item.body.text.replace(/\s+/g, ' ').slice(0, 180))}${item.body.text.replace(/\s+/g, ' ').length > 180 ? '…' : ''}</p>` : ''}<p class="small muted">Saved ${escape(new Date(item.updatedAt).toLocaleString())}</p><div class="button-row"><button class="secondary-button" data-open="${index}">${kind === 'draft' ? 'Open draft' : 'Apply view'}</button><button class="ghost-button" data-delete="${index}">Delete</button></div></article>`).join('');
         items.inert = false;
         element.querySelector('[data-prev]').disabled = page <= 1;
         element.querySelector('[data-next]').disabled = result.items.length < result.pageSize || page * result.pageSize >= result.total;
@@ -113,14 +113,18 @@
       finally { if (current === request) items.setAttribute('aria-busy', 'false'); }
     }
     function openDraft(item) {
-      const editor = dialog(item.title, `<form><p class="people-provenance">Saved draft, not a sent message. Review every claim before using it.</p><label class="people-field">Message<textarea name="text" rows="10" maxlength="12000" required>${escape(item.body.text)}</textarea></label><p data-status role="status"></p><div class="button-row"><button class="primary-button" type="submit">Save changes</button><button class="secondary-button" type="button" data-copy>Copy message</button>${item.body.contactId ? `<a class="secondary-button" href="#/contacts?person=${encodeURIComponent(item.body.contactId)}" data-person>Open person</a>` : ''}</div></form>`);
+      const editor = dialog(item.title, `<form><p class="people-provenance">Saved draft, not a sent message. Review every claim before using it.</p><label class="people-field">Draft name<input name="title" required maxlength="160" value="${escape(item.title)}"></label><label class="people-field">Message<textarea name="text" rows="10" maxlength="12000" required>${escape(item.body.text)}</textarea></label><p data-status role="status"></p><div class="button-row"><button class="primary-button" type="submit">Save changes</button><button class="secondary-button" type="button" data-copy>Copy message</button>${item.body.contactId ? `<a class="secondary-button" href="#/contacts?person=${encodeURIComponent(item.body.contactId)}" data-person>Open person</a>` : ''}</div></form>`);
       const textarea = editor.querySelector('textarea');
+      const titleInput = editor.querySelector('[name="title"]');
       let savedText = item.body.text;
+      let savedTitle = item.title;
       let busy = false;
-      const canClose = () => !busy && (textarea.value === savedText || confirm('Discard unsaved draft changes? Your saved copy will stay unchanged.'));
+      const dirty = () => textarea.value !== savedText || titleInput.value !== savedTitle;
+      const updateHeading = () => { editor.querySelector('header h3').textContent = item.title; editor.setAttribute('aria-label', item.title); };
+      const canClose = () => !busy && (!dirty() || confirm('Discard unsaved draft changes? Your saved copy will stay unchanged.'));
       editor.querySelector('[data-close]').onclick = () => { if (canClose()) editor.close(); };
       editor.addEventListener('cancel', event => { event.preventDefault(); if (canClose()) editor.close(); });
-      const unload = event => { if (busy || textarea.value !== savedText) { event.preventDefault(); event.returnValue = ''; } };
+      const unload = event => { if (busy || dirty()) { event.preventDefault(); event.returnValue = ''; } };
       window.addEventListener('beforeunload', unload);
       editor.addEventListener('close', () => { window.removeEventListener('beforeunload', unload); if (element.isConnected) refresh(); });
       editor.querySelector('[data-person]')?.addEventListener('click', event => { if (!canClose()) event.preventDefault(); else { editor.close(); element.close(); } });
@@ -132,10 +136,11 @@
         event.preventDefault(); if (busy) return; busy = true;
         const submit = editor.querySelector('[type="submit"]'); submit.disabled = true;
         const text = textarea.value;
-        try { item = await save('draft', item.id, { ...item, body: { ...item.body, text } }); savedText = text; editor.querySelector('[data-status]').textContent = 'Saved to your account.'; }
+        const title = titleInput.value;
+        try { item = await save('draft', item.id, { ...item, title, body: { ...item.body, text } }); savedText = text; savedTitle = title; updateHeading(); editor.querySelector('[data-status]').textContent = dirty() ? 'Saved. You have newer unsaved edits.' : 'Saved to your account.'; }
         catch (error) {
           editor.querySelector('[data-status]').textContent = error.message;
-          if (error.status === 409) resolveConflict(item.id, { ...item, body: { ...item.body, text: textarea.value } }, latest => { item = latest; textarea.value = savedText = latest.body.text; editor.querySelector('[data-status]').textContent = 'Latest saved copy loaded.'; });
+          if (error.status === 409) resolveConflict(item.id, { ...item, title: titleInput.value, body: { ...item.body, text: textarea.value } }, latest => { item = latest; textarea.value = savedText = latest.body.text; titleInput.value = savedTitle = latest.title; updateHeading(); editor.querySelector('[data-status]').textContent = 'Latest saved copy loaded.'; });
         }
         finally { busy = false; submit.disabled = false; }
       };

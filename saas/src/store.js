@@ -3341,7 +3341,7 @@ export function createStore() {
       const itemAccount = activity.accountId
         ? accountsForTenant(tenantId).find((item) => item.id === activity.accountId)
         : null;
-      if (itemAccount && !['task_completed', 'task_rescheduled', 'task_reopened'].includes(activity.type)) {
+      if (itemAccount && !['task_completed', 'task_rescheduled', 'task_reopened', 'task_cancelled'].includes(activity.type)) {
         const currentLastContactedAt = new Date(itemAccount.lastContactedAt || 0).getTime();
         const activityOccurredAt = new Date(activity.occurredAt).getTime();
         if (!Number.isFinite(currentLastContactedAt) || activityOccurredAt >= currentLastContactedAt) {
@@ -3500,7 +3500,7 @@ export function createStore() {
         && (!search || `${task.summary || task.title || ''} ${task.contactName || ''} ${accountNames.get(task.accountId) || ''}`.toLowerCase().includes(search)))
         .slice().sort((a, b) => {
           if (query.sort === 'name') return String(a.summary || a.title || '').localeCompare(String(b.summary || b.title || '')) || String(a.id).localeCompare(String(b.id));
-          const difference = status === 'completed'
+          const difference = status !== 'pending'
             ? dateValue(b.updatedAt || b.createdAt, 0) - dateValue(a.updatedAt || a.createdAt, 0)
             : dateValue(a.dueDate, Number.MAX_SAFE_INTEGER) - dateValue(b.dueDate, Number.MAX_SAFE_INTEGER);
           return difference || String(a.id).localeCompare(String(b.id));
@@ -3546,6 +3546,7 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId, false);
       const task = tasksForTenant(tenantId).find((item) => item.id === taskId);
+      if (task?.status === 'cancelled') throw new CommercialOutcomeValidationError('This follow-up is no longer needed. Reopen it before marking it done.', 409);
       if (task && task.status !== 'completed') {
         task.status = 'completed';
         task.updatedAt = now();
@@ -3562,7 +3563,7 @@ export function createStore() {
 
     async updateTask(tenantId, taskId, userId, payload = {}) {
       assertTenant(tenantId);
-      if (!payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.status !== undefined && payload.status !== 'pending')) throw new CommercialOutcomeValidationError('Provide a new due date or reopen the completed task.');
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.status !== undefined && !['pending', 'cancelled'].includes(payload.status))) throw new CommercialOutcomeValidationError('Provide a new due date, cancel a pending follow-up, or reopen a task.');
       await ensureDataLoaded(tenantId, false);
       const task = tasksForTenant(tenantId).find(item => item.id === taskId);
       if (!task) return null;
@@ -3570,19 +3571,26 @@ export function createStore() {
         throw new CommercialOutcomeValidationError('This task changed. Reload the queue before editing it.', 409);
       }
       const reopening = payload.status === 'pending';
+      const cancelling = payload.status === 'cancelled';
       const dueDate = String(payload.dueDate || '');
-      if (reopening ? task.status !== 'completed' || Boolean(dueDate) : task.status !== 'pending' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || !Number.isFinite(Date.parse(dueDate)) || new Date(dueDate).toISOString().slice(0, 10) !== dueDate) {
-        throw new CommercialOutcomeValidationError('Choose a valid date for a pending task, or reopen a completed task.');
+      let validChange;
+      if (reopening) validChange = ['completed', 'cancelled'].includes(task.status) && !dueDate;
+      else if (cancelling) validChange = task.status === 'pending' && !dueDate;
+      else validChange = task.status === 'pending' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate) && Number.isFinite(Date.parse(dueDate)) && new Date(dueDate).toISOString().slice(0, 10) === dueDate;
+      if (!validChange) {
+        throw new CommercialOutcomeValidationError('Reschedule or cancel a pending follow-up, or reopen completed or cancelled work.');
       }
       const previousDueDate = task.dueDate;
+      const previousStatus = task.status;
       if (reopening) task.status = 'pending';
+      else if (cancelling) task.status = 'cancelled';
       else task.dueDate = new Date(dueDate).toISOString();
       task.updatedAt = new Date(Math.max(Date.now(), Date.parse(task.updatedAt || task.createdAt) + 1)).toISOString();
       await this.addActivity(tenantId, userId, {
         accountId: task.accountId || '', contactId: task.contactId || '',
-        type: reopening ? 'task_reopened' : 'task_rescheduled',
-        summary: `${reopening ? 'Reopened task' : 'Rescheduled task'}: ${task.summary || task.title || 'Follow-up'}`,
-        metadata: { taskId, previousDueDate, dueDate: task.dueDate },
+        type: reopening ? 'task_reopened' : cancelling ? 'task_cancelled' : 'task_rescheduled',
+        summary: `${reopening ? 'Reopened task' : cancelling ? 'Follow-up no longer needed' : 'Rescheduled task'}: ${task.summary || task.title || 'Follow-up'}`,
+        metadata: { taskId, previousDueDate, dueDate: task.dueDate, previousStatus, status: task.status },
       });
       return task;
     },

@@ -7620,7 +7620,7 @@ function renderWarmStudioModal() {
       accountDraftStatus.textContent = data.accountDrafts[cloudKey] ? 'Resume your saved draft here. Saving replaces that copy.' : 'Private to your login in this workspace. Available across signed-in devices.';
       saveAccountButton.onclick = async () => {
         resumeAccountButton.disabled = saveAccountButton.disabled = true;
-        const item = { version: data.accountDrafts[cloudKey]?.version || 0, title: `${data.selectedContact?.fullName || 'Outreach'} · ${data.job?.title || 'Role'}`.slice(0, 160), body: { text: textarea.value, contactId: data.selectedContact?.id || '', accountId: data.account?.id || '', jobId: data.job?.id || '', recipient: data.selectedContact?.fullName || '' } };
+        const item = { version: data.accountDrafts[cloudKey]?.version || 0, title: data.accountDrafts[cloudKey]?.title || `${data.selectedContact?.fullName || 'Outreach'} · ${data.job?.title || 'Role'}`.slice(0, 160), body: { text: textarea.value, contactId: data.selectedContact?.id || '', accountId: data.account?.id || '', jobId: data.job?.id || '', recipient: data.selectedContact?.fullName || '', roleTitle: (data.job?.title || '').slice(0, 500), companyName: (data.job?.companyName || data.account?.displayName || '').slice(0, 300) } };
         try {
           data.accountDrafts[cloudKey] = await window.bdSavedWork.save('draft', cloudKey, item);
           accountDraftStatus.textContent = 'Saved to your account. Nothing was sent.';
@@ -11546,6 +11546,8 @@ async function renderContactsView() {
       root: appRoot,
       api,
       setTitle: setViewTitle,
+      defaultOutreachGoal: () => isJobSeekerPersona() ? 'job_search_intro' : 'recruiting_intro',
+      generateDraft: ({ person, job, goal, background }) => generateWarmStudioCopy({ job, selectedContact: person, goal: goal.startsWith('job_search') ? 'job_search' : 'recruiting', selectedStep: goal.endsWith('follow_up') ? 2 : 1, selectedTone: 'direct', background }).referralDm,
       onQuery: (query) => { appState.contactQuery = query; },
       exportOptions: () => renderExportOptions('contacts', 'People options'),
       onUpdated: (person) => {
@@ -15081,16 +15083,17 @@ async function renderTasksView() {
     const today = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) === todayKey);
     const upcoming = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) > todayKey);
     const completed = tasks.items.filter(t => t.status === 'completed');
+    const cancelled = appState.taskQuery.status === 'cancelled';
     const undated = tasks.items.filter(t => t.status === 'pending' && !calendarDateKey(t.dueDate));
 
     appRoot.innerHTML = `
       <section class="tasks-view">
         ${appState.taskQuery.contactId ? '<p class="small">Showing follow-ups for one person. <a href="#/tasks">Show everyone</a></p>' : ''}
         <details class="form-card workspace-disclosure" id="activity-history">
-          <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search completed tasks and recorded outreach</small></span></summary>
+          <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search outreach and follow-up history</small></span></summary>
           <form id="activity-history-form" class="task-create-form">
             <label>Search<input name="q" placeholder="Message, company or notes"></label>
-            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="task_reopened">Reopened tasks</option><option value="task_rescheduled">Rescheduled tasks</option><option value="note">Notes</option></select></label>
+            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="task_cancelled">Cancelled follow-ups</option><option value="task_reopened">Reopened tasks</option><option value="task_rescheduled">Rescheduled tasks</option><option value="note">Notes</option></select></label>
             <label>Order<select name="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
             <button class="secondary-button" type="submit">Apply filters</button>
           </form>
@@ -15099,12 +15102,13 @@ async function renderTasksView() {
         <div class="panel-header tasks-header">
           <div>
             <p class="eyebrow">Follow-up queue</p>
-            <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : 'Completed work'}</h3>
-            <p class="muted small">${formatNumber(tasks.total)} matching tasks. ${appState.taskQuery.status === 'pending' ? 'Earliest due dates first by default, across the entire queue.' : 'Most recently completed first by default.'} Section counts refer to this page.</p>
+            <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : cancelled ? 'No longer needed' : 'Completed work'}</h3>
+            <p class="muted small">${formatNumber(tasks.total)} matching tasks. ${appState.taskQuery.status === 'pending' ? 'Earliest due dates first by default, across the entire queue.' : cancelled ? 'Cancelled follow-ups, newest first. These do not count as completed work.' : 'Most recently completed first by default.'} Section counts refer to this page.</p>
           </div>
           <div class="tasks-tabs" role="tablist" aria-label="Task status">
             <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" id="tasks-tab-pending" role="tab" aria-selected="${String(appState.taskQuery.status === 'pending')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'pending' ? '0' : '-1'}" data-action="filter-tasks" data-status="pending">Pending</button>
             <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" id="tasks-tab-completed" role="tab" aria-selected="${String(appState.taskQuery.status === 'completed')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'completed' ? '0' : '-1'}" data-action="filter-tasks" data-status="completed">Completed</button>
+            <button class="tab-btn ${cancelled ? 'active' : ''}" id="tasks-tab-cancelled" role="tab" aria-selected="${String(cancelled)}" aria-controls="tasks-panel" tabindex="${cancelled ? '0' : '-1'}" data-action="filter-tasks" data-status="cancelled">No longer needed</button>
           </div>
         </div>
 
@@ -15128,7 +15132,7 @@ async function renderTasksView() {
 
         <form id="task-search-form" class="task-create-form task-search-form">
           <label><span>Search tasks, people or companies</span><input name="q" maxlength="240" value="${escapeAttr(appState.taskQuery.q || '')}" placeholder="Person, company or task title"></label>
-          <label><span>Sort</span><select name="sort"><option value="">${appState.taskQuery.status === 'pending' ? 'Due date — earliest first' : 'Completed — newest first'}</option><option value="name" ${selected(appState.taskQuery.sort, 'name')}>Task title A–Z</option></select></label>
+          <label><span>Sort</span><select name="sort"><option value="">${appState.taskQuery.status === 'pending' ? 'Due date — earliest first' : cancelled ? 'Cancelled — newest first' : 'Completed — newest first'}</option><option value="name" ${selected(appState.taskQuery.sort, 'name')}>Task title A–Z</option></select></label>
           <button class="secondary-button" type="submit">Search tasks</button>
           <button class="ghost-button" id="task-search-clear" type="button">Clear search</button>
         </form>
@@ -15140,6 +15144,9 @@ async function renderTasksView() {
             ${renderTaskSection('Upcoming', upcoming, 'success')}
             ${renderTaskSection('No due date', undated, 'neutral')}
             ${!tasks.items.length ? renderEmptyState({ icon: 'OK', title: appState.taskQuery.q ? 'No tasks match your search' : 'No pending tasks', copy: appState.taskQuery.q ? 'Clear or change your search to see other tasks.' : 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
+          ` : cancelled ? `
+            ${renderTaskSection('No longer needed', tasks.items, 'neutral')}
+            ${!tasks.items.length ? renderEmptyState({ icon: 'Done', title: appState.taskQuery.q ? 'No tasks match your search' : 'No cancelled follow-ups', copy: 'Use Edit follow-up on a pending task to mark it no longer needed. You can reopen it later.' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
             ${!completed.length ? renderEmptyState({ icon: 'Done', title: appState.taskQuery.q ? 'No tasks match your search' : 'No completed tasks yet', copy: appState.taskQuery.q ? 'Clear or change your search to see other completed tasks.' : 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
@@ -15185,7 +15192,7 @@ async function renderTasksView() {
         if (request !== historyRequest || !results.isConnected || !isCurrent()) return;
         const lastPage = Math.max(1, Math.ceil(response.total / 25));
         if (!response.items.length && page > lastPage) return loadHistory(lastPage);
-        results.innerHTML = response.items.map(item => `<article class="task-item"><div><strong>${escapeHtml(item.summary)}</strong><div class="small muted">${escapeHtml(item.type === 'task_completed' ? 'Task completed' : item.type)} · ${escapeHtml(formatDate(item.occurredAt || item.createdAt))}</div>${item.notes ? `<details><summary>Details</summary><p style="white-space:pre-wrap">${escapeHtml(item.notes)}</p></details>` : ''}</div></article>`).join('') || '<p>No activity matches these filters.</p>';
+        results.innerHTML = response.items.map(item => `<article class="task-item"><div><strong>${escapeHtml(item.summary)}</strong><div class="small muted">${escapeHtml(item.type === 'task_completed' ? 'Task completed' : item.type === 'task_cancelled' ? 'Follow-up cancelled' : humanize(item.type))} · ${escapeHtml(formatDate(item.occurredAt || item.createdAt))}</div>${item.notes ? `<details><summary>Details</summary><p style="white-space:pre-wrap">${escapeHtml(item.notes)}</p></details>` : ''}</div></article>`).join('') || '<p>No activity matches these filters.</p>';
         results.insertAdjacentHTML('beforeend', `<div class="tasks-tabs"><button type="button" class="secondary-button" data-history-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button><span>Page ${page} · ${response.total} activities</span><button type="button" class="secondary-button" data-history-page="${page + 1}" ${page * 25 >= response.total ? 'disabled' : ''}>Next</button></div>`);
         results.querySelectorAll('[data-history-page]').forEach(button => { button.onclick = () => loadHistory(Number(button.dataset.historyPage)); });
       } catch {
@@ -15223,12 +15230,12 @@ function renderTaskItem(task) {
       <div class="task-item-main">
         <div class="task-item-info">
           <strong>${escapeHtml(summary)}</strong>
-          <div class="small muted">${task.status === 'completed' ? `Completed ${formatDate(task.updatedAt || task.createdAt)}` : task.dueDate ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date'}${task.contactName ? ` · ${escapeHtml(task.contactName)}` : ''}${task.accountName ? ` · ${escapeHtml(task.accountName)}` : ''}</div>
+          <div class="small muted">${task.status === 'completed' ? `Completed ${formatDate(task.updatedAt || task.createdAt)}` : task.status === 'cancelled' ? `Cancelled ${formatDate(task.updatedAt || task.createdAt)}` : task.dueDate ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date'}${task.contactName ? ` · ${escapeHtml(task.contactName)}` : ''}${task.accountName ? ` · ${escapeHtml(task.accountName)}` : ''}</div>
         </div>
         <div class="task-item-actions">
           ${task.contactId ? `<a href="#/contacts?person=${encodeURIComponent(task.contactId)}" class="ghost-button micro-button">Open person</a>` : task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
           ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
-          <button type="button" class="ghost-button micro-button" data-task-edit="${escapeAttr(task.id)}">${task.status === 'pending' ? 'Reschedule' : 'Undo completion'}</button>
+          <button type="button" class="ghost-button micro-button" data-task-edit="${escapeAttr(task.id)}">${task.status === 'pending' ? 'Edit follow-up' : task.status === 'cancelled' ? 'Reopen follow-up' : 'Undo completion'}</button>
         </div>
       </div>
     </article>
@@ -15237,23 +15244,25 @@ function renderTaskItem(task) {
 
 function editTask(task) {
   if (!task) return;
-  const reopening = task.status === 'completed';
-  const dialog = window.bdSavedWork.dialog(reopening ? 'Undo task completion' : 'Reschedule follow-up', `<form><p>${escapeHtml(task.summary || task.title || 'Follow-up')}</p>${reopening ? '<p>Return this task to Pending. The original completion and this correction stay in activity history. Logged outreach is not undone.</p>' : `<label class="people-field">New due date<input name="dueDate" type="date" required value="${escapeAttr(calendarDateKey(task.dueDate) || '')}"></label>`}<p role="status" data-feedback></p><button class="primary-button" type="submit">${reopening ? 'Reopen task' : 'Save date'}</button></form>`);
+  const reopening = task.status !== 'pending';
+  const dialog = window.bdSavedWork.dialog(reopening ? task.status === 'cancelled' ? 'Reopen follow-up' : 'Undo task completion' : 'Edit follow-up', `<form><p>${escapeHtml(task.summary || task.title || 'Follow-up')}</p>${reopening ? '<p>Return this task to Pending with its previous due date. Its history is preserved. Logged outreach is not undone.</p>' : `<label class="people-field">New due date<input name="dueDate" type="date" required value="${escapeAttr(calendarDateKey(task.dueDate) || '')}"></label>`}<p role="status" data-feedback></p><button class="primary-button" type="submit">${reopening ? 'Reopen task' : 'Save date'}</button></form>${reopening ? '' : '<details class="person-section"><summary>No longer needed?</summary><p>Remove this follow-up from Pending without marking it done. It stays in activity history and can be reopened.</p><button type="button" class="secondary-button" data-cancel-task>Confirm cancellation</button></details>'}`);
   let busy = false;
   dialog.querySelector('[data-close]').onclick = () => { if (!busy) dialog.close(); };
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-  dialog.querySelector('form').onsubmit = async event => {
-    event.preventDefault(); if (busy) return; busy = true;
-    const button = dialog.querySelector('[type="submit"]'); button.disabled = true;
+  async function saveChange(change) {
+    if (busy) return; busy = true;
+    const controls = [...dialog.querySelectorAll('button, input')]; controls.forEach(control => control.disabled = true);
     try {
-      const payload = { expectedUpdatedAt: task.updatedAt || task.createdAt, ...(reopening ? { status: 'pending' } : { dueDate: event.target.elements.dueDate.value }) };
+      const payload = { expectedUpdatedAt: task.updatedAt || task.createdAt, ...change };
       await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
       dialog.close();
       if (getRouteRoot() === 'tasks') await renderTasksView();
-      showToast(reopening ? 'Task reopened. Correction recorded in activity history.' : 'Follow-up rescheduled.', 'success');
+      showToast(change.status === 'cancelled' ? 'Follow-up cancelled, not completed. You can reopen it from No longer needed.' : reopening ? 'Task reopened. Correction recorded in activity history.' : 'Follow-up rescheduled.', 'success');
     } catch (error) { dialog.querySelector('[data-feedback]').textContent = error.message; }
-    finally { busy = false; button.disabled = false; }
-  };
+    finally { busy = false; controls.forEach(control => control.disabled = false); }
+  }
+  dialog.querySelector('form').onsubmit = event => { event.preventDefault(); saveChange(reopening ? { status: 'pending' } : { dueDate: event.target.elements.dueDate.value }); };
+  dialog.querySelector('[data-cancel-task]')?.addEventListener('click', () => saveChange({ status: 'cancelled' }));
 }
 
 async function completeTask(taskId, buttonEl) {

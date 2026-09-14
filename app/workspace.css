@@ -140,7 +140,18 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .person-activity { margin: 12px 0; overflow-wrap: anywhere; }
 .person-activity > p { margin-bottom: 4px; }
 .person-activity summary { cursor: pointer; font-size: 12px; color: var(--accent); padding: 6px 0; }
-.person-activity-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.person-activity-text, .person-sent-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+.person-contact-history { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.person-contact-history summary, [data-draft-context] summary { cursor: pointer; padding: 6px 0; }
+.person-contact-history p { margin: 6px 0; }
+.person-outreach > .primary-button { margin: 12px 0; }
+.person-outreach { scroll-margin-block: 64px 16px; }
+.saved-work-item { overflow-wrap: anywhere; }
+.saved-draft-preview { font-size: 13px; margin: 8px 0; color: var(--text); }
+.tasks-tabs { flex-wrap: wrap; }
+.tasks-tabs[role="tablist"] { gap: 4px; }
+.tasks-tabs[role="tablist"] .tab-btn { flex: 1 0 auto; padding: 6px 10px; border-radius: 6px; white-space: nowrap; }
+.tasks-tabs[role="tablist"] .tab-btn.active { background: var(--accent-fill); color: var(--on-accent); }
 .people-field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; font-size: 12px; color: var(--muted); font-weight: 500; }
 .people-field input, .people-field textarea, .people-field select { width: 100%; font-size: 13px; font-weight: 400; line-height: 1.5; }
 .people-field textarea { padding: 10px; resize: vertical; min-height: 95px; }

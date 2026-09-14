@@ -3,6 +3,7 @@
  */
 (() => {
   const stages = { not_started: 'Not started', researching: 'Researching', ready_to_contact: 'Ready to contact', contacted: 'Contacted', replied: 'Replied', opportunity: 'Opportunity' };
+  const outreachGoals = { recruiting_intro: 'Recruiting introduction', recruiting_follow_up: 'Recruiting follow-up', job_search_intro: 'Job-search question', job_search_follow_up: 'Job-search follow-up' };
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const safeUrl = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
   const label = value => stages[value] || 'Not started';
@@ -12,15 +13,19 @@
   const button = (action, text, extra = '') => `<button type="button" class="secondary-button" data-people="${action}" ${extra}>${text}</button>`;
   const profileLink = person => safeUrl(person.linkedinUrl) ? `<a class="secondary-button" href="${escape(safeUrl(person.linkedinUrl))}" target="_blank" rel="noreferrer">Open profile ↗</a>` : '<span class="muted small">No profile link saved</span>';
 
-  function create({ root, api, setTitle, onQuery, exportOptions, onUpdated }) {
+  function create({ root, api, setTitle, onQuery, exportOptions, onUpdated, generateDraft, defaultOutreachGoal = () => 'recruiting_intro' }) {
     const state = { result: null, key: '', query: {}, selected: '', person: null, checked: new Set(), dirty: false, busy: false, sequence: 0, scroll: 0, notice: '', dialog: null };
     let lastHash = location.hash;
     let returnFocus = null;
     let savedFormValues = {};
     let savedDraft = null;
     let savedDraftText = '';
+    let savedDraftContext = '';
+    let outreachRequest = 0;
+    let workRequest = 0;
+    const draftContext = () => ({ jobId: root.querySelector('#person-draft-role')?.value || '', goal: root.querySelector('#person-draft-goal')?.value || defaultOutreachGoal(), background: root.querySelector('#person-draft-background')?.value || '' });
     const hasFollowUpDraft = () => [...(root.querySelector('[data-people-form="follow-up"]')?.elements || [])].some(input => input.name && input.value.trim());
-    const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && root.querySelector('#person-draft').value !== savedDraftText) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
+    const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && (root.querySelector('#person-draft').value !== savedDraftText || JSON.stringify(draftContext()) !== savedDraftContext)) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
     const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"], [data-people-form="log-outreach"]') && [...state.dialog.querySelectorAll('input, textarea')].some(input => input.value.trim()));
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
@@ -196,12 +201,13 @@
     }
     function drawPerson() {
       savedDraft = null; savedDraftText = '';
+      state.draftLoaded = false; state.roles = []; state.rolesLoaded = false; state.lastOutreach = null; state.outreachStatus = 'loading';
       const person = state.person;
       const panel = root.querySelector('.person-panel');
       const index = state.result.items.findIndex(item => item.id === person.id);
       const source = person.source === 'manual' ? 'Added manually' : /sample|demo/i.test(person.source || person.id) ? 'Sample data' : person.source ? String(person.source).replace(/[_-]/g, ' ') : 'Source not recorded';
       panel.innerHTML = `<div class="person-panel-nav">${button('close', '← Back to people')}<div>${button('previous-person', '↑', `aria-label="Previous person" ${index <= 0 ? 'disabled' : ''}`)}${button('next-person', '↓', `aria-label="Next person" ${index < 0 || index >= state.result.items.length - 1 ? 'disabled' : ''}`)}</div></div>
-        <header class="person-identity"><span class="people-source">${escape(source)}</span><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p>${person.accountId ? `<a href="#/accounts/${escape(person.accountId)}">${escape(person.companyName || 'View company')}</a>` : escape(person.companyName || 'Company not provided')}</p><div class="person-links"><span data-person-profile>${profileLink(person)}</span>${button('prepare', 'Prepare outreach')}</div></header>
+        <header class="person-identity"><span class="people-source">${escape(source)}</span><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p>${person.accountId ? `<a href="#/accounts/${escape(person.accountId)}">${escape(person.companyName || 'View company')}</a>` : escape(person.companyName || 'Company not provided')}</p><div class="person-links"><span data-person-profile>${profileLink(person)}</span>${button('prepare', 'Prepare outreach')}</div><div class="person-contact-history" data-last-outreach aria-live="polite"><p class="small muted">Loading outreach history…</p></div></header>
         <div class="person-panel-body">
           <dl class="person-facts"><div><dt>Location</dt><dd>${escape(person.location || 'Not provided')}</dd></div><div><dt>Connected</dt><dd>${escape(date(person.connectedOn))}</dd></div><div><dt>Email</dt><dd data-person-email>${escape(person.email || 'Not provided')}</dd></div></dl>
           <p class="people-provenance">Connection details may be out of date. Confirm them on the source profile. No candidate fit assessment has been made.</p>
@@ -218,18 +224,71 @@
             </details>
             <div class="person-save-row"><button class="primary-button" type="submit">Save changes</button><span class="people-feedback" data-person-feedback role="status">${escape(state.notice)}</span></div>
           </form>
-          <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Review every claim. Save privately to your account to resume on another device. Saving and copying do not send anything.</p><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000"></textarea></label><div class="person-links">${button('save-draft', 'Save draft')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
+          <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Uses saved role and contact details, with no paid AI service. Verify the opening before sending. Saving and copying do not send anything.</p>
+            <div data-draft-context>${field('draft-role', 'Role to discuss', '<select id="person-draft-role" disabled><option value="">Loading saved openings…</option></select>')}<p class="people-feedback" data-role-feedback role="status"></p>${field('draft-goal', 'Outreach goal', `<select id="person-draft-goal">${options(outreachGoals, defaultOutreachGoal())}</select>`)}<details><summary>Add your context</summary><label class="people-field">Your relevant experience or offer<textarea id="person-draft-background" rows="3" maxlength="1000" placeholder="Add a specific, truthful detail about how you can help."></textarea></label></details><p class="people-provenance">Changing these choices does not replace your message. Generate a draft when ready. Follow-up wording is only for messages you already sent.</p></div>
+            <button type="button" class="primary-button" data-people="generate-draft" disabled>Generate draft</button><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000" placeholder="Choose a role and generate a draft, or write your own message."></textarea></label><div class="person-links">${button('save-draft', 'Save draft', 'disabled')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
           <details class="person-section"><summary>Follow-ups and activity</summary><form data-people-form="follow-up"><label class="people-field">Next step<input name="summary" required maxlength="240" placeholder="Follow up on our conversation"></label><label class="people-field">Due date<input name="dueDate" type="date" required></label><button class="secondary-button" type="submit">Add follow-up</button><p role="status" data-task-feedback></p></form><div data-person-work role="status">Loading linked work…</div></details>
           <footer class="person-review-footer">${index >= 0 ? `${index + 1} of ${state.result.items.length} on this page · J / K to move when not typing` : 'Opened directly · Not in the current results'}</footer>
         </div>`;
       savedFormValues = Object.fromEntries(new FormData(panel.querySelector('.person-edit-form')));
+      savedDraftContext = JSON.stringify(draftContext());
     }
     async function loadPersonWork(contactId, ticket = state.sequence) {
+      const request = ++workRequest;
+      loadRecentOutreach(contactId, ticket);
       try {
         const [tasks, history] = await Promise.all([api(`/api/tasks?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true }), api(`/api/activity?${new URLSearchParams({ contactId, pageSize: 10 })}`, { skipCache: true })]);
-        if (ticket !== state.sequence || state.selected !== contactId || !active()) return;
+        if (request !== workRequest || ticket !== state.sequence || state.selected !== contactId || !active()) return;
         root.querySelector('[data-person-work]').innerHTML = `<h4>Pending follow-ups</h4>${tasks.items.length ? tasks.items.map(task => `<p>${escape(task.summary)} · ${escape(date(task.dueDate))}</p>`).join('') : '<p>No pending follow-ups.</p>'}<a href="#/tasks?contactId=${encodeURIComponent(contactId)}">Open this person’s follow-ups</a><h4>Recent activity</h4>${history.items.length ? history.items.map(item => `<div class="person-activity"><p>${escape(item.summary)} <span class="muted small">${escape(date(item.occurredAt))}</span></p>${item.notes ? `<details><summary>${item.type === 'outreach' ? 'Read sent message' : 'Read activity details'}</summary><p class="person-activity-text">${escape(item.notes)}</p></details>` : ''}</div>`).join('') : '<p>No activity recorded for this person yet.</p>'}`;
-      } catch (error) { if (ticket === state.sequence && active()) message(`Could not load linked work. ${error.message}`, true, root.querySelector('[data-person-work]')); }
+      } catch (error) { if (request === workRequest && ticket === state.sequence && active()) message(`Could not load linked work. ${error.message}`, true, root.querySelector('[data-person-work]')); }
+    }
+    function recentOutreach() {
+      const age = Date.now() - Date.parse(state.lastOutreach?.occurredAt || '');
+      return Number.isFinite(age) && age >= 0 && age < 7 * 86400000;
+    }
+    async function loadRecentOutreach(contactId, ticket = state.sequence) {
+      const request = ++outreachRequest;
+      state.outreachStatus = 'loading';
+      try {
+        const result = await api(`/api/activity?${new URLSearchParams({ contactId, type: 'outreach', pageSize: 1 })}`, { skipCache: true });
+        if (request !== outreachRequest || ticket !== state.sequence || state.selected !== contactId || !active()) return;
+        state.lastOutreach = result.items[0] || null; state.outreachStatus = 'loaded';
+        root.querySelector('[data-last-outreach]').innerHTML = state.lastOutreach ? `<details><summary>Last recorded outreach · ${escape(date(state.lastOutreach.occurredAt))}</summary><p class="person-sent-preview">${escape(state.lastOutreach.notes || 'No message text was saved.')}</p></details>${recentOutreach() ? '<p class="small">Outreach was recorded in the past 7 days. Check before contacting again; choose a follow-up when intentional.</p>' : ''}` : '<p class="small muted">No outreach recorded here. Messages sent elsewhere appear only when logged.</p>';
+      } catch {
+        if (request !== outreachRequest || ticket !== state.sequence || state.selected !== contactId || !active()) return;
+        state.outreachStatus = 'unavailable';
+        root.querySelector('[data-last-outreach]').innerHTML = `<p class="small">Outreach history is unavailable. Check your sent messages before contacting again.</p>${button('retry-outreach-history', 'Retry history')}`;
+      }
+    }
+    function restoreDraftContext(body = {}) {
+      const role = root.querySelector('#person-draft-role');
+      role.innerHTML = `<option value="">${state.roles.length ? 'Choose an opening at this company' : 'No saved openings — write your own message'}</option>${state.roles.map(job => `<option value="${escape(job.id)}">${escape(job.title)}${job.location ? ` · ${escape(job.location)}` : ''}</option>`).join('')}`;
+      if (body.jobId && !state.roles.some(job => job.id === body.jobId)) {
+        const option = new Option(`${body.roleTitle || 'Saved role'} (unavailable)`, body.jobId); option.disabled = true; role.add(option);
+      }
+      role.value = body.jobId || '';
+      role.disabled = !state.roles.length;
+      root.querySelector('#person-draft-goal').value = outreachGoals[body.goal] ? body.goal : defaultOutreachGoal();
+      root.querySelector('#person-draft-background').value = body.background || '';
+      root.querySelector('[data-people="generate-draft"]').disabled = !state.roles.some(job => job.id === role.value);
+    }
+    function draftItem(text) {
+      const context = draftContext();
+      const job = state.roles.find(job => job.id === context.jobId);
+      return { title: savedDraft?.title || `Outreach to ${state.person.fullName}`.slice(0, 160), version: savedDraft?.version || 0, body: { ...context, text, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName, companyName: (state.person.companyName || '').slice(0, 300), roleTitle: (job?.title || (context.jobId === savedDraft?.body.jobId ? savedDraft.body.roleTitle || '' : '')).slice(0, 500) } };
+    }
+    function generatePersonDraft() {
+      const context = draftContext();
+      const job = state.roles.find(job => job.id === context.jobId);
+      if (!job || state.busy) return;
+      const startedAt = performance.now();
+      try {
+        root.querySelector('#person-draft').value = generateDraft({ person: state.person, job: { ...job, companyName: state.person.companyName }, goal: context.goal, background: context.background });
+        updateDirty();
+        message('Draft ready. Review the facts and wording, then save or copy. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
+        root.querySelector('#person-draft').focus();
+      } catch { message('Could not generate this draft. Your saved copy is unchanged; you can write your message below.', true, root.querySelector('[data-draft-feedback]')); }
+      finally { window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::generatePersonDraft', elapsedMs: Math.round(performance.now() - startedAt) } })); }
     }
     async function savePerson(form) {
       if (state.busy) return;
@@ -382,42 +441,77 @@
       if (action === 'save-view') window.bdSavedWork.saveView(state.query);
       if (action === 'views') window.bdSavedWork.openLibrary('view', query => navigate({ ...query, page: 1, pageSize: 20 }));
       if (action === 'compare') compare();
+      if (action === 'retry-outreach-history') loadRecentOutreach(state.person.id);
       if (action === 'close-dialog') closeDialog();
       if (action === 'clear-selection') { state.checked.clear(); root.querySelectorAll('[data-people="select-person"]').forEach(el => el.checked = false); updateSelection(); }
-      if (action === 'prepare') {
+      if (action === 'prepare' || action === 'retry-draft-context') {
         if (state.busy) return;
+        if (action === 'prepare') loadRecentOutreach(state.person.id);
         const section = root.querySelector('.person-outreach'); section.hidden = false;
-        const textarea = section.querySelector('textarea');
-        if (!textarea.value) {
-          control.disabled = true; state.busy = true;
+        const textarea = section.querySelector('#person-draft');
+        if (!state.draftLoaded || !state.rolesLoaded) {
+          const startedAt = performance.now();
+          const needsDraft = !state.draftLoaded;
+          const context = draftContext();
+          const controls = [...section.querySelectorAll('button, textarea, select')];
+          control.disabled = true; state.busy = true; controls.forEach(item => item.disabled = true);
+          message('Loading your saved draft and company openings…', false, root.querySelector('[data-draft-feedback]'));
           try {
-            savedDraft = await window.bdSavedWork.load('draft', `person-${state.person.id}`);
-            savedDraftText = savedDraft?.body.text || '';
-            if (savedDraft) textarea.value = savedDraftText;
-          } catch (error) { message(`Could not load the saved draft. ${error.message} Retry before editing.`, true, root.querySelector('[data-draft-feedback]')); return; }
-          finally { control.disabled = false; state.busy = false; }
+            const [draftResult, rolesResult] = await Promise.allSettled([
+              needsDraft ? window.bdSavedWork.load('draft', `person-${state.person.id}`) : Promise.resolve(savedDraft),
+              state.rolesLoaded ? Promise.resolve(state.roles) : state.person.accountId ? api(`/api/accounts/${encodeURIComponent(state.person.accountId)}`, { skipCache: true }).then(detail => (detail.jobs || []).filter(job => job.active !== false && job.title)) : Promise.resolve([]),
+            ]);
+            if (rolesResult.status === 'fulfilled') { state.roles = rolesResult.value; state.rolesLoaded = true; }
+            const roleFeedback = root.querySelector('[data-role-feedback]');
+            roleFeedback.innerHTML = state.rolesLoaded ? state.roles.length ? 'Saved openings at this person’s company. Confirm they are still current.' : state.person.accountId ? 'No active openings saved for this company. You can still write and save a message.' : 'This person is not linked to a saved company. Write your own message; no role has been assumed.' : `Openings could not be loaded. Your message is unchanged. ${button('retry-draft-context', 'Retry openings')}`;
+            if (draftResult.status === 'fulfilled') {
+              if (needsDraft) { savedDraft = draftResult.value; savedDraftText = savedDraft?.body.text || ''; textarea.value = savedDraftText; }
+              state.draftLoaded = true;
+              restoreDraftContext(needsDraft ? savedDraft?.body : { ...context, roleTitle: savedDraft?.body.roleTitle });
+              if (needsDraft) savedDraftContext = JSON.stringify(draftContext());
+              updateDirty();
+              message(savedDraft ? 'Saved draft loaded. Nothing was sent.' : 'Choose an opening to draft a specific message, or write your own.', false, root.querySelector('[data-draft-feedback]'));
+            } else message(`Could not load the saved draft. ${draftResult.reason.message} Click Prepare outreach to retry before editing.`, true, root.querySelector('[data-draft-feedback]'));
+          } finally {
+            control.disabled = false; state.busy = false;
+            controls.forEach(item => item.disabled = !state.draftLoaded);
+            root.querySelector('#person-draft-role').disabled = !state.draftLoaded || !state.roles.length;
+            root.querySelector('[data-people="generate-draft"]').disabled = !state.draftLoaded || !state.roles.some(job => job.id === draftContext().jobId);
+            window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::prepareOutreach', elapsedMs: Math.round(performance.now() - startedAt) } }));
+          }
         }
-        if (!textarea.value) textarea.value = `Hi ${state.person.fullName?.trim().split(/\s+/)[0] || state.person.firstName || 'there'},\n\nI'm reaching out about [add the role or reason for contacting this person].\n\n[Add relevant, verified details and a clear next step.]\n\nWould you be open to a brief conversation?`;
-        textarea.focus();
+        if (!textarea.value && state.roles.length && state.draftLoaded) root.querySelector('#person-draft-role').focus();
+        else textarea.focus();
       }
+      if (action === 'generate-draft') {
+        if (state.busy) return;
+        const replacing = Boolean(root.querySelector('#person-draft').value.trim());
+        const firstContact = !draftContext().goal.endsWith('follow_up');
+        const warning = firstContact && (recentOutreach() || state.outreachStatus !== 'loaded');
+        if (replacing || warning) openDialog(replacing ? 'Replace this draft?' : 'Check previous outreach', `<p>${replacing ? 'This replaces the current editor text. Save or copy any changes you want to keep first. Your saved copy is unchanged until you save again.' : 'Review this person’s recent contact before creating another introduction.'}</p>${warning ? `<p>${recentOutreach() ? `Outreach was recorded on ${escape(date(state.lastOutreach.occurredAt))}. Consider a follow-up instead of another introduction.` : 'Outreach history could not be checked yet. Check your sent messages before continuing.'}</p>` : ''}<button class="primary-button" type="button" data-people="confirm-generate">${replacing ? 'Replace draft' : 'Create another introduction'}</button>`);
+        else generatePersonDraft();
+      }
+      if (action === 'confirm-generate') { if (closeDialog()) generatePersonDraft(); }
       if (action === 'save-draft') {
         if (state.busy) return;
         const textarea = root.querySelector('#person-draft');
         const text = textarea.value;
         control.disabled = true; state.busy = true;
         try {
-          savedDraft = await window.bdSavedWork.save('draft', `person-${state.person.id}`, { title: `Outreach to ${state.person.fullName}`.slice(0, 160), body: { text, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName }, version: savedDraft?.version || 0 });
-          savedDraftText = text; updateDirty(); message(state.dirty ? 'Unsaved contact changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
+          const item = draftItem(text);
+          savedDraft = await window.bdSavedWork.save('draft', `person-${state.person.id}`, item);
+          savedDraftText = text; savedDraftContext = JSON.stringify({ jobId: item.body.jobId, goal: item.body.goal, background: item.body.background }); updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
         } catch (error) {
           message(error.message, true, root.querySelector('[data-draft-feedback]'));
-          if (error.status === 409) window.bdSavedWork.resolveConflict(`person-${state.person.id}`, { title: `Outreach to ${state.person.fullName}`.slice(0, 160), body: { text: textarea.value, contactId: state.person.id, accountId: state.person.accountId || '', recipient: state.person.fullName } }, latest => { savedDraft = latest; textarea.value = savedDraftText = latest.body.text; updateDirty(); message('Latest saved copy loaded.', false, root.querySelector('[data-draft-feedback]')); });
+          if (error.status === 409) window.bdSavedWork.resolveConflict(`person-${state.person.id}`, draftItem(textarea.value), latest => { savedDraft = latest; textarea.value = savedDraftText = latest.body.text; restoreDraftContext(latest.body); savedDraftContext = JSON.stringify(draftContext()); updateDirty(); message('Latest saved copy loaded.', false, root.querySelector('[data-draft-feedback]')); });
         }
         finally { control.disabled = false; state.busy = false; }
       }
       if (action === 'copy-draft') {
         const textarea = root.querySelector('#person-draft');
         const target = root.querySelector('[data-draft-feedback]');
-        if (!textarea.value.trim() || /\[(?:add|Add)/.test(textarea.value)) { message('Replace the placeholders with your own verified details before copying.', true, target); return; }
+        if (!textarea.value.trim()) { message('Write a message before copying.', true, target); return; }
+        if (/\[(?:add|Add)/.test(textarea.value)) { message('Replace the placeholders with your own verified details before copying.', true, target); return; }
         try { await navigator.clipboard.writeText(textarea.value); message('Copied. Nothing was sent and the stage is unchanged.', false, target); }
         catch { textarea.select(); message('Clipboard access unavailable. The message is selected; use your copy shortcut.', true, target); }
       }
@@ -437,6 +531,10 @@
     root.addEventListener('change', event => {
       if (!alive()) return;
       const target = event.target;
+      if (target.closest('[data-draft-context]')) {
+        root.querySelector('[data-people="generate-draft"]').disabled = !state.roles.some(job => job.id === draftContext().jobId);
+        updateDirty();
+      }
       if (target.closest('[data-people-form="filters"]') && target.tagName === 'SELECT') { target.form.requestSubmit(); return; }
       if (target.dataset.people === 'select-person') {
         event.stopPropagation();
@@ -450,7 +548,7 @@
       }
     });
     root.addEventListener('input', event => {
-      if (event.target.closest('.person-edit-form') || event.target.id === 'person-draft') { updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved'); }
+      if (event.target.closest('.person-edit-form, [data-draft-context]') || event.target.id === 'person-draft') { updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved'); }
       if (event.target.closest('[data-people-form="follow-up"]')) { updateDirty(); message(hasFollowUpDraft() ? 'Unfinished follow-up' : '', false, root.querySelector('[data-task-feedback]')); }
     });
     // Guard navigation to legacy routes too, without taking over the router.

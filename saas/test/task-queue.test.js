@@ -64,6 +64,33 @@ test('task queue sorts before pagination and clamps pages after completion', asy
   assert.equal((await store.findTasks(tenantId, { accountId: 'different-account' })).total, 0);
 });
 
+test('cancelled follow-ups preserve history, stay out of completed work, and can be reopened', async () => {
+  const store = createStore(); const tenantId = store.getSession().tenant.id;
+  const company = await store.addAccount(tenantId, { displayName: 'Cancellation fixture' });
+  const person = await store.addContact(tenantId, { fullName: 'Cancellation recipient', companyName: company.displayName, accountId: company.id });
+  const before = company.lastContactedAt;
+  const task = await store.createTask(tenantId, { contactId: person.id, summary: 'No longer relevant' });
+  const oldVersion = task.updatedAt;
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, status: 'cancelled', dueDate: '2027-01-01' }));
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, status: 'cancelled' });
+  assert.equal(task.status, 'cancelled'); assert.notEqual(task.updatedAt, oldVersion);
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id })).total, 0);
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id, status: 'completed' })).total, 0);
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id, status: 'cancelled' })).total, 1);
+  await assert.rejects(store.completeTask(tenantId, task.id, 'user'), { status: 409 });
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: oldVersion, status: 'cancelled' }), { status: 409 });
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: task.updatedAt, dueDate: '2027-01-01' }));
+  const history = await store.findActivities(tenantId, { contactId: person.id });
+  assert.equal(history.total, 1); assert.equal(history.items[0].type, 'task_cancelled');
+  assert.equal(company.lastContactedAt, before);
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: task.updatedAt, status: 'pending' });
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id })).total, 1);
+  await store.completeTask(tenantId, task.id, 'user');
+  assert.equal((await store.findTasks(tenantId, { contactId: person.id, status: 'completed' })).total, 1);
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: task.updatedAt, status: 'cancelled' }));
+  assert.equal((await store.findActivities(tenantId, { contactId: person.id })).total, 3);
+});
+
 test('task search includes company context and completed work supports name sorting', async () => {
   const store = createStore();
   const tenantId = store.getSession().tenant.id;
