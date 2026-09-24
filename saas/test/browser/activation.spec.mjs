@@ -27,6 +27,8 @@ async function submitSignup(page, prefix) {
 async function continueProfile(app) {
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
+  // A reloaded iframe can render this form before its document finishes loading.
+  await expect.poll(() => profile.evaluate(form => form.ownerDocument.readyState)).toBe('complete');
   await expect(profile.locator('#setup-workspace-name')).toHaveValue('Activation Workspace');
   await profile.getByRole('button', { name: 'Continue guided setup' }).click();
 }

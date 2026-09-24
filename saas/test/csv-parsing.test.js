@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { parse as parseCsvSync } from 'csv-parse/sync';
 import { createStore } from '../src/store.js';
 
 function createTenant(tenantId) {
@@ -9,6 +10,16 @@ function createTenant(tenantId) {
 }
 
 const unlimitedPlan = { displayName: 'Unlimited', limits: { accounts: -1, contacts: -1 } };
+
+test('CSV dependency treats duplicate prototype headers as data, not a prototype setter', () => {
+  // GHSA-8cw4-87c7-c6xx: guard the dependency even though application imports
+  // currently use array records without either of these column options.
+  const [record] = parseCsvSync('__proto__,__proto__,name\nfirst,second,Jamie', { columns: true, group_columns_by_name: true });
+  assert.equal(Object.getPrototypeOf(record), Object.prototype);
+  assert.equal(Object.hasOwn(record, '__proto__'), true);
+  assert.deepEqual(record.__proto__, ['first', 'second']);
+  assert.equal(record.name, 'Jamie');
+});
 
 test('LinkedIn import accepts a BOM, CRLF rows, quoted commas, and escaped quotes', async () => {
   const store = createTenant('tenant-csv-bom');

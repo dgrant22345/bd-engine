@@ -32,6 +32,10 @@ Large batches still run multiple waves. The full browser suite observed 64–67 
 
 No real customer, checkout session, or charge was created. An owner-performed real card purchase remains the final end-to-end payment proof. General reconciliation of arbitrarily reordered historical webhooks is outside this patch.
 
+### CSV dependency maintenance
+
+The production build exposed [GHSA-8cw4-87c7-c6xx](https://github.com/adaltas/node-csv/security/advisories/GHSA-8cw4-87c7-c6xx) in `csv-parse` 7.0.1. The app's array-record parser does not enable the advisory's affected column options. Still, the existing dependency and lockfile were updated narrowly to 7.0.2, with a regression asserting duplicate prototype headers remain data. No other package versions changed. A clean install reported zero known vulnerabilities.
+
 ### Onboarding and activation measurement
 
 - The checklist emphasizes the next incomplete action. An empty People workspace opens the Add person form directly and does not reopen it on reload.
@@ -40,18 +44,21 @@ No real customer, checkout session, or charge was created. An owner-performed re
 
 ## Validation
 
-- 413 backend/unit/integration tests passed.
+- 414 backend/unit/integration tests passed after the CSV patch (413 before its additional security regression).
 - ESLint, JavaScript syntax checks, schema contract, and additional People/Saved Work syntax checks passed. Schema remains 28 tables, 62 indexes, 13 migrations; only the source fingerprint changed.
 - All 9 company-link browser checks and 18 checkout-return checks passed across Chromium, Firefox, and WebKit. A further 9 Firefox company-link checks passed across three repetitions.
 - New company controls inspected at 390, 900, and 1440 px. Automated WCAG A/AA checks passed in light and dark themes.
 - Firefox intermittently missed the reload lifecycle notification even when the document and person had loaded. The regression now verifies a fresh document, completed DOM lifecycle, cleared unsaved-work guard, and restored person rather than depending only on that notification.
 - All 114 full Chromium workflow/regression checks passed in 2.9 minutes.
-- Production build/deployment verification: pending deployment below.
+- After the CSV patch, all 12 selected import/onboarding checks passed across Chromium, Firefox, and WebKit. The onboarding harness now waits for the reloaded iframe document to finish loading before continuing.
+- A repeated headless Firefox onboarding run still intermittently timed out at different automation calls, despite the final 12-test run passing. No uncaught app exception or failed application request was captured. This is not claimed fixed; isolate the browser/harness behavior in a separate pass.
 
 ## Deployment / rollback
 
 Asset version: `20260924-reliability-01`.
 
-Deploy using the existing Railway `saas/Dockerfile`, then perform non-mutating production smoke checks. The repository has no separate frontend build or TypeScript compilation step.
+Core release `9044967`: Railway deployment `fcfe4421-a2d8-4347-b107-8a95d763809b`, created 2026-09-24 12:22 UTC, succeeded. Docker build/readiness and eight non-mutating production smoke checks passed. Deployed App/People scripts matched the tested local source by LF-normalized SHA-256. Immediate error-level deployment logs were empty; live Stripe catalog recheck remained READY.
+
+CSV patch deployment verification is pending. The repository uses the existing Railway `saas/Dockerfile`; it has no separate frontend build or TypeScript compilation step.
 
 Previous production deployment: `89093d10-4f19-4f98-be3d-44384780a06e`, source `c1799d9`. This is the rollback target; no migration rollback is needed.
