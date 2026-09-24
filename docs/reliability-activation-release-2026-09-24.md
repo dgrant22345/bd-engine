@@ -59,6 +59,6 @@ Asset version: `20260924-reliability-01`.
 
 Core release `9044967`: Railway deployment `fcfe4421-a2d8-4347-b107-8a95d763809b`, created 2026-09-24 12:22 UTC, succeeded. Docker build/readiness and eight non-mutating production smoke checks passed. Deployed App/People scripts matched the tested local source by LF-normalized SHA-256. Immediate error-level deployment logs were empty; live Stripe catalog recheck remained READY.
 
-CSV patch deployment verification is pending. The repository uses the existing Railway `saas/Dockerfile`; it has no separate frontend build or TypeScript compilation step.
+CSV patch `e688587`: Railway deployment `2a4aa26c-64cf-4751-bf27-b69dae34271c`, created 2026-09-24 12:30 UTC, succeeded. The production Docker build reported zero known vulnerabilities, readiness passed, and all eight non-mutating smoke checks passed again. Immediate error-level deployment logs were empty. The repository uses the existing Railway `saas/Dockerfile`; it has no separate frontend build or TypeScript compilation step.
 
 Previous production deployment: `89093d10-4f19-4f98-be3d-44384780a06e`, source `c1799d9`. This is the rollback target; no migration rollback is needed.
