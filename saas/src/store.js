@@ -12,7 +12,7 @@ import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
 import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
-import { compareContacts, normalizeContactQuery } from './contact-queries.js';
+import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -72,6 +72,7 @@ function buildActivityOutcomeNotes(payload = {}, stage = '') {
 const DASHBOARD_EXTENDED_QUEUE_LIMIT = 50;
 const DEFAULT_ATS_FETCH_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_FETCH_CONCURRENCY, 8);
 const DEFAULT_ATS_DISCOVERY_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_CONCURRENCY, 8);
+const ATS_DISCOVERY_TIME_BUDGET_MS = Math.min(120000, readPositiveInteger(process.env.BD_ATS_DISCOVERY_TIME_BUDGET_MS, 30000));
 const DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS = readPositiveInteger(process.env.BD_ATS_CAREERS_SCRAPE_TIMEOUT_MS, 5000);
 const DEFAULT_ATS_MAX_PAGES = Math.min(100, readPositiveInteger(process.env.BD_ATS_MAX_PAGES, 50));
 const DEFAULT_WORKDAY_MAX_PAGES = Math.min(500, readPositiveInteger(process.env.BD_WORKDAY_MAX_PAGES, 250));
@@ -2112,6 +2113,7 @@ export function createStore() {
         }
         if (category === 'discovery_needed') detail = `Company domain: ${config.domain || config.canonicalDomain}`;
         if (category === 'missing_identity') detail = 'No usable company domain or careers URL is saved yet.';
+        if (!isImportReadyConfig(config) && config.lastDiscoveryError) detail = config.lastDiscoveryError;
         return {
           config,
           accountItem,
@@ -2817,12 +2819,30 @@ export function createStore() {
 
     async patchContact(tenantId, contactId, patch) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
       await ensureDataLoaded(tenantId, true);
-      const item = contacts.find((contactItem) => contactItem.tenantId === tenantId && contactItem.id === contactId);
+      const tenantContacts = contactsForTenant(tenantId);
+      const item = tenantContacts.find((contactItem) => contactItem.id === contactId);
       if (!item) return null;
+      const previousAccountId = item.accountId;
+      if (Object.hasOwn(patch, 'accountId') || Object.hasOwn(patch, 'companyName')) {
+        const company = resolveContactCompany(accountsForTenant(tenantId), patch, item);
+        if (normalizeKey(company.companyName) !== normalizeKey(item.companyName) && (item.companyName || item.title)) {
+          item.employmentHistory = [...(Array.isArray(item.employmentHistory) ? item.employmentHistory : []), {
+            companyName: item.companyName, title: item.title, accountId: previousAccountId || '',
+            firstObservedAt: item.sourceMetadata?.currentEmploymentObservedAt || item.createdAt || '',
+            lastObservedAt: now(), source: 'manual_correction',
+          }];
+          item.sourceMetadata = { ...item.sourceMetadata, currentEmploymentObservedAt: now() };
+        }
+        Object.assign(item, company);
+      }
       Object.assign(item, pickPatch(patch, ['fullName', 'outreachStatus', 'notes', 'email', 'title', 'linkedinUrl']));
       item.updatedAt = now();
+      if (previousAccountId !== item.accountId) refreshAccountContactRollups(accountsForTenant(tenantId), tenantContacts, new Set([previousAccountId, item.accountId].filter(Boolean)), item.updatedAt);
       persistTenant(tenantId);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 250) console.warn(`Slow contact update: saas/src/store.js patchContact ${elapsedMs}ms`);
       return item;
     },
 
@@ -4133,9 +4153,13 @@ export function createStore() {
       let unresolved = 0;
       const discoveryStartedAt = performance.now();
       const discoveryConcurrency = readPositiveInteger(options.discoveryConcurrency || options.concurrency, DEFAULT_ATS_DISCOVERY_CONCURRENCY);
+      const discoveryTimeBudgetMs = Math.min(ATS_DISCOVERY_TIME_BUDGET_MS, readPositiveInteger(options.discoveryTimeBudgetMs, ATS_DISCOVERY_TIME_BUDGET_MS));
       const discoveredBoards = await mapSettledWithConcurrency(candidates, discoveryConcurrency, async (config) => {
-        const match = await discoverAtsBoard(config);
-        return { config, match };
+        const startedAt = performance.now();
+        try {
+          const match = await discoverAtsBoard(config, startedAt + discoveryTimeBudgetMs);
+          return { config, match };
+        } finally { config.lastDiscoveryElapsedMs = Math.round(performance.now() - startedAt); }
       });
       for (let index = 0; index < discoveredBoards.length; index++) {
         const config = candidates[index];
@@ -4143,9 +4167,9 @@ export function createStore() {
         checked++;
         if (settled.status === 'rejected') {
           const message = settled.reason?.message || 'Discovery failed';
-          errors.push({ configId: config.id, companyName: config.companyName, error: message });
-          config.discoveryStatus = 'error';
-          config.discoveryMethod = 'public_ats_probe';
+          errors.push({ configId: config.id, companyName: config.companyName, error: message, code: settled.reason?.code || 'discovery_failed' });
+          // A failed recheck is not evidence that a verified board disappeared.
+          if (!isResolvedBoardConfig(config)) config.discoveryStatus = 'error';
           config.lastDiscoveryError = message;
           config.lastDiscoveryCheckedAt = now();
           config.updatedAt = now();
@@ -4154,6 +4178,7 @@ export function createStore() {
         }
 
         const match = settled.value?.match;
+        config.lastDiscoveryError = '';
         try {
           if (match) {
             const requiresReview = match.method === 'public_ats_probe' || match.requiresReview === true;
@@ -4200,6 +4225,8 @@ export function createStore() {
       }
       timings.discoveryMs = Math.round(performance.now() - discoveryStartedAt);
       timings.discoveryConcurrency = discoveryConcurrency;
+      timings.companyTimeBudgetMs = discoveryTimeBudgetMs;
+      timings.slowestCompanyMs = Math.max(0, ...candidates.map(config => config.lastDiscoveryElapsedMs || 0));
 
       const persistStartedAt = performance.now();
       if (createdConfigs || directResolved || linkedAccountConfigs || checked) persistTenant(tenantId);
@@ -4209,9 +4236,11 @@ export function createStore() {
       if (timings.totalMs > 10000) {
         console.warn(`Slow ATS discovery: saas/src/store.js runAtsDiscovery ${timings.totalMs}ms`, timings);
       }
+      const timedOut = errors.filter(error => error.code === 'discovery_timeout').length;
+      if (timedOut) warnings.push(`${timedOut} company discovery check${timedOut === 1 ? '' : 's'} reached the time limit. This does not mean there are no jobs. Existing boards and jobs were kept. Add the exact careers or job-board URL and retry discovery.`);
       if (!mapped && suggested) {
         warnings.push(`Found ${suggested} possible ATS board${suggested === 1 ? '' : 's'} by company-name matching. Review them before importing jobs.`);
-      } else if (!mapped && checked) {
+      } else if (!mapped && checked && !timedOut) {
         warnings.push('No supported public job boards were matched. Add the company careers URL or a known board URL, then try discovery again.');
       }
 
@@ -4227,6 +4256,7 @@ export function createStore() {
         configsCreated: createdConfigs,
         candidateCount: candidates.length,
         discoveryConcurrency,
+        timedOut,
         errors: errors.length,
       };
       if (mapped > 0) {
@@ -5466,18 +5496,20 @@ export function createStore() {
 
     async addContact(tenantId, payload, _skipPersist = false) {
       assertTenant(tenantId);
+      const startedAt = performance.now();
       await ensureDataLoaded(tenantId, true);
+      const company = resolveContactCompany(accountsForTenant(tenantId), payload);
       const id = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const item = contact({
         id,
         tenantId,
-        accountId: payload.accountId || '',
+        accountId: company.accountId,
         fullName: payload.fullName || `${payload.firstName || ''} ${payload.lastName || ''}`.trim(),
         firstName: payload.firstName || '',
         lastName: payload.lastName || '',
         email: payload.email || '',
         linkedinUrl: payload.linkedinUrl || payload.url || '',
-        companyName: payload.companyName || '',
+        companyName: company.companyName,
         title: payload.title || payload.position || '',
         connectedOn: payload.connectedOn || '',
         outreachStatus: payload.outreachStatus || 'not_started',
@@ -5494,10 +5526,13 @@ export function createStore() {
       contacts.push(item);
       const tenantContacts = getTenantArray(contactsByTenant, tenantId);
       tenantContacts.push(item);
+      if (item.accountId) refreshAccountContactRollups(accountsForTenant(tenantId), tenantContacts, new Set([item.accountId]), item.updatedAt);
       if (!_skipPersist) {
         tenantContacts.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
         persistTenant(tenantId);
       }
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 250) console.warn(`Slow contact creation: saas/src/store.js addContact ${elapsedMs}ms`);
       return item;
     },
 
@@ -7345,9 +7380,9 @@ async function fetchSmartRecruitersJobs(config, boardId) {
   });
 }
 
-async function fetchJobviteJobs(config, boardId) {
+async function fetchJobviteJobs(config, boardId, deadlineAt = Infinity) {
   const url = getJobviteBoardUrl(config, boardId);
-  const content = await fetchText(url, 15000);
+  const content = await fetchText(url, 15000, deadlineAt);
   const jobs = parseJobviteJobs(content, url);
   // An unrecognized HTML page is not authoritative evidence of zero openings.
   return { jobs, complete: jobs.length > 0 };
@@ -7399,9 +7434,9 @@ async function fetchRecruiteeJobs(config, boardId) {
   return { jobs: requireJobArray('Recruitee', payload?.offers, payload?.jobs, payload) };
 }
 
-async function fetchPersonioJobs(config, boardId) {
+async function fetchPersonioJobs(config, boardId, deadlineAt = Infinity) {
   const url = getPersonioJobsFeedUrl(config, boardId);
-  const content = await fetchText(url, 15000);
+  const content = await fetchText(url, 15000, deadlineAt);
   const parser = new XMLParser({
     ignoreAttributes: true,
     parseTagValue: false,
@@ -7414,9 +7449,9 @@ async function fetchPersonioJobs(config, boardId) {
   return { jobs: Array.isArray(positions) ? positions : (positions ? [positions] : []) };
 }
 
-async function fetchRipplingJobs(config, boardId) {
+async function fetchRipplingJobs(config, boardId, deadlineAt = Infinity) {
   const boardUrl = getRipplingBoardUrl(config, boardId);
-  const content = await fetchText(boardUrl, 15000);
+  const content = await fetchText(boardUrl, 15000, deadlineAt);
   const scriptMatch = content.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
   if (!scriptMatch?.[1]) throw new Error('Rippling: jobs data missing from the page; existing jobs preserved');
 
@@ -7542,6 +7577,7 @@ async function fetchWithPublicRedirects(url, init = {}) {
   let currentUrl = await validatePublicUrl(url);
   const method = String(init.method || 'GET').toUpperCase();
   for (let redirects = 0; redirects <= 5; redirects++) {
+    init.signal?.throwIfAborted();
     const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(response.status)) {
       return { response, finalUrl: response.url || currentUrl };
@@ -7604,15 +7640,17 @@ async function fetchJson(url, timeoutMs = 15000, init = {}, deadlineAt = Infinit
   throw lastError || new Error('ATS request failed');
 }
 
-async function fetchText(url, timeoutMs = 15000) {
-  return (await fetchTextPage(url, timeoutMs)).content;
+async function fetchText(url, timeoutMs = 15000, deadlineAt = Infinity) {
+  return (await fetchTextPage(url, timeoutMs, deadlineAt)).content;
 }
 
-async function fetchTextPage(url, timeoutMs = 15000) {
+async function fetchTextPage(url, timeoutMs = 15000, deadlineAt = Infinity) {
   let lastError = null;
   for (let attempt = 1; attempt <= ATS_JSON_REQUEST_ATTEMPTS; attempt++) {
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) throw new Error('ATS page time budget exceeded; existing jobs preserved');
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remainingMs));
     try {
       const { response, finalUrl } = await fetchWithPublicRedirects(url, {
         headers: {
@@ -7639,7 +7677,7 @@ async function fetchTextPage(url, timeoutMs = 15000) {
     } finally {
       clearTimeout(timeout);
     }
-    await waitForAtsRetry(lastError, attempt);
+    await waitForAtsRetry(lastError, attempt, deadlineAt);
   }
   throw lastError || new Error('ATS request failed');
 }
@@ -7714,7 +7752,12 @@ function parseBamboohrJobs(content) {
   return [];
 }
 
-async function discoverAtsBoard(config) {
+function checkDiscoveryDeadline(deadlineAt) {
+  if (performance.now() >= deadlineAt) throw Object.assign(new Error('Company discovery reached its time limit. Add the exact careers or job-board URL and retry; existing boards and jobs were kept.'), { code: 'discovery_timeout' });
+}
+
+async function discoverAtsBoard(config, deadlineAt) {
+  checkDiscoveryDeadline(deadlineAt);
   const knownAtsType = getConfigAtsType(config);
   const atsTypes = BLIND_PROBE_ATS_TYPES.includes(knownAtsType)
     ? [knownAtsType, ...BLIND_PROBE_ATS_TYPES.filter((item) => item !== knownAtsType)]
@@ -7729,14 +7772,15 @@ async function discoverAtsBoard(config) {
     || trustedUrlCandidates.some((value) => Boolean(getUsableCareerUrl(value)));
 
   if (hasTrustedCareerIdentity) {
-    const linkedBoard = await discoverAtsBoardFromCareersPages(config);
+    const linkedBoard = await discoverAtsBoardFromCareersPages(config, deadlineAt);
     if (linkedBoard) return linkedBoard;
   }
 
   for (const boardId of candidates) {
+    checkDiscoveryDeadline(deadlineAt);
     const probes = await mapSettledWithConcurrency(atsTypes, ATS_DISCOVERY_PROBE_CONCURRENCY, async (atsType) => ({
       atsType,
-      result: await probeAtsBoard(atsType, boardId),
+      result: await probeAtsBoard(atsType, boardId, deadlineAt),
     }));
     const match = probes.find((probe) => probe.status === 'fulfilled' && probe.value.result)?.value;
     if (match) {
@@ -7751,9 +7795,10 @@ async function discoverAtsBoard(config) {
     }
   }
   if (!hasTrustedCareerIdentity) {
-    const guessedCareerMatch = await discoverAtsBoardFromCareersPages(config);
+    const guessedCareerMatch = await discoverAtsBoardFromCareersPages(config, deadlineAt);
     return guessedCareerMatch ? { ...guessedCareerMatch, requiresReview: true } : null;
   }
+  checkDiscoveryDeadline(deadlineAt);
   return null;
 }
 
@@ -7783,15 +7828,16 @@ function buildBoardCandidates(config) {
   return candidates.filter((value) => value.length >= 2).slice(0, 5);
 }
 
-async function discoverAtsBoardFromCareersPages(config) {
+async function discoverAtsBoardFromCareersPages(config, deadlineAt) {
   const urls = buildCareerPageUrls(config);
   const batchSize = 3;
   const renderCandidates = [];
   for (let offset = 0; offset < urls.length; offset += batchSize) {
+    checkDiscoveryDeadline(deadlineAt);
     const batch = urls.slice(offset, offset + batchSize);
     const results = await mapSettledWithConcurrency(batch, batchSize, async (url, batchIndex) => {
-      const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
-      const directResult = await inspectCareerPage(config, page, url, 'careers_page_link');
+      const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS, deadlineAt);
+      const directResult = await inspectCareerPage(config, page, url, 'careers_page_link', deadlineAt);
       return {
         directResult,
         page,
@@ -7815,11 +7861,12 @@ async function discoverAtsBoardFromCareersPages(config) {
     renderCandidates.sort((a, b) => b.score - a.score || a.order - b.order);
     const candidate = renderCandidates[0];
     const renderUrl = candidate.page?.finalUrl || candidate.url;
-    const renderedPage = await fetchRenderedCareerPage(renderUrl);
+    const renderedPage = await fetchRenderedCareerPage(renderUrl, deadlineAt);
     if (renderedPage) {
-      return inspectCareerPage(config, renderedPage, renderUrl, 'rendered_careers_page');
+      return inspectCareerPage(config, renderedPage, renderUrl, 'rendered_careers_page', deadlineAt);
     }
   }
+  checkDiscoveryDeadline(deadlineAt);
   return null;
 }
 
@@ -7842,7 +7889,7 @@ function scoreRenderedCareerCandidate(page, requestedUrl) {
   return score;
 }
 
-async function inspectCareerPage(config, page, requestedUrl, method) {
+async function inspectCareerPage(config, page, requestedUrl, method, deadlineAt) {
   const finalUrl = page?.finalUrl || requestedUrl;
   const atsLinks = [];
   if (detectAtsTypeFromUrl(finalUrl)) atsLinks.push(finalUrl);
@@ -7850,7 +7897,7 @@ async function inspectCareerPage(config, page, requestedUrl, method) {
     if (!atsLinks.includes(atsUrl)) atsLinks.push(atsUrl);
   }
   for (const atsUrl of atsLinks) {
-    const result = await probeAtsUrl(config, atsUrl);
+    const result = await probeAtsUrl(config, atsUrl, deadlineAt);
     if (result) return { ...result, method };
   }
 
@@ -7867,11 +7914,13 @@ async function inspectCareerPage(config, page, requestedUrl, method) {
   };
 }
 
-async function fetchRenderedCareerPage(url) {
+async function fetchRenderedCareerPage(url, deadlineAt = Infinity) {
+  checkDiscoveryDeadline(deadlineAt);
   const target = getUsableCareerUrl(url);
   if (!target || !ATS_RENDER_SERVICE_URL) return null;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ATS_RENDER_TIMEOUT_MS);
+  const timeoutMs = Math.min(ATS_RENDER_TIMEOUT_MS, deadlineAt - performance.now());
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(ATS_RENDER_SERVICE_URL, {
       method: 'POST',
@@ -7883,7 +7932,7 @@ async function fetchRenderedCareerPage(url) {
       body: JSON.stringify({
         url: target,
         waitUntil: 'networkidle',
-        timeoutMs: ATS_RENDER_TIMEOUT_MS,
+        timeoutMs: Math.max(1, Math.floor(timeoutMs)),
       }),
       signal: controller.signal,
     });
@@ -8324,7 +8373,8 @@ function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function probeAtsUrl(config, atsUrl) {
+async function probeAtsUrl(config, atsUrl, deadlineAt) {
+  checkDiscoveryDeadline(deadlineAt);
   const atsType = detectAtsTypeFromUrl(atsUrl);
   if (!ATS_FETCHERS.has(atsType)) return null;
   const tempConfig = {
@@ -8339,7 +8389,7 @@ async function probeAtsUrl(config, atsUrl) {
   const boardId = getConfigBoardId(tempConfig);
   if (!boardId) return null;
   if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'].includes(atsType)) {
-    const probed = await probeAtsBoard(atsType, boardId);
+    const probed = await probeAtsBoard(atsType, boardId, deadlineAt);
     if (probed) {
       return {
         atsType,
@@ -8362,7 +8412,7 @@ async function probeAtsUrl(config, atsUrl) {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText: '' }),
-      });
+      }, deadlineAt);
       jobCount = Array.isArray(payload?.jobPostings) ? payload.jobPostings.length : 0;
     } catch {
       return null;
@@ -8380,7 +8430,7 @@ async function probeAtsUrl(config, atsUrl) {
   if (atsType === 'bamboohr') {
     const apiUrl = getBambooCareersApiUrl(tempConfig, boardId);
     try {
-      const payload = await fetchJson(apiUrl, 8000);
+      const payload = await fetchJson(apiUrl, 8000, {}, deadlineAt);
       const jobs = firstArray(payload?.result, payload?.jobs, payload);
       if (!jobs.length) return null;
       return {
@@ -8398,7 +8448,7 @@ async function probeAtsUrl(config, atsUrl) {
   if (atsType === 'workable') {
     const apiUrl = getWorkableJobsApiUrl(tempConfig, boardId);
     try {
-      const payload = await fetchJson(apiUrl, 8000);
+      const payload = await fetchJson(apiUrl, 8000, {}, deadlineAt);
       const jobs = firstArray(payload?.jobs, payload);
       if (!jobs.length) return null;
       return {
@@ -8416,12 +8466,13 @@ async function probeAtsUrl(config, atsUrl) {
   return null;
 }
 
-async function probeAtsBoard(atsType, boardId) {
+async function probeAtsBoard(atsType, boardId, deadlineAt) {
+  checkDiscoveryDeadline(deadlineAt);
   const encoded = encodeURIComponent(boardId);
   if (atsType === 'jobvite') {
     const resolvedBoardUrl = `https://jobs.jobvite.com/${encoded}/jobs`;
     try {
-      const result = await fetchJobviteJobs({ resolvedBoardUrl }, boardId);
+      const result = await fetchJobviteJobs({ resolvedBoardUrl }, boardId, deadlineAt);
       if (!result.jobs.length) return null;
       return {
         apiUrl: resolvedBoardUrl,
@@ -8435,7 +8486,7 @@ async function probeAtsBoard(atsType, boardId) {
   if (atsType === 'personio') {
     const apiUrl = `https://${encoded}.jobs.personio.de/xml?language=en`;
     try {
-      const result = await fetchPersonioJobs({ apiUrl }, boardId);
+      const result = await fetchPersonioJobs({ apiUrl }, boardId, deadlineAt);
       if (!result.jobs.length) return null;
       return {
         apiUrl,
@@ -8449,7 +8500,7 @@ async function probeAtsBoard(atsType, boardId) {
   if (atsType === 'rippling') {
     const resolvedBoardUrl = `https://ats.rippling.com/${encoded}/jobs`;
     try {
-      const result = await fetchRipplingJobs({ resolvedBoardUrl }, boardId);
+      const result = await fetchRipplingJobs({ resolvedBoardUrl }, boardId, deadlineAt);
       if (!result.jobs.length) return null;
       return {
         apiUrl: resolvedBoardUrl,
@@ -8490,7 +8541,7 @@ async function probeAtsBoard(atsType, boardId) {
   const endpoint = endpoints[atsType];
   if (!endpoint) return null;
   try {
-    const payload = await fetchJson(endpoint.apiUrl, 6000);
+    const payload = await fetchJson(endpoint.apiUrl, 6000, {}, deadlineAt);
     const jobs = endpoint.readJobs(payload);
     // Require ACTUAL jobs, not just a 200 with an empty array. SmartRecruiters
     // (and others) return 200 {content:[]} for any invalid slug, so accepting

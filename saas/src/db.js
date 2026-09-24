@@ -2327,7 +2327,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
              COALESCE(BOOL_OR(events.event_type = 'setup_completed'), FALSE) AS has_setup,
              COALESCE(BOOL_OR(events.event_type = 'target_created'), FALSE) AS has_target,
              COALESCE(BOOL_OR(events.event_type IN ('board_resolved', 'useful_jobs_found')), FALSE) AS has_signal,
-             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_logged')), FALSE) AS has_action
+             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_draft_saved', 'outreach_logged')), FALSE) AS has_action
            FROM signups
            LEFT JOIN analytics_events AS events
              ON events.tenant_id = signups.tenant_id
@@ -2374,7 +2374,7 @@ export async function dbGetAnalyticsSummary(days = 30) {
              COALESCE(BOOL_OR(events.event_type = 'setup_completed'), FALSE) AS has_setup,
              COALESCE(BOOL_OR(events.event_type = 'target_created'), FALSE) AS has_target,
              COALESCE(BOOL_OR(events.event_type IN ('board_resolved', 'useful_jobs_found')), FALSE) AS has_signal,
-             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_logged')), FALSE) AS has_action
+             COALESCE(BOOL_OR(events.event_type IN ('outreach_generated', 'outreach_draft_saved', 'outreach_logged')), FALSE) AS has_action
            FROM signups
            LEFT JOIN analytics_events AS events
              ON events.tenant_id = signups.tenant_id
@@ -2554,7 +2554,7 @@ function summarizeActivationCohort(rows, sinceDay, nowMs = Date.now()) {
     const activated = milestones.has('setup_completed')
       && milestones.has('target_created')
       && (milestones.has('board_resolved') || milestones.has('useful_jobs_found'))
-      && (milestones.has('outreach_generated') || milestones.has('outreach_logged'));
+      && (milestones.has('outreach_generated') || milestones.has('outreach_draft_saved') || milestones.has('outreach_logged'));
     if (activated) workspaces += 1;
     else if (nowMs - signupAt < windowMs) pendingWindow += 1;
   }
@@ -2598,7 +2598,7 @@ function summarizeActivationBySource(rows, sinceDay, nowMs = Date.now()) {
     const activated = milestones.has('setup_completed')
       && milestones.has('target_created')
       && (milestones.has('board_resolved') || milestones.has('useful_jobs_found'))
-      && (milestones.has('outreach_generated') || milestones.has('outreach_logged'));
+      && (milestones.has('outreach_generated') || milestones.has('outreach_draft_saved') || milestones.has('outreach_logged'));
     if (activated) group.workspaces += 1;
     else if (nowMs - signup.signupAt < windowMs) group.pendingWindow += 1;
   }

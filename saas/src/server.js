@@ -1979,7 +1979,14 @@ self.addEventListener('activate', (event) => {
         const result = id ? await savedWork.get(tenantId, user.id, kind, id) : await savedWork.list(tenantId, user.id, kind, Object.fromEntries(url.searchParams));
         return sendJson(res, result ? 200 : 404, result || { error: 'Saved item not found.' });
       }
-      if (id && req.method === 'PUT') return sendJson(res, 200, await savedWork.put(tenantId, user.id, kind, id, await readJson(req)));
+      if (id && req.method === 'PUT') {
+        const result = await savedWork.put(tenantId, user.id, kind, id, await readJson(req));
+        if (kind === 'draft') await recordProductMilestone({
+          eventType: 'outreach_draft_saved', tenantId, userId: user.id, eventKey: tenantId,
+          dimensions: { source: 'saved_work', persona: tenant.persona, planId: tenant.plan },
+        });
+        return sendJson(res, 200, result);
+      }
       if (id && req.method === 'DELETE') return sendJson(res, 200, await savedWork.remove(tenantId, user.id, kind, id, Number(url.searchParams.get('version'))));
       return sendJson(res, 405, { error: 'Method not allowed.' });
     } catch (error) {
@@ -2260,11 +2267,16 @@ async function bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, act
 
 async function handleStripeBillingEvent(event) {
   const object = event?.data?.object || {};
-  if (event.type === 'checkout.session.completed') {
+  if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const tenantId = object.client_reference_id || object.metadata?.tenantId || '';
     const planId = object.metadata?.planId || '';
-    if (!tenantId || !planId) return { updated: false, reason: 'missing checkout metadata' };
+    if (!tenantId || !PLANS[planId]?.stripePriceEnv || object.mode !== 'subscription' || !getStripeId(object.subscription)) return { updated: false, reason: 'invalid subscription checkout metadata' };
+    // Completing Checkout alone is not proof of a settled payment. Current
+    // checkout is card-only; also handle delayed confirmation defensively.
+    if (!['paid', 'no_payment_required'].includes(object.payment_status)) return { updated: false, reason: 'checkout payment not confirmed' };
     const existingTenant = findTenantById(tenantId);
+    if (!existingTenant) return { updated: false, reason: 'workspace not found for checkout' };
+    if (getStripeId(existingTenant.stripeSubscriptionId || existingTenant.stripe_subscription_id) === getStripeId(object.subscription) && existingTenant.status === 'canceled') return { updated: false, reason: 'subscription already ended' };
     const resolvedPlanId = existingTenant?.plan === ownerPlanId ? ownerPlanId : planId;
     const tenant = await updateTenantPersisted(tenantId, {
       plan: resolvedPlanId,
@@ -2291,6 +2303,11 @@ async function handleStripeBillingEvent(event) {
     const planId = object.metadata?.planId || getPlanByStripePriceId(priceId)?.id || '';
     if (!tenantId) return { updated: false, reason: 'workspace not found for subscription' };
     const existingTenant = findTenantById(tenantId);
+    const currentSubscriptionId = getStripeId(existingTenant?.stripeSubscriptionId || existingTenant?.stripe_subscription_id);
+    if (currentSubscriptionId === object.id && existingTenant?.status === 'canceled' && object.status !== 'canceled') return { updated: false, reason: 'subscription already ended' };
+    // Only confirmed Checkout may replace an existing subscription. A delayed
+    // created/updated event for the old one must not take over its replacement.
+    if (currentSubscriptionId && currentSubscriptionId !== object.id) return { updated: false, reason: 'different subscription is current' };
     const updates = {
       status: existingTenant?.plan === ownerPlanId ? 'active' : (object.status || 'active'),
       stripeCustomerId: customerId,
@@ -2317,6 +2334,8 @@ async function handleStripeBillingEvent(event) {
     const tenantId = object.metadata?.tenantId || findTenantByStripeCustomerId(customerId)?.id || '';
     if (!tenantId) return { updated: false, reason: 'workspace not found for canceled subscription' };
     const existingTenant = findTenantById(tenantId);
+    const currentSubscriptionId = getStripeId(existingTenant?.stripeSubscriptionId || existingTenant?.stripe_subscription_id);
+    if (currentSubscriptionId && currentSubscriptionId !== object.id) return { updated: false, reason: 'different subscription is current' };
     if (existingTenant?.plan === ownerPlanId) {
       const tenant = await updateTenantPersisted(tenantId, {
         status: 'active',
@@ -2386,12 +2405,16 @@ async function handleStripeBillingEvent(event) {
 
 function resolveTenantFromStripeInvoice(invoice = {}) {
   const customerId = getStripeId(invoice.customer);
-  if (customerId) {
-    const tenant = findTenantByStripeCustomerId(customerId);
-    if (tenant) return tenant;
-  }
-  const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId || '';
-  return tenantId ? findTenantById(tenantId) : null;
+  const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId || invoice.parent?.subscription_details?.metadata?.tenantId || '';
+  const tenant = (customerId && findTenantByStripeCustomerId(customerId)) || (tenantId && findTenantById(tenantId));
+  if (!tenant) return null;
+  // Invoice delivery can lag cancellation or a replacement subscription.
+  // Neither an old invoice nor an unrelated one-off charge grants access.
+  const invoiceSubscriptionId = getStripeId(invoice.subscription || invoice.parent?.subscription_details?.subscription);
+  const currentSubscriptionId = getStripeId(tenant.stripeSubscriptionId || tenant.stripe_subscription_id);
+  if (!invoiceSubscriptionId || (currentSubscriptionId && invoiceSubscriptionId !== currentSubscriptionId)) return null;
+  if (['canceled', 'incomplete_expired'].includes(tenant.status)) return null;
+  return tenant;
 }
 
 async function maybeGrantReferralCredit(referredTenant, stripeObject = {}) {

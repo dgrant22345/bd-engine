@@ -66,4 +66,13 @@ test('seven-day activation requires setup, a target, a usable signal, and an act
       pendingWindow: 1,
     },
   ]);
+  // The current People/Warm Studio path saves private drafts without calling
+  // the older account-generation endpoint. It must count as a useful action.
+  await recordMilestone(pendingTenant, 'outreach_draft_saved');
+  await recordMilestone(pendingTenant, 'outreach_draft_saved');
+  const afterSavedDraft = await dbGetAnalyticsSummary(30);
+  assert.equal(afterSavedDraft.activation.workspaces, 2);
+  assert.equal(afterSavedDraft.activation.pendingWindow, 0);
+  assert.equal(afterSavedDraft.funnel.find(row => row.eventType === 'outreach_draft_saved').workspaces, 1);
+  assert.equal(afterSavedDraft.activationBySource.find(row => row.source === 'discord').workspaces, 1);
 });

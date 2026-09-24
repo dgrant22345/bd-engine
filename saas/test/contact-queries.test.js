@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.js';
-import { buildContactQuerySql, normalizeContactQuery, validateContactInput } from '../src/contact-queries.js';
+import { buildContactQuerySql, normalizeContactQuery, validateContactInput, resolveContactCompany } from '../src/contact-queries.js';
 
 test('people filters and sorting operate across pages and remain tenant scoped', async () => {
   const store = createStore();
@@ -44,4 +44,46 @@ test('person input supports existing fields but rejects unsafe or malformed valu
   for (const bad of [{ fullName: ' ' }, { notes: {} }, { linkedinUrl: 'javascript:alert(1)' }, { outreachStatus: 'hired_by_ai' }, { email: 'invalid' }]) {
     assert.throws(() => validateContactInput(bad), { status: 400 });
   }
+  for (const bad of [{ accountId: {} }, { companyName: null }, { accountId: 'a'.repeat(201) }]) assert.throws(() => validateContactInput(bad), { status: 400 });
+});
+
+test('company matching is exact, explicit, and rejects ambiguity without guessing', () => {
+  const accounts = [{ id: 'one', displayName: 'Example Co', aliases: ['Example Ltd'] }];
+  assert.equal(resolveContactCompany(accounts, { companyName: ' example  CO ' }).accountId, 'one');
+  assert.equal(resolveContactCompany(accounts, { companyName: 'Example Ltd' }).accountId, 'one');
+  assert.equal(resolveContactCompany(accounts, { companyName: 'Example' }).accountId, '');
+  assert.deepEqual(resolveContactCompany(accounts, { accountId: 'one', companyName: 'Old name' }), { accountId: 'one', companyName: 'Example Co' });
+  const duplicates = [...accounts, { id: 'two', displayName: 'Example Co' }];
+  assert.throws(() => resolveContactCompany(duplicates, { companyName: 'Example Co' }), { status: 409 });
+  assert.equal(resolveContactCompany(duplicates, { companyName: 'Example Co', accountId: '' }).accountId, '');
+  assert.equal(resolveContactCompany(duplicates, { companyName: 'Example Co', accountId: 'two' }).accountId, 'two');
+  assert.throws(() => resolveContactCompany(accounts, { accountId: 'another-workspace' }), { status: 400 });
+});
+
+test('manual company changes update both rollups but preserve historical task and activity associations', async () => {
+  const store = createStore();
+  const tenant = 'manual-company-links';
+  for (const id of [tenant, 'foreign-company-links']) store.ensureTenant({ id, name: id }, { id: `${id}-owner` });
+  const oldCompany = await store.addAccount(tenant, { displayName: 'Original Company' });
+  const newCompany = await store.addAccount(tenant, { displayName: 'Next Company' });
+  const foreign = await store.addAccount('foreign-company-links', { displayName: 'Private Company' });
+  const person = await store.addContact(tenant, { fullName: 'Jamie', title: 'Recruiter', companyName: 'original company' });
+  assert.equal(person.accountId, oldCompany.id);
+  assert.equal((await store.getAccountDetail(tenant, oldCompany.id)).account.connectionCount, 1);
+  const task = await store.createTask(tenant, { contactId: person.id, summary: 'Original company follow-up', dueDate: '2026-12-01' });
+  await assert.rejects(store.patchContact(tenant, person.id, { accountId: foreign.id, notes: 'must not save' }), { status: 400 });
+  assert.notEqual(person.notes, 'must not save');
+  await assert.rejects(store.addContact(tenant, { fullName: 'Invalid', accountId: foreign.id }), { status: 400 });
+  await store.patchContact(tenant, person.id, { accountId: newCompany.id });
+  assert.equal(person.companyName, 'Next Company');
+  assert.equal(person.employmentHistory.at(-1).companyName, 'Original Company');
+  assert.equal(task.accountId, oldCompany.id);
+  assert.equal((await store.getAccountDetail(tenant, oldCompany.id)).account.connectionCount, 0);
+  assert.equal((await store.getAccountDetail(tenant, newCompany.id)).account.connectionCount, 1);
+  await store.patchContact(tenant, person.id, { accountId: '' });
+  assert.equal(person.companyName, 'Next Company');
+  assert.equal(person.accountId, '');
+  assert.equal((await store.getAccountDetail(tenant, newCompany.id)).account.connectionCount, 0);
+  await store.patchContact(tenant, person.id, { notes: 'A note must not relink a person' });
+  assert.equal(person.accountId, '');
 });

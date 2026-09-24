@@ -12,6 +12,10 @@
   const field = (name, title, control) => `<div class="people-field"><label for="person-${name}">${escape(title)}</label>${control}</div>`;
   const button = (action, text, extra = '') => `<button type="button" class="secondary-button" data-people="${action}" ${extra}>${text}</button>`;
   const profileLink = person => safeUrl(person.linkedinUrl) ? `<a class="secondary-button" href="${escape(safeUrl(person.linkedinUrl))}" target="_blank" rel="noreferrer">Open profile ↗</a>` : '<span class="muted small">No profile link saved</span>';
+  const companyLink = person => person.accountId ? `<a href="#/accounts/${encodeURIComponent(person.accountId)}">${escape(person.companyName || 'View company')}</a>` : escape(person.companyName || 'Company not provided');
+  function companyFields(person = {}, prefix = '') {
+    return `<div data-company-fields>${field(`${prefix}companyName`, 'Company', `<input id="person-${prefix}companyName" name="companyName" maxlength="300" value="${escape(person.companyName || '')}">`)}${field(`${prefix}accountId`, 'Company link', `<select id="person-${prefix}accountId" name="accountId"><option value="@match"${!person.id ? ' selected' : ''}>Match company name when saved</option><option value=""${person.id && !person.accountId ? ' selected' : ''}>Not linked — name only</option>${person.accountId ? `<option value="${escape(person.accountId)}" data-company-name="${escape(person.companyName)}" selected>${escape(person.companyName)}</option>` : ''}</select>`)}${button('find-company', 'Find saved company')}<p class="people-provenance" data-company-feedback role="status">A unique exact name links automatically. Choose a saved company for a different name or an ambiguous match. Past activity stays with its original company.</p></div>`;
+  }
 
   function create({ root, api, setTitle, onQuery, exportOptions, onUpdated, generateDraft, defaultOutreachGoal = () => 'recruiting_intro' }) {
     const state = { result: null, key: '', query: {}, selected: '', person: null, checked: new Set(), dirty: false, busy: false, sequence: 0, scroll: 0, notice: '', dialog: null };
@@ -57,6 +61,43 @@
       target.textContent = text;
       target.classList.toggle('is-error', error);
       target.setAttribute('role', error ? 'alert' : 'status');
+    }
+    function personValues(form, changesOnly = false) {
+      const values = Object.fromEntries([...new FormData(form)].filter(([key, value]) => !changesOnly || value !== savedFormValues[key]));
+      if (values.accountId === '@match') { delete values.accountId; values.companyName = form.elements.companyName.value; }
+      return values;
+    }
+    function companyInput(event) {
+      const fields = event.target.closest('[data-company-fields]');
+      if (!fields) return;
+      const select = fields.querySelector('[name="accountId"]');
+      if (event.target.name === 'companyName') select.value = '@match';
+      if (event.target === select && select.value && select.value !== '@match') fields.querySelector('[name="companyName"]').value = select.selectedOptions[0].dataset.companyName;
+      if (fields.closest('.person-edit-form')) updateDirty();
+    }
+    async function findCompany(control) {
+      if (state.busy) return;
+      const fields = control.closest('[data-company-fields]');
+      const input = fields.querySelector('[name="companyName"]');
+      const select = fields.querySelector('[name="accountId"]');
+      const q = input.value.trim(); const selected = select.value;
+      const feedback = fields.querySelector('[data-company-feedback]');
+      control.disabled = true;
+      message('Looking up saved companies…', false, feedback);
+      try {
+        const result = await api(`/api/accounts?${new URLSearchParams({ q, portfolio: 'all', pageSize: 20 })}`, { skipCache: true });
+        if (!fields.isConnected || input.value.trim() !== q || select.value !== selected || state.busy) return;
+        select.querySelectorAll('option[data-result]').forEach(option => { if (option.value !== selected) option.remove(); });
+        for (const company of result.items) {
+          if ([...select.options].some(option => option.value === company.id)) continue;
+          const option = new Option([company.displayName, company.domain || company.location || company.id].filter(Boolean).join(' · '), company.id);
+          option.dataset.companyName = company.displayName; option.dataset.result = 'true'; select.add(option);
+        }
+        select.value = selected;
+        message(result.total ? `${result.total} saved ${result.total === 1 ? 'company found' : 'companies found'}. Choose one in Company link.${result.total > 20 ? ' Showing the first 20; narrow the company name to find another.' : ''}` : 'No saved company matches. The name can be saved without a link; no company will be created.', false, feedback);
+        select.focus();
+      } catch (error) { if (fields.isConnected) message(`Company lookup failed. Your details are unchanged. ${error.message}`, true, feedback); }
+      finally { control.disabled = false; }
     }
     function loading() {
       root.innerHTML = `<section class="people-workspace" aria-label="People workspace" aria-busy="true"><div class="people-toolbar"><span role="status">Loading people…</span></div><div class="people-skeleton" aria-hidden="true">${Array.from({ length: 7 }, () => '<div><i></i><span></span><span></span></div>').join('')}</div></section>`;
@@ -105,6 +146,10 @@
         state.dirty = false;
         draw();
         await renderPerson(ticket, { focus: !samePerson && Boolean(nextPerson) });
+        if (ticket === state.sequence && active() && new URLSearchParams(location.hash.split('?')[1] || '').get('add') === '1') {
+          history.replaceState(null, '', hash()); lastHash = location.hash;
+          addPerson();
+        }
         const elapsed = Math.round(performance.now() - startedAt);
         window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::render', elapsedMs: elapsed, rows: result.items.length } }));
       } catch (error) {
@@ -207,7 +252,7 @@
       const index = state.result.items.findIndex(item => item.id === person.id);
       const source = person.source === 'manual' ? 'Added manually' : /sample|demo/i.test(person.source || person.id) ? 'Sample data' : person.source ? String(person.source).replace(/[_-]/g, ' ') : 'Source not recorded';
       panel.innerHTML = `<div class="person-panel-nav">${button('close', '← Back to people')}<div>${button('previous-person', '↑', `aria-label="Previous person" ${index <= 0 ? 'disabled' : ''}`)}${button('next-person', '↓', `aria-label="Next person" ${index < 0 || index >= state.result.items.length - 1 ? 'disabled' : ''}`)}</div></div>
-        <header class="person-identity"><span class="people-source">${escape(source)}</span><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p>${person.accountId ? `<a href="#/accounts/${escape(person.accountId)}">${escape(person.companyName || 'View company')}</a>` : escape(person.companyName || 'Company not provided')}</p><div class="person-links"><span data-person-profile>${profileLink(person)}</span>${button('prepare', 'Prepare outreach')}</div><div class="person-contact-history" data-last-outreach aria-live="polite"><p class="small muted">Loading outreach history…</p></div></header>
+        <header class="person-identity"><span class="people-source">${escape(source)}</span><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p data-person-company>${companyLink(person)}</p><div class="person-links"><span data-person-profile>${profileLink(person)}</span>${button('prepare', 'Prepare outreach')}</div><div class="person-contact-history" data-last-outreach aria-live="polite"><p class="small muted">Loading outreach history…</p></div></header>
         <div class="person-panel-body">
           <dl class="person-facts"><div><dt>Location</dt><dd>${escape(person.location || 'Not provided')}</dd></div><div><dt>Connected</dt><dd>${escape(date(person.connectedOn))}</dd></div><div><dt>Email</dt><dd data-person-email>${escape(person.email || 'Not provided')}</dd></div></dl>
           <p class="people-provenance">Connection details may be out of date. Confirm them on the source profile. No candidate fit assessment has been made.</p>
@@ -219,6 +264,7 @@
             <details class="person-edit-fields"><summary>Correct contact details</summary>
               ${field('fullName', 'Full name', `<input id="person-fullName" name="fullName" value="${escape(person.fullName)}" required maxlength="200">`)}
               ${field('title', 'Current role', `<input id="person-title" name="title" value="${escape(person.title || '')}" maxlength="300">`)}
+              ${companyFields(person)}
               ${field('email', 'Email', `<input id="person-email" name="email" type="email" value="${escape(person.email || '')}" maxlength="320">`)}
               ${field('linkedinUrl', 'Profile URL', `<input id="person-linkedinUrl" name="linkedinUrl" type="url" value="${escape(person.linkedinUrl || '')}" maxlength="2000" placeholder="https://www.linkedin.com/in/…">`)}
             </details>
@@ -292,30 +338,43 @@
     }
     async function savePerson(form) {
       if (state.busy) return;
-      const values = Object.fromEntries([...new FormData(form)].filter(([key, value]) => value !== savedFormValues[key]));
+      const values = personValues(form, true);
       if (!Object.keys(values).length) { message('No changes to save.'); return; }
-      const button = form.querySelector('[type="submit"]');
+      const submit = form.querySelector('[type="submit"]');
       const fields = [...form.querySelectorAll('input, textarea, select')];
       const startedAt = performance.now();
-      state.busy = true; button.disabled = true; button.textContent = 'Saving…';
+      state.busy = true; submit.disabled = true; submit.textContent = 'Saving…';
       fields.forEach(control => control.disabled = true);
       message('Saving changes…');
       try {
         const updated = await api(`/api/contacts/${encodeURIComponent(state.person.id)}`, { method: 'PATCH', body: JSON.stringify(values) });
+        const companyChanged = state.person.accountId !== updated.accountId || state.person.companyName !== updated.companyName;
         state.person = updated;
         updateRow(updated);
+        const companySelect = form.elements.accountId;
+        if (updated.accountId && ![...companySelect.options].some(option => option.value === updated.accountId)) {
+          const option = new Option(updated.companyName, updated.accountId); option.dataset.companyName = updated.companyName; companySelect.add(option);
+        }
         for (const field of fields) field.value = updated[field.name] ?? (field.name === 'outreachStatus' ? 'not_started' : '');
         savedFormValues = Object.fromEntries(fields.map(field => [field.name, field.value]));
+        if (companyChanged) {
+          state.roles = []; state.rolesLoaded = false;
+          root.querySelector('#person-draft-role').innerHTML = '<option value="">Reload this company’s openings</option>';
+          root.querySelector('#person-draft-role').disabled = true;
+          root.querySelector('[data-people="generate-draft"]').disabled = true;
+          root.querySelector('[data-role-feedback]').innerHTML = `Company changed. Your message is preserved; review it before using it. ${button('retry-draft-context', 'Load company openings')}`;
+        }
         updateDirty();
         // Keep the form and focus intact; update identity separately.
         root.querySelector('#person-heading').textContent = updated.fullName;
         root.querySelector('.person-current-role').textContent = updated.title || 'Role not provided';
         root.querySelector('[data-person-email]').textContent = updated.email || 'Not provided';
         root.querySelector('[data-person-profile]').innerHTML = profileLink(updated);
+        root.querySelector('[data-person-company]').innerHTML = companyLink(updated);
         message('Saved.');
         window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::savePerson', elapsedMs: Math.round(performance.now() - startedAt) } }));
       } catch (error) { message(`Could not save. ${error.message} Your changes are still here.`, true); }
-      finally { state.busy = false; fields.forEach(control => control.disabled = false); button.disabled = false; button.textContent = 'Save changes'; }
+      finally { state.busy = false; fields.forEach(control => control.disabled = false); submit.disabled = false; submit.textContent = 'Save changes'; }
     }
     function openDialog(title, content, className = '') {
       if (!closeDialog()) return;
@@ -327,6 +386,8 @@
       state.dialog = dialog;
       dialog.addEventListener('click', onClick);
       dialog.addEventListener('submit', onSubmit);
+      dialog.addEventListener('input', companyInput);
+      dialog.addEventListener('change', companyInput);
       dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
       dialog.addEventListener('close', () => { dialog.remove(); if (state.dialog === dialog) state.dialog = null; });
       dialog.showModal();
@@ -343,7 +404,7 @@
       if (!allowLeave()) return;
       // A confirmed discard must also remove the abandoned values from view.
       if (discardPerson && state.person) drawPerson();
-      openDialog('Add person', `<form data-people-form="add"><p class="people-provenance">Save details you have permission to use. Adding a URL does not scrape a profile.</p>${field('new-name', 'Full name', '<input id="person-new-name" name="fullName" required maxlength="200" autofocus>')}${field('new-title', 'Current role', '<input id="person-new-title" name="title" maxlength="300">')}${field('new-company', 'Company', '<input id="person-new-company" name="companyName" maxlength="300">')}${field('new-url', 'Profile URL', '<input id="person-new-url" name="linkedinUrl" type="url" maxlength="2000" placeholder="https://www.linkedin.com/in/…">')}<p class="people-feedback" data-add-feedback role="status"></p><footer><button class="primary-button" type="submit">Add person</button>${button('close-dialog', 'Cancel')}</footer></form>`);
+      openDialog('Add person', `<form data-people-form="add"><p class="people-provenance">Save details you have permission to use. Adding a URL does not scrape a profile.</p>${field('new-name', 'Full name', '<input id="person-new-name" name="fullName" required maxlength="200" autofocus>')}${field('new-title', 'Current role', '<input id="person-new-title" name="title" maxlength="300">')}${companyFields({}, 'new-')}${field('new-url', 'Profile URL', '<input id="person-new-url" name="linkedinUrl" type="url" maxlength="2000" placeholder="https://www.linkedin.com/in/…">')}<p class="people-feedback" data-add-feedback role="status"></p><footer><button class="primary-button" type="submit">Add person</button>${button('close-dialog', 'Cancel')}</footer></form>`);
     }
     function compare() {
       const people = state.result.items.filter(item => state.checked.has(item.id));
@@ -392,9 +453,9 @@
       if (form.dataset.peopleForm !== 'add') return;
       const submit = form.querySelector('[type="submit"]');
       if (submit.disabled || state.busy) return;
-      const values = Object.fromEntries(new FormData(form));
+      const values = personValues(form);
       const dialog = form.closest('dialog');
-      const controls = [...dialog.querySelectorAll('input, button')];
+      const controls = [...dialog.querySelectorAll('input, select, button')];
       const startedAt = performance.now();
       state.busy = true;
       controls.forEach(control => control.disabled = true);
@@ -437,6 +498,7 @@
       if (action === 'sort-company') navigate({ ...state.query, sortBy: 'company', page: 1 });
       if (action === 'next-person' || action === 'previous-person') move(action === 'next-person' ? 1 : -1);
       if (action === 'add') addPerson();
+      if (action === 'find-company') await findCompany(control);
       if (action === 'drafts') window.bdSavedWork.openLibrary('draft');
       if (action === 'save-view') window.bdSavedWork.saveView(state.query);
       if (action === 'views') window.bdSavedWork.openLibrary('view', query => navigate({ ...query, page: 1, pageSize: 20 }));
@@ -528,6 +590,8 @@
     }
     root.addEventListener('click', onClick);
     root.addEventListener('submit', onSubmit, true);
+    root.addEventListener('input', companyInput);
+    root.addEventListener('change', companyInput);
     root.addEventListener('change', event => {
       if (!alive()) return;
       const target = event.target;

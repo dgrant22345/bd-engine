@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "658b4e5700a70e7e27f0ffa19f2a42a39c0429b82b5c0e2a29d738ccad01504a",
+  "sourceSha256": "a26efed9cd64bc1b48f526efb7689087b85f272ad9855ac4050e958a9204530b",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",

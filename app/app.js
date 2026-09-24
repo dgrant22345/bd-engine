@@ -5050,6 +5050,7 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
   const readinessMetrics = dashboard.readiness?.metrics || {};
   const summary = dashboard.summary || {};
   const jobSeeker = personaCopy.persona === 'jobseeker';
+  const hasPeople = Number(readinessMetrics.contactCount || 0) > 0;
   const steps = [
     {
       id: 'target',
@@ -5097,11 +5098,12 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
       description: 'Review a relevant person and the hiring evidence, prepare a specific message, then save it. Saving is not sending. Add a follow-up when you have a next step.',
       value: Number(dashboard.savedDraftCount || 0),
       valueLabel: 'saved draft',
-      cta: 'Choose a person',
-      href: '#/contacts',
+      cta: hasPeople ? 'Choose a person' : 'Add a person',
+      href: hasPeople ? '#/contacts' : '#/contacts?add=1',
     },
   ].filter(Boolean).map((step) => ({ ...step, complete: step.value > 0 }));
   const completeCount = steps.filter((step) => step.complete).length;
+  const nextStep = steps.find(step => !step.complete);
   if (completeCount === steps.length) return '';
   const progress = Math.round((completeCount / steps.length) * 100);
   const summaryCopy = jobSeeker
@@ -5126,7 +5128,7 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
       </div>
       <ol class="activation-path__steps">
         ${steps.map((step, index) => `
-          <li class="activation-step ${step.complete ? 'is-complete' : ''}" data-first-value-step="${escapeAttr(step.id)}" aria-label="${escapeAttr(`${step.title}: ${step.complete ? 'complete' : 'not complete'}`)}">
+          <li class="activation-step ${step.complete ? 'is-complete' : ''}" data-first-value-step="${escapeAttr(step.id)}" ${step === nextStep ? 'aria-current="step"' : ''} aria-label="${escapeAttr(`${step.title}: ${step.complete ? 'complete' : 'not complete'}`)}">
             <span class="activation-step__number" aria-hidden="true">${step.complete ? '&#10003;' : index + 1}</span>
             <div class="activation-step__copy">
               <div class="activation-step__title-row">
@@ -5135,7 +5137,7 @@ function renderFirstValueChecklist(dashboard = {}, personaCopy = getPersonaUiCop
               </div>
               <p>${escapeHtml(step.description)}</p>
             </div>
-            ${step.complete ? '' : `<a class="secondary-button activation-step__cta" href="${escapeAttr(step.href)}">${escapeHtml(step.cta)}</a>`}
+            ${step.complete ? '' : `<a class="${step === nextStep ? 'primary-button' : 'secondary-button'} activation-step__cta" href="${escapeAttr(step.href)}">${escapeHtml(step.cta)}</a>`}
           </li>
         `).join('')}
       </ol>
@@ -11795,7 +11797,8 @@ const ACQUISITION_FUNNEL_STAGES = [
   { eventType: 'setup_completed', label: 'Setup complete', description: 'Workspace configured', tone: 'accent', unit: 'workspace' },
   { eventType: 'target_created', label: 'First targets', description: 'Workspaces creating a target', tone: 'success', unit: 'workspace' },
   { eventType: 'useful_jobs_found', label: 'Useful roles found', description: 'Workspaces finding live roles', tone: 'success', unit: 'workspace' },
-  { eventType: 'outreach_generated', label: 'First action', description: 'Workspaces generating outreach', tone: 'success', unit: 'workspace' },
+  { eventType: 'outreach_generated', label: 'Draft generated', description: 'Workspaces generating account outreach', tone: 'success', unit: 'workspace' },
+  { eventType: 'outreach_draft_saved', label: 'Draft saved', description: 'Workspaces saving an outreach message; not sent', tone: 'success', unit: 'workspace' },
 ];
 
 function renderAcquisitionFunnel(analytics = {}) {

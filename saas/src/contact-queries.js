@@ -44,8 +44,7 @@ export function buildContactQuerySql(tenantId, input = {}) {
 export function validateContactInput(input, { create = false } = {}) {
   const fail = message => { const error = new Error(message); error.status = 400; throw error; };
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Provide contact fields.');
-  const fields = { fullName: 200, title: 300, email: 320, linkedinUrl: 2000, notes: 20000, outreachStatus: 40 };
-  if (create) fields.companyName = 300;
+  const fields = { fullName: 200, title: 300, email: 320, linkedinUrl: 2000, notes: 20000, outreachStatus: 40, companyName: 300, accountId: 200 };
   const result = {};
   for (const [key, max] of Object.entries(fields)) {
     if (!Object.hasOwn(input, key)) continue;
@@ -69,4 +68,25 @@ export function validateContactInput(input, { create = false } = {}) {
   }
   if (result.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result.email)) fail('Enter a valid email address.');
   return result;
+}
+
+// Only an explicit choice or a unique exact name may establish a company link.
+// An explicit empty accountId means "name only", including for duplicate names.
+export function resolveContactCompany(accounts, input, current = {}) {
+  const fail = (message, status = 400) => { const error = new Error(message); error.status = status; throw error; };
+  const normalize = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (Object.hasOwn(input, 'companyName') && typeof input.companyName !== 'string') fail('Company name must be text.');
+  const companyName = Object.hasOwn(input, 'companyName') ? input.companyName.trim() : current.companyName || '';
+  if (Object.hasOwn(input, 'accountId')) {
+    if (typeof input.accountId !== 'string') fail('Choose a saved company or leave the company unlinked.');
+    const accountId = input.accountId.trim();
+    if (!accountId) return { accountId: '', companyName };
+    const account = accounts.find(item => item.id === accountId);
+    if (!account) fail('That company is not available in this workspace. Choose a saved company again.');
+    return { accountId: account.id, companyName: account.displayName };
+  }
+  const key = normalize(companyName);
+  const matches = key ? accounts.filter(account => [account.displayName, account.normalizedName, ...(Array.isArray(account.aliases) ? account.aliases : [])].some(name => normalize(name) === key)) : [];
+  if (matches.length > 1) fail('More than one saved company matches this name. Choose a saved company or keep the name unlinked.', 409);
+  return { accountId: matches[0]?.id || '', companyName: matches[0]?.displayName || companyName };
 }

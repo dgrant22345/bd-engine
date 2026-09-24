@@ -5,6 +5,7 @@ export const PRODUCT_EVENT_TYPES = new Set([
   'setup_completed',
   'target_created',
   'outreach_generated',
+  'outreach_draft_saved',
   'discovery_started',
   'board_resolved',
   'job_import_started',
