@@ -20,3 +20,10 @@
 ## Deliberately unchanged
 
 Source approval, geography inclusion, role matching/scoring, payment configuration, customer records, and the overall design language. External careers sites can still be slow or unavailable. A real paid purchase remains an owner-performed acceptance test; no charge was initiated.
+
+## Deployment
+
+- Source commit: `7be3bb0`, pushed to `agent/paid-product-quality-audit`.
+- Railway production deployment `ece64a9b-ae5a-47f3-8176-b4a2fa95f3de`: SUCCESS, Docker image built and `/readyz` passed.
+- Eight read-only production smoke checks passed; mutating checks were disabled.
+- Live browser confirmed the new asset version, applied Canada filter chip, individual removal, restored All Roles selection, and keyboard focus returning to Search. Production validation used only the synthetic read-only demo; private saved-search writes were tested locally.
