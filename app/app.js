@@ -11636,13 +11636,6 @@ async function renderJobsView() {
 
   appRoot.innerHTML = `
     <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${formatNumber(result.total)} results</strong></div>
-    <details class="form-card workspace-disclosure" id="job-filter-explanation">
-      <summary><span><strong>Why am I seeing these jobs?</strong><small>Import coverage and shortlist filters are different</small></span></summary>
-      <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
-      <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
-      <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>
-      <p>Open a job’s relevance reasons to understand its score. Excluded title phrases lower relevance; they are not proof of a failed import. Adjust your <a href="#/admin/search-focus">saved focus</a>, use <strong>All Roles</strong> below to broaden the list, or <a href="#/admin/jobs">check source coverage and refresh errors</a>.</p>
-    </details>
 
     <section class="table-card">
       <div class="panel-header">
@@ -11662,6 +11655,16 @@ async function renderJobsView() {
       </div>
       <div class="job-results-context muted small">
         <p role="status">${formatNumber(result.total)} results${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}. This is your imported inventory, not a search of every job on the web.</p>
+        <details class="job-results-help" id="job-filter-explanation">
+          <summary>Why am I seeing these jobs?</summary>
+          <div class="job-results-help__body">
+            <p><strong>Import coverage and shortlist filters are different</strong></p>
+            <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
+            <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
+            <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>
+            <p>Open a job’s relevance reasons to understand its score. Excluded title phrases lower relevance; they are not proof of a failed import. Adjust your <a href="#/admin/search-focus">saved focus</a>, use <strong>All Roles</strong> to broaden the list, or <a href="#/admin/jobs">check source coverage and refresh errors</a>.</p>
+          </div>
+        </details>
         ${focusConfigured ? `<details class="job-focus-explanation"><summary>Saved focus &amp; how matching works</summary>
           <dl>
             <dt>Target titles</dt><dd>${escapeHtml(searchFocus.targetRoles || 'No title restriction')}</dd>

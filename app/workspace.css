@@ -67,6 +67,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .compact-page-intro strong { color: var(--text); }
 .settings-subnav { display: flex; flex-wrap: wrap; gap: 4px 16px; border-bottom: 1px solid var(--line); padding: 0 0 12px; margin-bottom: 16px; }
 .settings-subnav a { font-size: 13px; padding: 6px 0; color: var(--accent); }
+.job-results-help > summary { width: fit-content; max-width: 100%; min-height: 32px; padding: 6px 0; color: var(--muted); line-height: 20px; cursor: pointer; }
+.job-results-help > summary:hover, .job-results-help[open] > summary { color: var(--text); }
+.job-results-help__body { max-width: 85ch; margin: 4px 0 12px; padding: 4px 12px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
+.job-results-help__body p:last-child { margin-bottom: 0; }
 .job-row-context > summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 8px 0; }
 .job-row-context[open] { min-width: 200px; }
 .jobs-table--selectable th:first-child, .jobs-table--selectable td:first-child { width: 40px; min-width: 40px; }
@@ -219,6 +223,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
   .topbar-mobile-action[data-action="toggle-persona-mode"] { display: flex; }
 }
 @media (max-width: 760px) {
+  .job-results-help > summary { min-height: 44px; padding-block: 12px; }
   .main .topbar { min-height: 56px; gap: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .topbar .view-heading h2 { font-size: 19px; }
   .topbar .persona-mode-toggle { display: none; }
