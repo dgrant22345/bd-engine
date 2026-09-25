@@ -173,6 +173,11 @@ test('search focus form saves settings and opens the matching shortlist', async 
   await expect(app.locator('#jobs-filter-form select[name="minRelevance"]')).toHaveValue('35');
   await expect(app.locator('#jobs-filter-form select[name="geography"]')).toHaveValue('canada');
   await page.setViewportSize({ width: 390, height: 844 });
+  await app.locator('#jobs-filter-form select[name="sortBy"]').selectOption('connections');
+  await app.locator('#jobs-filter-form').getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(app.locator('[data-preset="target_roles"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(app.locator('[data-preset="canada"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(app.locator('#jobs-filter-form select[name="minRelevance"]')).toHaveValue('35');
   await app.locator('.job-focus-explanation summary').click();
   await expect(app.locator('.job-focus-explanation dd').first()).toBeVisible();
   const mobileOverflow = await app.locator('.job-results-context').evaluate((el) => el.scrollWidth > el.clientWidth + 1);

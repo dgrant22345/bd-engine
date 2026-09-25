@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260924-jobs-help-01';
+const ASSET_VERSION = '20260925-job-filters-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

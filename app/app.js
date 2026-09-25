@@ -11632,10 +11632,19 @@ async function renderJobsView() {
   if (!isCurrent()) return;
   // Keep the job detail/composer cache aligned with the visible page.
   appState.jobs = result.items;
-  const jobAdvancedCount = ['geography', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance'].filter((key) => appState.jobQuery[key]).length;
+  const jobAdvancedCount = ['active', 'geography', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance']
+    .filter((key) => appState.jobQuery[key] !== defaultQueries.jobs[key]).length;
+  // Preset state describes filters, not sorting; changing the order does not change the set of roles.
+  const activeJobPresets = {
+    all: Object.entries(appState.jobQuery).every(([key, value]) => ['page', 'pageSize', 'sortBy'].includes(key) || String(value ?? '') === String(defaultQueries.jobs[key] ?? '')),
+    target_roles: focusConfigured && appState.jobQuery.minRelevance === String(targetRoleThreshold),
+    canada: appState.jobQuery.geography === 'canada',
+    network: appState.jobQuery.hasContacts === 'true',
+    pipeline: appState.jobQuery.pipelineOnly === 'true',
+  };
 
   appRoot.innerHTML = `
-    <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${formatNumber(result.total)} results</strong></div>
+    <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${pluralize(result.total, 'result')}</strong></div>
 
     <section class="table-card">
       <div class="panel-header">
@@ -11647,18 +11656,19 @@ async function renderJobsView() {
       </div>
       <div class="job-preset-strip" role="group" aria-label="Job quick filters">
         <span class="job-preset-label">Quick filters:</span>
-        <button class="job-preset-chip${!appState.jobQuery.workStyle && !appState.jobQuery.hasContacts && !appState.jobQuery.minRelevance && !appState.jobQuery.geography && !appState.jobQuery.recencyDays && !appState.jobQuery.pipelineOnly && (!appState.jobQuery.sortBy || appState.jobQuery.sortBy === 'posted') ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="all">All Roles</button>
-        <button class="job-preset-chip${appState.jobQuery.sortBy === 'relevance' && appState.jobQuery.minRelevance === String(targetRoleThreshold) ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
-        <button class="job-preset-chip${appState.jobQuery.geography === 'canada' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
-        <button class="job-preset-chip${appState.jobQuery.hasContacts === 'true' ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
-        <button class="job-preset-chip${appState.jobQuery.pipelineOnly ? ' is-active' : ''}" type="button" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
+        <button class="job-preset-chip${activeJobPresets.all ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.all}" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${activeJobPresets.target_roles ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.target_roles}" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
+        <button class="job-preset-chip${activeJobPresets.canada ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.canada}" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
+        <button class="job-preset-chip${activeJobPresets.network ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.network}" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
+        <button class="job-preset-chip${activeJobPresets.pipeline ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.pipeline}" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
       </div>
       <div class="job-results-context muted small">
-        <p role="status">${formatNumber(result.total)} results${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}. This is your imported inventory, not a search of every job on the web.</p>
+        <p role="status">${pluralize(result.total, 'result')}${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}. This is your imported inventory, not a search of every job on the web.</p>
         <details class="job-results-help" id="job-filter-explanation">
           <summary>Why am I seeing these jobs?</summary>
           <div class="job-results-help__body">
             <p><strong>Import coverage and shortlist filters are different</strong></p>
+            <p>Posting status: ${appState.jobQuery.active === 'true' ? 'active jobs only' : appState.jobQuery.active === 'false' ? 'inactive jobs only' : 'active and inactive jobs'}.</p>
             <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
             <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
             <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>

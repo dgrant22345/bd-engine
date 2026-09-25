@@ -63,3 +63,57 @@ for (const theme of ['light', 'dark']) {
     expect(errors).toEqual([]);
   });
 }
+
+test('job filters show accurate selection without expanding unrelated controls', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await app.getByRole('link', { name: 'Hiring activity', exact: true }).click();
+  const form = app.locator('#jobs-filter-form');
+  const more = form.locator('.filter-disclosure');
+  const all = app.locator('[data-preset="all"]');
+  const apply = form.getByRole('button', { name: 'Apply', exact: true });
+
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+  await expect(more).not.toHaveAttribute('open', '');
+  await form.locator('[name="sortBy"]').selectOption('retrieved');
+  await apply.click();
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+
+  await form.locator('[name="q"]').fill('Toronto');
+  await apply.click();
+  await expect(all).toHaveAttribute('aria-pressed', 'false');
+  await expect(all).not.toHaveClass(/is-active/);
+  await expect(more).not.toHaveAttribute('open', '');
+
+  await app.locator('[data-preset="network"]').click();
+  await expect(app.locator('[data-preset="network"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(form.locator('[name="q"]')).toHaveValue('Toronto');
+  await expect(more).not.toHaveAttribute('open', '');
+  await form.locator('[name="workStyle"]').selectOption('remote');
+  await apply.click();
+  await expect(more).not.toHaveAttribute('open', '');
+  await expect(form.locator('[name="workStyle"]')).toHaveValue('remote');
+  await expect(app.locator('.compact-page-intro strong')).toHaveText('1 result');
+  await expect(app.locator('.job-results-context [role="status"]')).toContainText('1 result ·');
+
+  // Non-default posting status must not silently hide behind a collapsed panel.
+  await all.click();
+  await more.locator('summary').click();
+  await form.locator('[name="active"]').selectOption('false');
+  await apply.click();
+  await expect(more).toHaveAttribute('open', '');
+  await expect(more.locator('summary')).toHaveText('More filters · 1 active');
+  await expect(all).toHaveAttribute('aria-pressed', 'false');
+  await expect(app.locator('.compact-page-intro strong')).toHaveText('0 results');
+  await app.locator('#job-filter-explanation summary').click();
+  await expect(app.locator('#job-filter-explanation')).toContainText('Posting status: inactive jobs only.');
+  await all.click();
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+  await expect(form.locator('[name="active"]')).toHaveValue('true');
+  await expect(app.locator('.compact-page-intro strong')).toHaveText('4 results');
+  await expect(more).not.toHaveAttribute('open', '');
+  expect(errors).toEqual([]);
+});
