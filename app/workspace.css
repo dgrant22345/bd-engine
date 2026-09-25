@@ -119,16 +119,27 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .people-empty h3 { font-size: 18px; margin: 0 0 8px; }
 .people-empty p { color: var(--muted); max-width: 480px; margin: 0 auto 16px; font-size: 13px; }
 .people-empty button, .people-empty a { margin: 4px; }
-.person-panel { position: sticky; top: 0; border-left: 1px solid var(--line); max-height: calc(100dvh - 200px); overflow: auto; scroll-padding: 12px; }
+.person-panel { position: sticky; top: 0; border-left: 1px solid var(--line); max-height: calc(100dvh - 200px); overflow: auto; scroll-padding: calc(var(--person-nav-height, 48px) + 12px) 12px 12px; }
 .person-panel-nav { display: flex; justify-content: space-between; align-items: center; gap: 4px; position: sticky; top: 0; z-index: 2; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
-.person-panel-nav > div { display: flex; gap: 4px; }
 .person-panel-nav button { padding: 4px 8px; font-size: 12px; }
-.person-identity { padding: 20px 20px 16px; }
+.person-review-nav { display: block; padding: 10px 16px 0; }
+.person-review-nav--flow { position: static; }
+.person-review-controls, .person-review-paging { display: flex; align-items: center; gap: 4px; }
+.person-review-controls { justify-content: space-between; }
+.person-review-position { color: var(--muted); font-size: 11px; margin-right: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.person-review-context { margin: 10px 4px 4px; }
+.person-review-context h3 { font-size: 20px; line-height: 1.25; letter-spacing: -.025em; margin: 0; overflow-wrap: anywhere; }
+.person-review-context [data-person-company] { font-size: 12px; margin: 2px 0 0; overflow-wrap: anywhere; }
+.person-current-role { font-size: 12px; line-height: 1.5; font-weight: 500; color: var(--muted); margin: 4px 0 0; overflow-wrap: anywhere; }
+.person-section-nav { display: flex; flex-wrap: wrap; gap: 0; margin-top: 8px; }
+.person-section-nav .secondary-button { border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--muted); padding: 8px; min-height: 36px; }
+.person-section-nav .secondary-button:hover { background: var(--surface-muted); color: var(--text); }
+.person-section-nav [data-people="prepare"] { color: var(--accent); font-weight: 600; }
+.person-section-nav .secondary-button:focus-visible { outline-offset: -3px; }
+.person-identity { padding: 16px 20px 12px; }
 .people-source { font-size: 11px; font-weight: 600; color: var(--muted); }
-.person-identity h3 { font-size: 23px; line-height: 1.2; letter-spacing: -.035em; margin: 8px 0; overflow-wrap: anywhere; }
 .person-identity p { margin: 4px 0; font-size: 13px; }
-.person-identity .person-current-role { font-size: 14px; font-weight: 500; }
-.person-identity .person-links { margin-top: 14px; }
+.person-overview-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .person-panel-body { padding: 0 20px 20px; }
 .person-facts { margin: 0; font-size: 12px; }
 .person-facts > div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
@@ -137,6 +148,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .people-provenance { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 12px 0; }
 .person-section { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
 .person-section h4 { font-size: 15px; margin: 0 0 12px; }
+#person-activity > summary { font-size: 13px; font-weight: 600; color: var(--text); }
+#person-activity > form { margin-top: 12px; }
+[data-person-work] { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 16px; font-size: 12px; line-height: 1.5; }
+[data-person-work] h4 { font-size: 13px; margin: 20px 0 8px; }
+[data-person-work] h4:first-child { margin-top: 0; }
 .person-activity { margin: 12px 0; overflow-wrap: anywhere; }
 .person-activity > p { margin-bottom: 4px; }
 .person-activity summary { cursor: pointer; font-size: 12px; color: var(--accent); padding: 6px 0; }
@@ -145,7 +161,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .person-contact-history summary, [data-draft-context] summary { cursor: pointer; padding: 6px 0; }
 .person-contact-history p { margin: 6px 0; }
 .person-outreach > .primary-button { margin: 12px 0; }
-.person-outreach { scroll-margin-block: 64px 16px; }
+.person-panel-body :is(input, textarea, select, summary), .person-identity { scroll-margin-block: 8px; }
 .saved-work-item { overflow-wrap: anywhere; }
 .saved-draft-preview { font-size: 13px; margin: 8px 0; color: var(--text); }
 .tasks-tabs { flex-wrap: wrap; }
@@ -158,6 +174,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .person-edit-fields { margin: 8px 0 16px; }
 .person-edit-fields summary, .person-section > summary { padding: 6px 0; cursor: pointer; font-size: 12px; color: var(--muted); }
 .person-edit-fields[open] summary { margin-bottom: 10px; }
+.person-detail-grid { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.person-detail-grid .people-field { flex: 1 1 calc(50% - 6px); min-width: min(100%, 160px); }
 .person-save-row { display: flex; align-items: center; gap: 12px; }
 .person-review-footer { font-size: 11px; color: var(--muted); margin-top: 20px; }
 .people-panel-loading { padding: 20px; }
@@ -188,9 +206,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 @media (max-width: 1200px) {
   .has-person .people-layout { grid-template-columns: minmax(0, 1fr); }
   .has-person .people-master { display: none; }
-  .person-panel { border-left: 0; max-height: none; position: static; }
+  .person-panel { border-left: 0; max-height: none; position: static; scroll-padding: 12px; }
   .person-panel-body, .person-identity { max-width: 760px; margin-inline: auto; }
   .person-panel-nav { position: static; }
+  .person-review-context { width: min(720px, calc(100% - 8px)); margin-inline: auto; }
+  .person-review-controls, .person-section-nav { max-width: 736px; margin-inline: auto; }
   .has-person .people-toolbar { display: none; }
   .topbar .kbd { display: none; }
 }

@@ -27,6 +27,22 @@
     let savedDraftContext = '';
     let outreachRequest = 0;
     let workRequest = 0;
+    let sectionFocusRequest = 0;
+    const personNavObserver = new ResizeObserver(() => {
+      // Write outside the observer delivery cycle: changing a scroll container's
+      // padding can otherwise trigger a ResizeObserver loop in Chromium.
+      requestAnimationFrame(() => {
+        const panel = root.querySelector('.person-panel');
+        const nav = panel?.querySelector('.person-review-nav');
+        if (!nav) return;
+        const height = nav.offsetHeight;
+        // A long identity or short window must not leave the editor trapped
+        // beneath a header that consumes most of the available panel.
+        const flow = height > panel.clientHeight / 2;
+        nav.classList.toggle('person-review-nav--flow', flow);
+        panel.style.setProperty('--person-nav-height', `${flow ? 0 : height}px`);
+      });
+    });
     const draftContext = () => ({ jobId: root.querySelector('#person-draft-role')?.value || '', goal: root.querySelector('#person-draft-goal')?.value || defaultOutreachGoal(), background: root.querySelector('#person-draft-background')?.value || '' });
     const hasFollowUpDraft = () => [...(root.querySelector('[data-people-form="follow-up"]')?.elements || [])].some(input => input.name && input.value.trim());
     const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && (root.querySelector('#person-draft').value !== savedDraftText || JSON.stringify(draftContext()) !== savedDraftContext)) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
@@ -222,12 +238,14 @@
       root.querySelector('.people-workspace').classList.toggle('has-person', Boolean(state.selected));
       panel.hidden = !state.selected;
       if (!state.selected) {
+        personNavObserver.disconnect();
         panel.innerHTML = '';
         state.person = null;
         if (returnFocus) [...root.querySelectorAll('.person-name')].find(el => el.dataset.id === returnFocus)?.focus({ preventScroll: true });
         return;
       }
       if (state.person?.id === state.selected && state.dirty) return;
+      personNavObserver.disconnect();
       panel.innerHTML = `<div class="person-panel-nav">${button('close', '← Back to people')}</div><p class="people-panel-loading" role="status">Loading person…</p>`;
       let person = state.result.items.find(item => item.id === state.selected);
       try {
@@ -245,14 +263,19 @@
       }
     }
     function drawPerson() {
+      personNavObserver.disconnect();
       savedDraft = null; savedDraftText = '';
       state.draftLoaded = false; state.roles = []; state.rolesLoaded = false; state.lastOutreach = null; state.outreachStatus = 'loading';
       const person = state.person;
       const panel = root.querySelector('.person-panel');
       const index = state.result.items.findIndex(item => item.id === person.id);
       const source = person.source === 'manual' ? 'Added manually' : /sample|demo/i.test(person.source || person.id) ? 'Sample data' : person.source ? String(person.source).replace(/[_-]/g, ' ') : 'Source not recorded';
-      panel.innerHTML = `<div class="person-panel-nav">${button('close', '← Back to people')}<div>${button('previous-person', '↑', `aria-label="Previous person" ${index <= 0 ? 'disabled' : ''}`)}${button('next-person', '↓', `aria-label="Next person" ${index < 0 || index >= state.result.items.length - 1 ? 'disabled' : ''}`)}</div></div>
-        <header class="person-identity"><span class="people-source">${escape(source)}</span><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p data-person-company>${companyLink(person)}</p><div class="person-links"><span data-person-profile>${profileLink(person)}</span>${button('prepare', 'Prepare outreach')}</div><div class="person-contact-history" data-last-outreach aria-live="polite"><p class="small muted">Loading outreach history…</p></div></header>
+      panel.innerHTML = `<header class="person-panel-nav person-review-nav">
+          <div class="person-review-controls">${button('close', '← Back to people')}<div class="person-review-paging"><span class="person-review-position" title="Position on this page">${index >= 0 ? `${index + 1} of ${state.result.items.length}` : 'Direct link'}</span>${button('previous-person', '↑', `aria-label="Previous person" ${index <= 0 ? 'disabled' : ''}`)}${button('next-person', '↓', `aria-label="Next person" ${index < 0 || index >= state.result.items.length - 1 ? 'disabled' : ''}`)}</div></div>
+          <div class="person-review-context"><h3 id="person-heading" tabindex="-1">${escape(person.fullName)}</h3><p class="person-current-role">${escape(person.title || 'Role not provided')}</p><p data-person-company>${companyLink(person)}</p></div>
+          <nav class="person-section-nav" aria-label="Person sections">${button('person-overview', 'Overview', 'aria-controls="person-overview"')}${button('person-notes', 'Notes', 'aria-controls="person-notes"')}${button('prepare', 'Prepare outreach', 'aria-controls="person-outreach" aria-expanded="false"')}${button('person-activity', 'Activity', 'aria-controls="person-activity"')}</nav>
+        </header>
+        <section class="person-identity" id="person-overview" tabindex="-1" aria-label="Profile overview"><div class="person-overview-actions"><span class="people-source">${escape(source)}</span><span data-person-profile>${profileLink(person)}</span></div><div class="person-contact-history" data-last-outreach aria-live="polite"><p class="small muted">Loading outreach history…</p></div></section>
         <div class="person-panel-body">
           <dl class="person-facts"><div><dt>Location</dt><dd>${escape(person.location || 'Not provided')}</dd></div><div><dt>Connected</dt><dd>${escape(date(person.connectedOn))}</dd></div><div><dt>Email</dt><dd data-person-email>${escape(person.email || 'Not provided')}</dd></div></dl>
           <p class="people-provenance">Connection details may be out of date. Confirm them on the source profile. No candidate fit assessment has been made.</p>
@@ -262,22 +285,39 @@
             ${field('notes', 'Notes', `<textarea id="person-notes" name="notes" rows="5" maxlength="20000" placeholder="Evidence, questions to clarify, and the next step…">${escape(person.notes || '')}</textarea>`)}
             ${field('outreachStatus', 'Outreach stage', `<select id="person-outreachStatus" name="outreachStatus">${options(stages, person.outreachStatus || 'not_started')}</select>`)}
             <details class="person-edit-fields"><summary>Correct contact details</summary>
+              <div class="person-detail-grid">
               ${field('fullName', 'Full name', `<input id="person-fullName" name="fullName" value="${escape(person.fullName)}" required maxlength="200">`)}
               ${field('title', 'Current role', `<input id="person-title" name="title" value="${escape(person.title || '')}" maxlength="300">`)}
-              ${companyFields(person)}
               ${field('email', 'Email', `<input id="person-email" name="email" type="email" value="${escape(person.email || '')}" maxlength="320">`)}
               ${field('linkedinUrl', 'Profile URL', `<input id="person-linkedinUrl" name="linkedinUrl" type="url" value="${escape(person.linkedinUrl || '')}" maxlength="2000" placeholder="https://www.linkedin.com/in/…">`)}
+              </div>
+              ${companyFields(person)}
             </details>
             <div class="person-save-row"><button class="primary-button" type="submit">Save changes</button><span class="people-feedback" data-person-feedback role="status">${escape(state.notice)}</span></div>
           </form>
-          <section class="person-section person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Uses saved role and contact details, with no paid AI service. Verify the opening before sending. Saving and copying do not send anything.</p>
+          <section class="person-section person-outreach" id="person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Uses saved role and contact details, with no paid AI service. Verify the opening before sending. Saving and copying do not send anything.</p>
             <div data-draft-context>${field('draft-role', 'Role to discuss', '<select id="person-draft-role" disabled><option value="">Loading saved openings…</option></select>')}<p class="people-feedback" data-role-feedback role="status"></p>${field('draft-goal', 'Outreach goal', `<select id="person-draft-goal">${options(outreachGoals, defaultOutreachGoal())}</select>`)}<details><summary>Add your context</summary><label class="people-field">Your relevant experience or offer<textarea id="person-draft-background" rows="3" maxlength="1000" placeholder="Add a specific, truthful detail about how you can help."></textarea></label></details><p class="people-provenance">Changing these choices does not replace your message. Generate a draft when ready. Follow-up wording is only for messages you already sent.</p></div>
-            <button type="button" class="primary-button" data-people="generate-draft" disabled>Generate draft</button><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000" placeholder="Choose a role and generate a draft, or write your own message."></textarea></label><div class="person-links">${button('save-draft', 'Save draft', 'disabled')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status"></p></section>
-          <details class="person-section"><summary>Follow-ups and activity</summary><form data-people-form="follow-up"><label class="people-field">Next step<input name="summary" required maxlength="240" placeholder="Follow up on our conversation"></label><label class="people-field">Due date<input name="dueDate" type="date" required></label><button class="secondary-button" type="submit">Add follow-up</button><p role="status" data-task-feedback></p></form><div data-person-work role="status">Loading linked work…</div></details>
-          <footer class="person-review-footer">${index >= 0 ? `${index + 1} of ${state.result.items.length} on this page · J / K to move when not typing` : 'Opened directly · Not in the current results'}</footer>
+            <button type="button" class="primary-button" data-people="generate-draft" disabled>Generate draft</button><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000" placeholder="Choose a role and generate a draft, or write your own message."></textarea></label><div class="person-links">${button('save-draft', 'Save draft', 'disabled')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status" tabindex="-1"></p></section>
+          <details class="person-section" id="person-activity"><summary>Follow-ups and activity</summary><form data-people-form="follow-up"><label class="people-field">Next step<input name="summary" required maxlength="240" placeholder="Follow up on our conversation"></label><label class="people-field">Due date<input name="dueDate" type="date" required></label><button class="secondary-button" type="submit">Add follow-up</button><p role="status" data-task-feedback></p></form><div data-person-work role="status">Loading linked work…</div></details>
+          <footer class="person-review-footer">${index >= 0 ? 'J / K to move within this page when not typing' : 'Opened directly · Not in the current results'}</footer>
         </div>`;
       savedFormValues = Object.fromEntries(new FormData(panel.querySelector('.person-edit-form')));
       savedDraftContext = JSON.stringify(draftContext());
+      personNavObserver.observe(panel.querySelector('.person-review-nav'));
+      personNavObserver.observe(panel);
+    }
+    function focusPersonSection(target, scrollTarget = target) {
+      ++sectionFocusRequest;
+      scrollTarget.scrollIntoView({ block: 'start', behavior: 'instant' });
+      // In the single-column layout the document scrolls, not the person panel.
+      // Keep the target below the workspace's responsive sticky top bar.
+      if (getComputedStyle(root.querySelector('.person-review-nav')).position !== 'sticky') {
+        const topbar = document.querySelector('.topbar');
+        const offset = (topbar?.getBoundingClientRect().bottom || 0) + 12;
+        const top = scrollTarget.getBoundingClientRect().top;
+        if (top < offset) window.scrollBy({ top: top - offset, behavior: 'instant' });
+      }
+      target.focus({ preventScroll: true });
     }
     async function loadPersonWork(contactId, ticket = state.sequence) {
       const request = ++workRequest;
@@ -497,6 +537,16 @@
       if (action === 'sort-name') navigate({ ...state.query, sortBy: state.query.sortBy === 'name' ? 'name_desc' : 'name', page: 1 });
       if (action === 'sort-company') navigate({ ...state.query, sortBy: 'company', page: 1 });
       if (action === 'next-person' || action === 'previous-person') move(action === 'next-person' ? 1 : -1);
+      if (action === 'person-overview') {
+        root.querySelector('.person-panel').scrollTo({ top: 0, behavior: 'instant' });
+        focusPersonSection(root.querySelector('#person-heading'), root.querySelector('.person-review-nav'));
+      }
+      if (action === 'person-notes') focusPersonSection(root.querySelector('#person-notes'));
+      if (action === 'person-activity') {
+        const section = root.querySelector('#person-activity');
+        section.open = true;
+        focusPersonSection(section.querySelector('summary'));
+      }
       if (action === 'add') addPerson();
       if (action === 'find-company') await findCompany(control);
       if (action === 'drafts') window.bdSavedWork.openLibrary('draft');
@@ -508,8 +558,10 @@
       if (action === 'clear-selection') { state.checked.clear(); root.querySelectorAll('[data-people="select-person"]').forEach(el => el.checked = false); updateSelection(); }
       if (action === 'prepare' || action === 'retry-draft-context') {
         if (state.busy) return;
+        const focusRequest = sectionFocusRequest;
         if (action === 'prepare') loadRecentOutreach(state.person.id);
         const section = root.querySelector('.person-outreach'); section.hidden = false;
+        root.querySelector('[data-people="prepare"]').setAttribute('aria-expanded', 'true');
         const textarea = section.querySelector('#person-draft');
         if (!state.draftLoaded || !state.rolesLoaded) {
           const startedAt = performance.now();
@@ -542,8 +594,8 @@
             window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::prepareOutreach', elapsedMs: Math.round(performance.now() - startedAt) } }));
           }
         }
-        if (!textarea.value && state.roles.length && state.draftLoaded) root.querySelector('#person-draft-role').focus();
-        else textarea.focus();
+        const target = !state.draftLoaded ? root.querySelector('[data-draft-feedback]') : !textarea.value && state.roles.length ? root.querySelector('#person-draft-role') : textarea;
+        if (focusRequest === sectionFocusRequest) focusPersonSection(target);
       }
       if (action === 'generate-draft') {
         if (state.busy) return;
@@ -627,7 +679,7 @@
       if (event.key === 'Escape' && state.selected) { event.preventDefault(); event.stopImmediatePropagation(); navigate(state.query); }
     }, true);
     window.addEventListener('beforeunload', event => { if (state.dirty || state.busy || hasAddDraft()) { event.preventDefault(); event.returnValue = ''; } });
-    return { render, allowLeave, beforeLeave: () => { if (allowLeave()) return true; history.replaceState(null, '', lastHash); return false; }, leave: () => { ++state.sequence; state.key = ''; }, open: id => navigate(state.query, id) };
+    return { render, allowLeave, beforeLeave: () => { if (allowLeave()) return true; history.replaceState(null, '', lastHash); return false; }, leave: () => { ++state.sequence; state.key = ''; personNavObserver.disconnect(); }, open: id => navigate(state.query, id) };
   }
   window.bdPeople = { create };
 })();

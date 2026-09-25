@@ -343,3 +343,148 @@ test('people review is accessible and usable at desktop, tablet and phone widths
     expect(await app.locator('.people-table tbody tr').first().evaluate(el => el.getBoundingClientRect().top)).toBeLessThan(600);
   }
 });
+
+test('person section shortcuts preserve unfinished work, identity and list context', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const { app, frame } = await workspace(page);
+  await app.getByRole('button', { name: 'Next', exact: true }).click();
+  await app.getByRole('link', { name: 'Person 20', exact: true }).click();
+  const context = await frame.evaluate(() => location.hash);
+  const requests = []; page.on('request', request => requests.push(request.url()));
+  let dialogs = 0; page.on('dialog', async dialog => { dialogs++; await dialog.dismiss(); });
+  const sections = app.getByRole('navigation', { name: 'Person sections' });
+  await sections.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(app.getByLabel('Notes', { exact: true })).toBeFocused();
+  await app.getByLabel('Notes', { exact: true }).fill('Unsaved evidence to keep.');
+  await sections.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  await expect(app.getByLabel('Message', { exact: true })).toBeFocused();
+  await app.getByLabel('Message', { exact: true }).fill('Unsent draft to keep.');
+  await sections.getByRole('button', { name: 'Activity', exact: true }).click();
+  await expect(app.locator('#person-activity')).toHaveAttribute('open', '');
+  await expect(app.locator('#person-activity > summary')).toBeFocused();
+  await app.getByLabel('Next step', { exact: true }).fill('Unfinished follow-up to keep.');
+  const visibility = await frame.evaluate(() => {
+    const header = document.querySelector('.person-review-nav').getBoundingClientRect();
+    const identity = document.querySelector('#person-heading').getBoundingClientRect();
+    const nextStep = document.querySelector('[data-people-form="follow-up"] input').getBoundingClientRect();
+    return { headerTop: header.top, headerBottom: header.bottom, identityTop: identity.top, nextStepTop: nextStep.top, topbarBottom: document.querySelector('.topbar').getBoundingClientRect().bottom };
+  });
+  expect(visibility.identityTop).toBeGreaterThanOrEqual(visibility.headerTop);
+  expect(visibility.headerTop).toBeGreaterThanOrEqual(visibility.topbarBottom);
+  expect(visibility.nextStepTop).toBeGreaterThanOrEqual(visibility.headerBottom);
+  await expect(app.locator('.person-review-position')).toHaveText('1 of 4');
+  await sections.getByRole('button', { name: 'Overview', exact: true }).click();
+  await expect(app.locator('#person-heading')).toBeFocused();
+  await sections.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(app.getByLabel('Notes', { exact: true })).toHaveValue('Unsaved evidence to keep.');
+  await expect(app.getByLabel('Next step', { exact: true })).toHaveValue('Unfinished follow-up to keep.');
+  await sections.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  await expect(app.getByLabel('Message', { exact: true })).toHaveValue('Unsent draft to keep.');
+  expect(await frame.evaluate(() => location.hash)).toBe(context);
+  await expect(app.locator('.people-pagination')).toContainText('21–24 of 24');
+  expect(requests.filter(url => /\/api\/(bootstrap|contacts)(?:\?|$)/.test(url))).toEqual([]);
+  expect(dialogs).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('long profile headers, section focus and compact forms adapt without overflow', async ({ page }, testInfo) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const { app, frame } = await workspace(page, { count: 1 });
+  await app.locator('.person-name').click();
+  await app.locator('.person-edit-fields summary').click();
+  await app.getByLabel('Full name', { exact: true }).fill('Alexandra Catherine Robertson-Smith');
+  await app.getByLabel('Current role', { exact: true }).fill('Senior Director of Talent Acquisition and Recruiting Operations');
+  await app.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(app.locator('[data-person-feedback]')).toHaveText('Saved.');
+  for (const [width, height] of [[1440, 900], [1440, 640], [1024, 900], [390, 900], [320, 900]]) {
+    await page.setViewportSize({ width, height });
+    const sections = app.getByRole('navigation', { name: 'Person sections' });
+    await sections.getByRole('button', { name: 'Notes', exact: true }).click();
+    await expect(app.getByLabel('Notes', { exact: true })).toBeFocused();
+    const bounds = await frame.evaluate(() => {
+      const notes = document.querySelector('#person-notes').getBoundingClientRect();
+      const header = document.querySelector('.person-review-nav');
+      const name = document.querySelector('#person-fullName').getBoundingClientRect();
+      const role = document.querySelector('#person-title').getBoundingClientRect();
+      return { overflow: document.documentElement.scrollWidth > innerWidth + 1, notesTop: notes.top, notesBottom: notes.bottom, viewportHeight: innerHeight, obscuredBy: getComputedStyle(header).position === 'sticky' ? header.getBoundingClientRect().bottom : document.querySelector('.topbar').getBoundingClientRect().bottom, nameTop: name.top, roleTop: role.top };
+    });
+    expect(bounds.overflow).toBe(false);
+    expect(bounds.notesTop).toBeGreaterThanOrEqual(bounds.obscuredBy);
+    expect(bounds.notesBottom).toBeLessThanOrEqual(bounds.viewportHeight);
+    if (width >= 1024) expect(bounds.nameTop).toBe(bounds.roleTop);
+    if (width <= 390) expect(bounds.roleTop).toBeGreaterThan(bounds.nameTop);
+    await sections.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(app.locator('#person-activity > summary')).toBeFocused();
+    await sections.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(app.locator('#person-heading')).toBeFocused();
+    const identityTop = await app.locator('#person-heading').evaluate(el => el.getBoundingClientRect().top);
+    const controlsTop = await app.locator('.person-review-controls').evaluate(el => el.getBoundingClientRect().top);
+    const barBottom = await app.locator('.topbar').evaluate(el => el.getBoundingClientRect().bottom);
+    expect(identityTop).toBeGreaterThanOrEqual(barBottom);
+    expect(controlsTop).toBeGreaterThanOrEqual(barBottom);
+    await page.screenshot({ path: testInfo.outputPath(`person-review-${width}-${height}.png`) });
+  }
+  expect(errors).toEqual([]);
+});
+
+test('person shortcuts support keyboard review and accessible dark surfaces', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const { app } = await workspace(page, { count: 2 });
+  await app.locator('.person-name').first().click();
+  await app.locator('summary[aria-label="Workspace options"]').click();
+  await app.locator('#theme-toggle').click();
+  await expect(app.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await app.getByRole('button', { name: 'Notes', exact: true }).press('Enter');
+  await expect(app.getByLabel('Notes', { exact: true })).toBeFocused();
+  await app.getByRole('button', { name: 'Activity', exact: true }).press('Space');
+  await expect(app.locator('#person-activity > summary')).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath('person-review-dark.png') });
+  // Axe temporarily activates its own frame in Firefox. Complete keyboard
+  // focus assertions before running the scan, so the test measures the app.
+  await app.getByRole('button', { name: 'Next person', exact: true }).press('Enter');
+  await expect(app.locator('#person-heading')).toHaveText('Person 01');
+  await expect(app.locator('#person-heading')).toBeFocused();
+  await expect(app.locator('.person-review-position')).toHaveText('2 of 2');
+  await expect(app.getByRole('button', { name: 'Prepare outreach', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await app.getByRole('button', { name: 'Activity', exact: true }).press('Space');
+  const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(axe.violations.map(v => ({ id: v.id, targets: v.nodes.map(n => n.target) }))).toEqual([]);
+});
+
+test('outreach load failures focus the explanation and retry without losing notes', async ({ page }) => {
+  const { app } = await workspace(page, { count: 1 });
+  await app.locator('.person-name').click();
+  await app.getByLabel('Notes', { exact: true }).fill('Keep my unsaved notes.');
+  await page.route('**/api/saved-work/draft/person-*', route => route.fulfill({ status: 503, json: { error: 'Drafts temporarily unavailable' } }));
+  await app.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  await expect(app.locator('[data-draft-feedback]')).toBeFocused();
+  await expect(app.locator('[data-draft-feedback]')).toContainText('Could not load the saved draft.');
+  await expect(app.getByLabel('Message', { exact: true })).toBeDisabled();
+  await page.unroute('**/api/saved-work/draft/person-*');
+  await app.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  await expect(app.getByLabel('Message', { exact: true })).toBeFocused();
+  await expect(app.getByLabel('Message', { exact: true })).toBeEnabled();
+  await expect(app.getByLabel('Notes', { exact: true })).toHaveValue('Keep my unsaved notes.');
+});
+
+test('a delayed outreach load does not pull focus away from another person section', async ({ page }) => {
+  const { app } = await workspace(page, { count: 1 });
+  await app.locator('.person-name').click();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const path = '**/api/saved-work/draft/person-*';
+  await page.route(path, async route => { await gate; await route.continue(); });
+  try {
+    await app.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+    await expect(app.getByRole('button', { name: 'Prepare outreach', exact: true })).toBeDisabled();
+    await app.getByRole('button', { name: 'Notes', exact: true }).click();
+    await app.getByLabel('Notes', { exact: true }).fill('Continue working while the draft loads.');
+    release();
+    await expect(app.getByRole('button', { name: 'Prepare outreach', exact: true })).toBeEnabled();
+    await expect(app.getByLabel('Notes', { exact: true })).toBeFocused();
+    await expect(app.getByLabel('Notes', { exact: true })).toHaveValue('Continue working while the draft loads.');
+    await app.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+    await expect(app.getByLabel('Message', { exact: true })).toBeFocused();
+  } finally { release(); await page.unroute(path); }
+});
