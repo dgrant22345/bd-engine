@@ -1673,9 +1673,26 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
   const scheduled = Boolean(job.recovery?.options?.scheduled);
   try {
     await beginResumableBackgroundJob(job, 'Fetching active ATS boards...');
-    job.progress = 25;
+    job.progress = 0;
     job.stage = 'import';
-    const result = await storeApi.importLiveJobs(tenantId, job.recovery.options || {});
+    const result = await storeApi.importLiveJobs(tenantId, {
+      ...(job.recovery.options || {}),
+      onProgress: (progress) => {
+        job.stage = progress.stage;
+        job.sourceProgress = progress;
+        const fraction = progress.total ? progress.checked / progress.total : 0;
+        if (progress.stage === 'discovery') {
+          job.progress = Math.floor(20 * fraction);
+          job.progressMessage = `Finding sources: ${progress.checked} of ${progress.total} companies checked · ${progress.found} found · ${progress.needsReview} need review · ${progress.failed} failed.`;
+        } else if (progress.stage === 'fetch') {
+          job.progress = 20 + Math.floor(75 * fraction);
+          job.progressMessage = `Fetching jobs: ${progress.checked} of ${progress.total} boards checked · ${progress.fetched} jobs fetched · ${progress.partial} incomplete · ${progress.failed} failed${progress.lastCompany ? `. Last checked: ${progress.lastCompany}` : ''}`;
+        } else {
+          job.progress = 95;
+          job.progressMessage = 'Source checks finished. Applying your import geography, scoring roles, and saving results...';
+        }
+      },
+    });
     if (result.error) {
       job.status = 'failed';
       job.errorMessage = result.error;
@@ -1684,7 +1701,7 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
       job.status = 'completed';
       job.progress = 100;
       job.stage = 'completed';
-      job.progressMessage = 'Completed';
+      job.progressMessage = `Import complete: ${result.stats?.fetched || 0} jobs fetched, ${result.stats?.kept || 0} kept within your import geography, ${result.stats?.partialBoards || 0} incomplete sources, ${result.stats?.errors || 0} source errors.`;
       job.recordsAffected = getTrackedJobCountFromResult(result) || getTouchedJobCountFromResult(result);
       job.result = {
         stats: result.stats,
@@ -4004,14 +4021,21 @@ export function createStore() {
         try {
           job.status = 'running';
           job.startedAt = now();
-          job.progress = 20;
+          job.progress = 0;
           job.stage = 'discovery';
-          job.progressMessage = 'Mapping public ATS boards...';
-          const result = await this.runAtsDiscovery(tenantId, options);
+          job.progressMessage = 'Preparing source checks...';
+          const result = await this.runAtsDiscovery(tenantId, {
+            ...options,
+            onProgress: (progress) => {
+              job.discoveryProgress = progress;
+              job.progress = progress.total ? Math.min(99, Math.floor(100 * progress.checked / progress.total)) : 0;
+              job.progressMessage = `${progress.checked} of ${progress.total} companies checked · ${progress.found} sources found · ${progress.needsReview} need review · ${progress.unmatched} unmatched · ${progress.failed} failed${progress.lastCompany ? `. Last checked: ${progress.lastCompany}` : ''}`;
+            },
+          });
           job.status = 'completed';
           job.progress = 100;
           job.stage = 'completed';
-          job.progressMessage = 'Completed';
+          job.progressMessage = `Checked ${result.stats.checked} companies. ${result.stats.mapped} sources ready, ${result.stats.suggested} need review, ${result.stats.errors} failed. Unmatched or failed checks do not mean there are no jobs.`;
           job.recordsAffected = result.stats?.mapped || result.stats?.discovered || 0;
           job.result = result;
         } catch (err) {
@@ -4154,12 +4178,34 @@ export function createStore() {
       const discoveryStartedAt = performance.now();
       const discoveryConcurrency = readPositiveInteger(options.discoveryConcurrency || options.concurrency, DEFAULT_ATS_DISCOVERY_CONCURRENCY);
       const discoveryTimeBudgetMs = Math.min(ATS_DISCOVERY_TIME_BUDGET_MS, readPositiveInteger(options.discoveryTimeBudgetMs, ATS_DISCOVERY_TIME_BUDGET_MS));
+      const progress = { checked: 0, total: candidates.length, found: 0, needsReview: 0, unmatched: 0, failed: 0, lastCompany: '', elapsedMs: 0 };
+      let progressCallbackMs = 0;
+      const reportProgress = () => {
+        progress.elapsedMs = Math.round(performance.now() - discoveryStartedAt);
+        if (typeof options.onProgress !== 'function') return;
+        const startedAt = performance.now();
+        try { options.onProgress({ ...progress }); }
+        catch (error) { console.warn('Discovery progress notification failed:', safeErrorSummary(error)); }
+        finally { progressCallbackMs += performance.now() - startedAt; }
+      };
+      reportProgress();
       const discoveredBoards = await mapSettledWithConcurrency(candidates, discoveryConcurrency, async (config) => {
         const startedAt = performance.now();
         try {
           const match = await discoverAtsBoard(config, startedAt + discoveryTimeBudgetMs);
+          if (!match) progress.unmatched++;
+          else if (match.method === 'public_ats_probe' || match.requiresReview === true) progress.needsReview++;
+          else progress.found++;
           return { config, match };
-        } finally { config.lastDiscoveryElapsedMs = Math.round(performance.now() - startedAt); }
+        } catch (error) {
+          progress.failed++;
+          throw error;
+        } finally {
+          config.lastDiscoveryElapsedMs = Math.round(performance.now() - startedAt);
+          progress.checked++;
+          progress.lastCompany = config.companyName;
+          reportProgress();
+        }
       });
       for (let index = 0; index < discoveredBoards.length; index++) {
         const config = candidates[index];
@@ -4224,6 +4270,7 @@ export function createStore() {
         }
       }
       timings.discoveryMs = Math.round(performance.now() - discoveryStartedAt);
+      timings.progressCallbackMs = Math.round(progressCallbackMs);
       timings.discoveryConcurrency = discoveryConcurrency;
       timings.companyTimeBudgetMs = discoveryTimeBudgetMs;
       timings.slowestCompanyMs = Math.max(0, ...candidates.map(config => config.lastDiscoveryElapsedMs || 0));
@@ -4316,6 +4363,14 @@ export function createStore() {
       const importItems = [];
       const selectedPlan = options.plan || { displayName: 'current', limits: {} };
       const jobBoardLimit = Number(selectedPlan.limits?.jobBoards ?? -1);
+      let progressCallbackMs = 0;
+      const reportProgress = (progress) => {
+        if (typeof options.onProgress !== 'function') return;
+        const startedAt = performance.now();
+        try { options.onProgress({ ...progress }); }
+        catch (error) { console.warn('Import progress notification failed:', safeErrorSummary(error)); }
+        finally { progressCallbackMs += performance.now() - startedAt; }
+      };
 
       const loadStartedAt = performance.now();
       await ensureDataLoaded(tenantId, false);
@@ -4372,6 +4427,7 @@ export function createStore() {
           onlyMissing: true,
           limit: autoDiscoveryLimit,
           discoveryConcurrency: options.discoveryConcurrency || options.concurrency,
+          onProgress: progress => reportProgress({ ...progress, stage: 'discovery' }),
         });
         timings.autoDiscoveryMs = Math.round(performance.now() - autoDiscoveryStartedAt);
         autoDiscoveryStats = discovery.stats || {};
@@ -4476,13 +4532,29 @@ export function createStore() {
 
       const fetchStartedAt = performance.now();
       const fetchConcurrency = readPositiveInteger(options.fetchConcurrency, DEFAULT_ATS_FETCH_CONCURRENCY);
+      const fetchProgress = { stage: 'fetch', checked: 0, total: supportedConfigs.length, fetched: 0, failed: 0, partial: 0, lastCompany: '', elapsedMs: 0 };
+      reportProgress(fetchProgress);
       const fetchedBoards = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async ({ config, atsType, boardId }) => {
         const fetcher = ATS_FETCHERS.get(atsType);
-        const response = await fetcher(config, boardId);
-        return { config, atsType, ...response };
+        try {
+          const response = await fetcher(config, boardId);
+          fetchProgress.fetched += response.jobs.length;
+          if (response.complete === false) fetchProgress.partial++;
+          return { config, atsType, ...response };
+        } catch (error) {
+          fetchProgress.failed++;
+          throw error;
+        } finally {
+          fetchProgress.checked++;
+          fetchProgress.lastCompany = config.companyName;
+          fetchProgress.elapsedMs = Math.round(performance.now() - fetchStartedAt);
+          reportProgress(fetchProgress);
+        }
       });
       timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
       timings.fetchConcurrency = fetchConcurrency;
+      reportProgress({ ...fetchProgress, stage: 'saving' });
+      timings.progressCallbackMs = Math.round(progressCallbackMs);
 
       const upsertStartedAt = performance.now();
       for (let index = 0; index < fetchedBoards.length; index++) {

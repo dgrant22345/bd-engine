@@ -3145,6 +3145,27 @@ function bindEvents() {
       await applyJobPreset(action.dataset.preset);
       return;
     }
+    if (actionName === 'save-job-search') {
+      window.bdSavedWork.saveView(appState.jobQuery, { viewType: 'jobs' });
+      return;
+    }
+    if (actionName === 'open-job-searches') {
+      window.bdSavedWork.openLibrary('view', query => {
+        appState.jobQuery = normalizeSavedJobQuery(query);
+        renderJobsView().catch(error => showToast(error.message, 'error'));
+      }, { viewType: 'jobs' });
+      return;
+    }
+    if (actionName === 'remove-job-filter') {
+      const key = action.dataset.filter;
+      if (!getActiveJobFilters().some(filter => filter.key === key)) return;
+      if (Object.hasOwn(defaultQueries.jobs, key)) appState.jobQuery[key] = defaultQueries.jobs[key];
+      else delete appState.jobQuery[key];
+      appState.jobQuery.page = 1;
+      await renderJobsView();
+      (document.querySelector('[data-action="remove-job-filter"]') || document.querySelector('#jobs-filter-form input[name="q"]'))?.focus({ preventScroll: true });
+      return;
+    }
     if (actionName === 'open-network-import-modal') {
       openNetworkImportModal();
       return;
@@ -4392,6 +4413,16 @@ function bindEvents() {
 async function loadBootstrap(force, options = {}) {
   appState.bootstrap = await window.bdLocalApi.loadBootstrap(appState, force, options);
   if (appState.bootstrap?.persona) appState.persona = normalizeAppPersona(appState.bootstrap.persona);
+  const session = appState.bootstrap?.session;
+  const jobScope = session?.tenant?.id && session?.user?.id && !session.readOnly ? `bd-role-search:${session.tenant.id}:${session.user.id}:${appState.persona}` : '';
+  if (appState.jobSearchScope !== jobScope) {
+    if (appState.jobSearchScope !== undefined) appState.jobQuery = { ...defaultQueries.jobs };
+    appState.jobSearchScope = jobScope;
+    try {
+      const saved = jobScope && localStorage.getItem(jobScope);
+      if (saved) appState.jobQuery = normalizeSavedJobQuery(JSON.parse(saved));
+    } catch { /* Storage restrictions must not prevent loading roles. */ }
+  }
   applyPersonaChrome();
   workspaceName.textContent = appState.bootstrap?.workspace?.name || 'BD Engine Workspace';
   window.bdLocalApi.setAlert('', appAlert);
@@ -11609,6 +11640,30 @@ async function renderContactsView() {
   `;
 }
 
+function normalizeSavedJobQuery(query) {
+  const result = { ...defaultQueries.jobs };
+  if (!query || typeof query !== 'object') return result;
+  for (const key of [...Object.keys(defaultQueries.jobs), 'pipelineOnly', 'company', 'accountId']) {
+    if (!['page', 'pageSize'].includes(key) && typeof query[key] === 'string' && query[key].length <= 300) result[key] = query[key];
+  }
+  return result;
+}
+
+function getActiveJobFilters() {
+  const labels = { q: 'Search', active: 'Posting status', geography: 'Location', workStyle: 'Work style', hasContacts: 'Network', minConnections: 'Minimum connections', ats: 'Source', recencyDays: 'Posted within', isNew: 'Posting age', minRelevance: 'Fit score', pipelineOnly: 'Pipeline', company: 'Company', accountId: 'Company selection', ids: 'Selected roles' };
+  const values = {
+    active: { '': 'Active and inactive', false: 'Inactive only' },
+    geography: { canada: 'Canada', us: 'US', canada_us: 'Canada and US', gta: 'Greater Toronto Area', local_remote: 'Local or remote', remote: 'Remote' },
+    workStyle: { local_remote: 'Local or remote', remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' },
+    hasContacts: { true: 'Has contacts' }, isNew: { true: 'Recent postings', false: 'Older postings' }, pipelineOnly: { true: 'Saved roles' },
+  };
+  return Object.entries(labels).filter(([key]) => String(appState.jobQuery[key] ?? '') !== String(defaultQueries.jobs[key] ?? '')).map(([key, label]) => {
+    const raw = String(appState.jobQuery[key] ?? '');
+    const value = values[key]?.[raw] ?? (key === 'recencyDays' ? `${raw} days` : key === 'minRelevance' ? `${raw}+` : ['ids', 'accountId'].includes(key) ? 'Selected' : raw);
+    return { key, text: `${label}: ${value}` };
+  });
+}
+
 async function renderJobsView() {
   const isCurrent = beginViewRender();
   renderLoadingState('Jobs', 'Loading job activity...');
@@ -11632,6 +11687,7 @@ async function renderJobsView() {
   if (!isCurrent()) return;
   // Keep the job detail/composer cache aligned with the visible page.
   appState.jobs = result.items;
+  try { if (appState.jobSearchScope) localStorage.setItem(appState.jobSearchScope, JSON.stringify(normalizeSavedJobQuery(appState.jobQuery))); } catch { /* Filters still work without local storage. */ }
   const jobAdvancedCount = ['active', 'geography', 'minConnections', 'ats', 'recencyDays', 'isNew', 'minRelevance']
     .filter((key) => appState.jobQuery[key] !== defaultQueries.jobs[key]).length;
   // Preset state describes filters, not sorting; changing the order does not change the set of roles.
@@ -11651,6 +11707,7 @@ async function renderJobsView() {
         <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>
         <div class="panel-actions">
           <a class="secondary-button secondary-button--sm" href="#/admin/jobs">Check sources & refresh</a>
+          ${stateBootstrap.session?.readOnly ? '' : '<button class="ghost-button ghost-button--sm" type="button" data-action="save-job-search">Save search</button><button class="ghost-button ghost-button--sm" type="button" data-action="open-job-searches">Saved searches</button>'}
           ${renderExportOptions('jobs', 'Job options')}
         </div>
       </div>
@@ -11689,6 +11746,7 @@ async function renderJobsView() {
         <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a>
         ${appState.jobQuery.minRelevance ? '<button class="ghost-button ghost-button--xs" type="button" data-action="apply-job-preset" data-preset="all_titles">Remove focus filter</button>' : ''}
       </div>
+      ${getActiveJobFilters().length ? `<div class="job-active-filters" role="group" aria-label="Applied role filters"><span class="muted small">Applied:</span>${getActiveJobFilters().map(filter => `<button class="job-preset-chip" type="button" data-action="remove-job-filter" data-filter="${escapeAttr(filter.key)}" aria-label="${escapeAttr(`Remove ${filter.text}`)}"><span>${escapeHtml(filter.text)}</span><span aria-hidden="true">×</span></button>`).join('')}</div>` : ''}
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('Network', `<select name="hasContacts"><option value="">All companies</option><option value="true" ${selected(appState.jobQuery.hasContacts, 'true')}>In my network (has contacts)</option></select>`)}

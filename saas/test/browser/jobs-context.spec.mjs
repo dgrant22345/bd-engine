@@ -99,6 +99,17 @@ test('job filters show accurate selection without expanding unrelated controls',
   await expect(app.locator('.compact-page-intro strong')).toHaveText('1 result');
   await expect(app.locator('.job-results-context [role="status"]')).toContainText('1 result ·');
 
+  await app.getByRole('button', { name: 'Remove Search: Toronto', exact: true }).click();
+  await expect(form.locator('[name="q"]')).toHaveValue('');
+  await expect(form.locator('[name="workStyle"]')).toHaveValue('remote');
+  await expect(form.locator('[name="hasContacts"]')).toHaveValue('true');
+  await expect(form.locator('[name="sortBy"]')).toHaveValue('retrieved');
+  await app.getByRole('button', { name: 'Remove Work style: Remote', exact: true }).press('Enter');
+  await expect(app.getByRole('button', { name: 'Remove Network: Has contacts', exact: true })).toBeFocused();
+  await app.getByRole('button', { name: 'Remove Network: Has contacts', exact: true }).press('Enter');
+  await expect(form.locator('[name="q"]')).toBeFocused();
+  await expect(app.getByRole('group', { name: 'Applied role filters' })).toHaveCount(0);
+
   // Non-default posting status must not silently hide behind a collapsed panel.
   await all.click();
   await more.locator('summary').click();

@@ -3,6 +3,30 @@ import assert from 'node:assert/strict';
 import { createSavedWorkStore, validateSavedWork } from '../src/saved-work.js';
 
 const draft = { title: 'Message to Jamie', body: { text: 'A specific, reviewed message.', contactId: 'person-1' }, version: 0 };
+test('role searches are bounded, private, and separate from legacy People views', async () => {
+  const store = createSavedWorkStore({ enabled: () => false });
+  const input = { title: 'Canada roles', version: 0, body: { viewType: 'jobs', geography: 'canada', minRelevance: '45', sortBy: 'relevance', page: 8, tenantId: 'other' } };
+  const saved = await store.put('t', 'u', 'view', 'jobs', input);
+  assert.equal(saved.body.geography, 'canada');
+  assert.equal(saved.body.active, 'true');
+  assert.equal(saved.body.page, undefined);
+  assert.equal(saved.body.tenantId, undefined);
+  await store.put('t', 'u', 'view', 'people', { title: 'People', version: 0, body: { q: 'Recruiter' } });
+  assert.equal((await store.list('t', 'u', 'view')).items[0].id, 'people');
+  assert.equal((await store.list('t', 'u', 'view', { viewType: 'jobs', page: 2 })).items[0].id, 'jobs');
+  assert.equal((await store.list('t', 'other', 'view', { viewType: 'jobs' })).total, 0);
+  assert.equal((await store.list('other', 'u', 'view', { viewType: 'jobs' })).total, 0);
+  for (const body of [{ geography: 'arbitrary' }, { minRelevance: '101' }, { sortBy: 'DROP TABLE jobs' }]) {
+    assert.throws(() => validateSavedWork('view', { ...input, body: { ...input.body, ...body } }), { status: 400 });
+  }
+  const calls = [];
+  const sqlStore = createSavedWorkStore({ enabled: () => true, query: async (sql, params) => { calls.push({ sql, params }); return { rows: [{ total: '0' }] }; } });
+  await sqlStore.list('t', 'u', 'view', { viewType: 'jobs' });
+  assert.match(calls[0].sql, /COALESCE\(body->>'viewType','people'\)=\$6/);
+  assert.deepEqual(calls[0].params, ['t', 'u', 'view', '', 0, 'jobs']);
+  await sqlStore.list('t', 'u', 'view', { viewType: 'jobs', summary: '1' });
+  assert.equal(calls[1].params[3], 'jobs');
+});
 test('draft names and optional role context persist with bounds and optimistic rename protection', async () => {
   const store = createSavedWorkStore({ enabled: () => false });
   const body = { ...draft.body, roleTitle: 'Talent Manager', companyName: 'Example', goal: 'recruiting_follow_up', background: 'Ten years of recruiting experience', ignored: 'never saved' };

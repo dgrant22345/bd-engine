@@ -64,7 +64,14 @@ test('incomplete SmartRecruiters pagination preserves the previous complete job 
     assert.equal(first.stats.newJobs, 1);
 
     refresh = 2;
-    const partial = await store.importLiveJobs(tenantId, { plan, autoDiscover: false });
+    const updates = [];
+    const partial = await store.importLiveJobs(tenantId, { plan, autoDiscover: false, onProgress: progress => updates.push(progress) });
+    assert.equal(updates[0].checked, 0);
+    assert.equal(updates.at(-1).stage, 'saving');
+    assert.equal(updates.at(-1).checked, 1);
+    assert.equal(updates.at(-1).partial, 1);
+    assert.equal(updates.at(-1).failed, 0);
+    assert.equal(updates.at(-1).fetched, 1);
     assert.equal(partial.stats.errors, 0);
     assert.equal(partial.stats.partialBoards, 1);
     assert.equal(partial.stats.newJobs, 1);
@@ -77,6 +84,36 @@ test('incomplete SmartRecruiters pagination preserves the previous complete job 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('import progress reports a successful board before a failing board completes', async () => {
+  const store = createStore(); const tenantId = 'progress-isolated';
+  addTenant(store, tenantId);
+  await addReadyBoard(store, tenantId, { companyName: 'Good Source', atsType: 'greenhouse', boardId: 'good-source' });
+  await addReadyBoard(store, tenantId, { companyName: 'Failed Source', atsType: 'greenhouse', boardId: 'failed-source' });
+  const originalFetch = globalThis.fetch;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const updates = [];
+  globalThis.fetch = async url => {
+    if (String(url).includes('good-source')) return Response.json({ jobs: [{ id: 'good', title: 'Recruiter', location: { name: 'Toronto, Canada' }, absolute_url: 'https://example.com/jobs/good' }] });
+    await gate;
+    return new Response('missing board', { status: 404 });
+  };
+  try {
+    const result = await store.importLiveJobs(tenantId, { plan, autoDiscover: false, onProgress(progress) {
+      updates.push(progress);
+      if (progress.checked === 1) release();
+    } });
+    assert.equal(updates[0].checked, 0);
+    assert.equal(updates[1].fetched, 1);
+    assert.equal(updates[1].failed, 0);
+    assert.equal(updates.at(-1).checked, 2);
+    assert.equal(updates.at(-1).failed, 1);
+    assert.equal(result.stats.newJobs, 1);
+    assert.equal(result.stats.errors, 1);
+    assert.ok(result.timings.progressCallbackMs >= 0);
+  } finally { release(); globalThis.fetch = originalFetch; }
 });
 
 test('Canada geography excludes ambiguous foreign and US locations', async () => {

@@ -2354,11 +2354,11 @@
 
       return `
         <div class="cloud-trial-cta" role="region" aria-label="Free trial limits and upgrade options">
-          <div class="cloud-trial-cta-copy">
-            <span class="cloud-trial-cta-kicker">Free trial · ${escapeHtml(daysCopy)}</span>
-            <strong>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} ${accountLabel}, ${formatLimit(trialLimits.contacts)} ${contactLabel}.</strong>
-            <span>${state.persona === 'jobseeker' ? 'Job Seeker adds a larger search workspace and 50 CSV imports.' : 'Recruiter Pro adds unlimited ATS boards, enrichment, and CSV export.'}</span>
-          </div>
+          <details class="cloud-trial-details">
+            <summary>Free trial · ${escapeHtml(daysCopy)}</summary>
+            <p>Trial limits: ${formatLimit(trialLimits.jobBoards)} ATS boards, ${formatLimit(trialLimits.accounts)} ${accountLabel}, ${formatLimit(trialLimits.contacts)} ${contactLabel}.</p>
+            <p>${state.persona === 'jobseeker' ? 'Job Seeker adds a larger search workspace and 50 CSV imports.' : 'Recruiter Pro adds unlimited ATS boards, enrichment, and CSV export.'}</p>
+          </details>
           <div class="cloud-trial-cta-actions">
             <button class="btn btn-primary btn-sm" id="cloud-upgrade-btn">Upgrade plan</button>
           </div>
@@ -2424,8 +2424,10 @@
               </div>
             </div>
           </div>
-          ${trialUpgradeBanner}
-          ${!state.demo && !recoveryReminderDismissed ? '<div class="cloud-trial-cta" id="cloud-recovery-reminder"><span>Email recovery may be unavailable. Save one-time recovery codes before losing access.</span><button class="btn btn-sm" id="cloud-save-recovery-btn">Save recovery codes</button><button class="cloud-notice-close" type="button" id="cloud-dismiss-recovery-btn" aria-label="Dismiss recovery codes reminder">Close</button></div>' : ''}
+          <div class="cloud-account-status">
+            ${trialUpgradeBanner}
+            ${!state.demo && !recoveryReminderDismissed ? '<div class="cloud-trial-cta" id="cloud-recovery-reminder"><details class="cloud-trial-details"><summary>Protect account access</summary><p>Email recovery may be unavailable. Save one-time recovery codes before losing access. You can also find them in your account menu.</p></details><button class="btn btn-sm" id="cloud-save-recovery-btn">Save recovery codes</button><button class="cloud-notice-close" type="button" id="cloud-dismiss-recovery-btn" aria-label="Dismiss recovery codes reminder">Close</button></div>' : ''}
+          </div>
           ${verificationNotice}
           <div class="cloud-app-container">
             <iframe class="cloud-app-frame" title="BD Engine workspace" src="${escapeHtml(appFrameSrc).replace(/"/g, '&quot;')}"></iframe>

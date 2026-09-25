@@ -21,8 +21,16 @@
     element.showModal();
     return element;
   }
-  function saveView(query) {
+  function saveView(query, { viewType = 'people' } = {}) {
+    query = viewType === 'jobs' ? { ...query, viewType } : { ...query };
     const element = dialog('Save People view', '<form><p>Private to your login in this workspace. Filters update as your people change; this is not a fixed membership list.</p><label class="people-field">View name<input name="title" required maxlength="160" autofocus placeholder="Hiring managers to contact"></label><p role="status" data-feedback></p><button class="primary-button" type="submit">Save view</button></form>');
+    if (viewType === 'jobs') {
+      element.setAttribute('aria-label', 'Save role search');
+      element.querySelector('h3').textContent = 'Save role search';
+      element.querySelector('form p').textContent = 'Private to your login in this workspace. Saves applied filters, not a fixed list of jobs. Results use your current role focus.';
+      element.querySelector('input').placeholder = 'Canadian recruiting roles';
+      element.querySelector('[type="submit"]').textContent = 'Save search';
+    }
     element.querySelector('form').onsubmit = async event => {
       event.preventDefault();
       const button = event.target.querySelector('button'); button.disabled = true;
@@ -58,13 +66,17 @@
       });
     };
   }
-  function openLibrary(kind = 'draft', onSelect) {
+  function openLibrary(kind = 'draft', onSelect, { viewType = 'people' } = {}) {
     let page = 1;
     let search = '';
     let request = 0;
     const element = dialog(kind === 'draft' ? 'My saved drafts' : 'My saved People views', `<p class="people-provenance">Private to your login in this workspace. Available on your other signed-in devices.</p><form data-search><label class="people-field">Search saved ${kind === 'draft' ? 'drafts' : 'views'}<input name="q" type="search" maxlength="240"></label><button class="secondary-button">Search</button></form><p role="status" data-feedback></p><div data-items></div><footer><button class="secondary-button" data-prev>Previous</button><span data-page></span><button class="secondary-button" data-next>Next</button></footer>`);
     const feedback = element.querySelector('[data-feedback]');
     const items = element.querySelector('[data-items]');
+    if (kind === 'view' && viewType === 'jobs') {
+      element.setAttribute('aria-label', 'Saved role searches');
+      element.querySelector('h3').textContent = 'Saved role searches';
+    }
     const retry = document.createElement('button');
     retry.type = 'button'; retry.className = 'secondary-button'; retry.textContent = 'Try again'; retry.hidden = true;
     feedback.after(retry);
@@ -81,7 +93,7 @@
       element.querySelector('[data-next]').disabled = true;
       element.querySelector('[data-page]').textContent = '';
       try {
-        const result = await api(`/api/saved-work/${kind}?${new URLSearchParams({ page, q: search })}`);
+        const result = await api(`/api/saved-work/${kind}?${new URLSearchParams({ page, q: search, ...(kind === 'view' ? { viewType } : {}) })}`);
         if (!element.isConnected || current !== request) return;
         page = result.page;
         if (!result.items.length && page > 1) { page -= 1; return refresh(); }

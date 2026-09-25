@@ -250,6 +250,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
   .people-table .person-name { padding: 4px 0; }
   .people-empty { padding: 28px 16px; }
 }
+.job-active-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-block: 8px 12px; }
+.job-active-filters .job-preset-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; text-align: left; }
+.job-active-filters .job-preset-chip > span:first-child { overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 760px) { .job-active-filters .job-preset-chip { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) {
   .people-workspace *, .people-dialog * { animation: none; transition: none; scroll-behavior: auto; }
 }

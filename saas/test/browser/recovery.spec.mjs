@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('saved recovery code resets a password once and revokes the signed-in session', async ({ page }) => {
+test('saved recovery code resets a password once and revokes the signed-in session', async ({ page }, testInfo) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const email = `recovery-browser-${Date.now()}@example.test`;
@@ -12,6 +12,17 @@ test('saved recovery code resets a password once and revokes the signed-in sessi
   await page.locator('#signup-workspace').fill('Recovery Test');
   await page.locator('#signup-legal-consent').check();
   await page.locator('#signup-form button[type="submit"]').click();
+  const trial = page.getByRole('region', { name: 'Free trial limits and upgrade options' });
+  await expect(trial.locator('details')).not.toHaveAttribute('open', '');
+  await trial.locator('summary').press('Enter');
+  await expect(trial).toContainText('Trial limits:');
+  await trial.locator('summary').press('Space');
+  await page.screenshot({ path: testInfo.outputPath('account-notices-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#cloud-recovery-reminder summary').click();
+  await expect(page.locator('#cloud-recovery-reminder p')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('account-notices-mobile.png') });
   await page.locator('#cloud-dismiss-recovery-btn').click();
   await expect(page.locator('#cloud-recovery-reminder')).toHaveCount(0);
   await page.reload();

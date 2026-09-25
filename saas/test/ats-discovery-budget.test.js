@@ -20,9 +20,18 @@ test('slow discovery is bounded per company, aborts outstanding requests, and pr
   };
   try {
     const startedAt = performance.now();
-    const result = await store.runAtsDiscovery(tenant, { limit: 2, discoveryTimeBudgetMs: 150 });
+    const updates = [];
+    const result = await store.runAtsDiscovery(tenant, { limit: 2, discoveryTimeBudgetMs: 150, onProgress: progress => updates.push(progress) });
     const elapsedMs = Math.round(performance.now() - startedAt);
     assert.equal(result.stats.mapped, 1);
+    assert.equal(updates[0].checked, 0);
+    assert.equal(updates[1].checked, 1);
+    assert.equal(updates[1].found, 1, 'successful sources are visible before the slow check finishes');
+    assert.equal(updates[1].failed, 0);
+    assert.equal(updates.at(-1).checked, 2);
+    assert.equal(updates.at(-1).failed, 1);
+    assert.equal(updates.at(-1).unmatched, 0, 'timeouts are not reported as unmatched sources');
+    assert.ok(result.timings.progressCallbackMs >= 0);
     assert.equal(result.stats.timedOut, 1);
     assert.equal(result.errors[0].code, 'discovery_timeout');
     assert.match(result.warnings.join(' '), /does not mean there are no jobs/);

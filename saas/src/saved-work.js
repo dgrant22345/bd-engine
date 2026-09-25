@@ -22,7 +22,23 @@ export function validateSavedWork(kind, input = {}) {
     for (const [key, max] of [['roleTitle', 500], ['companyName', 300], ['goal', 60], ['background', 1000]]) {
       if (source[key] !== undefined) body[key] = text(source[key], max);
     }
+  } else if (source.viewType === 'jobs') {
+    body = { viewType: 'jobs' };
+    for (const key of ['q', 'ats', 'company', 'accountId']) body[key] = text(source[key] || '', 300);
+    const choices = {
+      active: ['', 'true', 'false'], isNew: ['', 'true', 'false'], hasContacts: ['', 'true'], pipelineOnly: ['', 'true'],
+      geography: ['', 'local_remote', 'gta', 'canada', 'canada_us', 'us', 'remote'],
+      workStyle: ['', 'local_remote', 'remote', 'hybrid', 'onsite'], sortBy: ['', 'connections', 'relevance', 'retrieved'],
+      recencyDays: ['', '7', '14', '30'], minConnections: ['', '1', '2', '3'],
+    };
+    for (const [key, allowed] of Object.entries(choices)) {
+      body[key] = String(source[key] ?? (key === 'active' ? 'true' : ''));
+      if (!allowed.includes(body[key])) throw fail('Invalid role search filters.');
+    }
+    body.minRelevance = String(source.minRelevance || '');
+    if (body.minRelevance && (!/^\d{1,3}$/.test(body.minRelevance) || Number(body.minRelevance) > 100)) throw fail('Use a fit score from 0 to 100.');
   } else {
+    if (source.viewType && source.viewType !== 'people') throw fail('Unknown saved view type.');
     const allowedSorts = ['name', 'name_desc', 'company', 'recent', 'priority'];
     const allowedStages = ['', 'not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];
     body = { q: text(source.q || '', 240), outreachStatus: source.outreachStatus || '', sortBy: source.sortBy || 'name', minScore: String(source.minScore || '') };
@@ -41,8 +57,11 @@ export function createSavedWorkStore({ query = dbQuery, enabled = isDbEnabled } 
   };
   const publicItem = row => row && ({ id: row.id, kind: row.kind, title: row.title, body: row.body, version: row.version, updatedAt: row.updated_at });
   return {
-    async list(tenantId, userId, kind, { page = 1, q = '', summary = '' } = {}) {
+    async list(tenantId, userId, kind, { page = 1, q = '', summary = '', viewType = 'people' } = {}) {
       scope(tenantId, userId, kind);
+      if (!['people', 'jobs'].includes(viewType)) throw fail('Unknown saved view type.');
+      const viewClause = index => kind === 'view' ? ` AND COALESCE(body->>'viewType','people')=$${index}` : '';
+      const viewParams = params => kind === 'view' ? [...params, viewType] : params;
       page = Math.min(1000000, Math.max(1, Math.floor(Number(page) || 1)));
       q = String(q).slice(0, 240).toLowerCase();
       const startedAt = performance.now();
@@ -50,20 +69,20 @@ export function createSavedWorkStore({ query = dbQuery, enabled = isDbEnabled } 
       let total;
       if (enabled()) {
         if (summary === '1') {
-          const result = await query('SELECT count(*) AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3', [tenantId, userId, kind]);
+          const result = await query(`SELECT count(*) AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3${viewClause(4)}`, viewParams([tenantId, userId, kind]));
           const elapsed = Math.round(performance.now() - startedAt);
           if (elapsed > 150) console.warn(`Slow saved work: saas/src/saved-work.js summary ${elapsed}ms`);
           return { total: Number(result.rows[0]?.total || 0) };
         }
-        const result = await query(`SELECT *, count(*) OVER() AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3 AND strpos(lower(title), $4)>0 ORDER BY updated_at DESC, id LIMIT 50 OFFSET $5`, [tenantId, userId, kind, q, (page - 1) * 50]);
+        const result = await query(`SELECT *, count(*) OVER() AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3 AND strpos(lower(title), $4)>0${viewClause(6)} ORDER BY updated_at DESC, id LIMIT 50 OFFSET $5`, viewParams([tenantId, userId, kind, q, (page - 1) * 50]));
         rows = result.rows;
         if (!rows.length && page > 1) {
-          const count = await query('SELECT count(*) AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3 AND strpos(lower(title), $4)>0', [tenantId, userId, kind, q]);
-          return this.list(tenantId, userId, kind, { page: Math.max(1, Math.ceil(Number(count.rows[0]?.total || 0) / 50)), q });
+          const count = await query(`SELECT count(*) AS total FROM saved_work WHERE tenant_id=$1 AND user_id=$2 AND kind=$3 AND strpos(lower(title), $4)>0${viewClause(5)}`, viewParams([tenantId, userId, kind, q]));
+          return this.list(tenantId, userId, kind, { page: Math.max(1, Math.ceil(Number(count.rows[0]?.total || 0) / 50)), q, viewType });
         }
         total = Number(rows[0]?.total || 0);
       } else {
-        const all = [...memory.values()].filter(row => row.tenant_id === tenantId && row.user_id === userId && row.kind === kind && row.title.toLowerCase().includes(q)).sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
+        const all = [...memory.values()].filter(row => row.tenant_id === tenantId && row.user_id === userId && row.kind === kind && (kind !== 'view' || (row.body.viewType || 'people') === viewType) && row.title.toLowerCase().includes(q)).sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
         total = all.length; page = Math.min(page, Math.max(1, Math.ceil(total / 50))); rows = all.slice((page - 1) * 50, page * 50);
       }
       const elapsed = Math.round(performance.now() - startedAt);

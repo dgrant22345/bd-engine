@@ -260,7 +260,7 @@ test('role pipeline is saved to the workspace and survives a page reload', async
   await app.locator('[data-preset="pipeline"]').click();
   await expect(app.locator('.job-pipeline-select')).toHaveCount(1);
   await expect(app.locator('.job-pipeline-select')).toHaveValue('saved');
-  await expect(app.locator('.job-results-context')).toContainText('1 results');
+  await expect(app.locator('.job-results-context [role="status"]')).toContainText('1 result ·');
   await page.route('**/api/jobs/*/pipeline', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Temporary save failure' }) }));
   await app.locator('.job-pipeline-select').selectOption('offer');
   await expect(app.locator('.toast--error')).toContainText('Could not save pipeline stage');
