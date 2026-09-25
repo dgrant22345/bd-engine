@@ -29,6 +29,14 @@ Local visual evidence: `artifacts/people-ui-final/`. Full regression output: `ar
 
 - Consolidating the first-run trial/recovery banners, which still occupy substantial space on small screens.
 - Whole-batch ATS discovery progress and time budgets. Existing per-company deadlines can still yield minute-long batches; that deserves a dedicated data-flow pass rather than a cosmetic loading indicator.
+- Early production startup logs showed `saas/src/store.js::findActivities` and `findTasks` taking roughly 1.4–2.1 seconds, largely in `ensureDataLoaded`. Profile cold/scoped reads before proposing a performance fix; this observation is not a steady-state latency benchmark.
 - No new marketing claims, profile scoring, AI integrations, subscription changes, or production customer-data edits.
 
-Deployment verification will be recorded after the production build and live checks finish.
+## Deployment verification
+
+- Source commit: `df80cbd` on `agent/paid-product-quality-audit`, pushed to origin.
+- Railway deployment: `8ab81dc6-30dc-4975-a1ec-a4643ffcfc79`, status **SUCCESS**, created 2026-09-25 00:15 UTC (September 24 in Toronto).
+- Production Docker build completed; production dependency audit reported zero known vulnerabilities.
+- All eight non-customer-mutating production smoke checks passed.
+- Confirmed the released `20260924-people-review-01` asset in the live synthetic demo. Reviewed the profile header, Activity shortcut, company-specific outreach choices, and return to Overview without changing the profile URL. No new production browser errors appeared during this inspection.
+- No customer records, subscriptions, or outreach messages were changed during live validation.
