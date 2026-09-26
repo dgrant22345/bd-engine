@@ -279,7 +279,7 @@ test('persona mode switch survives a full page reload', async ({ page }) => {
   await app.locator('#persona-mode-btn').click();
   await expect(app.locator('#persona-mode-label')).toHaveText('Job seeker', { timeout: 10000 });
 
-  await page.reload();
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
   await expect(page.frameLocator('iframe.cloud-app-frame').locator('#persona-mode-label')).toHaveText('Job seeker', { timeout: 15000 });
 });

@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260925-role-workflows-01';
+const ASSET_VERSION = '20260925-mode-clarity-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

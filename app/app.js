@@ -2131,7 +2131,7 @@ function render3StepValueSprint(dashboard = {}, personaCopy = {}) {
             <span class="sprint-step-number">${step2Done ? '✓' : '2'}</span>
             <div class="sprint-step-content">
               <h4>${step2Done ? 'Live Hiring Matched' : '2. Discover ATS Signals'}</h4>
-              <p>${step2Done ? `${formatNumber(activeJobs)} verified active roles synced with warm paths.` : 'Discover Greenhouse, Lever, Ashby, Workday boards with active roles.'}</p>
+              <p>${step2Done ? `${formatNumber(activeJobs)} imported roles currently marked active, with available network connections.` : 'Discover supported company job boards and review source coverage.'}</p>
             </div>
           </div>
           <div class="sprint-step-cta">
@@ -4556,30 +4556,39 @@ function applyPersonaChrome() {
   if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Recruiter workspace';
   if (personaIcon) personaIcon.textContent = jobSeeker ? '🎯' : '💼';
   if (personaLabel) personaLabel.textContent = jobSeeker ? 'Job seeker' : 'Recruiting';
-  if (personaBtn) personaBtn.title = `Current mode: ${jobSeeker ? 'Job Seeker' : 'Business Development'}. Click to switch mode.`;
+  const modeDescription = `Current mode: ${jobSeeker ? 'Job seeker' : 'Recruiting / business development'}. Switch to ${jobSeeker ? 'Recruiting / business development' : 'Job seeker'}.`;
+  if (personaBtn) {
+    personaBtn.title = modeDescription;
+    personaBtn.setAttribute('aria-label', modeDescription);
+  }
+  const modeMenuDescription = document.getElementById('persona-mode-menu-description');
+  if (modeMenuDescription) modeMenuDescription.textContent = modeDescription;
 }
 
 async function togglePersonaMode() {
+  if (appState.personaSwitchPending) return;
   const current = isJobSeekerPersona();
   const next = current ? 'bd' : 'jobseeker';
   const planId = appState.bootstrap?.session?.plan?.id;
 
-  // $5/mo Job Seeker plan is dedicated to Job Seeker mode; $10/mo Recruiter Pro grants access to BOTH modes
+  // The Job Seeker plan is dedicated to job search; Recruiter Pro includes both modes.
   if (current && next === 'bd' && planId === 'jobseeker') {
     openPricingModal();
-    showToast('💼 Business Development mode requires the $10/mo Pro plan (which includes access to BOTH modes).', 'info', 6000);
+    showToast('Recruiting / business development requires Recruiter Pro, which includes both modes. Your current mode is unchanged.', 'info', 6000);
     return;
   }
 
-  const personaButton = document.getElementById('persona-mode-btn');
-  if (personaButton) personaButton.disabled = true;
+  appState.personaSwitchPending = true;
+  const modeButtons = [...document.querySelectorAll('[data-action="toggle-persona-mode"]')];
+  for (const button of modeButtons) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+  const startedAt = performance.now();
   try {
     const result = await api('/api/persona', {
       method: 'PATCH',
       body: JSON.stringify({ persona: next }),
     });
     appState.persona = normalizeAppPersona(result.persona);
-    localStorage.setItem('bd_persona', appState.persona);
+    try { localStorage.setItem('bd_persona', appState.persona); } catch { /* Server preferences remain authoritative when browser storage is unavailable. */ }
     appState.jobQuery = { ...defaultQueries.jobs };
     invalidateAppData();
     await loadBootstrap(true);
@@ -4588,13 +4597,17 @@ async function togglePersonaMode() {
     if (routeRoot === 'dashboard') await renderDashboardView({ skipLoading: true });
     else if (routeRoot === 'accounts') await renderAccountsView();
     else if (routeRoot === 'jobs') await renderJobsView();
-    else if (routeRoot === 'contacts') await renderContactsView();
+    // People facts and drafts do not depend on mode. Keep the active editor,
+    // unsaved notes and list position rather than replacing the workspace.
     else if (routeRoot === 'admin') await renderAdminView();
     showToast(`Switched mode: ${appState.persona === 'jobseeker' ? '🎯 Job Seeker Mode' : '💼 Business Development Mode'}. ${formatNumber(result.rescoredJobs || 0)} jobs rescored.`, 'success');
   } catch (error) {
     showToast(`Could not switch mode: ${error.message || error}`, 'error');
   } finally {
-    if (personaButton?.isConnected) personaButton.disabled = false;
+    appState.personaSwitchPending = false;
+    for (const button of modeButtons) if (button.isConnected) { button.disabled = false; button.removeAttribute('aria-busy'); }
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 1500) console.warn(`Slow mode switch: app/app.js::togglePersonaMode ${elapsedMs}ms`);
   }
 }
 
@@ -7199,7 +7212,7 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
           <div class="radar-step-icon">📁</div>
           <div class="radar-step-content">
             <strong>1. Import Connections</strong>
-            <span class="muted small">Export <code>Connections.csv</code> in 30s from LinkedIn settings. No login required.</span>
+            <span class="muted small">Request your <code>Connections.csv</code> from LinkedIn settings, then upload it to your workspace. Export preparation can take time; BD Engine never needs your LinkedIn password.</span>
           </div>
           <span class="radar-step-status ${hasContacts ? 'status-pill status-pill--success' : 'status-pill status-pill--neutral'}">
             ${hasContacts ? `✓ ${formatNumber(contactCount)} contacts` : 'Ready to import'}
@@ -7210,7 +7223,7 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
           <div class="radar-step-icon">🏢</div>
           <div class="radar-step-content">
             <strong>2. Auto-Match Companies</strong>
-            <span class="muted small">Discovers 50+ ATS platforms (Greenhouse, Lever, Ashby, Workday).</span>
+            <span class="muted small">Checks supported sources such as Greenhouse, Lever, Ashby and Workday. Coverage varies by company; review unresolved sources before relying on the shortlist.</span>
           </div>
           <span class="radar-step-status ${networkLeaders.length ? 'status-pill status-pill--success' : 'status-pill status-pill--neutral'}">
             ${networkLeaders.length ? `✓ ${formatNumber(networkLeaders.length)} companies` : 'Auto-resolving'}
@@ -10859,7 +10872,7 @@ async function renderDashboardView(options = {}) {
         <div class="panel-header">
           <div>
             <h3>Hiring trigger board</h3>
-            <p class="muted small">Accounts with verified active roles, ranked by the current target score.</p>
+            <p class="muted small">Accounts with imported roles currently marked active, ranked by the current target score. Check the source and last refresh before reaching out.</p>
           </div>
         </div>
         ${extended.alertQueue.length ? `<div class="timeline">${extended.alertQueue.map((item) => `

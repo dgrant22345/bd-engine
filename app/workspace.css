@@ -37,9 +37,10 @@ body { font-size: 14px; line-height: 1.5; background: var(--bg); }
 .topbar .view-heading h2 { font-size: 22px; line-height: 1.25; letter-spacing: -.035em; }
 .topbar { background: var(--surface); box-shadow: none; min-height: 60px; }
 .topbar .topbar-network-btn { display: none; }
-.topbar .persona-mode-toggle { background: transparent; color: var(--muted); border-color: transparent; box-shadow: none; }
+.topbar .persona-mode-toggle { background: var(--surface); color: var(--ink); border-color: var(--line-strong); box-shadow: none; }
 .topbar .persona-mode-toggle .btn-icon { display: none; }
-.topbar-overflow-menu { max-height: calc(100vh - 100px); overflow: auto; }
+.topbar-overflow-menu { display: flex; flex-direction: column; max-height: calc(100vh - 100px); overflow: auto; }
+.topbar-overflow-menu > * { flex-shrink: 0; }
 .topbar-overflow-menu .menu-group { border-top: 1px solid var(--line); padding-top: 8px; }
 .topbar-overflow-menu .menu-group > summary { padding: 8px; font-size: 13px; cursor: pointer; }
 .menu-action .menu-action-icon { display: none; }

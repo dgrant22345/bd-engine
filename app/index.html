@@ -8,9 +8,9 @@
   <meta name="theme-color" content="#f8fafc">
   <meta name="color-scheme" content="light dark">
   <title>BD Engine | Hiring Signals for Staffing BD</title>
-  <link rel="stylesheet" href="/styles.css?v=20260925-role-workflows-01">
-  <link rel="stylesheet" href="/palette.css?v=20260925-role-workflows-01">
-  <link rel="stylesheet" href="/workspace.css?v=20260925-role-workflows-01">
+<link rel="stylesheet" href="/styles.css?v=20260925-mode-clarity-01">
+  <link rel="stylesheet" href="/palette.css?v=20260925-mode-clarity-01">
+  <link rel="stylesheet" href="/workspace.css?v=20260925-mode-clarity-01">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg">
   <link rel="apple-touch-icon" href="/icons/icon-192.svg">
@@ -63,6 +63,7 @@
           <button class="persona-mode-toggle secondary-button secondary-button--sm" id="persona-mode-btn" type="button" data-action="toggle-persona-mode" title="Switch between Business Development and Job Seeker mode">
             <span class="btn-icon" id="persona-mode-icon" aria-hidden="true">💼</span>
             <span id="persona-mode-label">Staffing BD</span>
+            <span aria-hidden="true">↔</span>
           </button>
           <button class="topbar-network-btn primary-button primary-button--sm" id="topbar-import-network-btn" type="button" data-action="open-network-import-modal" title="Upload LinkedIn Connections CSV">
             <span class="btn-icon" aria-hidden="true">⚡</span>
@@ -91,7 +92,7 @@
               </button>
               <button class="menu-action topbar-mobile-action" type="button" data-action="toggle-persona-mode">
                 <span class="menu-action-icon" aria-hidden="true">&#8646;</span>
-                <span><strong>Switch workspace mode</strong><small>Staffing BD or job seeker</small></span>
+                <span><strong>Switch workspace mode</strong><small id="persona-mode-menu-description">Recruiting / business development or job seeker</small></span>
               </button>
               <button class="menu-action topbar-mobile-action" type="button" data-action="open-network-import-modal">
                 <span class="menu-action-icon" aria-hidden="true">&#9889;</span>
@@ -180,10 +181,10 @@
   <div id="pitch-deck-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/local-api.js?v=20260925-role-workflows-01"></script>
-  <script src="/saved-work.js?v=20260925-role-workflows-01"></script>
-  <script src="/people-workspace.js?v=20260925-role-workflows-01"></script>
-  <script src="/app.js?v=20260925-role-workflows-01"></script>
+  <script src="/local-api.js?v=20260925-mode-clarity-01"></script>
+  <script src="/saved-work.js?v=20260925-mode-clarity-01"></script>
+  <script src="/people-workspace.js?v=20260925-mode-clarity-01"></script>
+  <script src="/app.js?v=20260925-mode-clarity-01"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
