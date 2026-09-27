@@ -377,6 +377,28 @@ test('person queue clears unrelated filters, links new tasks, reschedules and un
   await expect(page.locator('#activity-history-results')).toContainText('Reopened task');
 });
 
+test('outreach dismissal only warns for unfinished work and preserves it when cancelled', async ({ page }) => {
+  await workspace(page);
+  await page.getByRole('button', { name: 'Prepare outreach', exact: true }).click();
+  const log = page.getByRole('dialog', { name: 'Log sent outreach', exact: true });
+  const prompts = [];
+  page.on('dialog', async dialog => { prompts.push(dialog.message()); await dialog.dismiss(); });
+  await page.getByRole('button', { name: 'Mark as contacted', exact: true }).click();
+  await log.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(log).toHaveCount(0);
+  expect(prompts).toEqual([]);
+  await page.getByRole('button', { name: 'Mark as contacted', exact: true }).click();
+  await log.getByLabel('Schedule follow-up').selectOption('7');
+  await page.keyboard.press('Escape');
+  await expect(log).toBeVisible();
+  await expect(log.getByLabel('Schedule follow-up')).toHaveValue('7');
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0]).toContain('Discard this outreach record?');
+  await log.getByLabel('Schedule follow-up').selectOption('0');
+  await log.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(log).toHaveCount(0);
+});
+
 test('confirmed People outreach records the sent message and optional person follow-up', async ({ page }) => {
   const person = await workspace(page);
   await page.getByRole('button', { name: 'Prepare outreach', exact: true }).click();

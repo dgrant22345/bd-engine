@@ -46,7 +46,14 @@
     const draftContext = () => ({ jobId: root.querySelector('#person-draft-role')?.value || '', goal: root.querySelector('#person-draft-goal')?.value || defaultOutreachGoal(), background: root.querySelector('#person-draft-background')?.value || '' });
     const hasFollowUpDraft = () => [...(root.querySelector('[data-people-form="follow-up"]')?.elements || [])].some(input => input.name && input.value.trim());
     const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && (root.querySelector('#person-draft').value !== savedDraftText || JSON.stringify(draftContext()) !== savedDraftContext)) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
-    const hasAddDraft = () => Boolean(state.dialog?.querySelector('[data-people-form="add"], [data-people-form="log-outreach"]') && [...state.dialog.querySelectorAll('input, textarea')].some(input => input.value.trim()));
+    const hasDialogDraft = () => {
+      const form = state.dialog?.querySelector('[data-people-form="add"], [data-people-form="log-outreach"]');
+      return Boolean(form && [...form.querySelectorAll('input, textarea, select')].some(input => {
+        if (input.type === 'checkbox') return input.checked;
+        if (input.tagName === 'SELECT') return input.value !== (input.querySelector('option[selected]') || input.options[0])?.value;
+        return Boolean(input.value.trim());
+      }));
+    };
     const active = () => /^#\/contacts(?:\?|$)/.test(location.hash);
     const alive = () => Boolean(root.querySelector('.people-workspace'));
     const readQuery = () => {
@@ -435,7 +442,10 @@
     function closeDialog({ saved = false } = {}) {
       if (!state.dialog) return true;
       if (!saved && state.busy) return false;
-      if (!saved && hasAddDraft() && !window.confirm('Discard this new person? These details have not been saved.')) return false;
+      const discardMessage = state.dialog.querySelector('[data-people-form="log-outreach"]')
+        ? 'Discard this outreach record? The message and follow-up have not been recorded. Your original draft will stay unchanged.'
+        : 'Discard this new person? These details have not been saved.';
+      if (!saved && hasDialogDraft() && !window.confirm(discardMessage)) return false;
       state.dialog.close(); state.dialog = null;
       return true;
     }
@@ -678,7 +688,7 @@
       if ((event.key === 'j' || event.key === 'k') && state.selected) { event.preventDefault(); event.stopImmediatePropagation(); move(event.key === 'j' ? 1 : -1); }
       if (event.key === 'Escape' && state.selected) { event.preventDefault(); event.stopImmediatePropagation(); navigate(state.query); }
     }, true);
-    window.addEventListener('beforeunload', event => { if (state.dirty || state.busy || hasAddDraft()) { event.preventDefault(); event.returnValue = ''; } });
+    window.addEventListener('beforeunload', event => { if (state.dirty || state.busy || hasDialogDraft()) { event.preventDefault(); event.returnValue = ''; } });
     return { render, allowLeave, beforeLeave: () => { if (allowLeave()) return true; history.replaceState(null, '', lastHash); return false; }, leave: () => { ++state.sequence; state.key = ''; personNavObserver.disconnect(); }, open: id => navigate(state.query, id) };
   }
   window.bdPeople = { create };
