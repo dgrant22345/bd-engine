@@ -12592,7 +12592,7 @@ function renderJobsTable(items, compact) {
 
 function renderJobRelevance(item) {
   if (item.relevanceScore === null || item.relevanceScore === undefined) {
-    return renderStatusPill('Not scored', 'neutral');
+    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">No saved relevance score.</div><a class="small" href="#/admin/search-focus">Set or refresh search focus</a>`;
   }
   const band = item.relevanceBand || 'low';
   const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
@@ -12602,7 +12602,7 @@ function renderJobRelevance(item) {
   const outcome = item.matchesSearchFocus === false ? 'Outside your saved focus. Lowering the score cutoff alone will not include this role.'
     : Number(item.relevanceScore) < threshold ? `Below your saved ${threshold}+ cutoff.`
       : `Meets your saved ${threshold}+ cutoff. Other list filters still apply.`;
-  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}<details class="job-row-context"><summary>Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>`;
+  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons.length ? `<div class="small muted job-match-preview">${escapeHtml(reasons[0])}</div>` : ''}<details class="job-row-context"><summary aria-label="${escapeAttr(`Why this score for ${item.title || 'this role'}${item.companyName ? ` at ${item.companyName}` : ''}?`)}">Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>`;
 }
 
 function renderMiniStatList(items) {

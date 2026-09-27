@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260927-role-explanations-01';
+const ASSET_VERSION = '20260927-role-scan-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

@@ -13,6 +13,8 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
     document.querySelector('#app').innerHTML = renderJobsTable([{ id: 'explanation-fixture', title: 'Recruiter', companyName: 'Example', relevanceScore: 35, relevanceBand: 'low', matchesSearchFocus: false, relevanceReasons: ['Outside target roles', 'Industry match: technology', 'onsite role'], active: true }]);
   });
   const explanation = app.locator('.job-row-context').filter({ has: app.getByText('Why this score?', { exact: true }) });
+  await expect(app.locator('.job-match-preview')).toHaveText('Outside target roles');
+  await expect(explanation.locator('summary')).toHaveAccessibleName('Why this score for Recruiter at Example?');
   await explanation.locator('summary').press('Enter');
   await expect(explanation).toContainText('Lowering the score cutoff alone will not include this role.');
   await expect(explanation).toContainText('onsite role');
@@ -28,6 +30,7 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
     completed: renderIngestionHealthPanel({ recentJobs: [{ id: 'completed-import', type: 'live-job-import', status: 'completed', finishedAt: '2026-09-27T01:00:00Z', result: { stats: { fetched: 100, configs: 4, kept: 60, filteredOutNonCanada: 40, partialBoards: 1 } } }] }),
     below: renderJobRelevance({ relevanceScore: 0, matchesSearchFocus: true }),
     meets: renderJobRelevance({ relevanceScore: 100, matchesSearchFocus: true }),
+    unscored: renderJobRelevance({ relevanceScore: null }),
   }));
   expect(health.empty).toContain('No completed import yet');
   expect(health.coverage).toContain('No companies tracked yet');
@@ -36,4 +39,6 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
   expect(health.completed).toContain('1 boards reported incomplete coverage');
   expect(health.below).toContain('Below your saved');
   expect(health.meets).toContain('Other list filters still apply');
+  expect(health.unscored).toContain('Set or refresh search focus');
+  expect(health.unscored).toContain('href="#/admin/search-focus"');
 });
