@@ -12596,8 +12596,13 @@ function renderJobRelevance(item) {
   }
   const band = item.relevanceBand || 'low';
   const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
-  const reasons = Array.isArray(item.relevanceReasons) ? item.relevanceReasons.filter(Boolean).slice(0, 2).join(' · ') : '';
-  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons ? `<div class="small muted">${escapeHtml(reasons)}</div>` : ''}`;
+  const reasons = Array.isArray(item.relevanceReasons) ? item.relevanceReasons.filter(Boolean) : [];
+  const persona = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+  const threshold = getTargetRoleThreshold(appState.bootstrap?.settings?.searchFocusByPersona?.[persona] || {});
+  const outcome = item.matchesSearchFocus === false ? 'Outside your saved focus. Lowering the score cutoff alone will not include this role.'
+    : Number(item.relevanceScore) < threshold ? `Below your saved ${threshold}+ cutoff.`
+      : `Meets your saved ${threshold}+ cutoff. Other list filters still apply.`;
+  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}<details class="job-row-context"><summary>Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>`;
 }
 
 function renderMiniStatList(items) {
@@ -13108,9 +13113,9 @@ function renderIngestionHealthPanel(runtime) {
       <div class="ingestion-health__head">
         <div>
           <p class="eyebrow">Ingestion health</p>
-          <strong>${activeImport ? 'Live import in progress' : 'Live import ready'}</strong>
+          <strong>${activeImport ? 'Live import in progress' : lastFailed ? 'Latest refresh needs attention' : lastImport ? 'Last import completed' : 'No completed import yet'}</strong>
         </div>
-        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill('Ready', 'success')}
+        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill(lastFailed ? 'Needs attention' : lastImport ? 'Completed' : 'Not run yet', lastFailed ? 'warning' : 'neutral')}
       </div>
       <div class="ingestion-health__grid">
         <div class="ingestion-health__metric">
@@ -13134,6 +13139,7 @@ function renderIngestionHealthPanel(runtime) {
           <span class="small muted">${escapeHtml(scheduleMeta)}</span>
         </div>
       </div>
+      ${lastImport && lastStats.fetched != null ? `<details class="job-results-help"><summary>Last completed import breakdown</summary><div class="job-results-help__body"><p>${formatNumber(lastStats.fetched)} source listings fetched from ${formatNumber(lastStats.configs || 0)} boards; ${formatNumber(lastStats.kept ?? lastStats.canadaKept ?? 0)} retained within the import geography, ${formatNumber(lastStats.filteredOutNonCanada || 0)} filtered outside it.</p><p>${formatNumber(lastStats.partialBoards || 0)} boards reported incomplete coverage. A completed run does not mean every source succeeded.</p><p>Source listings can include existing or duplicate jobs. These counts are not unique new roles and are separate from your saved-focus shortlist. Review source issues below for next steps.</p></div></details>` : ''}
       ${progress ? `<div class="spark-bar job-progress-bar ingestion-health__bar"><span style="width:${progress.pct}%"></span></div>` : ''}
       ${lastFailed ? `<div class="ingestion-health__notice" role="alert"><strong>Recent refresh needs attention.</strong><span>${escapeHtml(failureMessage || failureMeta)}</span><button class="ghost-button ghost-button--xs" type="button" data-action="run-live-import">Retry now</button></div>` : ''}
     </div>
@@ -13166,7 +13172,7 @@ function renderJobCoverageHealth(diagnostics = {}) {
           <strong>${escapeHtml(coverageCopy)}</strong>
           <p class="small muted">${formatNumber(summary.readyCoveragePercent || 0)}% ready for automatic job refresh</p>
         </div>
-        ${renderStatusPill(issueCount ? `${formatNumber(issueCount)} to improve` : 'Coverage healthy', issueCount ? 'warning' : 'success')}
+        ${renderStatusPill(!tracked ? 'No targets yet' : issueCount ? `${formatNumber(issueCount)} to improve` : 'No reported issues', issueCount ? 'warning' : 'neutral')}
       </div>
       ${legacyUnclassified ? `<div class="ingestion-health__notice" role="status"><strong>Focus automatic refresh on a target portfolio.</strong><span>${formatNumber(legacyUnclassified)} legacy companies are currently treated as targets because they predate target selection. Classify the strongest companies so discovery is not spread across your entire network history.</span><button class="ghost-button ghost-button--xs" type="button" data-action="curate-legacy-targets">Choose target count</button></div>` : ''}
       <div class="metrics-grid metrics-grid--compact">
@@ -13200,7 +13206,7 @@ function renderJobCoverageHealth(diagnostics = {}) {
             </tr>
           `).join('')}</tbody>
         </table></div>
-      ` : renderEmptyState({ icon: 'OK', title: 'Job coverage looks healthy', copy: 'All tracked job sources are ready, intentionally excluded, or importing successfully.', compact: true })}
+      ` : renderEmptyState({ icon: 'OK', title: tracked ? 'No source issues reported' : 'No companies tracked yet', copy: tracked ? 'Ready sources may not have run yet. Check the last refresh and role results before relying on coverage.' : 'Track your target companies, find their supported job boards, then run an import.', compact: true })}
     </div>
   `;
 }
