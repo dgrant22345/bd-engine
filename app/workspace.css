@@ -77,6 +77,30 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .jobs-table--selectable th:first-child, .jobs-table--selectable td:first-child { width: 40px; min-width: 40px; }
 .jobs-table td { vertical-align: top; }
 .jobs-table .job-network-cell .status-pill { font-size: 11px; white-space: normal; }
+.jobs-table .job-title, .jobs-table .job-title-link { font-weight: 650; font-size: 14px; line-height: 1.4; }
+.jobs-table .job-match-preview { margin-top: 4px; max-width: 30ch; }
+.jobs-table td[data-label="Role match"] .job-row-context { width: 230px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.jobs-table td[data-label="Role match"] .job-row-context ul { padding-left: 18px; }
+.jobs-table td[data-label="Source"], .jobs-table td[data-label="Timing"] { color: var(--muted); font-size: 12px; }
+.jobs-table td[data-label="Timing"] .job-row-context[open] { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .jobs-table.responsive-table tbody > tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .jobs-table.responsive-table tbody > tr > td { grid-column: auto; padding: 8px 12px; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Role"],
+  .jobs-table.responsive-table tbody > tr > td[data-label="Company"],
+  .jobs-table.responsive-table tbody > tr > td[data-label="Role match"],
+  .jobs-table.responsive-table tbody > tr > td[data-label="Location"] { grid-column: 1 / -1; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Role"] { order: -6; padding-bottom: 2px; border-bottom: 0; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Company"] { order: -5; padding-top: 0; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Location"] { order: -4; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Role match"] { order: -3; }
+  .jobs-table.responsive-table tbody > tr > td[data-label=""] { order: -7; grid-column: 1 / -1; padding: 8px 12px 0; border: 0; }
+  .jobs-table.responsive-table tbody > tr > td[data-label="Role"]::before,
+  .jobs-table.responsive-table tbody > tr > td[data-label="Company"]::before,
+  .jobs-table.responsive-table tbody > tr > td[data-label="Location"]::before { display: none; }
+  .jobs-table .job-title, .jobs-table .job-title-link { font-size: 16px; }
+  .jobs-table td[data-label="Role match"] .job-row-context { width: auto; }
+}
 .menu-action[hidden] { display: none; }
 .people-workspace { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: clip; }
 .people-workspace[aria-busy="true"] { cursor: progress; }

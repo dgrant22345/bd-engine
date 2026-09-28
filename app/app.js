@@ -12583,8 +12583,8 @@ function renderJobsTable(items, compact) {
               </div>
             </div>
           </td>
-          <td data-label="Source">${renderStatusPill(item.atsType || 'unknown', 'neutral')} ${renderStatusPill(item.active === false ? 'inactive' : 'active', item.active === false ? 'neutral' : 'success')}</td>
-          <td data-label="Timing">${item.postedAt ? formatDate(item.postedAt) : escapeHtml(item.postingAgeText || 'Posting date unavailable')}<div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></td>
+          <td data-label="Source"><span>${escapeHtml(item.atsType || 'Unknown source')}</span><div class="small muted">${item.active === false ? 'Marked inactive' : 'Marked active'}</div></td>
+          <td data-label="Timing"><details class="job-row-context"><summary>${item.postedAt ? formatDate(item.postedAt) : escapeHtml(item.postingAgeText || 'Posting date unavailable')}</summary><div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></details></td>
         </tr>`;
       }).join('')}
     </tbody></table></div>`;

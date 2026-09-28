@@ -21,8 +21,16 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
   await expect(explanation.getByRole('link', { name: 'Review saved focus' })).toHaveAttribute('href', '#/admin/search-focus');
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
+    expect(await app.locator('html').evaluate(el => el.scrollWidth <= el.ownerDocument.defaultView.innerWidth + 1)).toBeTruthy();
     await page.screenshot({ path: testInfo.outputPath(`explanations-${width}.png`) });
   }
+  await explanation.locator('summary').press('Enter');
+  expect((await app.locator('.jobs-table tbody > tr').boundingBox()).height).toBeLessThan(550);
+  const timing = app.locator('td[data-label="Timing"] details');
+  await timing.locator('summary').click();
+  await expect(timing).toContainText('Retrieved');
+  expect(await app.locator('html').evaluate(el => el.scrollWidth <= el.ownerDocument.defaultView.innerWidth + 1)).toBeTruthy();
+  await page.screenshot({ path: testInfo.outputPath('compact-role-mobile.png') });
   const health = await frame.evaluate(() => ({
     empty: renderIngestionHealthPanel({}),
     failed: renderIngestionHealthPanel({ recentJobs: [{ id: 'failed-import', type: 'live-job-import', status: 'failed', finishedAt: '2026-09-27T01:00:00Z', errorMessage: 'Source unavailable' }] }),
