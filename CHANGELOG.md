@@ -12,6 +12,8 @@ All notable customer-facing changes are recorded here. The project is currently 
   imported contacts, and reviewed outreach, with a dedicated job-search CTA.
 - Replaced unsubstantiated public outcome statistics and review ratings with
   product facts, and added campaign drafts with tracked acquisition links.
+- Patched CSV parsing and development-toolchain dependencies after the release
+  audit identified vulnerable versions.
 
 - Activated the production and ATS scheduled checks through default-branch
   schedulers that delegate to the Railway deployment branch.
