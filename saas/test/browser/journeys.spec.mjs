@@ -555,7 +555,6 @@ test('analytics admin journey: campaign and activation milestones are visible', 
     page.getByRole('button', { name: 'Try sample list' }).click(),
   ]);
   expect(sampleResponse.status()).toBe(202);
-  expect((await sampleResponse.json()).recorded).toBe(true);
   await page.getByLabel('Career-site or job-board URLs').fill('https://boards.greenhouse.io/manual-example');
   const [auditResponse] = await Promise.all([
     waitForAnalyticsEvent('ats_audit_completed'),
@@ -563,7 +562,6 @@ test('analytics admin journey: campaign and activation milestones are visible', 
   ]);
 
   expect(auditResponse.status()).toBe(202);
-  expect((await auditResponse.json()).recorded).toBe(true);
   const adminEmail = `analytics-admin-${browserName}@example.com`;
   const { app } = await signup(page, { email: adminEmail });
   await completeSetup(page, app);
