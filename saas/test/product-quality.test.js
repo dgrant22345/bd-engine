@@ -73,7 +73,7 @@ test('pipeline filters run before pagination, survive refresh, and cannot cross 
 test('public marketing does not invent reviews, performance results, or refunds', async () => {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(html, /aggregateRating|ratingValue|reviewCount|42%|8\.5 hrs|2,300\+|money-back guarantee|verified live jobs/);
-  assert.match(html, /Illustrative data/);
+  assert.match(html, /Synthetic sample data/);
   assert.match(html, /It does not search every employer or guarantee every opening/);
   assert.match(html, /does not send it/);
 });
