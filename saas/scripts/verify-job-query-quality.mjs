@@ -12,7 +12,7 @@ const jobs = [
     'London - 12 Arthur Street', 'London, ON', 'London | Toronto, ON', 'Cambridge', 'Richmond', 'Surrey', 'Victoria', 'Windsor', 'Kingston',
     'Cambridge, ON', 'Richmond, BC', 'Surrey, BC', 'Victoria, BC', 'Windsor, Ontario', 'Kingston, Canada',
   ].map((location, index) => ({ id: `other-${index}`, title: 'Recruiter', location, relevanceScore: 60 })),
-].map((j) => ({ ...j, tenantId, accountId: 'account-1', companyName: 'Fixture Employer', active: true, postedAt: '2026-09-01', pipelineStage: ['ca-31', 'ca-32', 'ca-33'].includes(j.id) ? 'saved' : '' }));
+].map((j) => ({ ...j, tenantId, accountId: 'account-1', companyName: 'Fixture Employer', active: true, postedAt: '2026-09-01', pipelineStage: ['ca-31', 'ca-32', 'ca-33'].includes(j.id) ? 'saved' : '', relevanceFeedback: j.id === 'ca-31' ? { vote: 'not_relevant' } : j.id === 'ca-32' ? { vote: 'relevant' } : {} }));
 const jobRows = [...jobs, { ...jobs[0], id: 'foreign-tenant', tenantId: 'not-this-tenant' }].map((j) => ({
   id: j.id, tenant_id: j.tenantId, account_id: j.accountId, title: j.title, company_name: j.companyName,
   location: j.location, source: 'Greenhouse', ats_type: 'greenhouse', posted_at: j.postedAt, active: j.active, raw: j,
@@ -48,6 +48,11 @@ const builtIds = buildTenantJobQueries(tenantId, { ids: 'ca-31,ca-32,ca-33,forei
 tests.push({ name: 'pipeline IDs before pagination and tenant isolation', rows: fixtureStatement(builtIds.rows), count: fixtureStatement(builtIds.count), total: 3, ids: ['ca-31', 'ca-32'] });
 const builtPipeline = buildTenantJobQueries(tenantId, { pipelineOnly: true, pageSize: 2 });
 tests.push({ name: 'persisted pipeline before pagination', rows: fixtureStatement(builtPipeline.rows), count: fixtureStatement(builtPipeline.count), total: 3, ids: ['ca-31', 'ca-32'] });
+
+for (const [feedback, ids, total] of [['not_relevant', ['ca-31'], 1], ['relevant', ['ca-32'], 1], ['unreviewed', ['ca-00','ca-01'], jobs.length - 2]]) {
+  const built = buildTenantJobQueries(tenantId, { feedback, pageSize: 2 });
+  tests.push({ name: `workspace feedback ${feedback} before pagination`, rows: fixtureStatement(built.rows), count: fixtureStatement(built.count), total, ids });
+}
 
 async function runChecks(db, tests, liveQuery, legacyFind = null) {
   if (!await db.initDb({ migrate: false, readOnly: true })) throw new Error('A read-only PostgreSQL connection is required');

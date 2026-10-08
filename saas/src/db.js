@@ -1407,6 +1407,7 @@ export async function dbLoadAllMemberships() {
 // ── Tenant data persistence (accounts, contacts, jobs, etc.) ────────────────
 
 export async function dbSaveTenantData(tenantId, data, { throwOnError = false } = {}) {
+  const startedAt = performance.now();
   if (!dbReady) return { saved: false, reason: 'database_not_ready' };
   try {
     // Only stringify if provided, otherwise pass null to trigger COALESCE in SQL
@@ -1418,7 +1419,14 @@ export async function dbSaveTenantData(tenantId, data, { throwOnError = false } 
        ON CONFLICT (tenant_id) DO UPDATE SET
          accounts = COALESCE(EXCLUDED.accounts, tenant_data.accounts),
          contacts = COALESCE(EXCLUDED.contacts, tenant_data.contacts),
-         jobs = COALESCE(EXCLUDED.jobs, tenant_data.jobs),
+         jobs = CASE WHEN EXCLUDED.jobs IS NULL THEN tenant_data.jobs
+           WHEN NOT jsonb_path_exists(tenant_data.jobs, '$[*].relevanceFeedback') THEN EXCLUDED.jobs ELSE (
+           SELECT coalesce(jsonb_agg(CASE WHEN feedback.by_id ? (item->>'id')
+             THEN jsonb_set(item,'{relevanceFeedback}',feedback.by_id->(item->>'id'),true) ELSE item END ORDER BY ordinal),'[]'::jsonb)
+           FROM jsonb_array_elements(EXCLUDED.jobs) WITH ORDINALITY AS incoming(item,ordinal)
+           CROSS JOIN (SELECT coalesce(jsonb_object_agg(saved->>'id',saved->'relevanceFeedback'),'{}'::jsonb) AS by_id
+             FROM jsonb_array_elements(tenant_data.jobs) AS prior(saved) WHERE saved ? 'relevanceFeedback') AS feedback
+         ) END,
          configs = COALESCE(EXCLUDED.configs, tenant_data.configs),
          activities = COALESCE(EXCLUDED.activities, tenant_data.activities),
          tasks = COALESCE(EXCLUDED.tasks, tenant_data.tasks),
@@ -1441,6 +1449,9 @@ export async function dbSaveTenantData(tenantId, data, { throwOnError = false } 
     console.error('DB: Failed to save workspace data:', safeErrorSummary(err));
     if (throwOnError) throw err;
     return { saved: false, reason: err.message };
+  } finally {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 250) console.warn(`Slow snapshot write: saas/src/db.js dbSaveTenantData ${elapsedMs}ms`);
   }
 }
 

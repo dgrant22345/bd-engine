@@ -2,6 +2,15 @@
 
 All notable customer-facing changes are recorded here. The project is currently in pre-1.0 commercial hardening.
 
+## 0.1.3.0 — Progressive imports and follow-up workflow (2026-10-08)
+
+- Publish each completed ATS source while other checks continue, with timing and a link to available roles. Failed and incomplete sources retain the existing closure safeguards.
+- Add workspace Relevant / Not relevant feedback, clear actions, a feedback filter, saved-search support, and guidance to refine saved title exclusions. Feedback survives reimports and stale snapshot writes; concurrent edits return a conflict.
+- Export pending, dated follow-ups as an escaped, UTF-8-folded calendar snapshot with stable event IDs. Add private opt-in daily email reminder preferences, verified-recipient checks, bounded delivery scans, and provider idempotency with durable daily deduplication. No new database migration.
+- Add operator customer-growth cohorts for confirmed subscriptions and returns during days 7–13 after signup, reported after the full 14-day window. Exclude demo workspaces, internal owners, reserved test domains, configured test inboxes, and test Stripe events.
+- Publish a captioned 30-second recruiter sample walkthrough and prepare organic/ad copy pointing to the free ATS audit. No posts or paid ads were launched.
+- Verify signup, verification, single-use email recovery, test-provider checkout, paid login, portal access, and cancellation as one isolated fixture journey. Actual Resend delivery and separate Stripe test-environment verification remain pending configuration; see docs/EMAIL-AND-STRIPE-TEST-SETUP.md.
+
 ## Unreleased
 
 ## 0.1.2.9 — 2026-10-08 — Acquisition walkthrough

@@ -11,8 +11,8 @@ import { createSavedWorkStore } from './saved-work.js';
 import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
-import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail } from './email.js';
+import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbQuery, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
@@ -30,6 +30,9 @@ import { assertDeclaredBodyWithinLimit, configureHttpServer, requestBodyTooLarge
 import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './commercial-outcomes.js';
 import { applyCommercialCheckoutReadiness, isCommercialCheckoutReady } from './production-readiness.js';
 import { validateContactInput } from './contact-queries.js';
+import { getGrowthOutcomes } from './growth-outcomes.js';
+import { createReminderStore, REMINDER_ID } from './followup-reminders.js';
+import { buildTaskCalendar } from './task-calendar.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
 
@@ -40,6 +43,7 @@ const port = Number(process.env.BD_CLOUD_PORT || 8787);
 const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const savedWork = createSavedWorkStore();
+const reminders = createReminderStore();
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
@@ -81,6 +85,7 @@ const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_M
   : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
+const ANALYTICS_MAX = Number(process.env.BD_ANALYTICS_MAX) > 0 ? Number(process.env.BD_ANALYTICS_MAX) : 120;
 const PUBLIC_ANALYTICS_EVENT_TYPES = new Set([
   'pageview',
   'tool_used',
@@ -340,6 +345,8 @@ const mimeTypes = {
   '.xml': 'application/xml; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.mp4': 'video/mp4',
+  '.vtt': 'text/vtt; charset=utf-8',
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
   '.woff2': 'font/woff2',
@@ -437,6 +444,7 @@ async function startServer() {
   server.listen(port, host, () => {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
     startPeriodicPipelineRunner(startupPromise);
+    startReminderRunner(startupPromise);
   });
 
   // Graceful shutdown. Order matters: wait for in-flight requests to finish
@@ -500,6 +508,44 @@ function logRequestError(status, req, error) {
   console.error(STRUCTURED_LOGS
     ? JSON.stringify(entry)
     : `${entry.status} on ${entry.method} ${entry.path} [${entry.requestId}]: ${entry.error}`);
+}
+
+function startReminderRunner(startupPromise) {
+  let running = false; let cursor = '';
+  const scan = async () => {
+    if (running || !isEmailConfigured()) return;
+    running = true; const startedAt = performance.now();
+    try {
+      await startupPromise;
+      if (!startupComplete || startupError) return;
+      const candidates = await reminders.candidates(cursor);
+      cursor = candidates.length === 20 ? `${candidates.at(-1).tenant_id}:${candidates.at(-1).user_id}` : '';
+      for (const candidate of candidates) {
+        try {
+          await reminders.deliver(candidate.tenant_id, candidate.user_id, {
+            getRecipient: async (tenantId, userId) => {
+              // Recheck current DB identity inside the delivery transaction.
+              const row = (await dbQuery(`SELECT u.email,u.email_verified_at,u.status,t.status AS tenant_status,t.slug,m.role FROM users u
+                JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=$1 AND t.id=$2`, [userId, tenantId])).rows[0];
+              return { to: row?.email, eligible: Boolean(row?.email_verified_at && row.status === 'active' && ['active','trialing'].includes(row.tenant_status) && row.slug !== PUBLIC_DEMO_SLUG && ['owner','admin','member'].includes(row.role)) };
+            },
+            getTasks: async (tenantId, date) => {
+              const result = await dbQuery(`SELECT raw, count(*) OVER() AS total FROM tasks WHERE tenant_id=$1 AND status='pending'
+                AND substring(due_date,1,10)<=$2 AND due_date<>'' ORDER BY due_date,id LIMIT 20`, [tenantId, date]);
+              return { items: result.rows.map(row => row.raw), total: Number(result.rows[0]?.total || 0) };
+            },
+            send: payload => sendFollowupReminderEmail({ ...payload, appUrl: `${PUBLIC_ORIGIN}/app/#/tasks` }),
+          });
+        } catch (error) { console.error('Follow-up reminder failed:', safeErrorSummary(error)); }
+      }
+    } finally {
+      running = false;
+      const elapsed = Math.round(performance.now() - startedAt);
+      if (elapsed > 1000) console.warn(`Slow reminders: saas/src/server.js startReminderRunner.scan ${elapsed}ms`);
+    }
+  };
+  const timer = setInterval(() => void scan().catch(error => console.error('Reminder scan failed:', safeErrorSummary(error))), 5 * 60 * 1000);
+  timer.unref();
 }
 
 function startPeriodicPipelineRunner(startupPromise) {
@@ -991,7 +1037,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/analytics/visit' && req.method === 'POST') {
-    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, 120, 60 * 60 * 1000)) {
+    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, ANALYTICS_MAX, 60 * 60 * 1000)) {
       return sendJson(res, 429, { error: 'Too many analytics requests.' });
     }
     return handleAnalyticsVisit(req, res);
@@ -1429,6 +1475,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/bootstrap') {
+    if (!isReadOnlyDemoSession(session, tenant)) await recordProductMilestone({ eventType: 'workspace_visited', tenantId, userId: user.id, eventKey: `${tenantId}:${user.id}:${new Date().toISOString().slice(0,10)}`, dimensions: { persona: tenant.persona } });
     return sendJson(res, 200, await store.getBootstrap(tenantId, {
       includeFilters: isTruthy(url.searchParams.get('includeFilters')),
       session,
@@ -1439,11 +1486,12 @@ self.addEventListener('activate', (event) => {
     const canViewAnalytics = canViewSiteAnalytics(user);
     const effectivePlanId = getEffectivePlanId(tenant, user);
     const analyticsStartedAt = performance.now();
-    const [bootstrapData, runtime, ingestionDiagnostics, analytics] = await Promise.all([
+    const [bootstrapData, runtime, ingestionDiagnostics, analytics, growth] = await Promise.all([
       store.getBootstrap(tenantId, { includeFilters: true, session }),
       store.getRuntimeStatus(tenantId),
       store.getIngestionDiagnostics(tenantId),
       canViewAnalytics ? dbGetAnalyticsSummary(30) : Promise.resolve(null),
+      canViewAnalytics ? getGrowthOutcomes({ excludedEmails: [...internalOwnerEmails, ...parseEmailList(process.env.BD_ANALYTICS_TEST_EMAILS)] }) : Promise.resolve(null),
     ]);
     const analyticsElapsedMs = Math.round(performance.now() - analyticsStartedAt);
     if (canViewAnalytics && analyticsElapsedMs > 250) {
@@ -1489,7 +1537,7 @@ self.addEventListener('activate', (event) => {
       mediumQueue: store.getResolverQueue(tenantId, 'medium'),
       enrichmentQueue: store.getEnrichmentQueue(tenantId, enrichmentQuery),
       configs,
-      analytics,
+      analytics: analytics ? { ...analytics, growth } : null,
       canViewSiteAnalytics: canViewAnalytics,
       billing: {
         plan: getPlan(effectivePlanId),
@@ -1539,6 +1587,7 @@ self.addEventListener('activate', (event) => {
     }
     const result = await store.clearTenantWorkspaceData(tenantId);
     await savedWork.clearTenant(tenantId);
+    await reminders.clearTenant(tenantId);
     return sendJson(res, 200, {
       ...result,
       message: 'Workspace data deleted. Your account and workspace shell remain available.',
@@ -1974,6 +2023,7 @@ self.addEventListener('activate', (event) => {
   const savedWorkMatch = pathname.match(/^\/api\/saved-work\/([^/]+)(?:\/([a-zA-Z0-9_-]{1,160}))?$/);
   if (savedWorkMatch) {
     const [, kind, id] = savedWorkMatch;
+    if (id === REMINDER_ID) return sendJson(res, 400, { error: 'Use follow-up reminder settings to edit this item.' });
     try {
       if (req.method === 'GET') {
         const result = id ? await savedWork.get(tenantId, user.id, kind, id) : await savedWork.list(tenantId, user.id, kind, Object.fromEntries(url.searchParams));
@@ -2000,6 +2050,30 @@ self.addEventListener('activate', (event) => {
     const result = await store.logPersonOutreach(tenantId, user.id, personOutreachMatch[1], await readJson(req));
     const bridgeResult = await bridgeCommercialOutcomeFromActivity({ tenantId, tenant, user, activity: result.activity, payload: { type: 'outreach' } });
     return sendJson(res, 201, { ...result, activity: buildActivityApiResponse(result.activity, bridgeResult) });
+  }
+
+  const jobFeedbackMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/feedback$/);
+  if (jobFeedbackMatch && req.method === 'PATCH') {
+    const result = await store.patchJobFeedback(tenantId, jobFeedbackMatch[1], await readJson(req));
+    return sendJson(res, result ? 200 : 404, result || { error: 'Role not found in this workspace.' });
+  }
+
+  if (pathname === '/api/tasks/reminders') {
+    const status = { providerConfigured: isEmailConfigured(), emailVerified: Boolean(user.emailVerifiedAt) };
+    if (req.method === 'GET') return sendJson(res, 200, { ...await reminders.get(tenantId, user.id), ...status });
+    if (req.method === 'PUT') {
+      const input = await readJson(req);
+      if (input?.emailEnabled && (!status.providerConfigured || !status.emailVerified)) return sendJson(res, 409, { error: status.providerConfigured ? 'Verify your account email before enabling reminders.' : 'Email delivery needs setup. Calendar export is available now.' });
+      return sendJson(res, 200, { ...await reminders.put(tenantId, user.id, input), ...status });
+    }
+  }
+
+  if (pathname === '/api/tasks/calendar' && req.method === 'GET') {
+    const result = await store.findTasks(tenantId, { ...Object.fromEntries(url.searchParams), status: 'pending', page: 1, pageSize: 10000 });
+    if (result.total > result.items.length) return sendJson(res, 400, { error: 'Narrow the task filters to export at most 10,000 follow-ups.' });
+    const calendar = buildTaskCalendar(tenantId, result.items, { origin: getRequestOrigin(req) });
+    res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': 'attachment; filename="bd-engine-followups.ics"', 'Cache-Control': 'no-store' });
+    return res.end(calendar);
   }
 
   if (pathname.startsWith('/api/tasks')) {
@@ -2227,7 +2301,13 @@ async function handleAnalyticsVisit(req, res) {
 
 async function recordProductMilestone(event) {
   try {
-    return await dbRecordProductEvent(buildProductEvent(event));
+    const subject = event.userId ? findUserById(event.userId) : null;
+    const workspace = event.tenantId ? findTenantById(event.tenantId) : null;
+    const email = String(subject?.email || '').toLowerCase();
+    const testEmails = parseEmailList(process.env.BD_ANALYTICS_TEST_EMAILS);
+    const billingTest = ['subscription_started', 'subscription_canceled', 'payment_recovered', 'payment_failed'].includes(event.eventType) && getStripeConfigStatus().mode === 'test';
+    const trafficClass = workspace?.slug === PUBLIC_DEMO_SLUG ? 'demo' : internalOwnerEmails.has(email) ? 'internal' : (billingTest || testEmails.includes(email) || /@(example\.(com|org|net)|[^@]*\.test)$/.test(email)) ? 'test' : 'customer';
+    return await dbRecordProductEvent(buildProductEvent({ ...event, dimensions: { ...event.dimensions, trafficClass } }));
   } catch (error) {
     console.error('Product milestone recording failed:', safeErrorSummary(error));
     return { recorded: false, reason: error.message };
@@ -2933,6 +3013,7 @@ async function handleCreateTenant(req, res, user) {
 // ── Static file serving ─────────────────────────────────────────────────────
 
 const PUBLIC_GUIDE_FILES = new Map([
+  ['/recruiter-walkthrough', 'recruiter-walkthrough.html'],
   ['/guides', 'guides/index.html'],
   ['/guides/ats-job-board-coverage', 'guides/ats-job-board-coverage.html'],
   ['/guides/workday-job-search', 'guides/workday-job-search.html'],

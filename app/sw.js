@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20260928-role-layout-01';
+const ASSET_VERSION = '20261008-workflows-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
@@ -8,6 +8,7 @@ const SHELL_FILES = [
   `/workspace.css?v=${ASSET_VERSION}`,
   `/people-workspace.js?v=${ASSET_VERSION}`,
   `/saved-work.js?v=${ASSET_VERSION}`,
+  `/workflow-tools.js?v=${ASSET_VERSION}`,
   `/app.js?v=${ASSET_VERSION}`,
   `/local-api.js?v=${ASSET_VERSION}`,
   '/manifest.json',

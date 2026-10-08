@@ -29,6 +29,7 @@ export function validateSavedWork(kind, input = {}) {
       active: ['', 'true', 'false'], isNew: ['', 'true', 'false'], hasContacts: ['', 'true'], pipelineOnly: ['', 'true'],
       geography: ['', 'local_remote', 'gta', 'canada', 'canada_us', 'us', 'remote'],
       workStyle: ['', 'local_remote', 'remote', 'hybrid', 'onsite'], sortBy: ['', 'connections', 'relevance', 'retrieved'],
+      feedback: ['', 'relevant', 'not_relevant', 'unreviewed'],
       recencyDays: ['', '7', '14', '30'], minConnections: ['', '1', '2', '3'],
     };
     for (const [key, allowed] of Object.entries(choices)) {

@@ -282,3 +282,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 @media (prefers-reduced-motion: reduce) {
   .people-workspace *, .people-dialog * { animation: none; transition: none; scroll-behavior: auto; }
 }
+
+.job-feedback { margin-top: .65rem; padding-top: .5rem; border-top: 1px solid var(--border, #ddd); }
+.job-feedback button[aria-pressed="true"] { background: var(--accent, #2563eb); color: #fff; }
+.job-feedback [role="status"]:empty { display: none; }
+#available-import-results { margin: .5rem 1rem; }
+[data-followup-tools] { margin-bottom: 1rem; }
+[data-reminder-form] { margin-top: 1rem; }
+
+.followup-tools-body { padding: 14px; }
+.task-create-form label.reminder-optin { display: flex; align-items: center; gap: .6rem; }
+.reminder-optin input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 auto; }
+[data-reminder-status]:empty, [data-calendar-status]:empty { display: none; }

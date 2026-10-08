@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { XMLParser } from 'fast-xml-parser';
 import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbListLegalConsents, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
-import { primeTenantRelationalMirror, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
+import { primeTenantRelationalMirror, syncTenantRelationalChanges, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
 import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
@@ -13,6 +13,7 @@ import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeS
 import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
 import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
+import { validateJobFeedback, persistJobFeedback, loadWorkspaceFeedback } from './job-feedback.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -1686,7 +1687,7 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
           job.progressMessage = `Finding sources: ${progress.checked} of ${progress.total} companies checked · ${progress.found} found · ${progress.needsReview} need review · ${progress.failed} failed.`;
         } else if (progress.stage === 'fetch') {
           job.progress = 20 + Math.floor(75 * fraction);
-          job.progressMessage = `Fetching jobs: ${progress.checked} of ${progress.total} boards checked · ${progress.fetched} jobs fetched · ${progress.partial} incomplete · ${progress.failed} failed${progress.lastCompany ? `. Last checked: ${progress.lastCompany}` : ''}`;
+          job.progressMessage = `Fetching jobs: ${progress.checked} of ${progress.total} boards checked · ${progress.fetched} jobs fetched · ${progress.available || 0} roles available now · ${progress.partial} incomplete · ${progress.failed} failed${progress.lastCompany ? `. Last checked: ${progress.lastCompany}` : ''}`;
         } else {
           job.progress = 95;
           job.progressMessage = 'Source checks finished. Applying your import geography, scoring roles, and saving results...';
@@ -2415,7 +2416,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
-        capabilities: { commercialOutcomes: true, jobPipeline: true, peopleWorkspace: true },
+        capabilities: { commercialOutcomes: true, jobPipeline: true, peopleWorkspace: true, jobFeedback: true, followupReminders: true },
         ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);
@@ -2886,6 +2887,11 @@ export function createStore() {
       const queryStartedAt = performance.now();
       // Direct visits after restart/eviction must not query an unloaded cache.
       await ensureDataLoaded(tenantId, true);
+      const latestFeedback = await loadWorkspaceFeedback(tenantId);
+      if (latestFeedback.length) {
+        const byId = new Map(latestFeedback.map(row => [row.id, row.feedback]));
+        for (const item of jobsForTenant(tenantId)) if (byId.has(item.id)) item.relevanceFeedback = byId.get(item.id);
+      }
       const tenantAccounts = accountsForTenant(tenantId);
       const accountByIdMap = new Map(tenantAccounts.map((acc) => [acc.id, acc]));
       const accountByNameMap = new Map(tenantAccounts.map((acc) => [normalizeKey(acc.displayName), acc]));
@@ -2995,6 +3001,9 @@ export function createStore() {
       if (minRelevance > 0) {
         items = items.filter((item) => item.matchesSearchFocus !== false && Number(item.relevanceScore ?? -1) >= minRelevance);
       }
+      if (['relevant', 'not_relevant', 'unreviewed'].includes(query.feedback)) {
+        items = items.filter(item => query.feedback === 'unreviewed' ? !item.relevanceFeedback?.vote : item.relevanceFeedback?.vote === query.feedback);
+      }
       if (query.sortBy === 'connections') {
         items.sort((a, b) => (b.connectionCount || 0) - (a.connectionCount || 0)
           || (Number(b.relevanceScore ?? -1) - Number(a.relevanceScore ?? -1))
@@ -3017,6 +3026,27 @@ export function createStore() {
         console.warn(`Slow job query: saas/src/store.js findJobs ${queryElapsedMs}ms`);
       }
       return result;
+    },
+
+    async patchJobFeedback(tenantId, jobId, input) {
+      assertTenant(tenantId);
+      const startedAt = performance.now();
+      const payload = validateJobFeedback(input);
+      const result = await this.findJobs(tenantId, { ids: jobId, active: '', pageSize: 1 });
+      const item = result.items[0];
+      if (!item) return null;
+      const cached = jobsForTenant(tenantId).find(entry => entry.id === jobId);
+      const current = isDbEnabled() ? item : cached || item;
+      if ((current.relevanceFeedback?.updatedAt || '') !== payload.expectedUpdatedAt) {
+        throw Object.assign(new Error('Feedback changed. Reload this role before saving again.'), { status: 409 });
+      }
+      const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.relevanceFeedback?.updatedAt || '') + 1 || 0)).toISOString();
+      const feedback = { vote: payload.vote, reason: payload.reason, updatedAt };
+      await persistJobFeedback(tenantId, jobId, feedback, payload.expectedUpdatedAt);
+      if (cached) cached.relevanceFeedback = feedback;
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 150) console.warn(`Slow role feedback: saas/src/store.js patchJobFeedback ${elapsedMs}ms`);
+      return { id: jobId, relevanceFeedback: feedback };
     },
 
     async patchJobPipeline(tenantId, jobId, stage) {
@@ -4189,27 +4219,7 @@ export function createStore() {
         finally { progressCallbackMs += performance.now() - startedAt; }
       };
       reportProgress();
-      const discoveredBoards = await mapSettledWithConcurrency(candidates, discoveryConcurrency, async (config) => {
-        const startedAt = performance.now();
-        try {
-          const match = await discoverAtsBoard(config, startedAt + discoveryTimeBudgetMs);
-          if (!match) progress.unmatched++;
-          else if (match.method === 'public_ats_probe' || match.requiresReview === true) progress.needsReview++;
-          else progress.found++;
-          return { config, match };
-        } catch (error) {
-          progress.failed++;
-          throw error;
-        } finally {
-          config.lastDiscoveryElapsedMs = Math.round(performance.now() - startedAt);
-          progress.checked++;
-          progress.lastCompany = config.companyName;
-          reportProgress();
-        }
-      });
-      for (let index = 0; index < discoveredBoards.length; index++) {
-        const config = candidates[index];
-        const settled = discoveredBoards[index];
+      const applyDiscovery = async (config, settled) => {
         checked++;
         if (settled.status === 'rejected') {
           const message = settled.reason?.message || 'Discovery failed';
@@ -4220,7 +4230,7 @@ export function createStore() {
           config.lastDiscoveryCheckedAt = now();
           config.updatedAt = now();
           unresolved++;
-          continue;
+          return;
         }
 
         const match = settled.value?.match;
@@ -4268,7 +4278,33 @@ export function createStore() {
           config.updatedAt = now();
           unresolved++;
         }
-      }
+        if (timings.firstResultMs === undefined && settled.status === 'fulfilled' && settled.value?.match) timings.firstResultMs = Math.round(performance.now() - totalStartedAt);
+        if (isDbEnabled()) await syncTenantRelationalChanges(tenantId, { configs: [config] });
+        if (!relationalWritesPrimaryForTenant(tenantId)) persistTenant(tenantId);
+      };
+      const discoveryResults = await mapSettledWithConcurrency(candidates, discoveryConcurrency, async (config) => {
+        const startedAt = performance.now();
+        try {
+          let match;
+          try { match = await discoverAtsBoard(config, startedAt + discoveryTimeBudgetMs); }
+          catch (error) {
+            progress.failed++;
+            await applyDiscovery(config, { status: 'rejected', reason: error });
+            return;
+          }
+          await applyDiscovery(config, { status: 'fulfilled', value: { config, match } });
+          if (!match) progress.unmatched++;
+          else if (match.method === 'public_ats_probe' || match.requiresReview === true) progress.needsReview++;
+          else progress.found++;
+        } finally {
+          config.lastDiscoveryElapsedMs = Math.round(performance.now() - startedAt);
+          progress.checked++;
+          progress.lastCompany = config.companyName;
+          reportProgress();
+        }
+      });
+      const discoveryPublishFailure = discoveryResults.find(item => item.status === 'rejected');
+      if (discoveryPublishFailure) throw discoveryPublishFailure.reason;
       timings.discoveryMs = Math.round(performance.now() - discoveryStartedAt);
       timings.progressCallbackMs = Math.round(progressCallbackMs);
       timings.discoveryConcurrency = discoveryConcurrency;
@@ -4532,35 +4568,12 @@ export function createStore() {
 
       const fetchStartedAt = performance.now();
       const fetchConcurrency = readPositiveInteger(options.fetchConcurrency, DEFAULT_ATS_FETCH_CONCURRENCY);
+      const publishedRoleIds = new Set();
       const fetchProgress = { stage: 'fetch', checked: 0, total: supportedConfigs.length, fetched: 0, failed: 0, partial: 0, lastCompany: '', elapsedMs: 0 };
       reportProgress(fetchProgress);
-      const fetchedBoards = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async ({ config, atsType, boardId }) => {
-        const fetcher = ATS_FETCHERS.get(atsType);
-        try {
-          const response = await fetcher(config, boardId);
-          fetchProgress.fetched += response.jobs.length;
-          if (response.complete === false) fetchProgress.partial++;
-          return { config, atsType, ...response };
-        } catch (error) {
-          fetchProgress.failed++;
-          throw error;
-        } finally {
-          fetchProgress.checked++;
-          fetchProgress.lastCompany = config.companyName;
-          fetchProgress.elapsedMs = Math.round(performance.now() - fetchStartedAt);
-          reportProgress(fetchProgress);
-        }
-      });
-      timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
-      timings.fetchConcurrency = fetchConcurrency;
-      reportProgress({ ...fetchProgress, stage: 'saving' });
-      timings.progressCallbackMs = Math.round(progressCallbackMs);
-
-      const upsertStartedAt = performance.now();
-      for (let index = 0; index < fetchedBoards.length; index++) {
-        const configInfo = supportedConfigs[index];
-        const { config, atsType } = configInfo;
-        const settled = fetchedBoards[index];
+      const applyBoard = async ({ config, atsType }, settled) => {
+        const boardStartedAt = performance.now();
+        const changedJobs = [];
 
         if (settled.status === 'rejected') {
           const message = settled.reason?.message || 'Unknown ATS fetch failure';
@@ -4586,7 +4599,7 @@ export function createStore() {
             warnings.push(`${config.companyName} returned ${message.match(/HTTP\s+\d+/i)?.[0] || 'a permanent not-found response'} and was moved back to ATS review.`);
           }
           config.updatedAt = now();
-          continue;
+          return;
         }
 
         const fetchedJobs = settled.value.jobs;
@@ -4636,6 +4649,7 @@ export function createStore() {
               importRunId,
               updatedAt: now(),
             });
+            changedJobs.push(existingJob);
             existingByNaturalKey.set(naturalKey, existingJob);
             if (providerIdentity) existingByProviderIdentity.set(providerIdentity, existingJob);
             seenJobIds.add(existingJob.id);
@@ -4661,6 +4675,7 @@ export function createStore() {
               createdAt: now(),
               updatedAt: now(),
             });
+            changedJobs.push(newJob);
             tenantJobs.unshift(newJob);
             jobs.push(newJob);
             existingByNaturalKey.set(naturalKey, newJob);
@@ -4687,6 +4702,7 @@ export function createStore() {
           warnings.push(`${config.companyName}: partial import (${fetchedJobs.length} fetched${settled.value.reportedTotal != null ? ` of ${settled.value.reportedTotal} reported` : ''}${configInvalidRows ? `; ${configInvalidRows} invalid rows` : ''}). ${coverageDetail ? `${coverageDetail} ` : ''}Unseen jobs were preserved; coverage is incomplete.`);
         }
         const closedForConfig = complete ? deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, now()) : [];
+        changedJobs.push(...closedForConfig);
         closedJobs += closedForConfig.length;
         for (const closedJob of closedForConfig) {
           importItems.push({
@@ -4705,7 +4721,41 @@ export function createStore() {
         config.lastImportedAt = now();
         config.lastImportError = '';
         config.updatedAt = now();
-      }
+        const changedAccounts = [...new Set(changedJobs.map(item => item.accountId).filter(Boolean))].map(id => accountsById.get(id)).filter(Boolean);
+        for (const item of changedAccounts) refreshAccountHiringStats(item, tenantJobs, searchFocus);
+        if (isDbEnabled()) await syncTenantRelationalChanges(tenantId, { jobs: changedJobs, accounts: changedAccounts, configs: [config] });
+        if (!relationalWritesPrimaryForTenant(tenantId)) persistTenant(tenantId);
+        timings.upsertMs = (timings.upsertMs || 0) + Math.round(performance.now() - boardStartedAt);
+        for (const item of changedJobs) { if (item.active === false) publishedRoleIds.delete(item.id); else publishedRoleIds.add(item.id); }
+        fetchProgress.available = publishedRoleIds.size;
+        if (timings.firstResultMs === undefined && configKept) timings.firstResultMs = Math.round(performance.now() - totalStartedAt);
+      };
+      const sourceResults = await mapSettledWithConcurrency(supportedConfigs, fetchConcurrency, async (configInfo) => {
+        const { config, atsType, boardId } = configInfo;
+        try {
+          let response;
+          try { response = await ATS_FETCHERS.get(atsType)(config, boardId); }
+          catch (error) {
+            fetchProgress.failed++;
+            await applyBoard(configInfo, { status: 'rejected', reason: error });
+            return;
+          }
+          await applyBoard(configInfo, { status: 'fulfilled', value: { config, atsType, ...response } });
+          fetchProgress.fetched += response.jobs.length;
+          if (response.complete === false) fetchProgress.partial++;
+        } finally {
+          fetchProgress.checked++;
+          fetchProgress.lastCompany = config.companyName;
+          fetchProgress.elapsedMs = Math.round(performance.now() - fetchStartedAt);
+          reportProgress(fetchProgress);
+        }
+      });
+      const publishFailure = sourceResults.find(item => item.status === 'rejected');
+      if (publishFailure) throw publishFailure.reason;
+      timings.fetchMs = Math.round(performance.now() - fetchStartedAt);
+      timings.fetchConcurrency = fetchConcurrency;
+      reportProgress({ ...fetchProgress, stage: 'saving' });
+      timings.progressCallbackMs = Math.round(progressCallbackMs);
 
       for (const accountId of touchedAccountIds) {
         const item = accountsById.get(accountId);
@@ -4713,7 +4763,7 @@ export function createStore() {
       }
 
       tenantJobs.sort((a, b) => String(b.postedAt || b.importedAt || b.updatedAt).localeCompare(String(a.postedAt || a.importedAt || a.updatedAt)));
-      timings.upsertMs = Math.round(performance.now() - upsertStartedAt);
+      timings.upsertMs ||= 0;
 
       const persistStartedAt = performance.now();
       if (supportedConfigs.length || touchedAccountIds.size || errors.length) persistTenant(tenantId);

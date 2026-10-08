@@ -21,6 +21,8 @@ export function buildTenantJobQueries(tenantId, query = {}) {
   const workStyle = buildJobWorkStyleSql();
   const relevance = `CASE WHEN COALESCE(j.raw->>'relevanceScore', '') ~ '^\\d+(\\.\\d+)?$' THEN (j.raw->>'relevanceScore')::numeric ELSE -1 END`;
   const posted = `COALESCE(NULLIF(j.posted_at, ''), j.raw->>'importedAt', '')`;
+  if (['relevant', 'not_relevant'].includes(query.feedback)) clauses.push(`j.raw->'relevanceFeedback'->>'vote' = ${param(query.feedback)}`);
+  else if (query.feedback === 'unreviewed') clauses.push("coalesce(j.raw->'relevanceFeedback'->>'vote', '') = ''");
   if (truthy(query.pipelineOnly)) clauses.push(`COALESCE(j.raw->>'pipelineStage', '') <> ''`);
   if (query.ids !== undefined) clauses.push(`j.id = ANY(${param(String(query.ids).split(',').filter(Boolean))}::text[])`);
   if (String(query.q || '').trim()) {
