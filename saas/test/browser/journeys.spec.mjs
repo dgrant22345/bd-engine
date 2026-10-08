@@ -447,6 +447,66 @@ test('task journey: whitespace task is rejected visibly, valid task succeeds', a
   await expect(createdTask).toHaveCount(0, { timeout: 5000 });
 });
 
+test('task queue exposes every page and returns to a valid page after completion', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await page.evaluate(async () => {
+    for (let index = 1; index <= 51; index++) {
+      const response = await fetch('/api/tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: `Queue reminder ${String(index).padStart(2, '0')}`, dueDate: '2030-01-15' }),
+      });
+      if (!response.ok) throw new Error(`Could not seed task ${index}`);
+    }
+  });
+  await gotoAppRoute(page, '#/tasks');
+  await expect(app.locator('.task-item')).toHaveCount(50);
+  await expect(app.locator('.tasks-header')).toContainText('51 pending tasks');
+  await expect(app.locator('#tasks-overview')).toContainText('Due dates on this page');
+  await app.getByRole('button', { name: 'Next page' }).click();
+  await expect(app.locator('.task-item')).toHaveCount(1);
+  await expect(app.locator('.task-item')).toContainText('Queue reminder 51');
+  await expect(app.getByRole('navigation', { name: 'Page navigation' })).toContainText('Showing 51-51 of 51');
+  await app.getByRole('button', { name: 'Mark Done' }).click();
+  await expect(app.locator('.task-item')).toHaveCount(50);
+  await expect(app.locator('.tasks-header')).toContainText('50 pending tasks');
+  await expect(app.getByRole('navigation', { name: 'Page navigation' })).toHaveCount(0);
+  await app.getByRole('tab', { name: 'Completed', exact: true }).click();
+  await expect(app.locator('.task-item')).toContainText('Queue reminder 51');
+  await app.locator('.task-create-disclosure > summary').click();
+  await app.locator('input[name="summary"]').fill('New commitment from completed work');
+  await app.locator('#task-create-form button[type="submit"]').click();
+  await expect(app.getByRole('tab', { name: 'Pending', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(app.locator('.tasks-header')).toContainText('51 pending tasks');
+  await expect(app.locator('.task-item', { hasText: 'New commitment from completed work' })).toHaveCount(1);
+  await app.getByRole('button', { name: 'Next page' }).click();
+  await expect(app.locator('.task-item')).toContainText('Queue reminder 50');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const layout = await app.locator('body').evaluate((body) => ({
+    width: body.ownerDocument.documentElement.scrollWidth,
+    viewport: body.ownerDocument.defaultView.innerWidth,
+  }));
+  expect(layout.width).toBeLessThanOrEqual(layout.viewport);
+});
+
+test('legacy tasks with missing or invalid dates remain visible', async ({ page }) => {
+  const { app } = await signup(page);
+  await completeSetup(page, app);
+  await page.route('**/api/tasks?**', async (route) => {
+    const response = await route.fetch();
+    const result = await response.json();
+    await route.fulfill({ response, json: { ...result, total: 3, items: [
+      { id: 'legacy-undated', summary: 'Undated reminder', status: 'pending', dueDate: '' },
+      { id: 'legacy-null', summary: 'Missing-date reminder', status: 'pending', dueDate: null },
+      { id: 'legacy-invalid', summary: 'Invalid-date reminder', status: 'pending', dueDate: '2026-99-99' },
+    ] } });
+  });
+  await gotoAppRoute(page, '#/tasks');
+  await expect(app.locator('[data-task-section="No due date"] .task-item')).toHaveCount(3);
+  await expect(app.locator('#tasks-overview')).toContainText('No due date');
+  await expect(app.locator('.tasks-content')).not.toContainText('Invalid Date');
+});
+
 test('filter journey: contacts filter narrows results without errors', async ({ page }) => {
   await startDemo(page);
   await gotoAppRoute(page, '#/contacts');

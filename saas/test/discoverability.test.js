@@ -27,6 +27,7 @@ test('software application structured data is valid JSON with current public off
   const schema = JSON.parse(match[1]);
   assert.equal(schema['@type'], 'SoftwareApplication');
   assert.equal(schema.url, 'https://bd-engine-production.up.railway.app/');
+  assert.equal(schema.aggregateRating, undefined, 'Only publish review ratings with substantiated review data');
   assert.deepEqual(
     schema.offers.map(({ name, price, priceCurrency }) => ({ name, price, priceCurrency })),
     [

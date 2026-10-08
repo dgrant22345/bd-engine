@@ -6544,6 +6544,13 @@ textarea:focus-visible {
 .task-create-form label { display: grid; gap: 6px; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
 .task-create-form input { width: 100%; }
 .tasks-tabs { display: flex; gap: 8px; }
+.tasks-overview-label { margin: 0 0 8px; }
+.tasks-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0; }
+.tasks-overview-grid > div { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.tasks-overview-grid dt { font-size: 0.8rem; color: var(--muted); }
+.tasks-overview-grid dd { margin: 4px 0 0; font-size: 1.6rem; font-weight: 800; color: var(--text); }
+.task-item-info { min-width: 0; overflow-wrap: anywhere; }
+.task-item-actions { flex-wrap: wrap; }
 .tab-btn { border: none; background: transparent; padding: 6px 16px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; cursor: pointer; color: var(--muted); transition: all 0.2s; }
 .tab-btn.active { background: var(--accent); color: #fff; }
 .tab-btn:hover:not(.active) { background: var(--bg-soft); color: var(--text); }

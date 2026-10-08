@@ -3200,9 +3200,9 @@ a:hover { text-decoration: underline; }
 
 /* ── Marketing & Social Proof Bar ── */
 .social-proof-bar {
-  background: linear-gradient(135deg, rgba(30, 41, 59, 0.04), rgba(15, 23, 42, 0.07));
-  border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+  background: var(--landing-surface);
+  border-top: 1px solid var(--landing-border);
+  border-bottom: 1px solid var(--landing-border);
   padding: 24px 20px;
   margin: 40px 0;
 }
@@ -3228,20 +3228,20 @@ a:hover { text-decoration: underline; }
 .proof-item strong {
   font-size: 26px;
   font-weight: 800;
-  color: var(--text-primary);
+  color: var(--landing-ink);
   line-height: 1;
 }
 
 .proof-item span {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--landing-muted);
   max-width: 200px;
 }
 
 .proof-divider {
   width: 1px;
   height: 36px;
-  background: var(--border-subtle);
+  background: var(--landing-border);
 }
 
 @media (max-width: 768px) {
@@ -3291,6 +3291,28 @@ a:hover { text-decoration: underline; }
   margin-top: 14px;
   display: flex;
   justify-content: flex-end;
+}
+
+.preview-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--landing-border); }
+.preview-tabs button { flex: 1; padding: 10px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--landing-muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.preview-tabs button[aria-selected="true"] { background: #eff6ff; color: #1d4ed8; }
+.preview-tabs button:focus-visible, .preview-stage:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.preview-stage { min-height: 285px; }
+.preview-stage[hidden] { display: none; }
+.preview-stage:not(#preview-panel-signal) { padding: 24px; }
+.preview-contact { display: flex; align-items: center; gap: 14px; margin: 8px 0 24px; }
+.preview-avatar { display: grid; place-items: center; flex-shrink: 0; width: 48px; height: 48px; border-radius: 14px; background: #eff6ff; color: #1d4ed8; font-weight: 800; }
+.preview-contact h2 { margin: 6px 0; font-size: 22px; color: var(--landing-ink); }
+.preview-contact p, .preview-stage-copy { font-size: 14px; line-height: 1.6; color: var(--landing-muted); }
+.preview-evidence { margin-top: 16px; font-size: 12px; line-height: 1.6; color: var(--landing-muted); }
+.preview-draft { margin: 16px 0; padding: 16px; border-left: 3px solid #2563eb; background: #f8fafc; border-radius: 0 10px 10px 0; color: #334155; font-size: 14px; line-height: 1.7; }
+.preview-stage .preview-next-action { padding: 0; background: transparent; }
+.preview-interactive-cta { padding: 0 20px 20px; }
+@media (max-width: 480px) {
+  .preview-tabs button { font-size: 11px; padding: 10px 4px; }
+  .preview-stage { min-height: 315px; }
+  .preview-stage:not(#preview-panel-signal) { padding: 20px; }
+  .preview-contact { align-items: flex-start; }
 }
 
 /* ── Interactive ATS Quick Scanner on Landing ── */

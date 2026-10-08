@@ -214,6 +214,7 @@ const appState = {
       : onboardingIntent?.careerUrls || []).join('\n'),
   },
   taskQuery: { page: 1, pageSize: 50, status: 'pending' },
+  taskPage: null,
   modalCsvFile: null,
   modalCsvFileName: '',
   modalCsvParsedStats: null,
@@ -3003,6 +3004,12 @@ function bindEvents() {
       if (view === 'contacts') appState.contactQuery.page = page;
       if (view === 'jobs') appState.jobQuery.page = page;
       if (view === 'configs') appState.configQuery.page = page;
+      if (view === 'tasks') {
+        appState.taskQuery.page = page;
+        await renderTasksView();
+        viewTitle?.focus({ preventScroll: true });
+        return;
+      }
       if (view === 'enrichmentQueue') {
         appState.enrichmentQuery.page = page;
         await refreshEnrichmentPanel();
@@ -3928,6 +3935,9 @@ function bindEvents() {
       if (submitButton) submitButton.disabled = true;
       try {
         await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        invalidateAppData();
+        appState.taskQuery.status = 'pending';
+        appState.taskQuery.page = 1;
         showToast('Task added to the workspace.', 'success');
         await renderTasksView();
       } catch (error) {
@@ -14942,9 +14952,16 @@ function endTour(options = {}) {
 }
 
 async function renderTasksView() {
+  const tasksStartedAt = performance.now();
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
-    const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    let tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    const lastPage = Math.max(1, Math.ceil(tasks.total / tasks.pageSize));
+    if (tasks.page > lastPage) {
+      appState.taskQuery.page = lastPage;
+      tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    }
+    appState.taskPage = tasks;
     setViewTitle('Tasks & Reminders');
 
     const todayKey = toLocalDateInputValue(new Date());
@@ -14954,6 +14971,7 @@ async function renderTasksView() {
     });
     const today = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) === todayKey);
     const upcoming = tasks.items.filter(t => t.status === 'pending' && calendarDateKey(t.dueDate) > todayKey);
+    const undated = tasks.items.filter(t => t.status === 'pending' && !calendarDateKey(t.dueDate));
     const completed = tasks.items.filter(t => t.status === 'completed');
 
     appRoot.innerHTML = `
@@ -14962,13 +14980,15 @@ async function renderTasksView() {
           <div>
             <p class="eyebrow">Follow-up queue</p>
             <h3>${appState.taskQuery.status === 'pending' ? 'What needs attention' : 'Completed work'}</h3>
-            <p class="muted small">Keep the next commitment visible; create another only when you need it.</p>
+            <p class="muted small">${formatNumber(tasks.total)} ${appState.taskQuery.status} task${tasks.total === 1 ? '' : 's'} in your workspace.</p>
           </div>
           <div class="tasks-tabs" role="tablist" aria-label="Task status">
             <button class="tab-btn ${appState.taskQuery.status === 'pending' ? 'active' : ''}" id="tasks-tab-pending" role="tab" aria-selected="${String(appState.taskQuery.status === 'pending')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'pending' ? '0' : '-1'}" data-action="filter-tasks" data-status="pending">Pending</button>
             <button class="tab-btn ${appState.taskQuery.status === 'completed' ? 'active' : ''}" id="tasks-tab-completed" role="tab" aria-selected="${String(appState.taskQuery.status === 'completed')}" aria-controls="tasks-panel" tabindex="${appState.taskQuery.status === 'completed' ? '0' : '-1'}" data-action="filter-tasks" data-status="completed">Completed</button>
           </div>
         </div>
+
+        <div id="tasks-overview">${renderTaskOverview(tasks)}</div>
 
         <details class="form-card workspace-disclosure task-create-disclosure">
           <summary>
@@ -14993,17 +15013,35 @@ async function renderTasksView() {
             ${renderTaskSection('Overdue', overdue, 'error')}
             ${renderTaskSection('Today', today, 'warning')}
             ${renderTaskSection('Upcoming', upcoming, 'success')}
-            ${!overdue.length && !today.length && !upcoming.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
+            ${renderTaskSection('No due date', undated, 'neutral')}
+            ${!tasks.items.length ? renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' }) : ''}
           ` : `
             ${renderTaskSection('Completed', completed, 'neutral')}
             ${!completed.length ? renderEmptyState({ icon: 'Done', title: 'No completed tasks yet', copy: 'Completed reminders and outreach tasks will appear here for reference.' }) : ''}
           `}
         </div>
+        <div id="tasks-pagination">${renderPagination('tasks', tasks.page, tasks.pageSize, tasks.total)}</div>
       </section>
     `;
   } catch (error) {
     appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;
+  } finally {
+    console.info(`BD Engine tasks render: ${(performance.now() - tasksStartedAt).toFixed(1)}ms`);
   }
+}
+
+function renderTaskOverview(tasks) {
+  if (appState.taskQuery.status !== 'pending' || !tasks.total) return '';
+  const todayKey = toLocalDateInputValue(new Date());
+  const counts = { Overdue: 0, Today: 0, Upcoming: 0, 'No due date': 0 };
+  tasks.items.forEach((task) => {
+    const key = calendarDateKey(task.dueDate);
+    counts[!key ? 'No due date' : key < todayKey ? 'Overdue' : key === todayKey ? 'Today' : 'Upcoming']++;
+  });
+  return `<p class="small muted tasks-overview-label">${tasks.total > tasks.pageSize ? 'Due dates on this page' : 'Your follow-up queue'}</p>
+    <dl class="tasks-overview-grid" aria-label="Task due dates">${Object.entries(counts)
+      .filter(([label, count]) => label !== 'No due date' || count)
+      .map(([label, count]) => `<div><dt>${label}</dt><dd>${formatNumber(count)}</dd></div>`).join('')}</dl>`;
 }
 
 function renderTaskSection(title, tasks, tone) {
@@ -15025,11 +15063,11 @@ function renderTaskItem(task) {
       <div class="task-item-main">
         <div class="task-item-info">
           <strong>${escapeHtml(summary)}</strong>
-          <div class="small muted">Due ${formatCalendarDate(task.dueDate)}</div>
+          <div class="small muted">${calendarDateKey(task.dueDate) ? `Due ${formatCalendarDate(task.dueDate)}` : 'No due date set'}</div>
         </div>
         <div class="task-item-actions">
-          ${task.accountId ? `<a href="#/accounts/${task.accountId}" class="ghost-button micro-button">View Account</a>` : ''}
-          ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${task.id}">Mark Done</button>` : ''}
+          ${task.accountId ? `<a href="#/accounts/${escapeAttr(task.accountId)}" class="ghost-button micro-button">View Account</a>` : ''}
+          ${task.status === 'pending' ? `<button class="primary-button micro-button" data-action="complete-task" data-id="${escapeAttr(task.id)}">Mark Done</button>` : ''}
         </div>
       </div>
     </article>
@@ -15044,7 +15082,7 @@ async function completeTask(taskId, buttonEl) {
     await api(`/api/tasks/${taskId}/complete`, { method: 'POST' });
     invalidateAppData();
     const taskItem = button?.closest('.task-item') || document.querySelector(`.task-item[data-task-id="${CSS.escape(taskId)}"]`);
-    if (appState.taskQuery.status === 'pending' && taskItem) {
+    if (appState.taskQuery.status === 'pending' && taskItem && appState.taskPage?.total <= appState.taskPage?.pageSize) {
       const section = taskItem.closest('.task-section');
       taskItem.classList.add('task-item--leaving');
       await new Promise((resolve) => window.setTimeout(resolve, 150));
@@ -15060,8 +15098,15 @@ async function completeTask(taskId, buttonEl) {
       if (content && !content.querySelector('.task-item')) {
         content.innerHTML = renderEmptyState({ icon: 'OK', title: 'No pending tasks', copy: 'Create a new task or add a follow-up from an account page.', action: '<button class="secondary-button" type="button" data-action="open-task-create">Create task</button>' });
       }
+      appState.taskPage.items = appState.taskPage.items.filter((task) => task.id !== taskId);
+      appState.taskPage.total = Math.max(0, appState.taskPage.total - 1);
+      document.getElementById('tasks-overview').innerHTML = renderTaskOverview(appState.taskPage);
+      document.querySelector('.tasks-header p.muted').textContent = `${formatNumber(appState.taskPage.total)} pending task${appState.taskPage.total === 1 ? '' : 's'} in your workspace.`;
+      const nextTask = content?.querySelector('[data-action="complete-task"]');
+      (nextTask || document.getElementById('tasks-tab-pending'))?.focus({ preventScroll: true });
     } else {
       await renderTasksView();
+      document.getElementById('tasks-tab-pending')?.focus({ preventScroll: true });
     }
     showToast('Task completed.', 'success');
   } catch (error) {
@@ -15072,8 +15117,12 @@ async function completeTask(taskId, buttonEl) {
 
 function calendarDateKey(value) {
   const raw = String(value || '');
+  if (!raw.trim()) return '';
   const dateOnly = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
-  if (dateOnly) return dateOnly;
+  if (dateOnly) {
+    const parsed = new Date(`${dateOnly}T12:00:00`);
+    return !Number.isNaN(parsed.getTime()) && toLocalDateInputValue(parsed) === dateOnly ? dateOnly : '';
+  }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : toLocalDateInputValue(date);
 }

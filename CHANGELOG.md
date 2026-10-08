@@ -4,6 +4,15 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Added task pagination and queue summaries so follow-ups beyond the first 50
+  remain reachable; completed last-page tasks return to a valid page.
+- Kept undated legacy reminders visible and switched new tasks back to the
+  pending queue when created from the completed-work view.
+- Added an accessible three-step landing-page sample for hiring signals,
+  imported contacts, and reviewed outreach, with a dedicated job-search CTA.
+- Replaced unsubstantiated public outcome statistics and review ratings with
+  product facts, and added campaign drafts with tracked acquisition links.
+
 - Activated the production and ATS scheduled checks through default-branch
   schedulers that delegate to the Railway deployment branch.
 - Pinned delegated scheduler checkouts to the Railway deployment branch so
