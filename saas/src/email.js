@@ -117,13 +117,24 @@ export async function sendSupportCustomerReplyEmail({ to, name, ticket, message,
   return sendEmail({ recipient, subject, text, html, kind: 'support customer notification' });
 }
 
-async function sendEmail({ recipient, recipients, subject, text, html, kind }) {
+export async function sendFollowupReminderEmail({ to, tasks, total, date, appUrl, idempotencyKey }) {
+  if (!isEmailConfigured()) return { sent: false, reason: 'email_not_configured' };
+  const items = tasks.map(task => `${task.dueDate?.slice(0, 10) || ''}: ${task.summary || task.title || 'Follow-up'}${task.accountName ? ` — ${task.accountName}` : ''}`);
+  const text = [`Your BD Engine follow-ups for ${date}`, '', ...items, '', total > tasks.length ? `${total - tasks.length} more due tasks are in your workspace.` : '', `Review or turn off reminders: ${appUrl}`].filter(Boolean).join('\n');
+  return sendEmail({ recipient: to, subject: `BD Engine: ${total} follow-up${total === 1 ? '' : 's'} due`, text,
+    html: `<p>Follow-ups due on or before ${escapeHtml(date)}:</p><ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul><p><a href="${escapeAttr(appUrl)}">Review all ${total} tasks or turn off reminders</a></p>`,
+    kind: 'follow-up reminder', idempotencyKey });
+}
+
+async function sendEmail({ recipient, recipients, subject, text, html, kind, idempotencyKey }) {
   const to = normalizeRecipients(recipients || recipient);
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
+    signal: AbortSignal.timeout(10_000),
     headers: {
       Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
       'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body: JSON.stringify({
       from: getEmailFrom(),

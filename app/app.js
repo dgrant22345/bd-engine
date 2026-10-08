@@ -123,7 +123,7 @@ const appState = {
   activeView: 'dashboard',
   accountQuery: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contactQuery: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobQuery: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
+  jobQuery: { feedback: '', page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
   configQuery: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichmentQuery: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
   accountDetail: null,
@@ -386,7 +386,7 @@ const themePresetLabel = document.getElementById('theme-preset-label');
 const defaultQueries = {
   accounts: { page: 1, pageSize: 20, portfolio: 'tracked', q: '', hiring: '', ats: '', recencyDays: '', minContacts: '', minTargetScore: '', priority: '', status: '', owner: '', outreachStatus: '', industry: '', geography: '', sortBy: '' },
   contacts: { page: 1, pageSize: 20, q: '', minScore: '', outreachStatus: '' },
-  jobs: { page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
+  jobs: { feedback: '', page: 1, pageSize: 20, q: '', ats: '', recencyDays: '', active: 'true', isNew: '', minRelevance: '', geography: '', workStyle: '', hasContacts: '', minConnections: '', sortBy: '' },
   configs: { page: 1, pageSize: 20, q: '', ats: '', active: '', discoveryStatus: '', confidenceBand: '', reviewStatus: '' },
   enrichment: { page: 1, pageSize: 20, confidence: '', missingDomain: '', missingCareersUrl: '', hasConnections: '', minTargetScore: '', topN: '' },
 };
@@ -2592,6 +2592,7 @@ function initCheckoutReturnNotice() {
 }
 
 function bindEvents() {
+  window.bdWorkflowTools.init({ api, getBootstrap: () => appState.bootstrap, canMutate: canMutateWorkspace, getTaskQuery: () => appState.taskQuery, updateJob: saved => { const item = appState.jobs?.find(job => job.id === saved.id); if (item) item.relevanceFeedback = saved.relevanceFeedback; } });
   window.addEventListener('hashchange', async () => {
     const requestedHash = location.hash;
     const withinPeople = appState.activeView === 'contacts' && getRouteRoot() === 'contacts';
@@ -5402,6 +5403,7 @@ async function watchBackgroundJob(jobId, options = {}) {
     }
 
     if (job.status === 'completed') {
+      document.getElementById('available-import-results')?.remove();
       invalidateAppData();
       if (options.refreshRoute !== false) {
         await renderRoute();
@@ -5410,6 +5412,7 @@ async function watchBackgroundJob(jobId, options = {}) {
     }
 
     if (job.status === 'failed') {
+      document.getElementById('available-import-results')?.remove();
       if (options.refreshRoute !== false) {
         await renderRoute();
       }
@@ -5417,12 +5420,19 @@ async function watchBackgroundJob(jobId, options = {}) {
     }
 
     if (job.status === 'cancelled') {
+      document.getElementById('available-import-results')?.remove();
       if (options.refreshRoute !== false) {
         await renderRoute();
       }
       throw new Error(`${label} was cancelled.`);
     }
 
+    const available = Number(job.sourceProgress?.available || 0);
+    if (available > 0) {
+      let link = document.getElementById('available-import-results');
+      if (!link) { link = document.createElement('a'); link.id = 'available-import-results'; link.href = '#/jobs'; link.className = 'secondary-button'; appAlert.insertAdjacentElement('afterend', link); }
+      link.textContent = `View available roles (${available})`;
+    }
     const pct = Number.isFinite(Number(job.progress)) ? ` ${Math.round(Number(job.progress))}%` : '';
     window.bdLocalApi.setAlert(`${label}${pct}: ${job.progressMessage || humanize(job.status)}`, appAlert);
     await sleep(2000);
@@ -11663,8 +11673,9 @@ function normalizeSavedJobQuery(query) {
 }
 
 function getActiveJobFilters() {
-  const labels = { q: 'Search', active: 'Posting status', geography: 'Location', workStyle: 'Work style', hasContacts: 'Network', minConnections: 'Minimum connections', ats: 'Source', recencyDays: 'Posted within', isNew: 'Posting age', minRelevance: 'Fit score', pipelineOnly: 'Pipeline', company: 'Company', accountId: 'Company selection', ids: 'Selected roles' };
+  const labels = { feedback: 'Workspace feedback', q: 'Search', active: 'Posting status', geography: 'Location', workStyle: 'Work style', hasContacts: 'Network', minConnections: 'Minimum connections', ats: 'Source', recencyDays: 'Posted within', isNew: 'Posting age', minRelevance: 'Fit score', pipelineOnly: 'Pipeline', company: 'Company', accountId: 'Company selection', ids: 'Selected roles' };
   const values = {
+    feedback: { relevant: 'Relevant', not_relevant: 'Not relevant', unreviewed: 'Unreviewed' },
     active: { '': 'Active and inactive', false: 'Inactive only' },
     geography: { canada: 'Canada', us: 'US', canada_us: 'Canada and US', gta: 'Greater Toronto Area', local_remote: 'Local or remote', remote: 'Remote' },
     workStyle: { local_remote: 'Local or remote', remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' },
@@ -11774,6 +11785,7 @@ async function renderJobsView() {
             ${renderField('Min connections', `<select name="minConnections"><option value="">Any</option><option value="1" ${selected(appState.jobQuery.minConnections, '1')}>1+ connections</option><option value="2" ${selected(appState.jobQuery.minConnections, '2')}>2+ connections</option><option value="3" ${selected(appState.jobQuery.minConnections, '3')}>3+ connections</option></select>`)}
             ${renderField('ATS', `<select name="ats"><option value="">All ATS</option>${atsOptions.map((value) => `<option value="${escapeAttr(value)}" ${selected(appState.jobQuery.ats, value)}>${escapeHtml(value)}</option>`).join('')}</select>`)}
             ${renderField('Recency', `<select name="recencyDays"><option value="">Any</option><option value="7" ${selected(appState.jobQuery.recencyDays, '7')}>Last 7 days</option><option value="14" ${selected(appState.jobQuery.recencyDays, '14')}>Last 14 days</option><option value="30" ${selected(appState.jobQuery.recencyDays, '30')}>Last 30 days</option></select>`)}
+            ${stateBootstrap.capabilities?.jobFeedback ? renderField('Workspace feedback', `<select name="feedback"><option value="">All judgments</option>${[['relevant', 'Relevant'], ['not_relevant', 'Not relevant'], ['unreviewed', 'Unreviewed']].map(([value, label]) => `<option value="${value}" ${selected(appState.jobQuery.feedback, value)}>${label}</option>`).join('')}</select>`) : ''}
             ${renderField('Posting age', `<select name="isNew"><option value="">All</option><option value="true" ${selected(appState.jobQuery.isNew, 'true')}>Recent postings</option><option value="false" ${selected(appState.jobQuery.isNew, 'false')}>Older postings</option></select>`)}
             ${renderField('Fit', `<select name="minRelevance"><option value="">All roles</option>${![45, 70].includes(targetRoleThreshold) ? `<option value="${escapeAttr(targetRoleThreshold)}" ${selected(appState.jobQuery.minRelevance, String(targetRoleThreshold))}>Saved target threshold (${escapeHtml(targetRoleThreshold)}+)</option>` : ''}<option value="45" ${selected(appState.jobQuery.minRelevance, '45')}>Relevant only</option><option value="70" ${selected(appState.jobQuery.minRelevance, '70')}>Strong matches</option></select>`)}
             <div class="field field--action"><button class="ghost-button" type="button" data-action="reset-filters" data-view="jobs">Reset filters</button></div>
@@ -11916,6 +11928,8 @@ function renderAcquisitionFunnel(analytics = {}) {
       </article>
     `;
   }).join('');
+  const growth = analytics.growth;
+  const growthReport = growth?.available ? `<div class="analytics-source-breakdown" data-growth-report><h5>Customer growth by first touch</h5><p class="small muted">Customer signup cohorts from the past 30 days. Demo workspaces, internal owners, reserved test domains, and configured test inboxes are excluded. Paid means at least one confirmed subscription, including subscriptions later canceled. Return: ${escapeHtml(growth.returnWindow)}.</p><p>${formatNumber(growth.totals.paid)} paid / ${formatNumber(growth.totals.signups)} signups · ${formatNumber(growth.totals.returned)} returning / ${formatNumber(growth.totals.eligible)} eligible · ${formatNumber(growth.totals.pending)} still awaiting a full return window</p><div class="table-scroll"><table class="table" aria-label="Customer paid conversion and return visits by source"><thead><tr><th>First touch</th><th>Persona</th><th>Signups</th><th>Paid</th><th>Return eligible</th><th>Returned</th></tr></thead><tbody>${growth.bySource.map(row => `<tr><td>${escapeHtml(row.source)}${row.campaign ? `<span class="table-meta">${escapeHtml(row.campaign)}</span>` : ''}</td><td>${escapeHtml(row.persona === 'bd' ? 'Recruiter' : row.persona === 'jobseeker' ? 'Job seeker' : 'Unspecified')}</td><td>${formatNumber(row.signups)}</td><td>${formatNumber(row.paid)}</td><td>${formatNumber(row.eligible)}</td><td>${formatNumber(row.returned)}</td></tr>`).join('')}</tbody></table></div><p class="small muted">Return visits start recording with this release; older cohorts may undercount returns. Source associations do not prove ad effectiveness. Showing up to 12 sources; totals include all sources.</p></div>` : '';
   const sourceBreakdown = sourceRows.length ? `
     <div class="analytics-source-breakdown">
       <div>
@@ -11952,6 +11966,7 @@ function renderAcquisitionFunnel(analytics = {}) {
       ${cards}
     </div>
     ${sourceBreakdown}
+    ${growthReport}
     <p class="small muted">Public actions are event counts; product milestones are unique workspaces. Seven-day activation is the value threshold; the remaining cards diagnose where workspaces stop. Use this as directional evidence, not a person-level cohort report.</p>
   `;
 }
@@ -12591,8 +12606,9 @@ function renderJobsTable(items, compact) {
 }
 
 function renderJobRelevance(item) {
+  const feedback = window.bdWorkflowTools.renderFeedback(item);
   if (item.relevanceScore === null || item.relevanceScore === undefined) {
-    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">No saved relevance score.</div><a class="small" href="#/admin/search-focus">Set or refresh search focus</a>`;
+    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">No saved relevance score.</div><a class="small" href="#/admin/search-focus">Set or refresh search focus</a>${feedback}`;
   }
   const band = item.relevanceBand || 'low';
   const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
@@ -12602,7 +12618,7 @@ function renderJobRelevance(item) {
   const outcome = item.matchesSearchFocus === false ? 'Outside your saved focus. Lowering the score cutoff alone will not include this role.'
     : Number(item.relevanceScore) < threshold ? `Below your saved ${threshold}+ cutoff.`
       : `Meets your saved ${threshold}+ cutoff. Other list filters still apply.`;
-  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons.length ? `<div class="small muted job-match-preview">${escapeHtml(reasons[0])}</div>` : ''}<details class="job-row-context"><summary aria-label="${escapeAttr(`Why this score for ${item.title || 'this role'}${item.companyName ? ` at ${item.companyName}` : ''}?`)}">Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>`;
+  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons.length ? `<div class="small muted job-match-preview">${escapeHtml(reasons[0])}</div>` : ''}<details class="job-row-context"><summary aria-label="${escapeAttr(`Why this score for ${item.title || 'this role'}${item.companyName ? ` at ${item.companyName}` : ''}?`)}">Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>${feedback}`;
 }
 
 function renderMiniStatList(items) {
@@ -15150,6 +15166,8 @@ function endTour(options = {}) {
 
 async function renderTasksView() {
   const isCurrent = beginViewRender();
+  if (!appState.bootstrap) await loadBootstrap(false);
+  if (!isCurrent()) return;
   const contactId = new URLSearchParams(location.hash.split('?')[1] || '').get('contactId') || '';
   if (contactId !== (appState.taskQuery.contactId || '')) appState.taskQuery = { ...appState.taskQuery, q: '', page: 1, status: 'pending', sort: '' };
   appState.taskQuery.contactId = contactId;
@@ -15181,6 +15199,7 @@ async function renderTasksView() {
 
     appRoot.innerHTML = `
       <section class="tasks-view">
+        ${window.bdWorkflowTools.renderFollowups()}
         ${appState.taskQuery.contactId ? '<p class="small">Showing follow-ups for one person. <a href="#/tasks">Show everyone</a></p>' : ''}
         <details class="form-card workspace-disclosure" id="activity-history">
           <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search outreach and follow-up history</small></span></summary>

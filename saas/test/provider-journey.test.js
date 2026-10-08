@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import Stripe from 'stripe';
+
+test('signup → verification → email recovery → test checkout → paid login → portal → cancellation', { timeout: 30000 }, async t => {
+  const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening'); const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
+  const origin = `http://127.0.0.1:${port}`; const secret = 'whsec_journey_fixture'; const messages = []; let output = '';
+  const child = spawn(process.execPath, ['--import', './test/fixtures/provider-harness.mjs', 'src/server.js'], { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: '', BD_CLOUD_HOST: '127.0.0.1', BD_CLOUD_PORT: String(port), BD_CLOUD_BASE_URL: origin, STRIPE_SECRET_KEY: 'sk_test_journey_fixture', STRIPE_WEBHOOK_SECRET: secret, STRIPE_PRICE_SALES: 'price_sales_fixture', STRIPE_PRICE_JOBSEEKER: 'price_jobseeker_fixture', BD_ALLOW_TEST_CHECKOUT: 'true', RESEND_API_KEY: 'resend_journey_fixture', BD_EMAIL_FROM: 'BD Engine <sender@example.test>', BD_OWNER_EMAILS: '', BD_INTERNAL_OWNER_EMAILS: '' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  child.on('message', message => messages.push(message)); child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
+  t.after(async () => { if (child.exitCode === null) { const stopped = once(child, 'exit'); child.kill(); await stopped; } });
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(`${origin}/readyz`)).ok) break; } catch { /* startup */ } assert.equal(child.exitCode, null, output); if (i === 99) assert.fail(output); await new Promise(resolve => setTimeout(resolve, 50)); }
+  let cookie = ''; const email = 'dgfinance15@gmail.com'; const password = 'Journey-fixture-2026';
+  const request = async (path, body) => { const response = await fetch(`${origin}${path}`, { method: body ? 'POST' : 'GET', headers: { cookie, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); const cookies = response.headers.getSetCookie(); if (cookies.length) cookie = cookies.map(value => value.split(';')[0]).join('; '); return response; };
+  const signup = await request('/api/auth/signup', { email, password, name: 'Provider QA', workspaceName: 'Provider QA', legalAcceptance: { accepted: true, termsVersion: '2026-08-21', privacyVersion: '2026-08-21' } }); assert.equal(signup.status, 201, await signup.clone().text());
+  assert.equal((await signup.json()).verificationToken, undefined, 'Tokens stay out of public signup responses');
+  const verification = messages.find(message => message.kind === 'email' && message.message.subject.includes('Verify'));
+  assert.ok(verification, output); assert.deepEqual(verification.message.to, [email]);
+  const verifyUrl = verification.message.text.match(/http:\/\/\S+/)[0];
+  assert.equal((await request('/api/auth/email-verification/confirm', { token: new URL(verifyUrl).searchParams.get('verify') })).status, 200);
+  assert.ok((await (await request('/api/auth/me')).json()).user.emailVerifiedAt);
+  assert.equal((await request('/api/auth/password-reset/request', { email })).status, 202);
+  const reset = messages.find(message => message.kind === 'email' && message.message.subject.includes('Reset'));
+  assert.ok(reset); const resetUrl = reset.message.text.match(/http:\/\/\S+/)[0]; const token = new URL(resetUrl).searchParams.get('reset');
+  const recoveredPassword = 'Recovered-journey-fixture-2026';
+  assert.equal((await request('/api/auth/password-reset/confirm', { token, password: recoveredPassword })).status, 200);
+  assert.equal((await request('/api/auth/password-reset/confirm', { token, password: recoveredPassword })).status, 400, 'Recovery link is single-use');
+  assert.equal((await request('/api/auth/login', { email, password })).status, 401);
+  assert.equal((await request('/api/auth/login', { email, password: recoveredPassword })).status, 200);
+  const identity = await (await request('/api/auth/me')).json(); const tenantId = identity.tenant.id;
+  const checkout = await request('/api/billing/checkout', { planId: 'sales' }); assert.equal(checkout.status, 200, await checkout.clone().text()); assert.match((await checkout.json()).url, /^https:\/\/checkout.stripe.com/);
+  const checkoutRequest = messages.find(message => message.path === '/v1/checkout/sessions'); assert.equal(checkoutRequest.fields['metadata[tenantId]'], tenantId); assert.equal(checkoutRequest.fields['line_items[0][price]'], 'price_sales_fixture');
+  assert.equal((await (await request('/api/billing')).json()).plan.id, 'trial', 'A checkout URL alone does not grant paid access');
+  const signer = new Stripe('sk_test_journey_fixture');
+  const event = async (type, object, id) => { const payload = JSON.stringify({ id, type, data: { object } }); return fetch(`${origin}/api/billing/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': signer.webhooks.generateTestHeaderString({ payload, secret }) }, body: payload }); };
+  const metadata = { tenantId, planId: 'sales' };
+  assert.equal((await event('checkout.session.completed', { id: 'cs_journey_fixture', mode: 'subscription', payment_status: 'paid', customer: 'cus_journey_fixture', subscription: 'sub_journey_fixture', client_reference_id: tenantId, metadata }, 'evt_journey_paid')).status, 200);
+  cookie = ''; assert.equal((await request('/api/auth/login', { email, password: recoveredPassword })).status, 200);
+  assert.equal((await (await request('/api/billing')).json()).plan.id, 'sales'); assert.equal((await request('/api/contacts')).status, 200);
+  assert.equal((await request('/api/billing/portal', {})).status, 200);
+  const deleted = await event('customer.subscription.deleted', { id: 'sub_journey_fixture', customer: 'cus_journey_fixture', status: 'canceled', metadata }, 'evt_journey_cancel'); assert.equal(deleted.status, 200);
+  assert.equal((await request('/api/contacts')).status, 402);
+});

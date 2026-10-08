@@ -155,6 +155,31 @@ export function primeTenantRelationalMirror(tenantId, data = {}) {
   return { primed: true };
 }
 
+// Publish only completed source rows. Do not advance snapshot cursors: another
+// source may still hold rows with earlier timestamps while its request finishes.
+export async function syncTenantRelationalChanges(tenantId, data = {}) {
+  if (DISABLED || !isDbReady()) return { skipped: true };
+  const startedAt = performance.now();
+  const writers = { accounts: upsertAccount, contacts: upsertContact, jobs: upsertJob, configs: upsertConfig, activities: upsertActivity, tasks: upsertTask };
+  const result = {};
+  for (const [section, items] of Object.entries(data)) {
+    if (!writers[section] || !Array.isArray(items)) throw new Error('Invalid incremental source rows');
+    if (items.some(item => !item.id || (item.tenantId && item.tenantId !== tenantId))) throw new Error('Source rows must belong to this workspace');
+  }
+  // Parents must exist before publishing rows with foreign keys.
+  for (const section of Object.keys(writers)) {
+    const items = data[section];
+    if (!items) continue;
+    for (let offset = 0; offset < items.length; offset += UPSERT_CONCURRENCY) {
+      await Promise.all(items.slice(offset, offset + UPSERT_CONCURRENCY).map(item => writers[section]({ ...item, tenantId })));
+    }
+    result[section] = items.length;
+  }
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 250) console.warn(`Slow source publish: saas/src/relational-writes.js syncTenantRelationalChanges ${elapsedMs}ms`);
+  return { ...result, elapsedMs };
+}
+
 export async function syncTenantRelationalMirror(tenantId, data = {}, { reconcile = false } = {}) {
   if (DISABLED || !isDbReady()) return { skipped: true };
   const result = {};
@@ -274,7 +299,7 @@ async function upsertJob(item) {
        last_seen_at = EXCLUDED.last_seen_at,
        closed_at = EXCLUDED.closed_at,
        import_run_id = EXCLUDED.import_run_id,
-       raw = EXCLUDED.raw,
+       raw = CASE WHEN jobs.raw ? 'relevanceFeedback' THEN jsonb_set(EXCLUDED.raw, '{relevanceFeedback}', jobs.raw->'relevanceFeedback', true) ELSE EXCLUDED.raw END,
        updated_at = EXCLUDED.updated_at`,
     [
       item.id, item.tenantId, nullableText(item.accountId), text(item.title), text(item.companyName), text(item.location),

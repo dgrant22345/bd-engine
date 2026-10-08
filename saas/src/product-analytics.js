@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 export const PRODUCT_EVENT_TYPES = new Set([
   'signup_completed',
+  'workspace_visited',
   'setup_completed',
   'target_created',
   'outreach_generated',
@@ -54,6 +55,7 @@ const ALLOWED_DIMENSIONS = new Set([
   ...ACQUISITION_TOKEN_DIMENSIONS,
   ...ACQUISITION_PATH_DIMENSIONS,
   ...ACQUISITION_PERSONA_DIMENSIONS,
+  'trafficClass',
   'planId',
   'termsVersion',
   'privacyVersion',
@@ -177,6 +179,7 @@ function normalizePersona(value) {
 }
 
 function normalizeDimensionValue(key, value) {
+  if (key === 'trafficClass') return ['customer', 'internal', 'test', 'demo'].includes(value) ? value : '';
   if (ACQUISITION_TOKEN_DIMENSIONS.has(key)) return sanitizeAcquisitionToken(value);
   if (ACQUISITION_PATH_DIMENSIONS.has(key)) return sanitizeAcquisitionLandingPath(value);
   if (ACQUISITION_PERSONA_DIMENSIONS.has(key)) return normalizePersona(value);

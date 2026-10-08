@@ -172,6 +172,7 @@ jobs:
         run: |
           npm run verify:job-queries
           npm run verify:contact-queries
+          node scripts/verify-workflow-tools.mjs
 
       - name: Verify one-time account recovery transactions
         env:
