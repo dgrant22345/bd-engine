@@ -4,6 +4,14 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+## 0.1.2.9 — 2026-10-08 — Acquisition walkthrough
+
+- Added an accessible three-step public sample showing hiring signals, imported contacts, and reviewed outreach drafts.
+- Kept job-search visitors in job-seeker signup from the preview, retaining acquisition context.
+- Improved contrast in the landing-page product facts strip and prepared tracked campaign drafts.
+- Patched the CSV parser and development dependency audit findings.
+- Preserved the live People, follow-up, saved-work, billing, and role-search workflows; no schema or configuration changes.
+
 ## 0.1.2.6 — 2026-09-09 — Partial import recovery
 
 - Retain successfully fetched pages when a later ATS request or final verification fails; explicitly flag incomplete coverage and preserve unseen jobs.

@@ -59,7 +59,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/cloud.css?v=20260906-product-quality-01">
+  <link rel="stylesheet" href="/cloud.css?v=20261008-acquisition-01">
 </head>
 <body>
   <div id="cloud-root"></div>
@@ -1103,7 +1103,7 @@
         previewLabel: 'Best account today',
         previewReason: 'Fresh controls hiring plus a mapped talent leader makes this the clearest account to work next.',
         previewScore: '91',
-        previewStats: [['2', 'Active roles'], ['84', 'Hiring velocity'], ['1', 'Warm contact']],
+        previewStats: [['2', 'Active roles'], ['2d', 'Freshest role'], ['1', 'Mapped contact']],
         nextAction: 'Follow up with Priya Shah using the two active controls roles as timely context.',
         workflowSteps: [
           ['Bring your target universe', 'Import companies and the contacts you already have instead of starting with another opaque database.'],
@@ -1163,22 +1163,28 @@
                     : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
                        <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
                 </div>
-                <p class="hero-note">Free ATS audit &middot; 14-day trial &middot; No credit card required</p>
+                <p class="hero-note">No credit card required &middot; 14-day free trial &middot; Bring your own targets</p>
               </div>
               <div class="product-preview" aria-label="Sample ranked daily action">
                 <div class="product-preview-header">
-                  <span>Sample workspace &middot; Illustrative data</span>
-                  <span class="preview-status">Example workflow</span>
+                  <span>Product walkthrough</span>
+                  <span class="preview-status">Synthetic sample data</span>
                 </div>
+                <div class="preview-tabs" role="tablist" aria-label="Explore the sample workflow">
+                  <button type="button" id="preview-tab-signal" role="tab" aria-selected="true" aria-controls="preview-panel-signal" data-preview-step="signal">1. Hiring signal</button>
+                  <button type="button" id="preview-tab-network" role="tab" aria-selected="false" aria-controls="preview-panel-network" tabindex="-1" data-preview-step="network">2. Your network</button>
+                  <button type="button" id="preview-tab-action" role="tab" aria-selected="false" aria-controls="preview-panel-action" tabindex="-1" data-preview-step="action">3. Next action</button>
+                </div>
+                <div class="preview-stage" id="preview-panel-signal" role="tabpanel" aria-labelledby="preview-tab-signal" tabindex="0">
                 <div class="preview-focus">
                   <div class="preview-focus-header">
                     <div>
                       <span class="preview-label">${landingCopy.previewLabel}</span>
                       <h2>Northstar Robotics</h2>
                       <div class="preview-signal-tags">
-                        <span class="landing-pill landing-pill--surge">Public role activity</span>
-                        <span class="landing-pill landing-pill--warm">Imported contact context</span>
-                        <span class="landing-pill landing-pill--stale">Posting age</span>
+                        <span class="landing-pill landing-pill--surge">${isJobSeekerLanding ? '3 relevant roles' : '2 active roles'}</span>
+                        <span class="landing-pill landing-pill--warm">1 mapped contact</span>
+                        <span class="landing-pill landing-pill--stale">Freshest role: 2 days</span>
                       </div>
                     </div>
                     <div class="preview-score" aria-label="Target score ${landingCopy.previewScore} out of 100">
@@ -1191,12 +1197,30 @@
                     ${landingCopy.previewStats.map(([value, label]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
                   </dl>
                 </div>
-                <div class="preview-next-action">
-                  <span class="preview-step">Next action</span>
-                  <p>${landingCopy.nextAction}</p>
+                </div>
+                <div class="preview-stage" id="preview-panel-network" role="tabpanel" aria-labelledby="preview-tab-network" tabindex="0" hidden>
+                  <div class="preview-contact">
+                    <span class="preview-avatar" aria-hidden="true">PS</span>
+                    <div><span class="preview-label">From your imported connections</span><h2>Priya Shah</h2><p>Talent leader · Northstar Robotics</p></div>
+                  </div>
+                  <p class="preview-stage-copy">A company match brings someone you already know into the same view as the hiring signal.</p>
+                  <p class="preview-evidence">The contact comes from an imported network, rather than an inferred introduction. Review the relationship before asking for help.</p>
+                </div>
+                <div class="preview-stage" id="preview-panel-action" role="tabpanel" aria-labelledby="preview-tab-action" tabindex="0" hidden>
+                  <span class="preview-label">Review a grounded draft</span>
+                  <blockquote class="preview-draft">${isJobSeekerLanding
+                    ? 'Hi Priya, I noticed the controls role at Northstar Robotics. Would you be open to pointing me toward the right person to ask about the team?'
+                    : 'Hi Priya, I noticed Northstar Robotics is hiring for two controls roles. Is support with either search something your team is considering?'}</blockquote>
+                  <div class="preview-next-action">
+                    <span class="preview-step">Your next step</span>
+                    <p>${landingCopy.nextAction}</p>
+                  </div>
+                  <p class="preview-evidence">Review and send through your own account, then log the outreach and set a follow-up.</p>
                 </div>
                 <div class="preview-interactive-cta">
-                  <button class="btn btn-primary btn-sm" data-demo-start>⚡ Test 1-Click Outreach in Live Demo →</button>
+                  ${isJobSeekerLanding
+                    ? '<button class="btn btn-primary btn-sm" data-jobseeker-signup>Build my job-search watchlist</button>'
+                    : '<button class="btn btn-primary btn-sm" data-demo-start>Explore the sample workspace →</button>'}
                 </div>
               </div>
             </section>
@@ -1343,6 +1367,27 @@
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd', btn.dataset.planIntent || '')));
       root.querySelectorAll('[data-trust-page]').forEach(btn => btn.addEventListener('click', () => { state.view = btn.dataset.trustPage; render(); }));
       root.querySelector('[data-dismiss-account-closed]')?.addEventListener('click', () => { state.accountClosedMessage = ''; render(); });
+      const previewTabs = Array.from(root.querySelectorAll('[data-preview-step]'));
+      function selectPreviewStep(index, focus = false) {
+        previewTabs.forEach((tab, tabIndex) => {
+          const selected = tabIndex === index;
+          tab.setAttribute('aria-selected', String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          root.querySelector(`#${tab.getAttribute('aria-controls')}`).hidden = !selected;
+        });
+        if (focus) previewTabs[index].focus();
+      }
+      previewTabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => selectPreviewStep(index));
+        tab.addEventListener('keydown', (event) => {
+          const next = event.key === 'ArrowRight' ? (index + 1) % previewTabs.length
+            : event.key === 'ArrowLeft' ? (index + previewTabs.length - 1) % previewTabs.length
+              : event.key === 'Home' ? 0 : event.key === 'End' ? previewTabs.length - 1 : null;
+          if (next === null) return;
+          event.preventDefault();
+          selectPreviewStep(next, true);
+        });
+      });
       console.info(`BD Engine landing render: ${Math.round(performance.now() - landingStartedAt)}ms (${isJobSeekerLanding ? 'job seeker' : 'staffing'} workflow)`);
     }
 

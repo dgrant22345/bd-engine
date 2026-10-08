@@ -42,7 +42,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "csv-parse": "^7.0.2",
+    "csv-parse": "^7.0.3",
     "fast-xml-parser": "^5.7.0",
     "pg": "^8.22.0",
     "stripe": "^22.3.1"

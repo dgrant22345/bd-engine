@@ -13,6 +13,35 @@ async function collectAnalyticsEvents(page) {
   return trackedEvents;
 }
 
+test('sample workflow supports keyboard exploration and uses explicit sample data', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  await page.goto('/');
+  await expect(page.getByText('Synthetic sample data', { exact: true })).toBeVisible();
+  const signal = page.getByRole('tab', { name: '1. Hiring signal' });
+  await signal.focus();
+  await signal.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: '2. Your network' })).toBeFocused();
+  await expect(page.getByRole('tabpanel')).toContainText('Priya Shah');
+  await page.getByRole('tab', { name: '2. Your network' }).press('End');
+  await expect(page.getByRole('tabpanel')).toContainText('Is support with either search');
+  await page.getByRole('tab', { name: '3. Next action' }).press('Home');
+  await expect(signal).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tabpanel')).toContainText('Northstar Robotics');
+  expect(errors).toEqual([]);
+});
+
+test('job-search preview keeps the visitor in the job-seeker signup workflow', async ({ page }) => {
+  await page.goto('/job-search?utm_source=linkedin&utm_medium=organic_social&utm_campaign=job_search_focus&utm_content=warm_path');
+  await page.getByRole('tab', { name: '3. Next action' }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('the controls role');
+  await expect(page.locator('[data-demo-start]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Build my job-search watchlist' }).click();
+  await expect(page.locator('#signup-persona')).toHaveValue('jobseeker');
+  const attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution.lastNonDirectTouch.campaign).toBe('job_search_focus');
+});
+
 test('job-seeker campaign link replaces a mismatched staffing demo session', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore live demo' }).click();
