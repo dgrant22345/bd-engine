@@ -5341,6 +5341,7 @@ async function renderRoute() {
   if (!appState.setupStatus) {
     await loadSetupStatus(false);
   }
+  if ((location.hash || '#/dashboard') !== hash) return;
 
   if (root === 'setup') {
     if (appState.setupStatus && !appState.setupStatus.requiresSetup && !appState.setupResult) {
@@ -10591,7 +10592,10 @@ function getDashboardPosted24h(summary = {}) {
 
 async function renderDashboardView(options = {}) {
   const dashboardStartedAt = performance.now();
+  const routeAtStart = location.hash || '#/dashboard';
+  const isCurrentRoute = () => (location.hash || '#/dashboard') === routeAtStart;
   if (!appState.bootstrap) await loadBootstrap(false);
+  if (!isCurrentRoute()) return;
   if (!options.skipLoading) {
     renderLoadingState('Dashboard', "Building today's hiring radar...");
   }
@@ -10611,6 +10615,10 @@ async function renderDashboardView(options = {}) {
         })
       : Promise.resolve({}));
   const [dashboardPayload, outcomeSummary] = await Promise.all([dashboardPromise, outcomePromise]);
+  if (!isCurrentRoute()) {
+    console.info(`BD Engine stale dashboard render discarded: ${Math.round(performance.now() - dashboardStartedAt)}ms`);
+    return;
+  }
   appState.outcomeSummary = outcomeSummary || {};
   const outcomeElapsedMs = Math.round(performance.now() - outcomeStartedAt);
   if (outcomeElapsedMs > 250) console.info(`BD Engine outcome summary load: ${outcomeElapsedMs}ms`);

@@ -119,6 +119,38 @@ test('signup journey: new account reaches the app workspace', async ({ page }) =
   await expect(profile.locator('#setup-user-email')).toHaveValue(email);
 });
 
+test('a delayed dashboard response cannot overwrite the next screen', async ({ page }) => {
+  const app = await startDemo(page);
+  await gotoAppRoute(page, '#/accounts');
+  await expect(app.locator('table tbody')).toBeVisible();
+  let releaseDashboard;
+  let signalDashboardRequest;
+  const responseGate = new Promise(resolve => { releaseDashboard = resolve; });
+  const requestStarted = new Promise(resolve => { signalDashboardRequest = resolve; });
+  await page.route('**/api/dashboard', async (route) => {
+    const response = await route.fetch();
+    signalDashboardRequest();
+    await responseGate;
+    await route.fulfill({ response });
+  });
+  try {
+    await gotoAppRoute(page, '#/dashboard');
+    await requestStarted;
+    await gotoAppRoute(page, '#/admin');
+    await expect(app.locator('.ingestion-health')).toBeAttached();
+    const responseFinished = page.waitForResponse(response => response.url().endsWith('/api/dashboard'));
+    releaseDashboard();
+    await responseFinished;
+    await app.locator('body').evaluate(() => new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await expect(app.locator('#view-title')).toHaveText('Admin');
+    await expect(app.locator('.ingestion-health')).toBeAttached();
+  } finally {
+    releaseDashboard();
+  }
+});
+
 test('post-setup dashboard is usable and its optional tour is accessible', async ({ page }) => {
   const { app } = await signup(page);
   const profile = app.locator('#setup-profile-form');

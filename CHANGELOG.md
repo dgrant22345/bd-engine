@@ -14,6 +14,8 @@ All notable customer-facing changes are recorded here. The project is currently 
   product facts, and added campaign drafts with tracked acquisition links.
 - Patched CSV parsing and development-toolchain dependencies after the release
   audit identified vulnerable versions.
+- Prevented delayed dashboard responses from replacing a screen opened after
+  navigation, with a browser regression test for the response ordering.
 
 - Activated the production and ATS scheduled checks through default-branch
   schedulers that delegate to the Railway deployment branch.
