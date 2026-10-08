@@ -85,6 +85,7 @@ const PRIVILEGED_SESSION_MAX_AGE_MS = Number(process.env.BD_PRIVILEGED_SESSION_M
   : 15 * 60 * 1000;
 const DEMO_MAX = Number(process.env.BD_DEMO_MAX) > 0 ? Number(process.env.BD_DEMO_MAX) : 30;
 const DEMO_WINDOW_MS = 60 * 60 * 1000;
+const ANALYTICS_MAX = Number(process.env.BD_ANALYTICS_MAX) > 0 ? Number(process.env.BD_ANALYTICS_MAX) : 120;
 const PUBLIC_ANALYTICS_EVENT_TYPES = new Set([
   'pageview',
   'tool_used',
@@ -1036,7 +1037,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/analytics/visit' && req.method === 'POST') {
-    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, 120, 60 * 60 * 1000)) {
+    if (await rateLimitExceeded(`analytics:${clientIp(req)}`, ANALYTICS_MAX, 60 * 60 * 1000)) {
       return sendJson(res, 429, { error: 'Too many analytics requests.' });
     }
     return handleAnalyticsVisit(req, res);

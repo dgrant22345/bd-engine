@@ -535,6 +535,9 @@ test('admin journey: import health and automatic refresh timing are visible', as
 });
 
 test('analytics admin journey: campaign and activation milestones are visible', async ({ page, browserName }) => {
+  // Reproduce shared-IP traffic above the normal production budget in this harness.
+  const traffic = await Promise.all(Array.from({ length: 125 }, () => page.request.post('/api/analytics/visit', { data: { visitorId: 'shared-suite-fixture', eventType: 'pageview', path: '/', source: 'test' } })));
+  expect(traffic.every(response => response.status() === 202)).toBe(true);
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: undefined });
   });
@@ -547,16 +550,20 @@ test('analytics admin journey: campaign and activation milestones are visible', 
     }
   });
   await page.goto('/ats-checker?utm_source=linkedin&utm_campaign=analytics_journey');
-  await Promise.all([
+  const [sampleResponse] = await Promise.all([
     waitForAnalyticsEvent('ats_sample_used'),
     page.getByRole('button', { name: 'Try sample list' }).click(),
   ]);
+  expect(sampleResponse.status()).toBe(202);
+  expect((await sampleResponse.json()).recorded).toBe(true);
   await page.getByLabel('Career-site or job-board URLs').fill('https://boards.greenhouse.io/manual-example');
-  await Promise.all([
+  const [auditResponse] = await Promise.all([
     waitForAnalyticsEvent('ats_audit_completed'),
     page.getByRole('button', { name: 'Audit coverage' }).click(),
   ]);
 
+  expect(auditResponse.status()).toBe(202);
+  expect((await auditResponse.json()).recorded).toBe(true);
   const adminEmail = `analytics-admin-${browserName}@example.com`;
   const { app } = await signup(page, { email: adminEmail });
   await completeSetup(page, app);
