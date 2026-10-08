@@ -140,6 +140,7 @@ input, select, textarea { border-radius: 8px; }
 .empty-state { border-radius: 12px; background: var(--surface-muted); }
 .empty-state-icon { border-radius: 12px; }
 .job-feedback button[aria-pressed="true"] { color: var(--on-accent); }
+.job-preset-chip.is-active { color: var(--on-accent); }
 @media (min-width: 1101px) {
   .shell { grid-template-columns: 224px minmax(0, 1fr); }
   .sidebar { width: 224px; }
