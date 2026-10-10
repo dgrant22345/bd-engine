@@ -1,9 +1,11 @@
 # Recruiter walkthrough campaign
 
+The expanded October launch kit includes five current-interface graphics, eight post drafts, tagged links, a two-week schedule, and a campaign scorecard: [ADVERTISING-LAUNCH-KIT.md](ADVERTISING-LAUNCH-KIT.md). Download the packaged kit at https://bd-engine-production.up.railway.app/media/campaign/bd-engine-launch-kit.zip.
+
 Ready-to-share 30-second walkthrough: https://bd-engine-production.up.railway.app/recruiter-walkthrough
 Download: https://bd-engine-production.up.railway.app/media/recruiter-walkthrough.mp4
 
-The video uses screenshots from the current app, labeled sample data. It has on-screen captions, an English caption track, and a page transcript. The free utility recognizes public career-site URL patterns; it does not fetch submitted sites or verify that jobs are currently open.
+The video uses labelled sample workspace screenshots from the earlier interface. It has on-screen captions, an English caption track, and a page transcript. The new campaign graphics show the current interface. The free utility recognizes public career-site URL patterns; it does not fetch submitted sites or verify that jobs are currently open.
 
 ## Suggested organic post
 
