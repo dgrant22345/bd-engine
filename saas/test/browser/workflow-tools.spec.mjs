@@ -76,3 +76,28 @@ test('recruiter walkthrough loads its actual 30-second video and has a usable mo
   await expect(page.getByRole('link', { name: 'Run free ATS audit →' })).toHaveAttribute('href', /\/ats-checker\?utm_source=walkthrough/);
   const a11y = await new AxeBuilder({ page }).analyze(); expect(a11y.violations).toEqual([]); expect(errors).toEqual([]);
 });
+
+test('shared walkthrough carries the campaign into the audit and signup without carrying account parameters', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/recruiter-walkthrough?utm_source=LinkedIn&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=video_01&email=private@example.com&reset=private-reset-token');
+  const audit = page.getByRole('link', { name: 'Run free ATS audit →' });
+  await expect(audit).toHaveAttribute('href', '/ats-checker?utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=video_01');
+  await audit.click();
+  await page.getByRole('button', { name: 'Try sample list' }).click();
+  await page.getByRole('link', { name: 'Monitor these companies' }).click();
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  const attribution = await page.evaluate(() => JSON.parse(localStorage.getItem('bd_acquisition') || '{}'));
+  expect(attribution.firstTouch).toMatchObject({ source: 'linkedin', medium: 'organic_social', campaign: 'recruiter_launch_oct26', content: 'video_01' });
+  expect(JSON.stringify(attribution)).not.toContain('private');
+  expect(page.url()).not.toContain('private');
+  expect(errors).toEqual([]);
+});
+
+test('walkthrough rejects personal campaign values and keeps its direct-visit audit path', async ({ page }) => {
+  await page.goto('/recruiter-walkthrough?utm_source=private%40example.com&utm_campaign=https%3A%2F%2Fexample.com%2Fprivate&token=private-token');
+  await expect(page.getByRole('link', { name: 'Run free ATS audit →' })).toHaveAttribute('href', '/ats-checker?utm_source=walkthrough&utm_medium=video&utm_campaign=recruiter_audit');
+  // A partial valid tag must not inherit a default campaign and mislabel it.
+  await page.goto('/recruiter-walkthrough?utm_source=LinkedIn&token=private-token');
+  await expect(page.getByRole('link', { name: 'Run free ATS audit →' })).toHaveAttribute('href', '/ats-checker?utm_source=linkedin');
+  await expect(page.getByRole('link', { name: 'Recruiter workspace' })).toHaveAttribute('href', '/?utm_source=linkedin');
+});

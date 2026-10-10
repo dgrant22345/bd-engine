@@ -3091,6 +3091,8 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
         'property="og:description" content="Focus an active job search around relevant public roles, target companies, warm contacts, and clear next actions."'
       )
       .replace('property="og:url" content="https://bd-engine-production.up.railway.app/"', 'property="og:url" content="https://bd-engine-production.up.railway.app/job-search"')
+      .replaceAll('/media/campaign/recruiter-social.png', '/media/campaign/jobseeker-social.png')
+      .replaceAll('Know who to call next. BD Engine recruiter workflow with sample data.', 'Give your job search a plan. BD Engine job-search workflow with sample data.')
       .replace(/name="twitter:title" content="[^"]*"/, 'name="twitter:title" content="BD Engine for Job Seekers | Focus relevant roles"')
       .replace(
         /name="twitter:description" content="[^"]*"/,
