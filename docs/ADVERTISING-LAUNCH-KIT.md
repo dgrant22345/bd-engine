@@ -1,10 +1,14 @@
 # BD Engine advertising launch kit
 
-Prepared October 10, 2026. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
+Prepared October 10, 2026; updated October 11 for company-Page promotion. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
+
+LinkedIn publishing identity: **BD Engine's company Page only**. Do not publish, reshare, comment, send promotional messages, or invite contacts through the owner's personal LinkedIn profile. The Page URL and publishing connection still need to be supplied before any post can be sent. The copy below uses the company's voice.
 
 ## Start here
 
-Publish recruiter post 1 below from your own LinkedIn account, with `audit-social.png`. On day 3, publish the walkthrough as a native video with recruiter post 2. Use the exact tagged link in each post. Reply to people who respond, and ask what would make the workflow useful in their own recruiting business. Review the acquisition report after a week; the first goal is people trying their own target list and creating an active workspace.
+Publish recruiter post 1 below as BD Engine's LinkedIn company Page, with `audit-social.png`. Before submitting, check that the composer displays the Page name and logo. On day 3, publish the walkthrough as a native video from the same Page with recruiter post 2. Use the exact tagged link in each post. Reply as the Page to people who respond, and ask what would make the workflow useful in their own recruiting business. Review the acquisition report after a week; the first goal is people trying their own target list and creating an active workspace.
+
+The Page's public profile can link to the free audit or recruiter walkthrough. Keep the owner's personal profile, contacts, and direct messages out of this campaign. Organic Page links use `utm_source=linkedin_page` so their results stay distinct from earlier LinkedIn traffic.
 
 The initial plan costs $0 in ad spend. Live traffic and keyword-research data are unavailable in this workspace, so the first week establishes a measured baseline.
 
@@ -35,12 +39,12 @@ When uploading a graphic, add accessible alt text:
 
 Which career sites are on your recruiter target list?
 
-I built a free ATS coverage audit inside BD Engine. Paste up to 50 public career-site URLs, see which ATS hosts it recognizes, and export the results.
+BD Engine includes a free ATS coverage audit. Paste up to 50 public career-site URLs, see which ATS hosts it recognizes, and export the results.
 
 No signup required. It checks URL patterns; it does not fetch the sites or confirm open jobs.
 
 Try it with your own targets:
-https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=audit_01
+https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=audit_01
 
 What would you want to see next in a recruiter target-list workflow?
 
@@ -52,29 +56,29 @@ BD Engine brings compatible public hiring activity, the contacts you import, and
 
 This 30-second tour uses sample data. Try the free ATS audit first, then bring your own targets into a 14-day trial. Recruiter Pro is $10 USD/month after the trial.
 
-https://bd-engine-production.up.railway.app/recruiter-walkthrough?utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=video_02
+https://bd-engine-production.up.railway.app/recruiter-walkthrough?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=video_02
 
 ### 3. Useful workflow — attach recruiter-square.png
 
 A useful recruiter target list needs more than a company name.
 
-I look for three things: current hiring context, a contact I actually know, and a clear follow-up.
+Review three things: current hiring context, a contact from your own network, and a clear follow-up.
 
-That's the workflow I'm building with BD Engine: review compatible public roles, bring in your own contacts, and keep the next action beside the account.
+That's the workflow BD Engine brings together: review compatible public roles, bring in your own contacts, and keep the next action beside the account.
 
 You can explore the sample workspace before importing anything:
-https://bd-engine-production.up.railway.app/?utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=workflow_03
+https://bd-engine-production.up.railway.app/?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=workflow_03
 
 ### 4. Early-user feedback — attach recruiter-social.png
 
-I'm looking for independent recruiters and small agency owners to try BD Engine with a real target list and tell me where it helps—or where it gets in the way.
+We're inviting independent recruiters and small agency owners to try BD Engine with a real target list and tell us where it helps—or where it gets in the way.
 
 It combines compatible public hiring activity, your imported contacts, and follow-ups. Start with a 14-day free trial; no card is required to start. Recruiter Pro is $10 USD/month after trial.
 
 Try the workflow here:
-https://bd-engine-production.up.railway.app/?signup=1&persona=bd&plan=trial&utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=feedback_04
+https://bd-engine-production.up.railway.app/?signup=1&persona=bd&plan=trial&utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=feedback_04
 
-If you try it, tell me the first thing you'd change.
+If you try it, tell us the first thing you'd change.
 
 ## Job-seeker posts: a separate audience
 
@@ -86,24 +90,26 @@ BD Engine helps organize an active search around target employers, relevant publ
 
 Try it free for 14 days. The Job Seeker plan is $5 USD/month after trial; no card is needed to start.
 
-https://bd-engine-production.up.railway.app/job-search?utm_source=linkedin&utm_medium=organic_social&utm_campaign=jobseeker_launch_oct26&utm_content=focus_01
+https://bd-engine-production.up.railway.app/job-search?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=jobseeker_launch_oct26&utm_content=focus_01
 
 ### 6. Warm-contact workflow — attach jobseeker-square.png
 
-Before asking someone for a referral, I want to know why that company and that role make sense.
+Before asking someone for a referral, check why that company and that role make sense for your search.
 
 BD Engine puts your target employers, relevant public roles, and imported network context into one workspace. Review the relationship and the role, then prepare your own next step.
 
 It doesn't promise interviews or provide a contact database. It helps you work with your own targets and network.
 
 See the job-search workflow:
-https://bd-engine-production.up.railway.app/job-search?utm_source=linkedin&utm_medium=organic_social&utm_campaign=jobseeker_launch_oct26&utm_content=network_02
+https://bd-engine-production.up.railway.app/job-search?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=jobseeker_launch_oct26&utm_content=network_02
 
 ## Short versions and community introduction
 
+These are optional drafts for other channels, outside the LinkedIn-Page-only schedule below. They are not scheduled or authorized for posting from a personal LinkedIn profile.
+
 ### X / Threads — free audit
 
-I built a free ATS coverage audit for recruiter target lists: paste up to 50 career-site URLs, check recognized ATS hosts, and export the results. No signup needed. URL recognition only; it doesn't check live jobs.
+Try BD Engine's free ATS coverage audit for recruiter target lists: paste up to 50 career-site URLs, check recognized ATS hosts, and export the results. No signup needed. URL recognition only; it doesn't check live jobs.
 
 https://bd-engine-production.up.railway.app/ats-checker?utm_source=x&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=short_01
 
@@ -111,38 +117,41 @@ For Threads, change only `utm_source=x` to `utm_source=threads`.
 
 ### Recruiting community introduction
 
-I'm the builder of BD Engine, a workspace for recruiters working with public hiring activity, their own contacts, and follow-ups.
+BD Engine is a workspace for recruiters working with public hiring activity, their own contacts, and follow-ups.
 
-I made the ATS coverage audit free: paste a career-site URL list, check which hosts it recognizes, and download a report. No signup is required; this is a URL-pattern check, not a check of job availability.
+The ATS coverage audit is free: paste a career-site URL list, check which hosts it recognizes, and download a report. No signup is required; this is a URL-pattern check, not a check of job availability.
 
-If useful tools are welcome here, I'd appreciate feedback on a real target list:
+If useful tools are welcome here, we'd appreciate feedback on a real target list:
 https://bd-engine-production.up.railway.app/ats-checker?utm_source=recruiter_community&utm_medium=community&utm_campaign=recruiter_launch_oct26&utm_content=intro_01
 
 Use this only in communities that allow product introductions, with your relationship to the product clear. Participate in relevant conversations; avoid reposting the same introduction across unrelated groups.
 
 ## Two-week free promotion schedule
 
-Start on the next weekday that fits your availability. Times are suggested in America/Toronto; they are not measured best-posting times.
+Start on the next weekday that fits your availability. All LinkedIn posts and replies in this schedule use BD Engine's company Page. Times are suggested in America/Toronto; they are not measured best-posting times.
 
 | Day | Action | Link content tag |
 | --- | --- | --- |
-| 1, 9:00 a.m. | LinkedIn free audit post + graphic | audit_01 |
-| 2 | Answer comments; note audience questions in the scorecard | — |
-| 3, 12:00 p.m. | Native walkthrough video + post 2 | video_02 |
-| 4 | Join two relevant recruiter conversations with useful answers | — |
-| 5 | One allowed community introduction | intro_01 |
+| 1, 9:00 a.m. | Company Page free audit post + graphic | audit_01 |
+| 2 | Answer comments as the Page; note audience questions in the scorecard | — |
+| 3, 12:00 p.m. | Company Page native walkthrough video + post 2 | video_02 |
+| 4 | Answer relevant questions on the Page's posts | — |
+| 5 | Improve the next Page post using the questions received | — |
 | 6–7 | Review audits, signups, and activation by source | — |
-| 8, 9:00 a.m. | Recruiter workflow post + square graphic | workflow_03 |
-| 9–10 | Answer comments; collect feedback from people who opt in | — |
-| 11, 12:00 p.m. | Early-user feedback post + recruiter graphic | feedback_04 |
-| 12 | Share a short free-tool post on X or Threads | short_01 |
+| 8, 9:00 a.m. | Company Page recruiter workflow post + square graphic | workflow_03 |
+| 9–10 | Answer comments as the Page; collect feedback from people who opt in | — |
+| 11, 12:00 p.m. | Company Page early-user feedback post + recruiter graphic | feedback_04 |
+| 12 | Company Page free-audit recap using post 1 with the recap link below | audit_recap_05 |
 | 13–14 | Compare the sources; plan the next two posts around useful responses | — |
 
 Use the job-seeker posts for a job-search audience or a separate test, with the `jobseeker_launch_oct26` campaign. Do not combine recruiter and job-seeker promises in a single ad.
 
+Day 12 recap link:
+https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_launch_oct26&utm_content=audit_recap_05
+
 ## Paid ad drafts — not launched
 
-Start with one small experiment only after choosing a platform, connecting its account, and setting an explicit spend cap. These are drafts, not spend authorization or market-rate forecasts. Avoid splitting a small budget across many platforms or audiences.
+Start with one small experiment only after choosing a platform, connecting its account, and setting an explicit spend cap. For any LinkedIn ad, select BD Engine's company Page as the sponsored identity. These are drafts, not spend authorization or market-rate forecasts. Avoid splitting a small budget across many platforms or audiences.
 
 | Audience | Headline | Primary text | CTA | Graphic |
 | --- | --- | --- | --- | --- |

@@ -1,9 +1,9 @@
 suggested_day,source,medium,campaign,content,published_date,impressions,platform_clicks,campaign_visitors,manual_audits,signups,activated_customers,confirmed_paid_customers,spend,spend_currency,eligible_for_returns,returned_customers,notes
-1,linkedin,organic_social,recruiter_launch_oct26,audit_01,,,,,,,,,,,,,
-3,linkedin,organic_social,recruiter_launch_oct26,video_02,,,,,,,,,,,,,
-5,recruiter_community,community,recruiter_launch_oct26,intro_01,,,,,,,,,,,,,
-8,linkedin,organic_social,recruiter_launch_oct26,workflow_03,,,,,,,,,,,,,
-11,linkedin,organic_social,recruiter_launch_oct26,feedback_04,,,,,,,,,,,,,
-12,x,organic_social,recruiter_launch_oct26,short_01,,,,,,,,,,,,,
-,linkedin,organic_social,jobseeker_launch_oct26,focus_01,,,,,,,,,,,,,
-,linkedin,organic_social,jobseeker_launch_oct26,network_02,,,,,,,,,,,,,
+1,linkedin_page,organic_social,recruiter_launch_oct26,audit_01,,,,,,,,,,,,,Publish as BD Engine company Page
+3,linkedin_page,organic_social,recruiter_launch_oct26,video_02,,,,,,,,,,,,,Publish as BD Engine company Page
+,recruiter_community,community,recruiter_launch_oct26,intro_01,,,,,,,,,,,,,Optional draft; outside the Page-only schedule
+8,linkedin_page,organic_social,recruiter_launch_oct26,workflow_03,,,,,,,,,,,,,Publish as BD Engine company Page
+11,linkedin_page,organic_social,recruiter_launch_oct26,feedback_04,,,,,,,,,,,,,Publish as BD Engine company Page
+12,linkedin_page,organic_social,recruiter_launch_oct26,audit_recap_05,,,,,,,,,,,,,Company Page recap of the free audit
+,linkedin_page,organic_social,jobseeker_launch_oct26,focus_01,,,,,,,,,,,,,Publish as BD Engine company Page
+,linkedin_page,organic_social,jobseeker_launch_oct26,network_02,,,,,,,,,,,,,Publish as BD Engine company Page

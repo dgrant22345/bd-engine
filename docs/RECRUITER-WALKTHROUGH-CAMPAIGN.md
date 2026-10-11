@@ -14,7 +14,7 @@ Before building a recruiter target list, check which career-site URLs your workf
 BD Engine's free ATS coverage audit gives you a labeled report from a pasted URL list—no signup or card required. Then use a workspace to review hiring activity, your existing contacts, job feedback, and follow-ups.
 
 Watch the 30-second sample walkthrough, or try the audit with your own targets:
-https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin&utm_medium=organic_social&utm_campaign=recruiter_audit_walkthrough&utm_content=video_30s
+https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_audit_walkthrough&utm_content=video_30s
 
 ## Suggested ad copy
 

@@ -1,5 +1,7 @@
 # Next campaign: hiring context to a useful conversation
 
+October 11 update: use BD Engine's LinkedIn company Page only; personal-profile promotion and personal-network invitations are excluded. Use the [current Page campaign kit](ADVERTISING-LAUNCH-KIT.md). The publishing check below is a historical September 12 observation, not a current access check.
+
 Status: copy prepared, not published. No advertising spend authorized or incurred.
 Publishing check: available LinkedIn browser is signed out. Owner must sign in
 and open the existing company page before posting can proceed. No post submitted.
@@ -34,8 +36,9 @@ Independent product; not affiliated with LinkedIn.
 
 1. Publish the page post with a short sample-data walkthrough; no real contacts
    or private browser notifications in the recording.
-2. Personally invite five relevant existing contacts to try the workflow. Select
-   recipients deliberately; no scraped lists or bulk messages.
+2. Reply as the company Page to people who respond to the post, and invite
+   feedback within those conversations. Do not use the owner's personal contacts
+   or profile for this promotion.
 3. Ask recruiter community organizers whether a disclosed feedback/demo post is
    appropriate. Use Discord, Facebook or Reddit only after checking each group's
    rules and obtaining permission where required. Do not copy-paste the same ad

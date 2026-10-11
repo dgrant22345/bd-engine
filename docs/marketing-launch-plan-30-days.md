@@ -2,6 +2,8 @@
 
 Status: working launch plan
 
+October 11 publishing update: LinkedIn promotion uses BD Engine's company Page only. The owner's personal LinkedIn profile, contacts, reshares, comments, and direct messages are excluded. This supersedes the founder-profile recommendations and draft voices below; use the current [company-Page campaign kit](ADVERTISING-LAUNCH-KIT.md) for publishable copy and its Page-only schedule.
+
 7 September execution pack: [ready-to-use promotion kit](marketing-ready-to-use-2026-09-07.md). The owner reports the People introduction is published. The next founder post, tester invitation, organizer request and demo storyboard are prepared but not sent or scheduled. Keep the People-productivity experiment distinct from the staffing-BD positioning below.
 
 6 September checkpoint: follow the [current product-quality release gates](product-quality-audit-2026-09-06.md)
@@ -344,7 +346,7 @@ Keep the cohort size aligned with actual support capacity and the commercial lau
 
 ### LinkedIn distribution rules
 
-- Publish from the founder’s real profile; use the company page for proof and reference, not as the only voice.
+- Publish and reply as BD Engine's company Page only. Do not use the owner's personal LinkedIn profile for promotion.
 - Reply to substantive comments within one business day.
 - Do not use pods, purchased engagement, mass tagging, auto-comments, connection automation, or bulk direct messages. LinkedIn states that repetitive/irrelevant content and software-automated activity can lead to reduced visibility or account restriction ([LinkedIn high-volume guidance](https://www.linkedin.com/help/linkedin/answer/a1339697)).
 - Send a direct message only after a person asks, engages meaningfully, is already known, or has another documented basis for a relevant message.

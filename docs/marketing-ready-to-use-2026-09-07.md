@@ -1,5 +1,7 @@
 # BD Engine: ready-to-use promotion kit
 
+October 11 update: publish LinkedIn promotion only as BD Engine's company Page. The owner's personal profile and personal-network outreach are excluded. The [current campaign kit](ADVERTISING-LAUNCH-KIT.md) supersedes the older founder-voice drafts below.
+
 Status: drafts only; no posts, messages, subscriptions or advertising purchases made. The company-page introduction is already published according to the owner; do not duplicate it.
 
 This is the next execution pack, not another replacement marketing strategy. Use the existing [30-day plan](marketing-launch-plan-30-days.md) for the broader staffing-BD experiment. This pack tests the newly released People workflow with hands-on recruiters. Do not mix the two audience promises in one message.
@@ -21,7 +23,7 @@ BD Engine is independent and not affiliated with LinkedIn.
 
 #Recruiting #Sourcing
 
-Publishing note: post from Derek’s personal profile only after approval. No invented customer results, time savings, testimonials or scarcity claims.
+Publishing note: use BD Engine's company Page and the current company-voice campaign copy. Do not post from Derek's personal profile. No invented customer results, time savings, testimonials or scarcity claims.
 
 ## 2. Follow-up post: useful notes
 
