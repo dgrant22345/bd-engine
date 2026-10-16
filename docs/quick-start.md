@@ -12,6 +12,8 @@
 
 ## Daily Routine
 
+The daily queue and playbook show tracked companies, with paused companies excluded. Follow-ups due today or overdue come first, oldest first, followed by roles posted in the last seven days, other active roles, and research. Mapped contacts then target score break ties. The **Why today** column explains the evidence; **Review follow-ups** opens your task queue. A recent import alone does not count as a recent job posting, and roles marked not relevant do not boost a company.
+
 1. Review important alerts and follow-ups due.
 2. Open a recommended company to see its hiring signals and contacts.
 3. Choose a relevant contact and generate the appropriate message type.

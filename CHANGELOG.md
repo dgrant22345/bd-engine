@@ -2,6 +2,15 @@
 
 All notable customer-facing changes are recorded here. The project is currently in pre-1.0 commercial hardening.
 
+## Unreleased
+
+## 0.1.3.3 — 2026-10-16 — Daily priorities and follow-up reliability
+
+- Rank the daily queue and playbook consistently using due follow-ups, recent posting dates, active roles, mapped contacts, and target score. Keep paused and network-only companies out of daily outreach suggestions, and exclude roles marked not relevant.
+- Explain why each lead appears and provide direct review links in the daily hero, playbook, and queue. Due tasks now populate the dashboard follow-up queue, and completed tasks stop contributing urgency.
+- Reject invalid follow-up due dates with a clear validation error instead of silently scheduling tomorrow or rolling impossible dates into the next month.
+- Keep task versions advancing through rapid rescheduling, completion, and reopening so stale edits cannot overwrite newer work.
+
 ## 0.1.3.0 — Progressive imports and follow-up workflow (2026-10-08)
 
 - Publish each completed ATS source while other checks continue, with timing and a link to available roles. Failed and incomplete sources retain the existing closure safeguards.
@@ -10,8 +19,6 @@ All notable customer-facing changes are recorded here. The project is currently 
 - Add operator customer-growth cohorts for confirmed subscriptions and returns during days 7–13 after signup, reported after the full 14-day window. Exclude demo workspaces, internal owners, reserved test domains, configured test inboxes, and test Stripe events.
 - Publish a captioned 30-second recruiter sample walkthrough and prepare organic/ad copy pointing to the free ATS audit. No posts or paid ads were launched.
 - Verify signup, verification, single-use email recovery, test-provider checkout, paid login, portal access, and cancellation as one isolated fixture journey. Actual Resend delivery and separate Stripe test-environment verification remain pending configuration; see docs/EMAIL-AND-STRIPE-TEST-SETUP.md.
-
-## Unreleased
 
 ## 0.1.2.9 — 2026-10-08 — Acquisition walkthrough
 

@@ -14,6 +14,7 @@ import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeograph
 import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
 import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
 import { validateJobFeedback, persistJobFeedback, loadWorkspaceFeedback } from './job-feedback.js';
+import { rankDailyAccounts } from './daily-priorities.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -322,6 +323,7 @@ function dashboardAccountSummary(item) {
     isOverdue: item.isOverdue,
     staleFlag: item.staleFlag,
     targetScoreExplanation: item.targetScoreExplanation,
+    dailyPriority: item.dailyPriority,
   };
 }
 
@@ -2444,6 +2446,9 @@ export function createStore() {
       const tenantJobs = jobsForTenant(tenantId);
       const tenantConfigs = configsForTenant(tenantId);
       const tenantContacts = contactsForTenant(tenantId);
+      const priorityStartedAt = performance.now();
+      const dailyAccounts = rankDailyAccounts(tenantAccounts, { jobs: tenantJobs, contacts: tenantContacts, tasks: tasksForTenant(tenantId) });
+      timings.priorityMs = Math.round(performance.now() - priorityStartedAt);
       const persona = this.getPersona(tenantId);
       const activeJobs = tenantJobs.filter((item) => item.active !== false);
       const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);
@@ -2451,10 +2456,10 @@ export function createStore() {
       const resolvedConfigs = tenantConfigs.filter(isResolvedBoardConfig);
       const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const newJobsToday = jobsImportedLast24h.slice(0, 50).map(dashboardJobSummary);
-      const followUpAccounts = tenantAccounts
-        .filter((item) => item.nextActionAt)
+      const followUpAccounts = dailyAccounts
+        .filter((item) => item.dailyPriority.lane === 'follow_up')
         .slice(0, 25)
-        .map(dashboardAccountSummary);
+        .map(item => dashboardAccountSummary({ ...item, nextActionAt: item.dailyPriority.dueAt, nextAction: item.dailyPriority.taskSummary }));
       const dashboard = {
         summary: {
           accountCount: tenantAccounts.length,
@@ -2469,17 +2474,17 @@ export function createStore() {
           discoveredBoardCount: resolvedConfigs.length,
           needsResolutionCount: unresolvedAccounts.length,
         },
-        todayQueue: tenantAccounts.slice(0, 50).map(dashboardAccountSummary),
+        todayQueue: dailyAccounts.slice(0, 50).map(dashboardAccountSummary),
         followUpAccounts,
         newJobsToday,
         networkLeaders: tenantContacts.slice(0, 5).map(dashboardContactSummary),
         needsResolution: unresolvedAccounts.slice(0, 5).map(dashboardAccountSummary),
-        actionPlan: buildDashboardActionPlan(persona, tenantAccounts, activeJobs, tenantContacts, tenantConfigs),
+        actionPlan: buildDashboardActionPlan(persona, dailyAccounts, activeJobs, tenantContacts, tenantConfigs),
         readiness: buildWorkspaceReadiness(persona, tenantAccounts, activeJobs, tenantContacts, tenantConfigs),
-        recommendedActions: tenantAccounts.slice(0, 5).map((item) => ({
+        recommendedActions: dailyAccounts.slice(0, 5).map((item) => ({
           accountId: item.id,
           company: item.displayName,
-          text: item.recommendedAction,
+          text: item.dailyPriority.taskSummary || item.recommendedAction || item.dailyPriority.reason,
           recommendedAction: item.recommendedAction,
           outreachStatus: item.outreachStatus,
         })),
@@ -2511,7 +2516,11 @@ export function createStore() {
       const tenantConfigs = configsForTenant(tenantId);
       const tenantActivities = activitiesForTenant(tenantId);
       const pendingFollowUps = tasksForTenant(tenantId)
-        .filter((item) => item.type === 'follow_up' && item.status === 'pending');
+        .filter((item) => item.type === 'follow_up' && item.status === 'pending')
+        .sort((a, b) => (Date.parse(a.dueDate) || Number.MAX_SAFE_INTEGER) - (Date.parse(b.dueDate) || Number.MAX_SAFE_INTEGER) || String(a.id).localeCompare(String(b.id)));
+      const priorityStartedAt = performance.now();
+      const dailyAccounts = rankDailyAccounts(tenantAccounts, { jobs: jobsForTenant(tenantId), contacts: contactsForTenant(tenantId), tasks: tasksForTenant(tenantId) });
+      const priorityMs = Math.round(performance.now() - priorityStartedAt);
       const unresolvedAccounts = getAccountsNeedingResolution(tenantAccounts, tenantConfigs);
       const unresolvedDashboardAccounts = unresolvedAccounts
         .slice(0, DASHBOARD_EXTENDED_QUEUE_LIMIT)
@@ -2556,8 +2565,7 @@ export function createStore() {
         };
       };
       const payload = {
-        playbook: [...tenantAccounts]
-          .sort((a, b) => Number(b.targetScore || 0) - Number(a.targetScore || 0))
+        playbook: dailyAccounts
           .slice(0, 5)
           .map(dashboardAccountSummary),
         overdueFollowUps: pendingFollowUps
@@ -2604,7 +2612,7 @@ export function createStore() {
       };
       const extendedElapsedMs = Math.round(performance.now() - extendedStartedAt);
       if (extendedElapsedMs > 250) {
-        console.warn(`Slow extended dashboard: saas/src/store.js getDashboardExtended ${extendedElapsedMs}ms`);
+        console.warn(`Slow extended dashboard: saas/src/store.js getDashboardExtended ${extendedElapsedMs}ms`, { priorityMs });
       }
       return payload;
     },
@@ -3588,8 +3596,15 @@ export function createStore() {
       if (payload.contactId && !person) throw new CommercialOutcomeValidationError('This person is not available in this workspace.');
       if (person && payload.accountId && payload.accountId !== person.accountId) throw new CommercialOutcomeValidationError('The follow-up company must match this person.');
       const summary = String(payload.summary || '').trim().slice(0, 240);
-      if (!summary) throw new Error('Task summary is required');
+      if (!summary) throw new CommercialOutcomeValidationError('Task summary is required');
+      if (payload.dueDate != null && typeof payload.dueDate !== 'string') throw new CommercialOutcomeValidationError('Choose a valid follow-up due date.');
       const requestedDueDate = new Date(payload.dueDate || Date.now() + 24 * 60 * 60 * 1000);
+      // Date accepts impossible calendar days by rolling them into the next month.
+      const calendarDay = String(payload.dueDate || '').match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+      const parsedDay = calendarDay ? new Date(`${calendarDay}T00:00:00Z`) : null;
+      if (!Number.isFinite(requestedDueDate.getTime()) || (parsedDay && (!Number.isFinite(parsedDay.getTime()) || parsedDay.toISOString().slice(0, 10) !== calendarDay))) {
+        throw new CommercialOutcomeValidationError('Choose a valid follow-up due date.');
+      }
       const task = {
         id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
@@ -3599,7 +3614,7 @@ export function createStore() {
         type: String(payload.type || 'follow_up').slice(0, 60),
         status: 'pending',
         summary,
-        dueDate: Number.isNaN(requestedDueDate.getTime()) ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : requestedDueDate.toISOString(),
+        dueDate: requestedDueDate.toISOString(),
         createdAt: now(),
         updatedAt: now(),
       };
@@ -3616,7 +3631,7 @@ export function createStore() {
       if (task?.status === 'cancelled') throw new CommercialOutcomeValidationError('This follow-up is no longer needed. Reopen it before marking it done.', 409);
       if (task && task.status !== 'completed') {
         task.status = 'completed';
-        task.updatedAt = now();
+        task.updatedAt = new Date(Math.max(Date.now(), Date.parse(task.updatedAt || task.createdAt) + 1)).toISOString();
         await this.addActivity(tenantId, userId, {
           accountId: task.accountId || '',
           contactId: task.contactId || '',
