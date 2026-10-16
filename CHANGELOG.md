@@ -13,6 +13,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Rank the daily queue and playbook consistently using due follow-ups, recent posting dates, active roles, mapped contacts, and target score. Keep paused and network-only companies out of daily outreach suggestions, and exclude roles marked not relevant.
+- Explain why each lead appears and provide direct review links in the daily hero, playbook, and queue. Due tasks now populate the dashboard follow-up queue, and completed tasks stop contributing urgency.
+
 - Reject invalid follow-up due dates with a clear validation error instead of silently scheduling tomorrow or rolling impossible dates into the next month.
 - Keep task versions advancing through rapid rescheduling, completion, and reopening so stale edits cannot overwrite newer work.
 

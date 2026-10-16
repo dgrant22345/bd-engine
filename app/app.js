@@ -10794,10 +10794,11 @@ async function renderDashboardView(options = {}) {
       <div class="hero-layout">
         <div class="hero-copy">
           <p class="eyebrow">Daily operating view</p>
-          <h3>${topCompany ? escapeHtml(topCompany.displayName) : 'No companies match today\'s target-score thresholds yet'}</h3>
-          <p class="subtitle">${topCompany ? escapeHtml(getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Run ATS discovery, import fresh jobs, or relax the filters to populate a new target-score lane.'}</p>
+          <h3>${topCompany ? escapeHtml(topCompany.displayName) : 'Choose a company to start your daily list'}</h3>
+          <p class="subtitle">${topCompany ? escapeHtml(topCompany.dailyPriority?.reason || getTargetScoreExplanation(topCompany) || topCompany.recommendedAction || '') : 'Track companies you want to work with. Your due follow-ups and current hiring evidence will guide the next move.'}</p>
+          ${topCompany?.dailyPriority?.taskSummary ? `<p class="small">${escapeHtml(topCompany.dailyPriority.taskSummary)}</p>` : ''}
           <div class="button-row">
-            ${topCompany ? `<button class="primary-button" data-action="open-account" data-id="${topCompany.id}">${escapeHtml(personaCopy.bestAccountCta)}</button>` : '<a class="primary-button" href="#/admin">Open admin</a>'}
+            ${topCompany ? renderDailyPriorityAction(topCompany, true) : '<a class="primary-button" href="#/accounts">Choose tracked companies</a>'}
             <span class="hero-secondary-links">
               <a href="#/jobs">${escapeHtml(personaCopy.reviewJobsCta)} <span aria-hidden="true">&#8594;</span></a>
               <a href="#/accounts">${escapeHtml(personaCopy.openAccountsCta)} <span aria-hidden="true">&#8594;</span></a>
@@ -10847,7 +10848,7 @@ async function renderDashboardView(options = {}) {
     ${dashSection('playbook', extended.playbook.length ? `
     <section class="detail-card playbook-section">
       <div class="panel-header">
-        <div><h3>Today's playbook</h3><p class="muted small">Your top 5 accounts to work right now, ranked by target score.</p></div>
+        <div><h3>Today's playbook</h3><p class="muted small">Your first 5 tracked companies to work: follow-ups due, recent hiring, then active roles and research.</p></div>
       </div>
       <div class="playbook-grid">
         ${extended.playbook.map((item) => `
@@ -10856,12 +10857,13 @@ async function renderDashboardView(options = {}) {
               <strong>${escapeHtml(item.displayName)}</strong>
               <span class="small muted">${formatNumber(getTargetScore(item))} / 100</span>
             </div>
-            <p class="small">${escapeHtml(getTargetScoreExplanation(item) || item.recommendedAction || 'Review account')}</p>
+            <p class="small">${escapeHtml(item.dailyPriority?.reason || getTargetScoreExplanation(item) || item.recommendedAction || 'Review account')}</p>
+            ${item.dailyPriority?.taskSummary ? `<p class="small">${escapeHtml(item.dailyPriority.taskSummary)}</p>` : ''}
             <div class="small muted">${item.topContactName ? 'Contact: ' + escapeHtml(item.topContactName) : ''}${item.openRoleCount ? ' \u00b7 ' + pluralize(item.openRoleCount, 'role') : ''}</div>
             ${item.isOverdue ? '<span class="status-pill danger">Overdue</span>' : ''}
             ${item.staleFlag === 'STALE' ? '<span class="status-pill warning">Stale</span>' : ''}
             <div class="button-row" style="margin-top:8px;">
-              <button class="ghost-button" data-action="open-account" data-id="${item.id}">Open</button>
+              ${renderDailyPriorityAction(item)}
             </div>
           </div>
         `).join('')}
@@ -10955,14 +10957,15 @@ async function renderDashboardView(options = {}) {
           </div>
           <a class="ghost-button" href="#/accounts">See all ${escapeHtml(personaCopy.accountPlural)}</a>
         </div>
-        ${dashboard.todayQueue.length ? renderTodayQueueTable(dashboard.todayQueue) : renderEmptyState({ icon: 'Queue', title: "No accounts in today's queue", copy: 'Lower the score filters, import more contacts, or run live job import to create a stronger queue.', action: '<a class="secondary-button" href="#/admin">Refresh coverage</a><a class="ghost-button" href="#/accounts">Review filters</a>' })}
+        <details class="job-row-context"><summary>How today's list is ranked</summary><p class="small muted">Follow-ups due today or overdue come first, oldest first. Next are active roles posted in the last 7 days, other active roles, and companies needing research. Within each group, a mapped contact comes before target score. Network-only and paused companies stay out of this list. Roles marked not relevant are excluded; an import date alone does not count as recent hiring.</p></details>
+        ${dashboard.todayQueue.length ? renderTodayQueueTable(dashboard.todayQueue) : renderEmptyState({ icon: 'Queue', title: "No accounts in today's queue", copy: 'Track a company to build your daily list. Network-only and paused companies stay out of this queue.', action: '<a class="secondary-button" href="#/accounts">Choose tracked companies</a>' })}
       </div>
       <div class="panel-stack">
         <div class="list-card detail-card">
           <div class="panel-header">
             <div>
               <h3>Follow-up queue</h3>
-              <p class="muted small">Accounts due for outreach, stale for too long, or ready for a next move.</p>
+              <p class="muted small">Tracked companies with a follow-up or scheduled next step due today or overdue.</p>
             </div>
           </div>
           ${dashboard.followUpAccounts.length ? `<div class="timeline">${dashboard.followUpAccounts.map((item) => renderFollowUpItem(item)).join('')}</div>` : renderEmptyState({ icon: 'OK', title: 'No follow-ups due', copy: 'When accounts become stale or ready for another touch, they will appear here.' })}
@@ -12400,17 +12403,23 @@ async function exportJobsCsv() {
   showToast('📥 Pipeline and network roles exported to CSV!', 'success');
 }
 
+function renderDailyPriorityAction(item, primary = false) {
+  const buttonClass = primary ? 'primary-button' : 'ghost-button';
+  return item.dailyPriority?.lane === 'follow_up' && item.dailyPriority?.dueTasks
+    ? `<a class="${buttonClass}" href="#/tasks">Review follow-ups</a>`
+    : `<a class="${buttonClass}" href="#/accounts/${escapeAttr(item.id)}">Review lead</a>`;
+}
+
 function renderTodayQueueTable(items) {
   return `
-    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>Company</th><th>Target score</th><th>Hiring velocity</th><th>Engagement</th><th>Network</th><th>Next move</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>Company</th><th>Why today</th><th>Hiring evidence</th><th>Network</th><th>Next move</th></tr></thead><tbody>
       ${items.map((item) => `
         <tr>
           <td data-label="Company"><a class="row-link" href="#/accounts/${item.id}">${escapeHtml(item.displayName)}</a><div class="small muted">${escapeHtml(item.topContactName || item.domain || '')}</div><div class="small muted">${escapeHtml(renderTargetScoreSignalSummary(item))}</div></td>
-          <td data-label="Target score">${formatNumber(getTargetScore(item))}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
-          <td data-label="Hiring velocity">${formatNumber(item.hiringVelocity || 0)}<div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d</div></td>
-          <td data-label="Engagement">${formatNumber(item.engagementScore || 0)}<div class="small muted">${formatNumber(item.jobsLast90Days || 0)} jobs / 90d</div></td>
-          <td data-label="Network">${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : '<span class="muted">—</span>'}<div class="small muted">${formatNumber(item.companyGrowthSignalScore || 0)} growth</div></td>
-          <td data-label="Next move">${escapeHtml(item.nextAction || item.recommendedAction || '')}</td>
+          <td data-label="Why today">${escapeHtml(item.dailyPriority?.reason || getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}<div class="small muted">Target score ${formatNumber(getTargetScore(item))} / 100</div></td>
+          <td data-label="Hiring evidence">${pluralize(item.dailyPriority?.activeRoles ?? item.openRoleCount ?? item.jobCount ?? 0, 'active role')}<div class="small muted">${formatNumber(item.dailyPriority?.freshRoles || 0)} posted in the last 7 days</div></td>
+          <td data-label="Network">${escapeHtml(item.dailyPriority?.contactName || item.topContactName || 'No mapped contact')}<div class="small muted">${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}</div></td>
+          <td data-label="Next move"><p class="small">${escapeHtml(item.dailyPriority?.taskSummary || item.nextAction || item.recommendedAction || item.dailyPriority?.reason || 'Review company')}</p>${renderDailyPriorityAction(item)}</td>
         </tr>`).join('')}
     </tbody></table></div>`;
 }
