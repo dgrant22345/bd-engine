@@ -2,6 +2,40 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.js';
 
+test('task creation rejects invalid due dates without creating replacement follow-ups', async () => {
+  const store = createStore(); const tenantId = store.getSession().tenant.id;
+  const before = (await store.findTasks(tenantId)).total;
+  for (const dueDate of ['not-a-date', '2027-02-30', '2027-02-30T09:00:00Z', '2027-04-31', [], {}]) {
+    await assert.rejects(store.createTask(tenantId, { summary: 'Invalid date', dueDate }), { status: 400 });
+  }
+  await assert.rejects(store.createTask(tenantId, { summary: '  ' }), { status: 400 });
+  assert.equal((await store.findTasks(tenantId)).total, before);
+  for (const dueDate of ['2028-02-29', '2027-01-01T09:00:00-05:00']) {
+    const task = await store.createTask(tenantId, { summary: 'Valid date', dueDate });
+    assert.equal(task.dueDate, new Date(dueDate).toISOString());
+  }
+  const defaultTask = await store.createTask(tenantId, { summary: 'Default date' });
+  assert.ok(Math.abs(Date.parse(defaultTask.dueDate) - Date.now() - 86400000) < 1000);
+});
+
+test('rapid completion advances the task version and rejects edits from before completion', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-16T12:00:00Z') });
+  const store = createStore(); const tenantId = store.getSession().tenant.id;
+  const task = await store.createTask(tenantId, { summary: 'Rapid corrections' });
+  const originalVersion = task.updatedAt;
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: originalVersion, dueDate: '2027-01-01' });
+  const rescheduledVersion = task.updatedAt;
+  await store.completeTask(tenantId, task.id, 'user');
+  assert.ok(task.updatedAt > rescheduledVersion);
+  await assert.rejects(store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: originalVersion, status: 'pending' }), { status: 409 });
+  const completedVersion = task.updatedAt;
+  await store.completeTask(tenantId, task.id, 'user');
+  assert.equal(task.updatedAt, completedVersion);
+  await store.updateTask(tenantId, task.id, 'user', { expectedUpdatedAt: completedVersion, status: 'pending' });
+  assert.ok(task.updatedAt > completedVersion);
+  assert.equal((await store.findActivities(tenantId)).total, 3);
+});
+
 test('person outreach records one message and linked follow-up even with concurrent retries', async () => {
   const store = createStore(); const tenantId = store.getSession().tenant.id;
   const person = await store.addContact(tenantId, { fullName: 'Outreach recipient', companyName: 'Example' });

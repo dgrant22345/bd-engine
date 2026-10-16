@@ -13,6 +13,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Reject invalid follow-up due dates with a clear validation error instead of silently scheduling tomorrow or rolling impossible dates into the next month.
+- Keep task versions advancing through rapid rescheduling, completion, and reopening so stale edits cannot overwrite newer work.
+
 ## 0.1.2.9 — 2026-10-08 — Acquisition walkthrough
 
 - Added an accessible three-step public sample showing hiring signals, imported contacts, and reviewed outreach drafts.

@@ -3588,8 +3588,15 @@ export function createStore() {
       if (payload.contactId && !person) throw new CommercialOutcomeValidationError('This person is not available in this workspace.');
       if (person && payload.accountId && payload.accountId !== person.accountId) throw new CommercialOutcomeValidationError('The follow-up company must match this person.');
       const summary = String(payload.summary || '').trim().slice(0, 240);
-      if (!summary) throw new Error('Task summary is required');
+      if (!summary) throw new CommercialOutcomeValidationError('Task summary is required');
+      if (payload.dueDate != null && typeof payload.dueDate !== 'string') throw new CommercialOutcomeValidationError('Choose a valid follow-up due date.');
       const requestedDueDate = new Date(payload.dueDate || Date.now() + 24 * 60 * 60 * 1000);
+      // Date accepts impossible calendar days by rolling them into the next month.
+      const calendarDay = String(payload.dueDate || '').match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+      const parsedDay = calendarDay ? new Date(`${calendarDay}T00:00:00Z`) : null;
+      if (!Number.isFinite(requestedDueDate.getTime()) || (parsedDay && (!Number.isFinite(parsedDay.getTime()) || parsedDay.toISOString().slice(0, 10) !== calendarDay))) {
+        throw new CommercialOutcomeValidationError('Choose a valid follow-up due date.');
+      }
       const task = {
         id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         tenantId,
@@ -3599,7 +3606,7 @@ export function createStore() {
         type: String(payload.type || 'follow_up').slice(0, 60),
         status: 'pending',
         summary,
-        dueDate: Number.isNaN(requestedDueDate.getTime()) ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : requestedDueDate.toISOString(),
+        dueDate: requestedDueDate.toISOString(),
         createdAt: now(),
         updatedAt: now(),
       };
@@ -3616,7 +3623,7 @@ export function createStore() {
       if (task?.status === 'cancelled') throw new CommercialOutcomeValidationError('This follow-up is no longer needed. Reopen it before marking it done.', 409);
       if (task && task.status !== 'completed') {
         task.status = 'completed';
-        task.updatedAt = now();
+        task.updatedAt = new Date(Math.max(Date.now(), Date.parse(task.updatedAt || task.createdAt) + 1)).toISOString();
         await this.addActivity(tenantId, userId, {
           accountId: task.accountId || '',
           contactId: task.contactId || '',
