@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isOutreachAiConfigured, rewriteOutreach } from './outreach-ai.js';
 import { generateUserRecoveryCodes, recoverUserWithCode } from './recovery-codes.js';
@@ -3028,7 +3028,7 @@ function serveStaticOrSPA(pathname, req, res) {
       return sendHtml(res, getAppIndexHtml(res.bdScriptNonce));
     }
     const appPath = tryStaticFile(appDir, appSubPath);
-    if (appPath) return streamFile(appPath, res);
+    if (appPath) return streamFile(appPath, res, req);
     // SPA fallback for /app/ routes — serve app's index.html
     const appIndex = join(appDir, 'index.html');
     if (existsSync(appIndex)) return sendHtml(res, getAppIndexHtml(res.bdScriptNonce));
@@ -3051,11 +3051,11 @@ function serveStaticOrSPA(pathname, req, res) {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
   }
   const cloudPath = tryStaticFile(publicDir, pathname);
-  if (cloudPath) return streamFile(cloudPath, res);
+  if (cloudPath) return streamFile(cloudPath, res, req);
 
   // Fall through to app dir for root-level asset requests (styles.css, app.js, etc.)
   const appFallbackPath = tryStaticFile(appDir, pathname);
-  if (appFallbackPath) return streamFile(appFallbackPath, res);
+  if (appFallbackPath) return streamFile(appFallbackPath, res, req);
 
   // SPA fallback: serve cloud index.html for unmatched routes
   const cloudIndex = join(publicDir, 'index.html');
@@ -3142,26 +3142,37 @@ function tryStaticFile(baseDir, pathname) {
   const safePath = normalize(requestedPath).replace(/^(\.\.[\\/])+/, '');
   const filePath = join(baseDir, safePath);
   if (!filePath.startsWith(baseDir)) return null;
-  if (!existsSync(filePath)) return null;
+  // Only regular files are servable. A directory path (for example /media)
+  // exists but cannot be streamed, and must fall through to the normal
+  // not-found handling instead of reaching createReadStream.
+  if (!statSync(filePath, { throwIfNoEntry: false })?.isFile()) return null;
   return filePath;
 }
 
 const COMPRESSIBLE_MIME = /^(text\/|application\/(json|javascript|xml))|image\/svg\+xml/;
 
-function streamFile(filePath, res) {
+function streamFile(filePath, res, req) {
   const contentType = mimeTypes[extname(filePath)] || 'application/octet-stream';
   const headers = {
     'Content-Type': contentType,
     'Cache-Control': 'no-store',
     'Vary': 'Accept-Encoding',
   };
+  // A read failure after the headers are sent must end this response only.
+  // Without a listener the stream's error event is unhandled and stops the
+  // whole process.
+  const source = createReadStream(filePath);
+  source.on('error', (error) => {
+    console.error(`Static file read failed [${req?.requestId || 'no-request-id'}]:`, safeErrorSummary(error));
+    res.destroy();
+  });
   if (res.bdAcceptsGzip && COMPRESSIBLE_MIME.test(contentType)) {
     res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
-    createReadStream(filePath).pipe(createGzip(GZIP_OPTIONS)).pipe(res);
+    source.pipe(createGzip(GZIP_OPTIONS)).pipe(res);
     return;
   }
   res.writeHead(200, headers);
-  createReadStream(filePath).pipe(res);
+  source.pipe(res);
 }
 
 function recordRequestMetric(req, res, elapsedMs) {
