@@ -4,6 +4,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Serve only regular files from the static directories and contain a failed file read to the request that triggered it, so one malformed asset request cannot interrupt the service for everyone else.
+
 ## 0.1.3.3 — 2026-10-16 — Daily priorities and follow-up reliability
 
 - Rank the daily queue and playbook consistently using due follow-ups, recent posting dates, active roles, mapped contacts, and target score. Keep paused and network-only companies out of daily outreach suggestions, and exclude roles marked not relevant.
