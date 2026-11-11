@@ -56,7 +56,7 @@ test('job-seeker campaign route renders dedicated copy and avoids the staffing d
   assert.match(landing, /mismatchedJobSeekerDemo/);
   assert.match(landing, />Audit career sites</);
   assert.doesNotMatch(landing, /isJobSeekerLanding\s*\?[^:]+data-demo-start/);
-  assert.match(server, /getCloudIndexHtml\(res\.bdScriptNonce, 'jobseeker'\)/);
+  assert.match(server, /getCloudIndexHtml\(res\.bdScriptNonce, 'jobseeker'[,)]/);
   assert.match(server, /bd-engine-production\.up\.railway\.app\/job-search/);
 });
 

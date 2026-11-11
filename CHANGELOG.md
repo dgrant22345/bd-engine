@@ -5,6 +5,14 @@ All notable customer-facing changes are recorded here. The project is currently 
 ## Unreleased
 
 - Serve only regular files from the static directories and contain a failed file read to the request that triggered it, so one malformed asset request cannot interrupt the service for everyone else.
+- Deliver the home page and `/job-search` already rendered for signed-out visitors, so the page appears without a loading spinner and its content is readable by search and AI crawlers that do not run JavaScript. Signed-in visitors still open straight into the workspace.
+- Add a favicon and home-screen icon to every public page.
+- Self-host the Inter typeface and load it on every public page. The ATS audit, guides, and walkthrough previously fell back to a system font, and the home page no longer contacts Google Fonts.
+- Cache stylesheets, scripts, fonts, and media in the browser, and answer repeat requests with a short "not modified" response instead of resending the file.
+- Support partial (byte-range) requests for media, which Safari requires to play the recruiter walkthrough video.
+- Return a branded "page not found" page with a 404 status for unknown addresses instead of a copy of the home page, and add `/login`, `/signup`, `/pricing`, `/privacy`, and `/terms` as shortcuts to those views.
+- Align the home page browser title with the headline used in link previews.
+- Fix the home page headline so its highlighted phrase uses the same letter-spacing as the rest of the line.
 
 ## 0.1.3.3 — 2026-10-16 — Daily priorities and follow-up reliability
 
