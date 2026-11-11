@@ -54,6 +54,13 @@ saas/
 `-- .env.example
 ```
 
+### Public site delivery
+
+- **Landing page.** `public/index.html` builds the landing page in the browser. For signed-out requests to `/` and `/job-search`, the server evaluates the same template (the code between the `// <landing-template>` markers) and sends the result inside `#cloud-root`, so the page is readable without JavaScript and paints before the account check returns. Keep that marked region free of DOM access; `test/landing-prerender.test.js` enforces it. Edit landing copy in `index.html` only. There is no second copy to update.
+- **Asset versions.** The server rewrites local `.css` and `.js` references in public HTML to `?v=<content hash>` and serves those URLs as immutable. Hand-written `?v=` tokens in the HTML files are ignored, so they do not need to be bumped. Any other request for a text asset is revalidated with an `ETag` on each use.
+- **Fonts and icons.** Inter is self-hosted from `public/fonts/` and declared once in `public/brand.css`. Regenerate the favicon and touch icons with `node scripts/build-brand-icons.mjs`.
+- **Unknown paths.** Anything that is not a known page, file, or shortcut returns `public/404.html` with a 404 status. Add new public pages to `PUBLIC_GUIDE_FILES` in `src/server.js`.
+
 ## Production Dependencies
 
 - New workspaces can use relational-primary storage with guarded legacy

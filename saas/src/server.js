@@ -23,6 +23,8 @@ import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-cl
 import { buildAcquisitionDimensions, buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
+import { canPrerenderLanding, insertPrerenderedLanding, landingPersonaForRequest, renderLandingHtml } from './landing-prerender.js';
+import { COMPRESSIBLE_MIME, etagMatches, getFileValidator, looksLikeAssetPath, parseByteRange, staticCacheControl, versionAssetUrls, versionTokenFromEtag } from './static-assets.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
 import { clientAddress } from './request-client.js';
 import { isUnsafeCrossSiteRequest } from './request-security.js';
@@ -3020,6 +3022,49 @@ const PUBLIC_GUIDE_FILES = new Map([
   ['/guides/linkedin-connections-job-search', 'guides/linkedin-connections-job-search.html'],
 ]);
 
+// Memorable addresses for views that otherwise live behind a query string on
+// the home page. They give the legal pages and sign-in a link that can be
+// typed or pasted into third-party forms.
+const PUBLIC_SHORTCUT_REDIRECTS = new Map([
+  ['/login', '/?login=1'],
+  ['/signup', '/?signup=1'],
+  ['/pricing', '/#pricing'],
+  ['/privacy', '/?legal=privacy'],
+  ['/terms', '/?legal=terms'],
+]);
+
+function sendShortcutRedirect(req, res, target) {
+  const destination = new URL(target, 'http://bd-engine.local');
+  const incoming = new URL(req.url || '/', 'http://bd-engine.local');
+  // Carry campaign parameters across without letting them override the view.
+  for (const [name, value] of incoming.searchParams) {
+    if (!destination.searchParams.has(name)) destination.searchParams.append(name, value);
+  }
+  res.writeHead(302, {
+    Location: `${destination.pathname}${destination.search}${destination.hash}`,
+    'Cache-Control': 'no-store',
+  });
+  res.end();
+}
+
+// Returns the persona whose landing page should be rendered into the shell for
+// this request, or '' when the visitor is signed in or the URL asks for a
+// different first view (the browser then renders as before).
+function getLandingPrerenderPersona(pathname, req) {
+  const { searchParams } = new URL(req.url || '/', 'http://bd-engine.local');
+  if (!canPrerenderLanding({ method: req.method, searchParams, hasSession: Boolean(extractSession(req)) })) return '';
+  return landingPersonaForRequest(pathname, searchParams);
+}
+
+function resolveAssetVersion(assetPath) {
+  const filePath = tryStaticFile(publicDir, assetPath) || tryStaticFile(appDir, assetPath);
+  return filePath ? versionTokenFromEtag(getFileValidator(filePath).etag) : '';
+}
+
+function readPublicHtml(relativePath) {
+  return versionAssetUrls(readFileSync(join(publicDir, relativePath), 'utf8'), resolveAssetVersion);
+}
+
 function serveStaticOrSPA(pathname, req, res) {
   // Handle /app/ prefix — the cloud shell loads the BD Engine app via iframe at /app/
   if (pathname === '/app' || pathname.startsWith('/app/')) {
@@ -3040,7 +3085,7 @@ function serveStaticOrSPA(pathname, req, res) {
     return sendHtml(res, getAtsCheckerHtml(res.bdScriptNonce));
   }
   if (pathname === '/job-search' || pathname === '/job-search/') {
-    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker'));
+    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker', getLandingPrerenderPersona(pathname, req)));
   }
   const guidePath = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   const guideFile = PUBLIC_GUIDE_FILES.get(guidePath);
@@ -3048,8 +3093,10 @@ function serveStaticOrSPA(pathname, req, res) {
     return sendHtml(res, getGuideHtml(guideFile, res.bdScriptNonce));
   }
   if (pathname === '/' || pathname === '/index.html') {
-    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
+    return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'bd', getLandingPrerenderPersona(pathname, req)));
   }
+  const shortcutTarget = PUBLIC_SHORTCUT_REDIRECTS.get(guidePath);
+  if (shortcutTarget) return sendShortcutRedirect(req, res, shortcutTarget);
   const cloudPath = tryStaticFile(publicDir, pathname);
   if (cloudPath) return streamFile(cloudPath, res, req);
 
@@ -3057,22 +3104,24 @@ function serveStaticOrSPA(pathname, req, res) {
   const appFallbackPath = tryStaticFile(appDir, pathname);
   if (appFallbackPath) return streamFile(appFallbackPath, res, req);
 
-  // SPA fallback: serve cloud index.html for unmatched routes
-  const cloudIndex = join(publicDir, 'index.html');
-  if (existsSync(cloudIndex)) return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce));
-
-  return sendJson(res, 404, { error: 'Not found' });
+  // Nothing matched. The cloud shell only lives at / and /job-search (its
+  // views are selected by query string), so an unknown path is a real 404
+  // rather than another copy of the landing page with a 200 status.
+  if (looksLikeAssetPath(pathname)) return sendNotFoundText(res);
+  return sendHtml(res, getNotFoundHtml(res.bdScriptNonce), 404);
 }
 
 let cachedAppIndexHtml = null;
 let cachedCloudIndexHtml = null;
 let cachedJobSeekerIndexHtml = null;
 let cachedAtsCheckerHtml = null;
+let cachedNotFoundHtml = null;
 const cachedGuideHtml = new Map();
+const cachedPrerenderedIndexHtml = new Map();
 
-function getCloudIndexHtml(scriptNonce, persona = 'bd') {
+function getCloudIndexHtml(scriptNonce, persona = 'bd', prerenderPersona = '') {
   if (!cachedCloudIndexHtml) {
-    cachedCloudIndexHtml = readFileSync(join(publicDir, 'index.html'), 'utf8');
+    cachedCloudIndexHtml = readPublicHtml('index.html');
   }
   if (persona === 'jobseeker' && !cachedJobSeekerIndexHtml) {
     cachedJobSeekerIndexHtml = cachedCloudIndexHtml
@@ -3101,21 +3150,47 @@ function getCloudIndexHtml(scriptNonce, persona = 'bd') {
       .replace('"url": "https://bd-engine-production.up.railway.app/"', '"url": "https://bd-engine-production.up.railway.app/job-search"')
       .replace(/<title>[^<]*<\/title>/, '<title>BD Engine for Job Seekers | Focus Relevant Roles</title>');
   }
-  return injectScriptNonce(persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml, scriptNonce);
+  const shell = persona === 'jobseeker' ? cachedJobSeekerIndexHtml : cachedCloudIndexHtml;
+  return injectScriptNonce(prerenderPersona ? getPrerenderedCloudIndexHtml(shell, persona, prerenderPersona) : shell, scriptNonce);
+}
+
+// The landing body is rendered once per (head persona, body persona) pair and
+// reused. If rendering ever fails, the plain shell is served and the browser
+// renders the page itself, exactly as it did before pre-rendering existed.
+function getPrerenderedCloudIndexHtml(shell, persona, prerenderPersona) {
+  const cacheKey = `${persona}:${prerenderPersona}`;
+  if (!cachedPrerenderedIndexHtml.has(cacheKey)) {
+    const startedAt = performance.now();
+    try {
+      cachedPrerenderedIndexHtml.set(cacheKey, insertPrerenderedLanding(shell, renderLandingHtml(cachedCloudIndexHtml, prerenderPersona)));
+      console.log(`Landing pre-render (${cacheKey}) took ${Math.round(performance.now() - startedAt)}ms.`);
+    } catch (error) {
+      console.error('Landing pre-render failed; serving the client-rendered shell:', safeErrorSummary(error));
+      cachedPrerenderedIndexHtml.set(cacheKey, shell);
+    }
+  }
+  return cachedPrerenderedIndexHtml.get(cacheKey);
 }
 
 function getAtsCheckerHtml(scriptNonce) {
   if (!cachedAtsCheckerHtml) {
-    cachedAtsCheckerHtml = readFileSync(join(publicDir, 'ats-checker.html'), 'utf8');
+    cachedAtsCheckerHtml = readPublicHtml('ats-checker.html');
   }
   return injectScriptNonce(cachedAtsCheckerHtml, scriptNonce);
 }
 
 function getGuideHtml(filePath, scriptNonce) {
   if (!cachedGuideHtml.has(filePath)) {
-    cachedGuideHtml.set(filePath, readFileSync(join(publicDir, filePath), 'utf8'));
+    cachedGuideHtml.set(filePath, readPublicHtml(filePath));
   }
   return injectScriptNonce(cachedGuideHtml.get(filePath), scriptNonce);
+}
+
+function getNotFoundHtml(scriptNonce) {
+  if (!cachedNotFoundHtml) {
+    cachedNotFoundHtml = readPublicHtml('404.html');
+  }
+  return injectScriptNonce(cachedNotFoundHtml, scriptNonce);
 }
 
 function getAppIndexHtml(scriptNonce) {
@@ -3149,30 +3224,66 @@ function tryStaticFile(baseDir, pathname) {
   return filePath;
 }
 
-const COMPRESSIBLE_MIME = /^(text\/|application\/(json|javascript|xml))|image\/svg\+xml/;
-
+// Static files carry a content-hash validator so repeat visits revalidate with
+// a 304 instead of downloading again. Only a URL whose ?v= token equals that
+// hash (and vendored fonts) is cached without revalidation; see
+// staticCacheControl. Binary media also honours single byte ranges, which
+// Safari requires before it will play a video.
 function streamFile(filePath, res, req) {
   const contentType = mimeTypes[extname(filePath)] || 'application/octet-stream';
+  const { size, etag } = getFileValidator(filePath);
+  const compressible = COMPRESSIBLE_MIME.test(contentType);
+  const gzipped = compressible && res.bdAcceptsGzip;
+  const requestUrl = new URL(req.url || '/', 'http://bd-engine.local');
   const headers = {
     'Content-Type': contentType,
-    'Cache-Control': 'no-store',
+    'Cache-Control': staticCacheControl({
+      versionMatches: requestUrl.searchParams.get('v') === versionTokenFromEtag(etag),
+      contentType,
+    }),
+    'ETag': gzipped ? `W/${etag}` : etag,
     'Vary': 'Accept-Encoding',
   };
-  // A read failure after the headers are sent must end this response only.
-  // Without a listener the stream's error event is unhandled and stops the
-  // whole process.
-  const source = createReadStream(filePath);
-  source.on('error', (error) => {
-    console.error(`Static file read failed [${req?.requestId || 'no-request-id'}]:`, safeErrorSummary(error));
-    res.destroy();
-  });
-  if (res.bdAcceptsGzip && COMPRESSIBLE_MIME.test(contentType)) {
-    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
-    source.pipe(createGzip(GZIP_OPTIONS)).pipe(res);
+  if (etagMatches(req.headers['if-none-match'], etag)) {
+    res.writeHead(304, headers);
+    res.end();
     return;
   }
-  res.writeHead(200, headers);
-  source.pipe(res);
+  const send = (status, extraHeaders, streamOptions) => {
+    res.writeHead(status, { ...headers, ...extraHeaders });
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    // A read failure after the headers are sent must end this response only.
+    // Without a listener the stream's error event is unhandled and stops the
+    // whole process.
+    const source = createReadStream(filePath, streamOptions);
+    source.on('error', (error) => {
+      console.error(`Static file read failed [${req.requestId || 'no-request-id'}]:`, safeErrorSummary(error));
+      res.destroy();
+    });
+    if (gzipped) source.pipe(createGzip(GZIP_OPTIONS)).pipe(res);
+    else source.pipe(res);
+  };
+  if (gzipped) return send(200, { 'Content-Encoding': 'gzip' });
+  if (compressible) return send(200, { 'Content-Length': size });
+
+  const ifRange = String(req.headers['if-range'] || '').trim();
+  const range = ifRange && ifRange !== etag ? null : parseByteRange(req.headers.range, size);
+  if (range?.unsatisfiable) {
+    res.writeHead(416, { ...headers, 'Accept-Ranges': 'bytes', 'Content-Range': `bytes */${size}` });
+    res.end();
+    return;
+  }
+  if (range) {
+    return send(206, {
+      'Accept-Ranges': 'bytes',
+      'Content-Range': `bytes ${range.start}-${range.end}/${size}`,
+      'Content-Length': range.end - range.start + 1,
+    }, { start: range.start, end: range.end });
+  }
+  return send(200, { 'Accept-Ranges': 'bytes', 'Content-Length': size });
 }
 
 function recordRequestMetric(req, res, elapsedMs) {
@@ -3308,11 +3419,19 @@ function sendCompressible(res, status, headers, body) {
   res.end(buffer);
 }
 
-function sendHtml(res, body) {
-  sendCompressible(res, 200, {
+function sendHtml(res, body, status = 200) {
+  sendCompressible(res, status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
   }, body);
+}
+
+function sendNotFoundText(res) {
+  res.writeHead(404, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end('Not found\n');
 }
 
 function sendRedirect(res, location, status = 302) {

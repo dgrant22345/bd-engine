@@ -25,7 +25,7 @@
   <meta name="twitter:description" content="Review public hiring activity, your imported contacts, and follow-ups in one workspace. Try BD Engine free for 14 days.">
   <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/media/campaign/recruiter-social.png">
   <meta name="twitter:image:alt" content="Know who to call next. BD Engine recruiter workflow with sample data.">
-  <title>BD Engine | Live Hiring Signals, Warm Referral Paths & Actionable Intelligence</title>
+  <title>BD Engine for Recruiters | Know Who to Call Next</title>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -59,9 +59,10 @@
     ]
   }
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/cloud.css?v=20261008-premium-ui-01">
   <link rel="stylesheet" href="/brand.css?v=20261008-premium-ui-01">
 </head>
@@ -118,6 +119,14 @@
       onboardingIntentScope: '',
       acquisition: getInitialAcquisition(),
     };
+
+    // True when the server delivered the landing page already rendered inside
+    // #cloud-root (signed-out request) and this URL asks for no other first view.
+    let serverRenderedLanding = root.dataset.prerendered === 'landing' && (() => {
+      const params = new URLSearchParams(window.location.search);
+      return !state.resetToken && !state.verificationToken && !params.has('legal')
+        && params.get('login') !== '1' && params.get('signup') !== '1';
+    })();
 
     function getInitialReferralCode() {
       const fromUrl = new URLSearchParams(window.location.search).get('ref') || '';
@@ -729,6 +738,11 @@
               ? 'signup'
               : 'landing';
       }
+      // The landing page is already on screen and wired when the server
+      // pre-rendered it; repainting would discard a visitor's open tab or FAQ.
+      const landingAlreadyLive = serverRenderedLanding && state.view === 'landing' && !state.accountClosedMessage;
+      serverRenderedLanding = false;
+      if (landingAlreadyLive) return;
       render();
     }
 
@@ -1077,6 +1091,11 @@
     // ── Landing page ──────────────────────────────────────────────────────
     function renderLanding() {
       const landingStartedAt = performance.now();
+      // The server also evaluates the code between the two landing-template
+      // markers to pre-render this page for signed-out visitors and crawlers
+      // (src/landing-prerender.js). Keep it free of DOM access: it may read
+      // only state, escapeHtml, and Date, and must assign root.innerHTML.
+      // <landing-template>
       const isJobSeekerLanding = state.signupPersona === 'jobseeker';
       const landingCopy = isJobSeekerLanding ? {
         badge: 'A more focused job search',
@@ -1364,6 +1383,7 @@
             <p class="landing-footer-copy">&copy; ${new Date().getFullYear()} BD Engine. ${landingCopy.footer}</p>
           </footer>
         </div>`;
+      // </landing-template>
 
       // Wire events
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
@@ -2559,6 +2579,10 @@
     }
 
     // ── Init ──────────────────────────────────────────────────────────────
+    // A signed-out visitor receives the landing page already rendered in the
+    // HTML. Keep it and attach behaviour now, instead of swapping it for the
+    // loading state while the account check is in flight.
+    if (serverRenderedLanding) state.view = 'landing';
     render();
     checkAuth();
   })();
