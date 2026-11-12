@@ -26,7 +26,7 @@
   </url>
   <url>
     <loc>https://bd-engine-production.up.railway.app/guides</loc>
-    <lastmod>2026-08-24</lastmod>
+    <lastmod>2026-11-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
@@ -45,6 +45,18 @@
   <url>
     <loc>https://bd-engine-production.up.railway.app/guides/linkedin-connections-job-search</loc>
     <lastmod>2026-08-24</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://bd-engine-production.up.railway.app/guides/find-hiring-companies-staffing</loc>
+    <lastmod>2026-11-12</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv</loc>
+    <lastmod>2026-11-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>

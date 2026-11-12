@@ -80,6 +80,30 @@ https://bd-engine-production.up.railway.app/?signup=1&persona=bd&plan=trial&utm_
 
 If you try it, tell us the first thing you'd change.
 
+## Guide posts (added November 12, 2026)
+
+Two guides for the staffing audience were published on the site on November 12. Use these after the launch schedule, or in place of the day 8 and day 11 posts if early responses ask for practical advice rather than product detail. Both are text posts from the company Page; no graphic is required.
+
+### 7. Hiring-signals guide
+
+A target list tells you who you would like to work with. It does not tell you who has a reason to talk this week.
+
+BD Engine has published a short guide for staffing recruiters on using hiring signals: which four are worth tracking, why the employer's own job board is the source, and a half-hour daily routine for ranking accounts and writing a first message.
+
+One caution from the guide: a posting is not a requirement for an agency. It earns a well-informed first message, not an assumption.
+
+https://bd-engine-production.up.railway.app/guides/find-hiring-companies-staffing?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=signals_guide_07
+
+Which signal has started the most useful conversations for you?
+
+### 8. Connections export guide
+
+Your LinkedIn connections are available to you as a file. Most recruiters have never requested it.
+
+This guide covers where to ask LinkedIn for the export, what Connections.csv contains, why most email cells are blank, and the four problems that stop the file importing cleanly into another tool.
+
+https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=export_guide_08
+
 ## Job-seeker posts: a separate audience
 
 ### 5. Focused search — attach jobseeker-social.png

@@ -4,6 +4,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Publish two guides for staffing recruiters: how to find companies that are hiring, and how to export LinkedIn connections to CSV. Both are listed on the guide index and in the sitemap.
+- Keep the campaign that brought a visitor to a guide when they continue to the free audit or the product, so results from a post that links to a guide are attributed to that post.
 - Show a new workspace its four first steps at the top of the Dashboard, and replace the grid of zero-value metrics with a single prompt until a company is ranked.
 - Put the follow-up queue first on the Follow-ups page, with calendar reminders and activity history below it, and make the "New task" panel the same width as the rest of the page.
 - Remove the box drawn around the page heading on the sign-up form and the first-run setup screen, which made the heading look like an editable field.

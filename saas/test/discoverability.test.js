@@ -10,6 +10,10 @@ const guideArticlePaths = [
   new URL('../public/guides/workday-job-search.html', import.meta.url),
   new URL('../public/guides/linkedin-connections-job-search.html', import.meta.url),
 ];
+const newerGuideArticles = [
+  { slug: 'find-hiring-companies-staffing', published: '2026-11-12' },
+  { slug: 'export-linkedin-connections-csv', published: '2026-11-12' },
+];
 const indexNowKeyPath = new URL('../public/9252ff32fcf3a7589799d0826f50459b.txt', import.meta.url);
 const robotsPath = new URL('../public/robots.txt', import.meta.url);
 const sitemapPath = new URL('../public/sitemap.xml', import.meta.url);
@@ -158,4 +162,45 @@ test('crawler files point to the canonical public origin and have explicit MIME 
   assert.match(server, /'\.txt': 'text\/plain; charset=utf-8'/);
   assert.match(server, /'\.xml': 'application\/xml; charset=utf-8'/);
   assert.equal(indexNowKey.trim(), '9252ff32fcf3a7589799d0826f50459b');
+});
+
+test('newer guides are routed, listed, in the sitemap, and carry valid article metadata', async () => {
+  const [guideIndex, server, sitemap] = await Promise.all([
+    readFile(guideIndexPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+    readFile(sitemapPath, 'utf8'),
+  ]);
+  for (const { slug, published } of newerGuideArticles) {
+    const article = await readFile(new URL(`../public/guides/${slug}.html`, import.meta.url), 'utf8');
+    const url = `https://bd-engine-production.up.railway.app/guides/${slug}`;
+    assert.ok(server.includes(`['/guides/${slug}', 'guides/${slug}.html']`), `${slug} is not routed`);
+    assert.ok(guideIndex.includes(`href="/guides/${slug}"`), `${slug} is not listed on the guide index`);
+    assert.ok(sitemap.includes(`<loc>${url}</loc>`), `${slug} is not in the sitemap`);
+    assert.ok(article.includes(`<link rel="canonical" href="${url}">`));
+    assert.match(article, /<meta name="robots" content="index, follow, max-image-preview:large">/);
+    assert.match(article, /utm_source=organic_search&amp;utm_medium=guide/);
+    assert.equal((article.match(/<h1[\s>]/g) || []).length, 1);
+    const description = article.match(/<meta name="description" content="([^"]+)">/)[1];
+    assert.ok(description.length >= 110 && description.length <= 170, `${slug} description is ${description.length} characters`);
+    const schema = JSON.parse(article.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/)[1]);
+    assert.equal(schema['@type'], 'Article');
+    assert.equal(schema.mainEntityOfPage, url);
+    assert.equal(schema.datePublished, published);
+    assert.equal(schema.author.name, 'BD Engine');
+    // Every in-page link to another guide resolves to a routed guide.
+    for (const [, target] of article.matchAll(/href="(\/guides\/[a-z0-9-]+)"/g)) {
+      assert.ok(server.includes(`['${target}',`), `${slug} links to unrouted ${target}`);
+    }
+  }
+});
+
+test('guides keep an incoming campaign on their product links', async () => {
+  const guideFiles = ['index', 'ats-job-board-coverage', 'workday-job-search', 'linkedin-connections-job-search', ...newerGuideArticles.map(({ slug }) => slug)];
+  for (const name of guideFiles) {
+    const guide = await readFile(new URL(`../public/guides/${name}.html`, import.meta.url), 'utf8');
+    assert.match(guide, /<script type="module" src="\/campaign-links\.js"><\/script>/, name);
+    const productLinks = guide.match(/<a\b[^>]*\bhref="(?:\/|\/job-search|\/ats-checker)(?:\?[^"]*)?"[^>]*>/g) || [];
+    assert.ok(productLinks.length >= 2, `${name} has no product links`);
+    for (const link of productLinks) assert.match(link, /data-campaign-link/, `${name}: ${link}`);
+  }
 });

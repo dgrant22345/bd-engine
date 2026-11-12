@@ -114,7 +114,7 @@ test('public pages ship icons and self-hosted fonts with no third-party font ori
   const iconBytes = Buffer.from(await favicon.arrayBuffer());
   assert.deepEqual([...iconBytes.subarray(0, 4)], [0, 0, 1, 0], 'ICO signature');
 
-  for (const path of ['/', '/job-search', '/ats-checker', '/recruiter-walkthrough', '/guides', '/guides/ats-job-board-coverage', '/guides/workday-job-search', '/guides/linkedin-connections-job-search']) {
+  for (const path of ['/', '/job-search', '/ats-checker', '/recruiter-walkthrough', '/guides', '/guides/ats-job-board-coverage', '/guides/workday-job-search', '/guides/linkedin-connections-job-search', '/guides/find-hiring-companies-staffing', '/guides/export-linkedin-connections-csv']) {
     const response = await fetch(`${origin}${path}`);
     const html = await response.text();
     assert.equal(response.status, 200, path);

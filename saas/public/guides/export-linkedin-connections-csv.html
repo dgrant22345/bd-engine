@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Request your LinkedIn connections export, find Connections.csv in the archive, understand its columns and blank emails, and fix the problems that make imports fail.">
+  <meta name="author" content="BD Engine">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="BD Engine Cloud">
+  <meta property="og:title" content="How to Export LinkedIn Connections to CSV | BD Engine">
+  <meta property="og:description" content="Where to request the file, what its columns contain, why most email cells are blank, and how to avoid the common import failures.">
+  <meta property="og:url" content="https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv">
+  <meta property="og:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta property="og:image:alt" content="BD Engine logo">
+  <meta property="article:published_time" content="2026-11-12">
+  <meta property="article:modified_time" content="2026-11-12">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="How to Export LinkedIn Connections to CSV | BD Engine">
+  <meta name="twitter:description" content="Where to request the file, what its columns contain, why most email cells are blank, and how to avoid the common import failures.">
+  <meta name="twitter:image" content="https://bd-engine-production.up.railway.app/bd-engine-logo.png">
+  <meta name="theme-color" content="#f3f6fa">
+  <title>How to Export LinkedIn Connections to CSV | BD Engine</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/guides.css">
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "How to Export Your LinkedIn Connections to CSV",
+  "description": "Where to request the file, what its columns contain, why most email cells are blank, and how to avoid the common import failures.",
+  "datePublished": "2026-11-12",
+  "dateModified": "2026-11-12",
+  "mainEntityOfPage": "https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv",
+  "image": "https://bd-engine-production.up.railway.app/bd-engine-logo.png",
+  "author": {
+    "@type": "Organization",
+    "name": "BD Engine",
+    "url": "https://bd-engine-production.up.railway.app/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "BD Engine",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://bd-engine-production.up.railway.app/bd-engine-logo.png"
+    }
+  }
+}
+  </script>
+  <link rel="stylesheet" href="/brand.css">
+  <script type="module" src="/campaign-links.js"></script>
+</head>
+<body class="public-premium">
+  <a class="skip-link" href="#article-main">Skip to guide</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="BD Engine home" data-campaign-link>
+      <img src="/brand-mark.svg" alt="" width="34" height="34">
+      <span>BD Engine</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="/guides">Guides</a>
+      <a href="/job-search" data-campaign-link>Job search</a>
+      <a class="header-cta" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=linkedin_export_guide&amp;utm_content=header" data-campaign-link>Run free ATS audit</a>
+    </nav>
+  </header>
+
+  <main id="article-main">
+    <article>
+      <header class="article-header">
+        <p class="eyebrow">Connections export</p>
+        <h1>How to export your LinkedIn connections to CSV</h1>
+        <p class="lede">LinkedIn will send you a file of your own first-degree connections on request. This guide covers where to ask for it, what the file contains, and the handful of problems that stop it importing cleanly elsewhere.</p>
+        <div class="article-meta">
+          <span>Published by BD Engine</span>
+          <time datetime="2026-11-12">November 12, 2026</time>
+          <span>6 minute guide</span>
+        </div>
+      </header>
+
+      <div class="article-layout">
+        <div class="article-body">
+          <section aria-labelledby="export-steps">
+            <h2 id="export-steps">Request the file from LinkedIn</h2>
+            <p>LinkedIn provides your first-degree connections as part of its own data download. You request it from your account settings; nothing is installed and no third party signs in to your account.</p>
+            <ol>
+              <li>On LinkedIn, open the <strong>Me</strong> menu and choose <strong>Settings &amp; Privacy</strong>.</li>
+              <li>Open <strong>Data privacy</strong>, then <strong>Get a copy of your data</strong>.</li>
+              <li>Choose the connections option if LinkedIn offers it. If it only offers the larger data archive, request that; the connections file is inside it.</li>
+              <li>Select <strong>Request archive</strong> and confirm your password if asked.</li>
+              <li>Wait for LinkedIn's email, download the archive, and unzip it. The file you need is <code>Connections.csv</code>.</li>
+            </ol>
+            <p class="note"><strong>Labels and timing are LinkedIn's to change.</strong> The email can arrive within minutes or take up to a day, and the menu wording is revised from time to time. If the options differ, follow <a href="https://www.linkedin.com/help/linkedin/answer/a566336" rel="noopener noreferrer">LinkedIn's current instructions</a>.</p>
+          </section>
+
+          <section aria-labelledby="file-contents">
+            <h2 id="file-contents">What Connections.csv contains</h2>
+            <p>The file begins with a short notes block from LinkedIn, followed by one header row and one row per connection. The columns are:</p>
+            <ul>
+              <li><strong>First Name</strong> and <strong>Last Name</strong></li>
+              <li><strong>URL</strong>: the person's public profile address</li>
+              <li><strong>Email Address</strong>: present only for connections who allow their connections to see it</li>
+              <li><strong>Company</strong> and <strong>Position</strong>: the current employer and title shown on the profile</li>
+              <li><strong>Connected On</strong>: the date you connected</li>
+            </ul>
+            <p>It does not contain phone numbers, work history, messages, or anything about second-degree connections. Most email cells are blank, and that is expected: the notes block at the top of the file says so.</p>
+          </section>
+
+          <section aria-labelledby="common-problems">
+            <h2 id="common-problems">Problems that make an import fail</h2>
+            <h3>The download is a zip archive</h3>
+            <p>Upload the <code>Connections.csv</code> file from inside the archive, not the archive itself.</p>
+            <h3>The file was opened and saved again in a spreadsheet</h3>
+            <p>Saving from a spreadsheet application can change the separator to a semicolon or a tab, change the text encoding so that accented names break, or produce an <code>.xlsx</code> workbook. If you need to edit the list, save it as CSV. BD Engine reads comma, semicolon, and tab-separated files and detects the common encodings, but it does not open workbooks.</p>
+            <h3>The columns were renamed or removed</h3>
+            <p>An import needs a name and a company for each person. A row with neither is skipped, and a file with no company column cannot be used. BD Engine states which column is missing and which columns it found, so the fix is usually to restore one heading.</p>
+            <h3>The list came from another tool</h3>
+            <p>Exports from a CRM or contact manager often use headings such as "Full Name", "Organization", or "Job Title". These are recognised. A heading BD Engine cannot match is ignored; it does not stop the import.</p>
+          </section>
+
+          <section aria-labelledby="use-the-file">
+            <h2 id="use-the-file">What the file is useful for</h2>
+            <p>On its own, the export is a long list sorted by nothing in particular. It becomes useful when it is grouped by employer and compared with something current, such as which of those employers are hiring.</p>
+            <ul>
+              <li><strong>For business development:</strong> see which target accounts already contain people you know, and whether any of them work in talent acquisition or lead a team that is hiring.</li>
+              <li><strong>For a job search:</strong> see which employers with relevant openings include someone who could tell you about the team.</li>
+            </ul>
+            <p class="note"><strong>A connection is context, not consent.</strong> The export shows that you are connected. It does not show how well you know the person or whether they want to hear from you about work. Review each contact before writing, and write to people individually.</p>
+          </section>
+
+          <section class="guide-cta" aria-labelledby="import-cta">
+            <h2 id="import-cta">Check your target list before you import</h2>
+            <p>BD Engine reads the file you upload and never signs in to LinkedIn. Before creating an account, you can test which of your target employers use a public job board it can read. The audit runs in your browser and needs no sign-up.</p>
+            <a class="button-link" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=linkedin_export_guide&amp;utm_content=article_cta" data-campaign-link>Run the free ATS audit</a>
+          </section>
+        </div>
+
+        <aside class="article-aside" aria-labelledby="quick-check">
+          <h2 id="quick-check">Before you upload</h2>
+          <ul>
+            <li>Archive unzipped</li>
+            <li>Connections.csv selected, not the zip</li>
+            <li>Saved as CSV, not a workbook</li>
+            <li>Name and Company columns present</li>
+            <li>Blank emails expected</li>
+            <li>Contacts reviewed before outreach</li>
+          </ul>
+        </aside>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <span>BD Engine Cloud</span>
+    <nav class="footer-links" aria-label="Related guides">
+      <a href="/guides">All guides</a>
+      <a href="/guides/linkedin-connections-job-search">Using a connections export</a>
+      <a href="/guides/find-hiring-companies-staffing">Hiring signals for staffing</a>
+    </nav>
+  </footer>
+</body>
+</html>
