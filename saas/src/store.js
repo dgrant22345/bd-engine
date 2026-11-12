@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { parse as parseCsvSync } from 'csv-parse/sync';
+import { EXPECTED_CONTACT_HEADERS, assertContactImportReadable, parseAccountListText, parseContactImport } from './import-parsing.js';
 import { XMLParser } from 'fast-xml-parser';
 import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbListLegalConsents, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalChanges, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
@@ -5199,6 +5199,9 @@ export function createStore() {
 
     async startLinkedInCsvImport(tenantId, csvText, options = {}) {
       assertTenant(tenantId);
+      // Reject an unusable file now, with the reason, instead of queueing a
+      // job that can only fail later.
+      assertContactImportReadable(csvText);
       const jobId = `linkedin-csv-${Date.now()}`;
       const job = {
         id: jobId,
@@ -5528,27 +5531,7 @@ export function createStore() {
     // owner, notes, status. Duplicates (by normalized name) and blank rows are
     // reported per line, never silently dropped.
     parseAccountImportText(text) {
-      const raw = String(text || '');
-      const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-      const headerLine = lines.find((line) => line.trim());
-      const looksLikeCsv = Boolean(headerLine)
-        && headerLine.includes(',')
-        && /(^|,)\s*"?company"?\s*(,|$)/i.test(headerLine);
-      if (looksLikeCsv) {
-        return parseCSV(raw).map((row, index) => ({
-          line: index + 2, // 1-based, after the header row
-          company: (row.company || row.Company || '').trim(),
-          domain: (row.domain || '').trim(),
-          careersUrl: (row.careers_url || row.careersUrl || '').trim(),
-          priority: (row.priority || '').trim(),
-          owner: (row.owner || '').trim(),
-          notes: (row.notes || '').trim(),
-          status: (row.status || '').trim(),
-        }));
-      }
-      return lines
-        .map((line, index) => ({ line: index + 1, company: line.trim() }))
-        .filter((row) => row.company);
+      return parseAccountListText(text);
     },
 
     // Import a pasted target list. Creates accounts for new companies, skips
@@ -5681,9 +5664,10 @@ export function createStore() {
       await ensureDataLoaded(tenantId, true);
       const dryRun = Boolean(options.dryRun);
       const plan = options.plan || { limits: {} };
-      const trackedCompaniesProvided = Array.isArray(options.trackedCompanies);
+      const trackAllCompanies = Boolean(options.trackAll);
+      const trackedCompaniesProvided = trackAllCompanies || Array.isArray(options.trackedCompanies);
       const selectedTrackedCompanies = new Set(
-        (trackedCompaniesProvided ? options.trackedCompanies : [])
+        (Array.isArray(options.trackedCompanies) ? options.trackedCompanies : [])
           .map((value) => normalizeKey(value))
           .filter(Boolean)
       );
@@ -5693,13 +5677,16 @@ export function createStore() {
       const importItems = [];
       
       let rows;
+      let importColumns = {};
       try {
-        rows = parseCSV(csvText || '');
+        ({ rows, columns: importColumns } = parseContactImport(csvText || ''));
       } catch (error) {
         return {
           error: error.message,
           code: error.code || 'invalid_csv',
-          expectedHeaders: ['First Name', 'Last Name', 'Company', 'Position'],
+          expectedHeaders: error.expectedHeaders || EXPECTED_CONTACT_HEADERS,
+          ...(error.missingColumns ? { missingColumns: error.missingColumns } : {}),
+          ...(error.foundHeaders ? { foundHeaders: error.foundHeaders } : {}),
         };
       }
       if (!String(csvText || '').trim()) {
@@ -5723,19 +5710,11 @@ export function createStore() {
       let skippedMissingCompany = 0;
 
       for (const row of rows) {
-        const firstName = (row['First Name'] || row['first name'] || '').trim();
-        const lastName = (row['Last Name'] || row['last name'] || '').trim();
-        const fullName = `${firstName} ${lastName}`.trim();
+        const { firstName, lastName, fullName, email, company, position, connectedOn, linkedinUrl } = row;
         if (!fullName) {
           skippedMissingName++;
           continue;
         }
-
-        const email = (row['Email Address'] || row['email address'] || row['Email'] || row['email'] || '').trim();
-        const company = (row['Company'] || row['company'] || '').trim();
-        const position = (row['Position'] || row['position'] || row['Title'] || row['title'] || '').trim();
-        const connectedOn = (row['Connected On'] || row['connected on'] || '').trim();
-        const linkedinUrl = (row['URL'] || row['url'] || row['Profile URL'] || row['profile url'] || '').trim();
 
         if (!company) {
           skippedMissingCompany++;
@@ -5768,6 +5747,18 @@ export function createStore() {
           connectedOn,
           linkedinUrl,
         });
+      }
+
+      // "Track every company in this file" is expressed as a flag plus optional
+      // exclusions, so a large network does not need thousands of names in the
+      // request.
+      if (trackAllCompanies) {
+        const excluded = new Set((Array.isArray(options.untrackedCompanies) ? options.untrackedCompanies : [])
+          .map((value) => normalizeKey(value))
+          .filter(Boolean));
+        for (const key of companyMap.keys()) {
+          if (!excluded.has(key)) selectedTrackedCompanies.add(key);
+        }
       }
 
       // Create accounts and contacts
@@ -5974,10 +5965,10 @@ export function createStore() {
       }
 
       if (planLimitedSkipped > 0) {
-        warnings.push(`${planLimitedSkipped} rows were skipped because the current plan limit was reached.`);
+        warnings.push(`${planLimitedSkipped.toLocaleString('en-US')} ${planLimitedSkipped === 1 ? 'row was' : 'rows were'} skipped because the current plan limit was reached.`);
       }
       if (skippedMissingName > 0 || skippedMissingCompany > 0) {
-        warnings.push(`${skippedMissingName + skippedMissingCompany} rows were skipped because they were missing a name or company.`);
+        warnings.push(`${(skippedMissingName + skippedMissingCompany).toLocaleString('en-US')} ${skippedMissingName + skippedMissingCompany === 1 ? 'row was' : 'rows were'} skipped because they were missing a name or company.`);
       }
 
       if (!dryRun) {
@@ -9435,47 +9426,6 @@ function deactivateMissingJobsForConfig(config, tenantJobs, seenJobIds, timestam
 }
 
 
-// ── CSV parser ───────────────────────────────────────────────────────────────
-
-function parseCSV(text) {
-  try {
-    const records = parseCsvSync(String(text || ''), {
-      bom: true,
-      skip_empty_lines: true,
-      relax_column_count: true,
-      trim: true,
-      max_record_size: 1_000_000,
-    });
-    if (records.length < 2) return [];
-
-    let headerIndex = 0;
-    for (let index = 0; index < Math.min(10, records.length); index += 1) {
-      const headerText = records[index]
-        .map((value) => String(value || '').toLowerCase())
-        .join(' ');
-      if (headerText.includes('first name') || headerText.includes('company')) {
-        headerIndex = index;
-        break;
-      }
-    }
-
-    const headers = records[headerIndex].map((value) => String(value || '').trim());
-    return records.slice(headerIndex + 1).map((values) => {
-      const row = {};
-      for (let index = 0; index < headers.length; index += 1) {
-        row[headers[index]] = String(values[index] || '').trim();
-      }
-      return row;
-    });
-  } catch (cause) {
-    const error = new Error('CSV could not be parsed. Check the file format and try the original export again.');
-    error.status = 400;
-    error.code = 'invalid_csv';
-    error.cause = cause;
-    throw error;
-  }
-}
-
 // ── Contact classification ───────────────────────────────────────────────────
 
 function classifySeniority(title) {
@@ -9490,7 +9440,9 @@ function classifySeniority(title) {
 
 function isTalentTitle(title) {
   const t = (title || '').toLowerCase();
-  return /\b(talent|recruit|people|hr|human resources|staffing|workforce)\b/.test(t);
+  // "recruit" must match as a stem: with a closing word boundary it never
+  // matched "Recruiter", "Recruiting", or "Recruitment".
+  return /\b(talent|recruit\w*|people|hr|human resources|staffing|workforce)\b/.test(t);
 }
 
 function computeContactPriority(seniority, isTalent, email) {

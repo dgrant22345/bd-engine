@@ -23,6 +23,7 @@ import { accountClosureSubjectHash, buildAccountClosurePlan } from './account-cl
 import { buildAcquisitionDimensions, buildProductEvent } from './product-analytics.js';
 import { safeErrorSummary, safeRequestPath } from './operational-logging.js';
 import { contentSecurityPolicy, injectScriptNonce } from './security-headers.js';
+import { decodeUploadedText } from './import-parsing.js';
 import { canPrerenderLanding, insertPrerenderedLanding, landingPersonaForRequest, renderLandingHtml } from './landing-prerender.js';
 import { COMPRESSIBLE_MIME, etagMatches, getFileValidator, looksLikeAssetPath, parseByteRange, staticCacheControl, versionAssetUrls, versionTokenFromEtag } from './static-assets.js';
 import { normalizePublicOrigin, resolvePublicOrigin } from './public-origin.js';
@@ -2166,21 +2167,40 @@ self.addEventListener('activate', (event) => {
     const csvText = payload.files?.connectionsCsv?.content || fields.csvContent || payload.text || '';
 
     const plan = getPlan(getEffectivePlanId(tenant, user));
-    const dryRun = isTruthy(fields.dryRun);
+    // The app uploads the raw file and passes options in the query string, so
+    // a preview request must be recognised there too. Reading only the body
+    // fields would turn "Preview CSV" into a real import.
+    const dryRun = isTruthy(fields.dryRun) || isTruthy(url.searchParams.get('dryRun'));
     const trackedCompanies = [
       ...url.searchParams.getAll('trackedCompany'),
       ...(Array.isArray(fields.trackedCompanies) ? fields.trackedCompanies : []),
     ];
+    // trackAll selects every company in the file except the listed exclusions.
+    const trackAll = isTruthy(fields.trackAll) || isTruthy(url.searchParams.get('trackAll'));
+    const untrackedCompanies = [
+      ...url.searchParams.getAll('untrackedCompany'),
+      ...(Array.isArray(fields.untrackedCompanies) ? fields.untrackedCompanies : []),
+    ];
+    const importOptions = trackAll ? { plan, trackAll, untrackedCompanies } : { plan, trackedCompanies };
     if (!dryRun) {
       if (!await requireEntitlement(res, tenant, user, { feature: 'csv_import', resource: 'csvImports' })) return;
-      return sendJson(res, 202, await store.startLinkedInCsvImport(tenantId, csvText, { plan, trackedCompanies }));
+      try {
+        return sendJson(res, 202, await store.startLinkedInCsvImport(tenantId, csvText, importOptions));
+      } catch (error) {
+        // An unusable file is the user's to fix: return the explanation and
+        // the expected columns in the same shape as a preview failure.
+        if (error?.status !== 400 || !error.code) throw error;
+        return sendJson(res, 400, {
+          error: error.message,
+          code: error.code,
+          expectedHeaders: error.expectedHeaders || [],
+          ...(error.missingColumns ? { missingColumns: error.missingColumns } : {}),
+          ...(error.foundHeaders ? { foundHeaders: error.foundHeaders } : {}),
+        });
+      }
     }
 
-    const result = await store.importLinkedInCSV(tenantId, csvText, {
-      dryRun,
-      plan,
-      trackedCompanies,
-    });
+    const result = await store.importLinkedInCSV(tenantId, csvText, { dryRun, ...importOptions });
     if (result.error) return sendJson(res, 400, result);
     return sendJson(res, 200, result);
   }
@@ -3500,12 +3520,13 @@ async function readFormOrJson(req) {
     return parseMultipartFormData(body, contentType);
   }
 
-  const text = body.toString('utf8');
   if (/application\/json/i.test(contentType)) {
-    return JSON.parse(text || '{}');
+    return JSON.parse(body.toString('utf8') || '{}');
   }
 
-  return { fields: {}, files: {}, text };
+  // A raw file upload. Spreadsheet exports are often Windows-1252 or UTF-16
+  // rather than UTF-8, so detect the encoding instead of assuming it.
+  return { fields: {}, files: {}, text: decodeUploadedText(body) };
 }
 
 function parseMultipartFormData(body, contentType) {

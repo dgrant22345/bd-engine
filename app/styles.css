@@ -9532,6 +9532,7 @@ body.global-dragover::after {
   animation: modalEnter 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.modal-dialog--settled { animation: none; }
 .modal-dialog--sm { max-width: 440px; }
 .modal-dialog--md { max-width: 580px; }
 .modal-dialog--lg { max-width: 720px; }
@@ -9774,6 +9775,74 @@ body.global-dragover::after {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Connections import dialog: file preview and file problems */
+.network-parsed-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.network-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.network-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--surface-strong, #ffffff);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+}
+
+.network-stat-card strong {
+  font-size: 1.35rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.network-stat-card span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.network-preview-note {
+  margin: 0;
+}
+
+.network-import-problem {
+  padding: 14px 16px;
+  background: rgba(190, 50, 50, 0.05);
+  border: 1px solid rgba(190, 50, 50, 0.28);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius-sm, 8px);
+}
+
+.network-import-problem strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--danger);
+}
+
+.network-import-problem p {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.network-import-problem p:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 560px) {
+  .network-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Success Card */
