@@ -118,6 +118,9 @@ for (const viewport of [
       '/guides/linkedin-connections-job-search',
       '/guides/find-hiring-companies-staffing',
       '/guides/export-linkedin-connections-csv',
+      '/guides/staffing-business-development-email',
+      '/guides/staffing-target-account-list',
+      '/guides/find-hiring-manager-for-job-posting',
     ];
 
     for (const path of paths) {

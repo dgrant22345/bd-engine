@@ -104,6 +104,36 @@ This guide covers where to ask LinkedIn for the export, what Connections.csv con
 
 https://bd-engine-production.up.railway.app/guides/export-linkedin-connections-csv?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=export_guide_08
 
+Three further guides were published on November 12. Posts 9 to 11 follow the same rules: text posts from the company Page, no graphic required.
+
+### 9. First business development email
+
+A hiring manager decides in a few seconds whether a recruiter's email is about them.
+
+BD Engine has published a guide to the first business development email: an evidence line, a relevance line, one question, and a plain sign-off, with a worked example and a list of what to leave out.
+
+It also summarises what the Canadian and United States regulators say about commercial email between businesses, with links to both sources.
+
+https://bd-engine-production.up.railway.app/guides/staffing-business-development-email?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=email_guide_09
+
+What do you put in your first line?
+
+### 10. Target account list
+
+Most target lists mix two questions: could we serve this employer, and is there a reason to contact them now.
+
+This guide for staffing recruiters keeps them apart. Fit decides who is on the list. Timing decides the order you work it in. It also covers where accounts come from, how many to keep, what to record for each, and when to remove one.
+
+https://bd-engine-production.up.railway.app/guides/staffing-target-account-list?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=accounts_guide_10
+
+### 11. Finding the hiring manager
+
+Postings rarely name the person who owns the hire.
+
+This guide gives a five-step sequence for working it out from public information: the posting itself, the employer's own pages, a search by likely title, a contact who works there, and a confirmation step before you write. It is written for recruiters and job seekers, and it says what to do when the answer stays uncertain.
+
+https://bd-engine-production.up.railway.app/guides/find-hiring-manager-for-job-posting?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=recruiter_guides_nov26&utm_content=manager_guide_11
+
 ## Job-seeker posts: a separate audience
 
 ### 5. Focused search — attach jobseeker-social.png

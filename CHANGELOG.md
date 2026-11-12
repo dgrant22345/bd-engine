@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Add three public guides: writing a first business development email to a hiring manager (with the Canadian and United States email rules to check), building a target account list for a staffing desk, and finding the hiring manager for a job posting. Each is listed on the guides page and in the sitemap, and the launch kit has a company Page post for each.
 - Remove decorative emoji from the workspace: headings, buttons, confirmations, badges, pipeline stages, location filters, and copied briefings are now plain text. Check marks, close buttons, and arrows are unchanged.
 - Replace combat and hype wording with plain descriptions. The account matrix quadrants are now "Warm and hiring", "Warm, hiring is quiet", "Hiring, few contacts", and "Watchlist"; "Executive Battle Plan" is "Daily plan"; "Cross-Hunt Sibling Cluster" is "Similar companies"; and "1-Click" buttons say what they do ("Copy plan", "Copy script").
 - Stop describing roles open for 45 days or more as "fast-track" with a "high response rate" in job seeker mode. The badge now reads "Open 45+ days".
