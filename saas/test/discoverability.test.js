@@ -13,6 +13,9 @@ const guideArticlePaths = [
 const newerGuideArticles = [
   { slug: 'find-hiring-companies-staffing', published: '2026-11-12' },
   { slug: 'export-linkedin-connections-csv', published: '2026-11-12' },
+  { slug: 'staffing-business-development-email', published: '2026-11-12' },
+  { slug: 'staffing-target-account-list', published: '2026-11-12' },
+  { slug: 'find-hiring-manager-for-job-posting', published: '2026-11-12' },
 ];
 const indexNowKeyPath = new URL('../public/9252ff32fcf3a7589799d0826f50459b.txt', import.meta.url);
 const robotsPath = new URL('../public/robots.txt', import.meta.url);

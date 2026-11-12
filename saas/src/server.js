@@ -3042,6 +3042,9 @@ const PUBLIC_GUIDE_FILES = new Map([
   ['/guides/linkedin-connections-job-search', 'guides/linkedin-connections-job-search.html'],
   ['/guides/export-linkedin-connections-csv', 'guides/export-linkedin-connections-csv.html'],
   ['/guides/find-hiring-companies-staffing', 'guides/find-hiring-companies-staffing.html'],
+  ['/guides/staffing-business-development-email', 'guides/staffing-business-development-email.html'],
+  ['/guides/staffing-target-account-list', 'guides/staffing-target-account-list.html'],
+  ['/guides/find-hiring-manager-for-job-posting', 'guides/find-hiring-manager-for-job-posting.html'],
 ]);
 
 // Memorable addresses for views that otherwise live behind a query string on
