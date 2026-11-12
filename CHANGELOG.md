@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Faster return visits to the workspace. Its stylesheets and scripts now use content-based addresses, so a returning browser reuses its saved copies instead of checking each of nine files with the server. A new release changes the addresses, so updates still arrive immediately.
 - On phones, show one account notice at a time. A new trial account sees the recovery-code reminder first, with the days remaining shown in the header; the trial notice returns once the reminder is saved or dismissed. This gives back a row of screen height on first use.
 - Plainer wording in the optional tools: confirmations end with a period, "Executive Morning Radar & Hiring Digest" is "Morning Radar and hiring digest", "Top 5 High-Momentum Accounts" is "Top 5 accounts by hiring activity", and badge tooltips no longer claim a "first-mover advantage" or "high leverage".
 - Remove 17 unused functions from the workspace script (about 13 KB). No visible change.

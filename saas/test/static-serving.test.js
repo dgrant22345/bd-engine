@@ -221,3 +221,21 @@ test('unknown URLs return 404 and common shortcuts redirect to their views', { t
     assert.equal((await fetch(`${origin}${path}`)).status, 200, path);
   }
 });
+
+test('workspace page references content-addressed assets that browsers may keep', { timeout: 30000 }, async (t) => {
+  const { origin } = await startLocalServer(t);
+  const html = await (await fetch(`${origin}/app/`)).text();
+  const assets = [...html.matchAll(/\b(?:href|src)="(\/[A-Za-z0-9_./-]+\.(?:css|js))(\?v=[^"]*)?"/g)].map(([, path, query]) => path + (query || ''));
+
+  // Every stylesheet and script, including the main workspace script.
+  assert.ok(assets.length >= 9, `found ${assets.length} assets`);
+  assert.ok(assets.some((url) => url.startsWith('/app/app.js?v=')), 'workspace script is versioned');
+  for (const url of assets) {
+    assert.match(url, /\?v=[A-Za-z0-9_-]{22}$/, `${url} is not content-addressed`);
+    const response = await fetch(`${origin}${url}`);
+    assert.equal(response.status, 200, url);
+    assert.equal(response.headers.get('cache-control'), 'public, max-age=31536000, immutable', url);
+    await response.arrayBuffer();
+  }
+  assert.doesNotMatch(html, /premium-ui-01/, 'hand-maintained version token is still served');
+});

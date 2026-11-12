@@ -3086,6 +3086,14 @@ function resolveAssetVersion(assetPath) {
   return filePath ? versionTokenFromEtag(getFileValidator(filePath).etag) : '';
 }
 
+// Workspace page assets are addressed as /app/<file>, or from the site root
+// for files that fall through to the app directory.
+function resolveWorkspaceAssetVersion(assetPath) {
+  if (!assetPath.startsWith('/app/')) return resolveAssetVersion(assetPath);
+  const filePath = tryStaticFile(appDir, assetPath.slice(4));
+  return filePath ? versionTokenFromEtag(getFileValidator(filePath).etag) : '';
+}
+
 function readPublicHtml(relativePath) {
   return versionAssetUrls(readFileSync(join(publicDir, relativePath), 'utf8'), resolveAssetVersion);
 }
@@ -3224,7 +3232,7 @@ function getAppIndexHtml(scriptNonce) {
   if (!cachedAppIndexHtml) {
     const appIndex = join(appDir, 'index.html');
     const html = readFileSync(appIndex, 'utf8');
-    cachedAppIndexHtml = html
+    const rewritten = html
       .replace(/href="\/styles\.css/g, 'href="/app/styles.css')
       .replace(/href="\/palette\.css/g, 'href="/app/palette.css')
       .replace(/href="\/manifest\.json/g, 'href="/app/manifest.json')
@@ -3233,6 +3241,9 @@ function getAppIndexHtml(scriptNonce) {
       .replace(/src="\/local-api\.js/g, 'src="/app/local-api.js')
       .replace(/src="\/app\.js/g, 'src="/app/app.js')
       .replace(/<script>\s*if \('serviceWorker' in navigator\) \{[\s\S]*?<\/script>/, '');
+    // Content-addressed stylesheet and script URLs let a returning browser
+    // reuse its copies without asking the server; a deploy changes the URL.
+    cachedAppIndexHtml = versionAssetUrls(rewritten, resolveWorkspaceAssetVersion);
   }
   return injectScriptNonce(cachedAppIndexHtml, scriptNonce);
 }
