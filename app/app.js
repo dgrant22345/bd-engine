@@ -4531,7 +4531,8 @@ function applyPersonaChrome() {
   const taskLabel = document.querySelector('[data-route="tasks"] .nav-label');
   const overviewLabel = document.querySelector('[data-route="dashboard"] .nav-label');
   if (taskLabel) taskLabel.textContent = 'Follow-ups';
-  if (overviewLabel) overviewLabel.textContent = 'Overview';
+  // Matches the page title and breadcrumbs.
+  if (overviewLabel) overviewLabel.textContent = 'Dashboard';
   const navigation = document.querySelector('.nav');
   if (navigation && !navigation.dataset.organized) {
     const group = text => { const label = document.createElement('p'); label.className = 'nav-group-label'; label.textContent = text; navigation.append(label); };
@@ -10861,7 +10862,9 @@ async function renderDashboardView(options = {}) {
   appRoot.innerHTML = `
     ${renderDashboardRoiHero(dashboard, appState.outcomeSummary)}
 
-    ${dashSection('hero', `<section class="hero-card hero-card--dashboard">
+    ${topCompany ? '' : renderFirstValueChecklist(dashboard, personaCopy)}
+
+    ${dashSection('hero', `<section class="hero-card hero-card--dashboard${topCompany ? '' : ' hero-card--empty'}">
       ${renderDashboardCustomizer()}
       <div class="hero-layout">
         <div class="hero-copy">
@@ -10876,27 +10879,27 @@ async function renderDashboardView(options = {}) {
               <a href="#/accounts">${escapeHtml(personaCopy.openAccountsCta)} <span aria-hidden="true">&#8594;</span></a>
             </span>
           </div>
-          <div class="hero-signal-strip">
+          ${topCompany ? `<div class="hero-signal-strip">
             ${renderSignalChip('Today queue', formatNumber(dashboard.todayQueue.length), 'accent')}
             ${renderSignalChip('Tracked jobs', formatNumber(activeJobCount), 'success')}
             ${renderSignalChip('Follow-ups', formatNumber((extended.overdueFollowUps.length || 0) + (extended.staleAccounts.length || 0)), 'warning')}
             ${renderSignalChip('ATS boards', formatNumber(dashboard.summary.discoveredBoardCount || 0), 'neutral')}
             ${renderSignalChip('Needs resolution', formatNumber(resolutionPressure), 'neutral')}
-          </div>
+          </div>` : ''}
         </div>
-        <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Target score', topCompany ? formatNumber(getTargetScore(topCompany)) : '0')}
-          ${renderMetricTile('Open roles', topCompany ? formatNumber(topCompany.openRoleCount || topCompany.jobCount) : '0')}
-          ${renderMetricTile('Hiring velocity', topCompany ? formatNumber(topCompany.hiringVelocity || 0) : '0')}
-          ${renderMetricTile('Engagement', topCompany ? formatNumber(topCompany.engagementScore || 0) : '0')}
-        </div>
+        ${topCompany ? `<div class="kpi-ribbon headline-metrics">
+          ${renderMetricTile('Target score', formatNumber(getTargetScore(topCompany)))}
+          ${renderMetricTile('Open roles', formatNumber(topCompany.openRoleCount || topCompany.jobCount))}
+          ${renderMetricTile('Hiring velocity', formatNumber(topCompany.hiringVelocity || 0))}
+          ${renderMetricTile('Engagement', formatNumber(topCompany.engagementScore || 0))}
+        </div>` : ''}
       </div>
 
     </section>`)}
 
     ${renderDeferredTargetNotice()}
 
-    ${renderFirstValueChecklist(dashboard, personaCopy)}
+    ${topCompany ? renderFirstValueChecklist(dashboard, personaCopy) : ''}
 
     ${dashSection('network-radar', renderDashboardNetworkRadar(dashboard, extended, personaCopy))}
 
@@ -11813,9 +11816,9 @@ async function renderJobsView() {
       <div class="job-preset-strip" role="group" aria-label="Job quick filters">
         <span class="job-preset-label">Quick filters:</span>
         <button class="job-preset-chip${activeJobPresets.all ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.all}" data-action="apply-job-preset" data-preset="all">All Roles</button>
-        <button class="job-preset-chip${activeJobPresets.target_roles ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.target_roles}" data-action="apply-job-preset" data-preset="target_roles">🎯 My Target Roles Only</button>
-        <button class="job-preset-chip${activeJobPresets.canada ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.canada}" data-action="apply-job-preset" data-preset="canada">🇨🇦 Canada Only</button>
-        <button class="job-preset-chip${activeJobPresets.network ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.network}" data-action="apply-job-preset" data-preset="network">👥 In My Network</button>
+        <button class="job-preset-chip${activeJobPresets.target_roles ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.target_roles}" data-action="apply-job-preset" data-preset="target_roles">My target roles only</button>
+        <button class="job-preset-chip${activeJobPresets.canada ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.canada}" data-action="apply-job-preset" data-preset="canada">Canada only</button>
+        <button class="job-preset-chip${activeJobPresets.network ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.network}" data-action="apply-job-preset" data-preset="network">In my network</button>
         <button class="job-preset-chip${activeJobPresets.pipeline ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.pipeline}" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
       </div>
       <div class="job-results-context muted small">
@@ -15280,18 +15283,7 @@ async function renderTasksView() {
 
     appRoot.innerHTML = `
       <section class="tasks-view">
-        ${window.bdWorkflowTools.renderFollowups()}
         ${appState.taskQuery.contactId ? '<p class="small">Showing follow-ups for one person. <a href="#/tasks">Show everyone</a></p>' : ''}
-        <details class="form-card workspace-disclosure" id="activity-history">
-          <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search outreach and follow-up history</small></span></summary>
-          <form id="activity-history-form" class="task-create-form">
-            <label>Search<input name="q" placeholder="Message, company or notes"></label>
-            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="task_cancelled">Cancelled follow-ups</option><option value="task_reopened">Reopened tasks</option><option value="task_rescheduled">Rescheduled tasks</option><option value="note">Notes</option></select></label>
-            <label>Order<select name="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
-            <button class="secondary-button" type="submit">Apply filters</button>
-          </form>
-          <div id="activity-history-results" aria-live="polite"></div>
-        </details>
         <div class="panel-header tasks-header">
           <div>
             <p class="eyebrow">Follow-up queue</p>
@@ -15346,6 +15338,20 @@ async function renderTasksView() {
           `}
         </div>
         ${renderPagination('tasks', tasks.page, tasks.pageSize, tasks.total)}
+        <div class="tasks-tools">
+          <p class="eyebrow tasks-tools__label">Reminders and history</p>
+          ${window.bdWorkflowTools.renderFollowups()}
+        <details class="form-card workspace-disclosure" id="activity-history">
+          <summary><span class="workspace-disclosure__icon" aria-hidden="true">↺</span><span><strong>Activity history</strong><small>Search outreach and follow-up history</small></span></summary>
+          <form id="activity-history-form" class="task-create-form">
+            <label>Search<input name="q" placeholder="Message, company or notes"></label>
+            <label>Activity type<select name="type"><option value="">All activity</option><option value="outreach">Outreach</option><option value="task_completed">Completed tasks</option><option value="task_cancelled">Cancelled follow-ups</option><option value="task_reopened">Reopened tasks</option><option value="task_rescheduled">Rescheduled tasks</option><option value="note">Notes</option></select></label>
+            <label>Order<select name="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <button class="secondary-button" type="submit">Apply filters</button>
+          </form>
+          <div id="activity-history-results" aria-live="polite"></div>
+        </details>
+        </div>
       </section>
     `;
     document.getElementById('task-search-form').onsubmit = async event => {

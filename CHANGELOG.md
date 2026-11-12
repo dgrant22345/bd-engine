@@ -4,6 +4,13 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Show a new workspace its four first steps at the top of the Dashboard, and replace the grid of zero-value metrics with a single prompt until a company is ranked.
+- Put the follow-up queue first on the Follow-ups page, with calendar reminders and activity history below it, and make the "New task" panel the same width as the rest of the page.
+- Remove the box drawn around the page heading on the sign-up form and the first-run setup screen, which made the heading look like an editable field.
+- Name the Dashboard consistently: the sidebar said "Overview" while the page title and breadcrumbs said "Dashboard".
+- Use plain-text labels for the hiring-activity quick filters. The flag symbol on "Canada only" displayed as the letters "CA" on Windows.
+- Even out the spacing above the Companies notice, and remove a stray divider from the Dashboard summary strip on phones.
+
 - Read connection files as people actually save them: semicolon, tab, and pipe-delimited files; Windows-1252 and UTF-16 encodings (accented names no longer arrive garbled); and column names from other tools and languages, such as "Full Name", "Organization", "Job Title", "Vorname", or "Firma".
 - When a file cannot be used, say which column is missing and which columns were found, before anything is queued, instead of reporting an import that skipped every row.
 - Fix "Preview CSV" in Settings, which performed a real import because the preview option was only read from the request body.

@@ -964,7 +964,8 @@ a {
 }
 
 .account-portfolio-notice {
-  margin: 16px 0;
+  /* The page container already spaces its children. */
+  margin: 0;
   border-color: rgba(169, 111, 23, 0.28);
   background: var(--warning-soft);
   color: var(--warning);
@@ -8048,6 +8049,7 @@ textarea:focus-visible {
 
   .hero-card--dashboard .signal-chip:last-child {
     grid-column: 1 / -1;
+    border-right: 0;
     border-bottom: 0;
   }
 
@@ -8611,7 +8613,7 @@ body {
 }
 
 .task-create-disclosure {
-  width: min(680px, 100%);
+  width: 100%;
 }
 
 .admin-section .collapsible-header {
@@ -13203,3 +13205,30 @@ body.global-dragover::after {
 
 
 
+
+/* Headings that receive focus from script (after navigation, so screen readers
+   announce the new page) are not controls. A focus ring around them reads as an
+   editable field. */
+:is(h1, h2, h3)[tabindex="-1"]:focus,
+:is(h1, h2, h3)[tabindex="-1"]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Follow-ups: supporting tools sit below the queue they support. */
+.tasks-tools {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.tasks-tools__label {
+  margin: 0;
+}
+
+/* A new workspace has no ranked company yet: the hero is a single prompt, not
+   a grid of zeros. */
+.hero-card--dashboard.hero-card--empty .hero-layout {
+  grid-template-columns: minmax(0, 1fr);
+}

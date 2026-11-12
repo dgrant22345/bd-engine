@@ -1073,10 +1073,12 @@ a:hover { text-decoration: underline; }
   outline-offset: 1px;
 }
 
-.auth-header h1:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 5px;
-  border-radius: 4px;
+/* The heading receives focus from script so the new view is announced. It is
+   not a control, and a ring around it reads as an editable field. */
+.auth-header h1:focus,
+.auth-header h1:focus-visible,
+.section-title[tabindex="-1"]:focus-visible {
+  outline: none;
 }
 
 .auth-footer {
