@@ -1097,51 +1097,6 @@ function wireKanbanDragDrop() {
   });
 }
 
-/* ── Column customization ── */
-const defaultAccountCols = ['company', 'health', 'targetScore', 'signalMix', 'owner', 'network', 'status', 'ats', 'actions'];
-function getVisibleCols(viewKey) {
-  return appState.columnPrefs[viewKey] || defaultAccountCols;
-}
-function setVisibleCols(viewKey, cols) {
-  appState.columnPrefs[viewKey] = cols;
-  localStorage.setItem('bd_col_prefs', JSON.stringify(appState.columnPrefs));
-}
-function renderColumnCustomizer(viewKey, allCols) {
-  const visible = getVisibleCols(viewKey);
-  return `
-    <div class="col-customizer">
-      <button class="ghost-button col-customizer-toggle" id="col-customizer-toggle" aria-label="Customize columns">&#9881; Columns</button>
-      <div class="col-customizer-dropdown hidden" id="col-customizer-dropdown">
-        ${allCols.map(col => `
-          <label class="col-customizer-item">
-            <input type="checkbox" data-col="${col.key}" ${visible.includes(col.key) ? 'checked' : ''}>
-            ${escapeHtml(col.label)}
-          </label>
-        `).join('')}
-        <button class="ghost-button ghost-button--xs col-customizer-reset" id="col-customizer-reset">Reset to default</button>
-      </div>
-    </div>
-  `;
-}
-function wireColumnCustomizer(viewKey, allCols, rerenderFn) {
-  const toggle = document.getElementById('col-customizer-toggle');
-  const dropdown = document.getElementById('col-customizer-dropdown');
-  if (!toggle || !dropdown) return;
-  toggle.addEventListener('click', () => dropdown.classList.toggle('hidden'));
-  dropdown.addEventListener('change', (e) => {
-    if (!e.target.dataset.col) return;
-    const visible = [];
-    dropdown.querySelectorAll('input[data-col]').forEach(cb => { if (cb.checked) visible.push(cb.dataset.col); });
-    setVisibleCols(viewKey, visible);
-    rerenderFn();
-  });
-  const reset = document.getElementById('col-customizer-reset');
-  if (reset) reset.addEventListener('click', () => { setVisibleCols(viewKey, defaultAccountCols); rerenderFn(); });
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.col-customizer')) dropdown.classList.add('hidden');
-  }, { once: false });
-}
-
 /* ── Inline editing ── */
 function wireInlineEditing() {
   document.querySelectorAll('[data-inline-edit]').forEach(trigger => {
@@ -1366,54 +1321,6 @@ function toggleAutomationRule(ruleId) {
   persistSharedWorkspacePreference('automationRules');
 }
 
-function evaluateAutomationRules(account) {
-  const triggered = [];
-  appState.automationRules.filter(r => r.enabled).forEach(rule => {
-    let match = true;
-    if (rule.trigger === 'status_change' && rule.triggerValue && account.status !== rule.triggerValue) match = false;
-    if (rule.trigger === 'score_above' && getTargetScore(account) < Number(rule.triggerValue)) match = false;
-    if (rule.trigger === 'score_below' && getTargetScore(account) > Number(rule.triggerValue)) match = false;
-    if (rule.trigger === 'stale' && account.staleFlag !== 'STALE') match = false;
-    if (match) triggered.push(rule);
-  });
-  return triggered;
-}
-
-function renderAutomationRulesPanel() {
-  return `
-    <div class="detail-card automation-panel">
-      <div class="panel-header"><div><h3>Shared rule drafts</h3><p class="muted small">Visible to your workspace for review. Actions are not applied automatically.</p></div></div>
-      <div class="automation-form" id="automation-form">
-        <select id="auto-trigger">
-          <option value="status_change">When status changes to...</option>
-          <option value="score_above">When score rises above...</option>
-          <option value="score_below">When score drops below...</option>
-          <option value="stale">When account goes stale</option>
-        </select>
-        <input id="auto-trigger-value" placeholder="Value (e.g. qualified, 80)" class="compact-input">
-        <select id="auto-action">
-          <option value="assign_owner">Assign owner</option>
-          <option value="set_priority">Set priority</option>
-          <option value="notify">Show notification</option>
-        </select>
-        <input id="auto-action-value" placeholder="Owner name / priority / message" class="compact-input">
-        <button class="secondary-button compact-btn" id="add-auto-rule">Add Rule</button>
-      </div>
-      <div class="automation-rules-list">
-        ${appState.automationRules.length ? appState.automationRules.map(r => `
-          <div class="automation-rule ${r.enabled ? '' : 'automation-rule--disabled'}">
-            <div class="automation-rule-text">When <strong>${escapeHtml(humanize(r.trigger))}</strong> ${r.triggerValue ? `= "${escapeHtml(r.triggerValue)}"` : ''} → <strong>${escapeHtml(humanize(r.action))}</strong>: "${escapeHtml(r.actionValue)}"</div>
-            <div class="automation-rule-actions">
-              <button class="ghost-button ghost-button--xs" data-toggle-rule="${r.id}">${r.enabled ? 'Disable' : 'Enable'}</button>
-              <button class="ghost-button ghost-button--xs" data-delete-rule="${r.id}">&times;</button>
-            </div>
-          </div>
-        `).join('') : '<div class="empty-state empty-state--compact">No automation rules configured.</div>'}
-      </div>
-    </div>
-  `;
-}
-
 /* ── PWA support ── */
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
@@ -1426,7 +1333,7 @@ function promptPwaInstall() {
   if (!appState.pwaInstallPrompt) return;
   appState.pwaInstallPrompt.prompt();
   appState.pwaInstallPrompt.userChoice.then(choice => {
-    if (choice.outcome === 'accepted') showToast('BD Engine installed!', 'success');
+    if (choice.outcome === 'accepted') showToast('BD Engine installed.', 'success');
     appState.pwaInstallPrompt = null;
     const btn = document.getElementById('pwa-install-btn');
     if (btn) btn.classList.add('hidden');
@@ -1434,13 +1341,6 @@ function promptPwaInstall() {
 }
 
 /* ── Notification API ── */
-async function requestNotificationPermission() {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'granted') return true;
-  const result = await Notification.requestPermission();
-  return result === 'granted';
-}
-
 function sendDesktopNotification(title, body) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try { new Notification(title, { body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' }); } catch(e) { /* mobile */ }
@@ -1576,12 +1476,6 @@ function computeDataQuality(account) {
   ];
   const score = Math.round((checks.filter(c => c.ok).length / checks.length) * 100);
   return { score, checks };
-}
-
-function renderDataQualityBadge(account) {
-  const { score } = computeDataQuality(account);
-  const color = score >= 75 ? 'var(--success)' : score >= 50 ? 'var(--warning)' : 'var(--danger)';
-  return `<span class="dq-badge" style="color:${color}" title="Data quality: ${score}%">${score}%</span>`;
 }
 
 function renderDataQualityPanel(accounts) {
@@ -1921,24 +1815,6 @@ function renderSalesCycleAnalytics(accounts) {
         ${velocityData.length ? renderSvgBarChart(velocityData, 280, 130, 'Avg days per stage') : '<div class="empty-state empty-state--compact">Not enough stage transitions tracked yet.</div>'}
       </div>
     </section>`;
-}
-
-/* ── Phase 6: Configurable alert thresholds ── */
-function renderAlertThresholdsPanel() {
-  const t = appState.alertThresholds;
-  return `
-    <div class="detail-card alert-thresholds-panel">
-      <div class="panel-header"><div><h3>Alert thresholds</h3><p class="muted small">Customize when smart alerts fire.</p></div></div>
-      <form id="alert-thresholds-form" class="detail-form">
-        ${renderField('Stale days', `<input name="staleDays" type="number" min="1" value="${t.staleDays}">`)}
-        ${renderField('Min score drop', `<input name="scoreDropMin" type="number" min="1" value="${t.scoreDropMin}">`)}
-        ${renderField('Hiring spike factor', `<input name="hiringSpikeFactor" type="number" min="1" step="0.5" value="${t.hiringSpikeFactor}">`)}
-        ${renderField('Spike min jobs', `<input name="hiringSpikeMinJobs" type="number" min="1" value="${t.hiringSpikeMinJobs}">`)}
-        ${renderField('High score no contacts', `<input name="highScoreNoContacts" type="number" min="1" value="${t.highScoreNoContacts}">`)}
-        ${renderField('High value stale min', `<input name="highValueStaleMin" type="number" min="1" value="${t.highValueStaleMin}">`)}
-        <div><button class="secondary-button" type="submit">Save thresholds</button></div>
-      </form>
-    </div>`;
 }
 
 /* ── Phase 6: Override detectSmartAlerts to use configurable thresholds ── */
@@ -2737,7 +2613,7 @@ function bindEvents() {
     // "?" to show Keyboard Shortcuts cheat sheet
     if (e.key === '?') { e.preventDefault(); openShortcutsModal(); return; }
 
-    // "a" / "A" to open Autonomous Autopilot Prospecting Co-Pilot
+    // "a" / "A" to open the outreach draft assistant
     if (e.key === 'a' || e.key === 'A') {
       e.preventDefault();
       openAutopilotModal();
@@ -3382,7 +3258,7 @@ function bindEvents() {
     }
     if (actionName === 'quick-log-call-success') {
       playActionChime('success');
-      showToast('Call logged as Successful Connect!', 'success');
+      showToast('Call logged as Successful Connect.', 'success');
       closeCallStudioModal();
       return;
     }
@@ -3544,7 +3420,7 @@ function bindEvents() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast(`Exported ${items.length} selected contacts to CSV!`, 'success');
+      showToast(`Exported ${items.length} selected contacts to CSV.`, 'success');
       return;
     }
     if (actionName === 'launch-batch-outreach-jobs') {
@@ -4885,7 +4761,7 @@ async function applyJobPreset(presetId) {
   } else if (presetId === 'pipeline') {
     const trackedCount = Object.keys(appState.jobPipelineStages || {}).length;
     if (!trackedCount && !appState.bootstrap?.capabilities?.jobPipeline) {
-      showToast('No roles in your pipeline yet. Choose a stage from "+ Track" on any job row!', 'info');
+      showToast('No roles in your pipeline yet. Choose a stage from "+ Track" on any job row.', 'info');
       return;
     }
     appState.jobQuery = {
@@ -6293,21 +6169,6 @@ function formatFileSize(bytes = 0) {
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function estimateCsvDataRows(csvContent = '') {
-  const lines = String(csvContent || '').split(/\r\n|\r|\n/).filter((line) => line.trim());
-  const headerIndex = lines.findIndex((line) => /first\s*name/i.test(line) && /(last\s*name|company|position|email|url)/i.test(line));
-  if (headerIndex >= 0) {
-    return Math.max(0, lines.length - headerIndex - 1);
-  }
-  return Math.max(0, lines.length - 1);
-}
-
-function formatCsvUploadSummary(file, csvContent = '') {
-  const rows = estimateCsvDataRows(csvContent);
-  const sizeLabel = formatFileSize(file?.size || csvContent.length || 0);
-  return `${formatNumber(rows)} data row${rows === 1 ? '' : 's'}, ${sizeLabel}`;
-}
-
 async function handleSetupCsvFile(file) {
   if (!file) return;
   persistSetupDraftFromDom();
@@ -6799,27 +6660,6 @@ async function loadSetupSampleWorkspace() {
     appState.setupBusy = false;
     appState.setupProgressMessage = '';
     await renderSetupWizard();
-  }
-}
-
-async function watchSetupImportJob(jobId) {
-  while (true) {
-    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
-    appState.setupProgressMessage = job.progressMessage || job.message || humanize(job.status || 'running');
-    await renderSetupWizard();
-
-    if (job.status === 'completed') {
-      invalidateAppData();
-      return job;
-    }
-    if (job.status === 'failed') {
-      throw new Error(job.errorMessage || 'LinkedIn connections import failed.');
-    }
-    if (job.status === 'cancelled') {
-      throw new Error('LinkedIn connections import was cancelled.');
-    }
-
-    await sleep(1500);
   }
 }
 
@@ -7790,11 +7630,11 @@ async function copyWarmStudioText(buttonEl) {
   const text = textarea.value;
   try {
     await navigator.clipboard.writeText(text);
-    showToast('Message copied to clipboard!', 'success');
+    showToast('Message copied to clipboard.', 'success');
   } catch {
     textarea.select();
     document.execCommand('copy');
-    showToast('Message copied!', 'success');
+    showToast('Message copied.', 'success');
   }
 }
 
@@ -7974,7 +7814,7 @@ function renderFeePipelineSimulator(dashboard = {}, outcomeSummary = {}) {
       <div class="fee-simulator-header">
         <div class="fee-simulator-title">
           <div>
-            <h3>${isJobSeeker ? 'Target Compensation & Offer Pipeline' : 'Executive Fee Pipeline & Deal Flow Simulator'}</h3>
+            <h3>${isJobSeeker ? 'Target compensation and offer pipeline' : 'Fee pipeline simulator'}</h3>
             <p class="muted small">${isJobSeeker ? 'Simulate your compensation upside across active warm referral roles.' : 'Real-time forecast of addressable agency staffing fees and projected quarterly billings.'}</p>
           </div>
         </div>
@@ -8274,7 +8114,7 @@ function renderKeyboardShortcutsModal() {
         <div class="shortcuts-group">
           <span class="shortcuts-group-title">Open a tool</span>
           <div class="shortcut-row">
-            <span class="shortcut-desc">Open Executive Morning Radar Briefing</span>
+            <span class="shortcut-desc">Open Morning Radar briefing</span>
             <div class="shortcut-keys"><kbd>M</kbd></div>
           </div>
           <div class="shortcut-row">
@@ -8401,7 +8241,7 @@ function extractTechStack(title = '', department = '', description = '') {
 function renderTechDnaCluster(stack = []) {
   if (!Array.isArray(stack) || !stack.length) return '';
   return `
-    <div class="tech-dna-cluster" title="Extracted Tech Stack DNA">
+    <div class="tech-dna-cluster" title="Technologies named in this posting">
       ${stack.map(s => `<span class="tech-dna-chip tech-dna-chip--${escapeAttr(s.category || 'primary')}">${escapeHtml(s.name)}</span>`).join('')}
     </div>
   `;
@@ -8507,7 +8347,7 @@ function updateDealStage(accountId, newStage) {
   
   if (newStage === 'placement_won') {
     playActionChime('success');
-    showToast(isJobSeekerPersona() ? 'Offer Received! Congratulations!' : 'Placement Won! Commission revenue recognized!', 'success');
+    showToast(isJobSeekerPersona() ? 'Marked as offer received.' : 'Marked as placement won.', 'success');
   } else {
     playActionChime('nav');
     showToast(`✓ Stage moved to ${newStage.replace(/_/g, ' ')}`, 'success');
@@ -8692,7 +8532,7 @@ async function copyObjectionScript(tabId, tone) {
   try {
     await navigator.clipboard.writeText(text);
     playActionChime('copy');
-    showToast('Objection counter-script copied to clipboard!', 'success');
+    showToast('Objection counter-script copied to clipboard.', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -8819,7 +8659,7 @@ async function copyCandidateSlateMarkdown() {
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast('Candidate specimen slate copied to clipboard (Markdown)!', 'success');
+    showToast('Candidate specimen slate copied to clipboard (Markdown).', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -9382,7 +9222,7 @@ function renderBattlePlanModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">${isJobSeeker ? 'Top 5 High-Momentum Hiring Employers' : 'Top 5 High-Momentum Accounts'}</div>
+          <div class="battle-plan-section-title">${isJobSeeker ? 'Top 5 employers by hiring activity' : 'Top 5 accounts by hiring activity'}</div>
           <div class="battle-plan-grid">
             ${dossier.topAccounts.map(a => `
               <div class="battle-plan-item">
@@ -9395,7 +9235,7 @@ function renderBattlePlanModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">${isJobSeeker ? 'Priority Requisitions & Tech Stack Match' : 'Priority Requisitions & Stack DNA'}</div>
+          <div class="battle-plan-section-title">${isJobSeeker ? 'Priority roles and matching technologies' : 'Priority roles and technologies'}</div>
           <div class="battle-plan-grid">
             ${dossier.topJobs.map(j => `
               <div class="battle-plan-item">
@@ -10119,7 +9959,7 @@ async function copyActiveBatchDraft() {
     await navigator.clipboard.writeText(fullText);
     appState.batchOutreach.copiedMap[item.id] = true;
     playActionChime('success');
-    showToast(`Draft copied for ${item.name}!`, 'success');
+    showToast(`Draft copied for ${item.name}.`, 'success');
     renderBatchOutreachModal();
   } catch {
     showToast('Failed to copy to clipboard', 'error');
@@ -10143,7 +9983,7 @@ async function copyAllBatchOutreachDrafts() {
     await navigator.clipboard.writeText(aggregated);
     items.forEach(item => { appState.batchOutreach.copiedMap[item.id] = true; });
     playActionChime('success');
-    showToast(`All ${items.length} outreach drafts copied to clipboard!`, 'success');
+    showToast(`All ${items.length} outreach drafts copied to clipboard.`, 'success');
     renderBatchOutreachModal();
   } catch {
     showToast('Failed to copy drafts', 'error');
@@ -10198,7 +10038,7 @@ function exportBatchOutreachCsv() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 
-  showToast(`Exported ${items.length} drafts for Apollo/GMass/Lemlist/Salesloft!`, 'success');
+  showToast(`Exported ${items.length} drafts for Apollo/GMass/Lemlist/Salesloft.`, 'success');
 }
 
 async function logAllBatchOutreachSent() {
@@ -10234,7 +10074,7 @@ async function logAllBatchOutreachSent() {
   }
 
   playActionChime('success');
-  showToast(`✓ Logged outreach for ${loggedCount} contacts & created 3-day follow-ups in task queue!`, 'success');
+  showToast(`✓ Logged outreach for ${loggedCount} contacts & created 3-day follow-ups in task queue.`, 'success');
   renderBatchOutreachModal();
 }
 
@@ -10359,7 +10199,7 @@ function renderPricingModal() {
             </div>
             <ul class="pricing-feature-list">
               <li>✓ <strong>Full access to both modes (Job Seeker + Staffing BD)</strong></li>
-              <li>✓ <strong>Deal Flow & Executive Revenue Pipeline Board</strong></li>
+              <li>✓ <strong>Deal pipeline board</strong></li>
               <li>✓ <strong>10-Second Pattern Interrupt Cold Call Teleprompter</strong></li>
               <li>✓ <strong>3-Touch B2B Prospecting & Search Sequencer</strong></li>
               <li>✓ <strong>Client Talent Presentation Decks & Candidate Slates</strong></li>
@@ -10519,10 +10359,10 @@ function getJobSignalBadges(item) {
     badges.push(`<span class="signal-badge signal-badge--warm" title="1st-degree connection at company">1st-Degree Match</span>`);
   }
   if (item.isNew || (daysOld >= 0 && daysOld <= 2)) {
-    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours — first-mover advantage">Hiring Surge (New)</span>`);
+    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours">Hiring Surge (New)</span>`);
   }
   if (daysOld >= 45) {
-    badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days — high leverage for direct placement or candidate outreach">Hard to Fill (${daysOld}d)</span>`);
+    badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days">Hard to Fill (${daysOld}d)</span>`);
   }
   if (/(recruiter|talent|head of|vp|director|lead|manager|staff|founding)/i.test(item.title || '')) {
     badges.push(`<span class="signal-badge signal-badge--expansion" title="Strategic hiring signal indicating team expansion">Expansion Signal</span>`);
@@ -10539,7 +10379,7 @@ async function openMorningRadarModal() {
       <div class="modal-header">
         <div class="modal-title-lockup">
           <div>
-            <h3>Executive Morning Radar & Hiring Digest</h3>
+            <h3>Morning Radar and hiring digest</h3>
             <p class="muted small">Assembling overnight hiring signals and network matches...</p>
           </div>
         </div>
@@ -10574,7 +10414,7 @@ async function openMorningRadarModal() {
     briefing += `**Executive Summary:**\n`;
     briefing += `• **${newJobs24h} New Roles Posted** across tracked companies in the last 24-48h\n`;
     briefing += `• **${connectedJobs.length} Warm Intro Opportunities** with 1st-degree colleague connections\n`;
-    briefing += `• **${hardToFillJobs.length} Hard-to-Fill Roles (45d+)** representing high placement leverage\n\n`;
+    briefing += `• **${hardToFillJobs.length} Hard-to-Fill Roles (45d+)**\n\n`;
     briefing += `**Top priority outreach targets today:**\n`;
 
     topOpportunities.forEach((job, idx) => {
@@ -10613,7 +10453,7 @@ function renderMorningRadarModal(data) {
       <div class="modal-header">
         <div class="modal-title-lockup">
           <div>
-            <h3 id="radar-modal-title">Executive Morning Radar & Hiring Digest</h3>
+            <h3 id="radar-modal-title">Morning Radar and hiring digest</h3>
             <p class="muted small">Daily executive briefing for <strong>${escapeHtml(todayStr)}</strong></p>
           </div>
         </div>
@@ -10689,7 +10529,7 @@ function renderMorningRadarModal(data) {
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-morning-radar">Close</button>
           <button class="primary-button" type="button" data-action="morning-radar-copy">
-            Copy Executive Briefing
+            Copy briefing
           </button>
         </div>
       </div>
@@ -10710,12 +10550,12 @@ async function copyMorningRadarText() {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    showToast('Executive Morning Radar briefing copied!', 'success');
+    showToast('Morning Radar briefing copied.', 'success');
   } catch {
     if (textarea) {
       textarea.select();
       document.execCommand('copy');
-      showToast('Executive Morning Radar briefing copied!', 'success');
+      showToast('Morning Radar briefing copied.', 'success');
     }
   }
 }
@@ -12440,7 +12280,7 @@ async function exportJobsCsv() {
       ];
     })
   );
-  showToast('Pipeline and network roles exported to CSV!', 'success');
+  showToast('Pipeline and network roles exported to CSV.', 'success');
 }
 
 function renderDailyPriorityAction(item, primary = false) {
@@ -12829,13 +12669,6 @@ function renderConfigsTable(items) {
 
 function renderAccountJobsTable(items) {
   return renderJobsTable(items.slice(0, 15), false);
-}
-
-function renderAccountContactsTable(items) {
-  return `
-    <div class="table-scroll"><table class="table responsive-table"><thead><tr><th>Contact</th><th>Title</th><th>Score</th><th>Connected</th></tr></thead><tbody>
-      ${items.map((item) => `<tr><td data-label="Contact">${escapeHtml(item.fullName || '')}</td><td data-label="Title">${escapeHtml(item.title || '')}</td><td data-label="Score">${formatNumber(item.priorityScore)}</td><td data-label="Connected">${formatDate(item.connectedOn)}</td></tr>`).join('')}
-    </tbody></table></div>`;
 }
 
 function renderAccountConfigsTable(items) {
@@ -13338,33 +13171,12 @@ function renderMetricTile(label, value) {
   return `<div class="kpi-tile"><span class="small muted">${escapeHtml(label)}</span><strong>${value}</strong></div>`;
 }
 
-function renderTrustCard(label, value, description, meta, tone = 'neutral') {
-  return `
-    <article class="trust-card trust-card--${tone}">
-      <span class="trust-card__eyebrow">${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value || ''))}</strong>
-      <p>${escapeHtml(description || '')}</p>
-      ${meta ? `<span class="trust-card__meta">${escapeHtml(meta)}</span>` : ''}
-    </article>
-  `;
-}
-
 function renderSignalChip(label, value, tone = 'neutral') {
   return `
     <div class="signal-chip signal-chip--${tone}">
       <span class="signal-chip__label">${escapeHtml(label)}</span>
       <strong>${escapeHtml(String(value || ''))}</strong>
     </div>
-  `;
-}
-
-function renderStoryCard(label, value, description, tone = 'neutral') {
-  return `
-    <article class="story-card story-card--${tone}">
-      <span class="story-card__label">${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value || ''))}</strong>
-      <p>${escapeHtml(description || '')}</p>
-    </article>
   `;
 }
 
@@ -13389,10 +13201,6 @@ function renderEmptyState({ icon = 'i', title = 'Nothing to show yet', copy = ''
 
 function renderStatusPill(value, tone) {
   return `<span class="status-pill ${tone}" aria-label="${escapeAttr(humanize(value))}">${escapeHtml(humanize(value))}</span>`;
-}
-
-function renderInlineBadge(value) {
-  return `<span>${escapeHtml(humanize(value))}</span>`;
 }
 
 function renderPagination(view, page, pageSize, total) {
@@ -14037,76 +13845,6 @@ async function applyBulkUpdate() {
     showToast(`Updated ${result.updated || 0} accounts; ${failed.length} could not be found.`, 'warning', 7000);
   } else {
     showToast(`Updated ${result.updated || 0} accounts.`, 'success');
-  }
-}
-
-async function generateSmartOutreachLegacy(accountId, buttonEl) {
-  if (!accountId) return;
-  const origText = buttonEl.textContent;
-  buttonEl.textContent = 'Generating...';
-  buttonEl.disabled = true;
-
-  try {
-    // Get selected contact from dropdown
-    const contactSelect = document.getElementById('outreach-contact-select');
-    const selectedOption = contactSelect?.selectedOptions?.[0];
-    const contactName = selectedOption?.dataset?.name || selectedOption?.value || '';
-    const contactTitle = selectedOption?.dataset?.title || '';
-
-    const result = await api(`/api/accounts/${accountId}/generate-outreach`, {
-      method: 'POST',
-      body: JSON.stringify({ bookingLink: 'https://tinyurl.com/ysdep7cn', contactName, contactTitle, template: document.getElementById('outreach-template-select')?.value || 'cold' }),
-    });
-
-    const subjectLine = result.subject_line || result.subjectLine || `Hiring signal at ${appState.accountDetail?.account?.displayName || 'this company'}`;
-    const messageBody = result.message_body || result.messageBody || result.outreach || '';
-    const linkedinMsg = result.linkedin_message || result.linkedinMessage || '';
-    appState.generatedOutreach = normalizeGeneratedOutreachItem({ ...result, subject_line: subjectLine, message_body: messageBody, linkedin_message: linkedinMsg });
-
-    // Update the outreach prompt card with the generated message
-    const body = document.getElementById('outreach-prompt-body');
-    if (body && messageBody) {
-      body.className = 'outreach-generated';
-      if (subjectLine) {
-        const gmailSubjectStructured = encodeURIComponent(subjectLine);
-        const gmailBodyStructured = encodeURIComponent(messageBody);
-        body.innerHTML = `
-          <div style="display: grid; gap: 16px;">
-            <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; background: var(--surface-muted);">
-              <strong>Email Message</strong>
-              <div style="margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85rem; color: var(--text-muted);">
-                Subject: ${escapeHtml(subjectLine)}<br><br>${escapeHtml(messageBody)}
-              </div>
-              <div class="button-row" style="margin-top:12px;">
-                <button class="secondary-button" data-action="copy-generated-outreach" data-kind="email" type="button">Copy Email</button>
-                <a class="primary-button" href="mailto:?subject=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Open in Default Mail</a>
-                <a class="secondary-button" href="https://mail.google.com/mail/?view=cm&su=${gmailSubjectStructured}&body=${gmailBodyStructured}" target="_blank" rel="noreferrer">Draft in Gmail</a>
-              </div>
-            </div>
-            
-            <div style="border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; background: var(--surface-muted);">
-              <strong>LinkedIn DM</strong>
-              <div style="margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85rem; color: var(--text-muted);">
-                ${escapeHtml(linkedinMsg)}
-              </div>
-              <div class="button-row" style="margin-top:12px;">
-                <button class="primary-button" data-action="open-generated-linkedin" type="button">Copy & Open LinkedIn</button>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-      const gmailSubject = encodeURIComponent('Quick intro — ' + (appState.accountDetail?.account?.displayName || ''));
-      // Scroll the outreach card into view
-      const card = document.getElementById('outreach-prompt-card');
-      scrollIntoViewRespectingMotion(card, { behavior: 'smooth', block: 'center' });
-    }
-    showToast('Outreach message generated!', 'success');
-  } catch (err) {
-    showToast('Failed to generate outreach: ' + (err.message || err), 'error');
-  } finally {
-    buttonEl.textContent = origText;
-    buttonEl.disabled = false;
   }
 }
 
