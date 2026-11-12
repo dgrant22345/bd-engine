@@ -218,6 +218,8 @@ const appState = {
   modalCsvFile: null,
   modalCsvFileName: '',
   modalCsvParsedStats: null,
+  modalCsvError: '',
+  modalCsvChecking: false,
   modalImportBusy: false,
   modalImportMessage: '',
   modalImportResult: null,
@@ -4108,7 +4110,7 @@ function bindEvents() {
       let message = `Imported ${formatNumber(result.count || 0)} target accounts.`;
       if (skipped.length) {
         const preview = skipped.slice(0, 3)
-          .map((row) => `line ${row.line}${row.company ? ` (${row.company})` : ''}: ${row.reason === 'duplicate' ? 'already in workspace' : row.reason}`)
+          .map((row) => `line ${row.line}${row.company ? ` (${row.company})` : ''}: ${row.reason === 'duplicate' ? 'already in workspace' : row.reason === 'missing_company' ? 'no company name' : row.reason}`)
           .join('; ');
         message += ` Skipped ${skipped.length}: ${preview}${skipped.length > 3 ? '…' : ''}`;
         showToast(message, 'warning', 9000);
@@ -5724,9 +5726,16 @@ function parseSetupTargetSites(text) {
   const invalid = [];
   const seen = new Set();
   lines.slice(0, 50).forEach((line, index) => {
-    const rawValue = line.replace(/^[\s"']+|[\s"']+$/g, '');
+    // Lists pasted from documents arrive numbered or bulleted.
+    const rawValue = line
+      .replace(/^[\s"']+|[\s"']+$/g, '')
+      .replace(/^(?:[-*\u2022\u00b7\u2013\u2014]\s+|\d{1,3}[.)]\s+)/, '')
+      .trim();
     if (!rawValue) return;
-    const looksLikeCompanyName = !rawValue.includes('://') && !rawValue.includes('.') && !rawValue.includes('/');
+    // A web address never contains a space, so "Acme Inc." and "St. Jude
+    // Medical" are company names even though they contain a period.
+    const looksLikeCompanyName = !rawValue.includes('://')
+      && (/\s/.test(rawValue) || (!rawValue.includes('.') && !rawValue.includes('/')));
     if (looksLikeCompanyName) {
       const key = rawValue.toLowerCase();
       if (!seen.has(key)) {
@@ -6030,7 +6039,7 @@ function renderSetupStepContent(stepKey) {
         </div>
 
         ${renderSetupSamplePanel(jobSeeker)}
-        <input id="setup-csv-file" class="hidden" type="file" accept=".csv,text/csv" />
+        <input id="setup-csv-file" class="hidden" type="file" accept="${IMPORT_FILE_ACCEPT}" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
           <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
           <span>${hasCsv ? 'Ready to preview or import.' : 'or choose the file from your computer'}</span>
@@ -6247,17 +6256,35 @@ function wireSetupDropZone() {
   });
 }
 
+// Spreadsheet exports are often Windows-1252 or UTF-16 rather than UTF-8.
+// Mirrors decodeUploadedText in saas/src/import-parsing.js.
 async function readTextFile(file) {
   if (!file) return '';
-  if (typeof file.text === 'function') {
-    return await file.text();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes);
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
   }
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (event) => resolve(event.target.result || '');
-    reader.onerror = () => reject(new Error('Failed to read file.'));
-    reader.readAsText(file);
-  });
+}
+
+const IMPORT_FILE_ACCEPT = '.csv,.tsv,.txt,text/csv,text/plain,text/tab-separated-values';
+
+// Returns a message when a chosen file cannot be imported as-is, or ''.
+function describeUnsupportedImportFile(file) {
+  const name = String(file?.name || '').toLowerCase();
+  if (/\.(xlsx|xlsm|xls|numbers|ods)$/.test(name)) {
+    return 'That is a spreadsheet workbook. In your spreadsheet app choose File, then Save As or Download, pick CSV, and upload the CSV file.';
+  }
+  if (/\.(zip|rar|7z)$/.test(name)) {
+    return 'That is a compressed archive. Open it and choose the Connections.csv file inside.';
+  }
+  if (name.includes('.') && !/\.(csv|tsv|txt)$/.test(name)) {
+    return 'Choose a CSV file, such as the Connections.csv export from LinkedIn.';
+  }
+  return '';
 }
 
 function formatFileSize(bytes = 0) {
@@ -6286,8 +6313,9 @@ async function handleSetupCsvFile(file) {
   if (!file) return;
   persistSetupDraftFromDom();
 
-  if (!file.name.toLowerCase().endsWith('.csv')) {
-    showToast('Please choose the Connections.csv file from LinkedIn.', 'warning');
+  const unsupported = describeUnsupportedImportFile(file);
+  if (unsupported) {
+    showToast(unsupported, 'warning', 9000);
     return;
   }
 
@@ -6300,15 +6328,46 @@ async function handleSetupCsvFile(file) {
   await renderSetupWizard();
   showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
 }
+// Chooses how to tell the server which companies to track without putting
+// thousands of names in the URL (long URLs are rejected before they reach the
+// app). Short selections travel as names; a large selection travels as
+// "track all" plus the exclusions; anything else moves into the request body.
+function planTrackedCompanyRequest(options = {}) {
+  if (options.trackAll) return { trackAll: true, untracked: [] };
+  const selected = [...new Set((options.trackedCompanies || []).filter(Boolean))];
+  const urlCost = (names) => names.reduce((total, name) => total + encodeURIComponent(name).length + 18, 0);
+  const urlBudget = 3500;
+  if (urlCost(selected) <= urlBudget) return { tracked: selected };
+  const selectedSet = new Set(selected);
+  const untracked = [...new Set((options.candidateCompanies || []).filter(Boolean))].filter((name) => !selectedSet.has(name));
+  if (options.candidateCompanies?.length && urlCost(untracked) <= urlBudget) return { trackAll: true, untracked };
+  return { tracked: selected, inBody: true };
+}
+
 async function postConnectionsCsvFile(file, options = {}) {
   const params = new URLSearchParams();
   params.set('dryRun', options.dryRun ? 'true' : 'false');
   params.set('useEmptyState', options.useEmptyState ? 'true' : 'false');
   params.set('fileName', options.fileName || file?.name || 'Connections.csv');
-  for (const company of options.trackedCompanies || []) {
-    params.append('trackedCompany', company);
-  }
+  const tracking = planTrackedCompanyRequest(options);
   const endpoint = options.preview ? '/api/import/connections-csv/preview' : '/api/import/connections-csv';
+  if (tracking.inBody) {
+    return api(`${endpoint}?${params.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        csvContent: await readTextFile(file),
+        dryRun: Boolean(options.dryRun),
+        trackedCompanies: tracking.tracked,
+      }),
+    });
+  }
+  if (tracking.trackAll) {
+    params.set('trackAll', 'true');
+    for (const company of tracking.untracked) params.append('untrackedCompany', company);
+  } else {
+    for (const company of tracking.tracked) params.append('trackedCompany', company);
+  }
   return api(`${endpoint}?${params.toString()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/csv;charset=utf-8' },
@@ -6631,6 +6690,9 @@ async function completeSetupWizard() {
         useEmptyState: false,
         fileName: appState.setupCsvFileName || appState.setupCsvFile.name || 'Connections.csv',
         trackedCompanies: appState.setupTrackedCompanies,
+        candidateCompanies: (appState.setupPreview?.companies || [])
+          .filter((company) => !company.overLimit && !company.alreadyTracked)
+          .map((company) => company.key),
       });
       const jobId = accepted.jobId || accepted.job?.id;
       const stats = accepted.stats || {};
@@ -6806,6 +6868,8 @@ function closeNetworkImportModal() {
   appState.modalCsvFile = null;
   appState.modalCsvFileName = '';
   appState.modalCsvParsedStats = null;
+  appState.modalCsvError = '';
+  appState.modalCsvChecking = false;
   appState.modalImportBusy = false;
   appState.modalImportMessage = '';
   appState.modalImportResult = null;
@@ -6830,116 +6894,58 @@ function closeLinkedInGuideModal() {
   linkedinGuideModalBackdrop.innerHTML = '';
 }
 
-function parseCsvPreviewLocal(text) {
-  if (!text || typeof text !== 'string') return null;
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return null;
-
-  let headerIndex = -1;
-  let headers = [];
-  for (let i = 0; i < Math.min(lines.length, 6); i++) {
-    const rawCols = splitCsvLine(lines[i]).map((c) => c.trim().toLowerCase());
-    if (rawCols.includes('first name') || rawCols.includes('company') || rawCols.includes('position') || rawCols.includes('url')) {
-      headerIndex = i;
-      headers = rawCols;
-      break;
-    }
-  }
-  if (headerIndex === -1) {
-    headerIndex = 0;
-    headers = splitCsvLine(lines[0]).map((c) => c.trim().toLowerCase());
-  }
-
-  const companyIdx = headers.indexOf('company');
-  const positionIdx = headers.indexOf('position');
-  const firstNameIdx = headers.indexOf('first name');
-  const lastNameIdx = headers.indexOf('last name');
-
-  const companyMap = new Map();
-  let totalContacts = 0;
-  let seniorCount = 0;
-  let talentCount = 0;
-  const sampleContacts = [];
-
-  const seniorKeywords = /\b(vp|vice president|director|head|chief|cto|cpo|ceo|coo|cfo|cro|founder|co-founder|lead|principal|partner)\b/i;
-  const talentKeywords = /\b(recruiter|talent|recruiting|hiring|people|human resources|hr|staffing)\b/i;
-
-  for (let i = headerIndex + 1; i < lines.length; i++) {
-    const cols = splitCsvLine(lines[i]);
-    const company = (cols[companyIdx] || '').trim();
-    const position = (cols[positionIdx] || '').trim();
-    const firstName = (cols[firstNameIdx] || '').trim();
-    const lastName = (cols[lastNameIdx] || '').trim();
-    const fullName = `${firstName} ${lastName}`.trim() || `Contact ${totalContacts + 1}`;
-
-    if (!firstName && !company && !position) continue;
-    totalContacts++;
-
-    if (position && seniorKeywords.test(position)) seniorCount++;
-    if (position && talentKeywords.test(position)) talentCount++;
-
-    if (company) {
-      const cleanCompany = company.replace(/[",]/g, '').trim();
-      const count = companyMap.get(cleanCompany) || 0;
-      companyMap.set(cleanCompany, count + 1);
-    }
-
-    if (sampleContacts.length < 5 && fullName) {
-      sampleContacts.push({ fullName, company: company || 'Company unspecified', position: position || 'Role unspecified' });
-    }
-  }
-
-  const sortedCompanies = Array.from(companyMap.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, count]) => ({ name, count }));
-
+// Summarises the server's dry-run of a connections file for the import
+// dialog. The server applies the same parsing as the real import, so the
+// numbers shown before importing are the numbers that will be imported.
+function summarizeConnectionsPreview(preview = {}) {
+  const stats = preview.stats || {};
+  const companies = Array.isArray(preview.companies) ? preview.companies : [];
+  const sum = (field) => companies.reduce((total, company) => total + Number(company[field] || 0), 0);
+  const skippedRows = Number(stats.missingNameRows || 0) + Number(stats.missingCompanyRows || 0);
   return {
-    totalContacts,
-    uniqueCompanies: companyMap.size,
-    seniorCount,
-    talentCount,
-    topCompanies: sortedCompanies.slice(0, 6),
-    allCompanyNames: sortedCompanies.map((c) => c.name),
-    sampleContacts,
+    totalContacts: Math.max(0, Number(stats.rowsParsed || 0) - skippedRows),
+    uniqueCompanies: companies.length,
+    seniorCount: sum('seniorContactCount'),
+    talentCount: sum('talentContactCount'),
+    newContacts: Number(stats.imported || 0),
+    updatedContacts: Number(stats.updated || 0),
+    unchangedContacts: Number(stats.duplicatesSkipped || 0),
+    skippedRows,
+    planLimited: Number(stats.planLimitedSkipped || 0),
+    warnings: Array.isArray(preview.warnings) ? preview.warnings : [],
   };
 }
 
-function splitCsvLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
+async function handleNetworkModalFile(file) {
+  if (!file) return;
+  const unsupported = describeUnsupportedImportFile(file);
+  appState.modalCsvFile = unsupported ? null : file;
+  appState.modalCsvFileName = file.name || 'Connections.csv';
+  appState.modalCsvParsedStats = null;
+  appState.modalImportResult = null;
+  appState.modalCsvError = unsupported;
+  appState.modalCsvChecking = !unsupported;
+  renderNetworkImportModal();
+  wireNetworkModalDropzone();
+  if (unsupported) return;
+
+  try {
+    const preview = await postConnectionsCsvFile(file, { dryRun: true, preview: true, fileName: appState.modalCsvFileName });
+    if (appState.modalCsvFile !== file) return; // A newer file was chosen while this one was being checked.
+    appState.modalCsvParsedStats = summarizeConnectionsPreview(preview);
+  } catch (error) {
+    if (appState.modalCsvFile !== file) return;
+    appState.modalCsvFile = null;
+    appState.modalCsvError = formatConnectionsImportError(error);
+  } finally {
+    if (appState.modalCsvFile === file || !appState.modalCsvFile) {
+      appState.modalCsvChecking = false;
+      if (appState.networkModalOpen) {
+        renderNetworkImportModal();
+        wireNetworkModalDropzone();
       }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
     }
   }
-  result.push(current.trim());
-  return result;
-}
-
-function handleNetworkModalFile(file) {
-  if (!file) return;
-  appState.modalCsvFile = file;
-  appState.modalCsvFileName = file.name || 'Connections.csv';
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const text = e.target?.result;
-    appState.modalCsvParsedStats = parseCsvPreviewLocal(text);
-    renderNetworkImportModal();
-    wireNetworkModalDropzone();
-  };
-  reader.readAsText(file);
 }
 
 function wireNetworkModalDropzone() {
@@ -6976,53 +6982,84 @@ function wireNetworkModalDropzone() {
 }
 
 function renderNetworkModalPreview() {
+  if (appState.modalCsvError) {
+    return `
+      <div class="network-import-problem" role="alert">
+        <strong>This file could not be used</strong>
+        <p>${escapeHtml(appState.modalCsvError)}</p>
+        <p class="muted small">Nothing was imported. Choose another file, or see how to export Connections.csv from LinkedIn.</p>
+      </div>
+    `;
+  }
+  if (appState.modalCsvChecking) {
+    return `
+      <div class="modal-progress-strip" role="status">
+        <div class="spinner-inline" aria-hidden="true"></div>
+        <span>Checking the file...</span>
+      </div>
+    `;
+  }
+
   const stats = appState.modalCsvParsedStats;
   if (!stats) return '';
 
   if (appState.modalImportResult) {
+    const result = appState.modalImportResult;
+    // Server warnings already explain why rows were skipped; only fall back
+    // to a bare count when there is no explanation.
+    const notes = [];
+    if (result.updated) notes.push(`${formatNumber(result.updated)} existing contact${result.updated === 1 ? '' : 's'} updated.`);
+    if (result.warnings?.length) notes.push(...result.warnings);
+    else if (result.skipped) notes.push(`${formatNumber(result.skipped)} row${result.skipped === 1 ? ' was' : 's were'} already in your workspace.`);
     return `
-      <div class="network-import-success-card">
-        <div class="success-icon-banner">🎉</div>
-        <h4>Network Successfully Imported & Tracked!</h4>
-        <p class="muted small">${formatNumber(stats.totalContacts)} contacts processed across ${formatNumber(stats.uniqueCompanies)} companies with active targeting enabled.</p>
+      <div class="network-import-success-card" role="status">
+        <h4>Import complete</h4>
+        <p class="muted small">${notes.length ? escapeHtml(notes.join(' ')) : 'Every row in the file was imported.'}</p>
         <div class="network-success-metrics">
           <div class="success-metric-box">
-            <strong>${formatNumber(stats.totalContacts)}</strong>
-            <span>Contacts Mapped</span>
+            <strong>${formatNumber(result.imported)}</strong>
+            <span>Contacts added</span>
           </div>
           <div class="success-metric-box">
-            <strong>${formatNumber(stats.uniqueCompanies)}</strong>
-            <span>Companies Tracked</span>
+            <strong>${formatNumber(result.contacts)}</strong>
+            <span>Contacts in workspace</span>
           </div>
           <div class="success-metric-box">
-            <strong>${formatNumber(stats.seniorCount)}</strong>
-            <span>Decision Makers</span>
+            <strong>${formatNumber(result.companies)}</strong>
+            <span>Companies in workspace</span>
           </div>
         </div>
       </div>
     `;
   }
 
+  const notes = [];
+  if (stats.unchangedContacts || stats.updatedContacts) {
+    notes.push(`${formatNumber(stats.unchangedContacts + stats.updatedContacts)} already in your workspace`);
+  }
+  if (stats.skippedRows) notes.push(`${formatNumber(stats.skippedRows)} row${stats.skippedRows === 1 ? '' : 's'} without a name or company will be skipped`);
+  if (stats.planLimited) notes.push(`${formatNumber(stats.planLimited)} over your plan limit`);
   return `
     <div class="network-parsed-preview">
       <div class="network-stats-grid">
         <div class="network-stat-card">
           <strong>${formatNumber(stats.totalContacts)}</strong>
-          <span>Total Connections</span>
+          <span>Connections in file</span>
         </div>
         <div class="network-stat-card">
           <strong>${formatNumber(stats.uniqueCompanies)}</strong>
-          <span>Companies in Network</span>
+          <span>Companies</span>
         </div>
         <div class="network-stat-card">
           <strong>${formatNumber(stats.seniorCount)}</strong>
-          <span>Leaders & VPs</span>
+          <span>Directors and above</span>
         </div>
         <div class="network-stat-card">
           <strong>${formatNumber(stats.talentCount)}</strong>
-          <span>Talent & Recruiters</span>
+          <span>Talent and HR</span>
         </div>
       </div>
+      <p class="muted small network-preview-note">${formatNumber(stats.newContacts)} new contact${stats.newContacts === 1 ? '' : 's'} will be added${notes.length ? `; ${escapeHtml(notes.join('; '))}` : ''}.</p>
     </div>
   `;
 }
@@ -7032,8 +7069,11 @@ function renderNetworkImportModal() {
   const hasFile = Boolean(appState.modalCsvFile);
   const isDone = Boolean(appState.modalImportResult);
 
+  // The dialog is rebuilt on every state change; only the first render should
+  // play the entrance animation, or each update makes the dialog flash.
+  const alreadyShown = Boolean(networkImportModalBackdrop.querySelector('.network-import-dialog'));
   networkImportModalBackdrop.innerHTML = `
-    <div class="modal-dialog modal-dialog--lg network-import-dialog" role="dialog" aria-modal="true" aria-labelledby="network-import-title">
+    <div class="modal-dialog modal-dialog--lg network-import-dialog${alreadyShown ? ' modal-dialog--settled' : ''}" role="dialog" aria-modal="true" aria-labelledby="network-import-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
           <span class="modal-icon-badge" aria-hidden="true">⚡</span>
@@ -7052,11 +7092,11 @@ function renderNetworkImportModal() {
         </div>
 
         ${!isDone ? `
-          <input id="network-modal-csv-input" class="hidden" type="file" accept=".csv,text/csv" />
+          <input id="network-modal-csv-input" class="hidden" type="file" accept="${IMPORT_FILE_ACCEPT}" />
           <div id="network-modal-dropzone" class="setup-drop-zone network-modal-dropzone ${hasFile ? 'is-populated' : ''}" tabindex="0" role="button" aria-label="Drop Connections.csv file here">
             <div class="dropzone-icon" aria-hidden="true">📁</div>
             <strong>${hasFile ? escapeHtml(appState.modalCsvFileName || 'Connections.csv') : 'Drag & Drop Connections.csv Here'}</strong>
-            <span class="muted small">${hasFile ? 'File parsed and ready to import.' : 'or browse from your computer'}</span>
+            <span class="muted small">${appState.modalCsvChecking ? 'Checking the file...' : hasFile ? 'Checked and ready to import.' : 'or browse from your computer'}</span>
             <button class="secondary-button" type="button" data-action="network-modal-browse-csv">${hasFile ? 'Change File' : 'Browse File'}</button>
           </div>
         ` : ''}
@@ -7066,7 +7106,7 @@ function renderNetworkImportModal() {
         ${appState.modalImportBusy ? `
           <div class="modal-progress-strip">
             <div class="spinner-inline" aria-hidden="true"></div>
-            <span>${escapeHtml(appState.modalImportMessage || 'Importing connections, tracking network companies, and pulling jobs...')}</span>
+            <span>${escapeHtml(appState.modalImportMessage || 'Importing contacts and tracking their companies...')}</span>
           </div>
         ` : ''}
       </div>
@@ -7079,7 +7119,7 @@ function renderNetworkImportModal() {
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-network-import-modal">${isDone ? 'Close' : 'Cancel'}</button>
           ${hasFile && !isDone ? `
-            <button class="primary-button" type="button" data-action="network-modal-run-import" ${appState.modalImportBusy ? 'disabled' : ''}>
+            <button class="primary-button" type="button" data-action="network-modal-run-import" ${appState.modalImportBusy || appState.modalCsvChecking || !appState.modalCsvParsedStats ? 'disabled' : ''}>
               ${appState.modalImportBusy ? 'Importing...' : 'Import connections'}
             </button>
           ` : ''}
@@ -7154,35 +7194,67 @@ function renderLinkedInGuideModal() {
   `;
 }
 
+// Follows an import started from the dialog. Progress stays in the dialog;
+// the first-run wizard's watcher would replace the page with the setup screen.
+async function watchNetworkModalImportJob(jobId) {
+  while (true) {
+    const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
+    if (job.status === 'completed') return job;
+    if (job.status === 'failed') {
+      const error = new Error(job.errorMessage || 'The connections import failed.');
+      error.expectedHeaders = job.result?.expectedHeaders;
+      throw error;
+    }
+    if (job.status === 'cancelled') throw new Error('The connections import was cancelled.');
+    const message = job.progressMessage || job.message || '';
+    if (message && message !== appState.modalImportMessage && appState.networkModalOpen) {
+      appState.modalImportMessage = message;
+      renderNetworkImportModal();
+    }
+    await sleep(1000);
+  }
+}
+
 async function runNetworkModalImport() {
   if (!appState.modalCsvFile) {
     showToast('Choose your LinkedIn Connections.csv file first.', 'warning');
     return;
   }
   appState.modalImportBusy = true;
-  appState.modalImportMessage = 'Importing contacts, tracking all network companies, and pulling jobs...';
+  appState.modalImportMessage = 'Importing contacts and tracking their companies...';
   renderNetworkImportModal();
 
   try {
     const file = appState.modalCsvFile;
-    const allTracked = appState.modalCsvParsedStats?.allCompanyNames || [];
     const run = await postConnectionsCsvFile(file, {
       dryRun: false,
       useEmptyState: false,
       fileName: appState.modalCsvFileName || file.name || 'Connections.csv',
-      trackedCompanies: allTracked,
+      // Every company in the file is tracked; the server works out the list.
+      trackAll: true,
     });
 
-    if (run.jobId) {
-      await watchSetupImportJob(run.jobId);
-    }
-    appState.modalImportResult = run;
+    const job = run.jobId ? await watchNetworkModalImportJob(run.jobId) : null;
+    const result = job?.result || run || {};
+    const stats = result.stats || result.importRun?.stats || {};
+    appState.modalImportResult = {
+      imported: Number(stats.imported || 0),
+      updated: Number(stats.updated || 0),
+      skipped: Number(stats.skipped || 0),
+      contacts: Number(stats.contacts || 0),
+      companies: Number(stats.companies || 0),
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    };
     invalidateAppData();
     await loadBootstrap(true);
+    // Refresh the view behind the dialog so the new contacts are there when
+    // it closes. The People view keeps its last result unless forced.
+    if (peopleWorkspace && /^#\/contacts(?:[/?]|$)/.test(location.hash)) await peopleWorkspace.render({ force: true });
+    else await renderRoute();
     playActionChime('success');
-    showToast(`⚡ Network imported! Tracked ${formatNumber(allTracked.length || appState.modalCsvParsedStats?.uniqueCompanies || 0)} companies with connections and pulled live jobs!`, 'success');
+    showToast(`Import complete: ${formatConnectionsImportStats(stats)}.`, 'success', 7000);
   } catch (error) {
-    showToast(`Import failed: ${error.message || error}`, 'error', 8000);
+    showToast(`Import failed: ${formatConnectionsImportError(error)}`, 'error', 9000);
   } finally {
     appState.modalImportBusy = false;
     appState.modalImportMessage = '';
@@ -14111,7 +14183,7 @@ function getSuggestedOutreachTemplate(detail) {
   if (outreachStatus === 'contacted' && daysSinceContact >= 21) {
     return 're_engage';
   }
-  if (/\b(recruit|talent|people|staffing|sourc|hr)\b/.test(title)) {
+  if (/\b(recruit\w*|talent|people|staffing|sourc(?:er|ers|ing)|hr)\b/.test(title)) {
     return 'talent_partner';
   }
   if (/\b(founder|chief|ceo|coo|cto|cfo|cio|president|svp|evp|vp)\b/.test(title)) {

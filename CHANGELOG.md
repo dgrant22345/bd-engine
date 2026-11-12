@@ -4,6 +4,15 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Read connection files as people actually save them: semicolon, tab, and pipe-delimited files; Windows-1252 and UTF-16 encodings (accented names no longer arrive garbled); and column names from other tools and languages, such as "Full Name", "Organization", "Job Title", "Vorname", or "Firma".
+- When a file cannot be used, say which column is missing and which columns were found, before anything is queued, instead of reporting an import that skipped every row.
+- Fix "Preview CSV" in Settings, which performed a real import because the preview option was only read from the request body.
+- Show the server's own preview in the People import dialog, so the counts shown before importing are the counts that are imported, and report what was actually added afterwards. The dialog now stays on the page it was opened from and no longer flashes on each update.
+- Track every company in a large connections file without placing thousands of names in the request address, which made large imports fail.
+- Explain spreadsheet workbooks and zip archives when they are chosen instead of rejecting them without a reason, and accept `.tsv` and `.txt` files.
+- Read target-account lists pasted from documents (numbered, bulleted, or quoted), with tab or semicolon separators, and with common column names such as "Account Name" and "Website".
+- Count "Recruiter", "Recruiting", and "Recruitment" titles as talent contacts. They were previously missed, which lowered the ranking of companies where you know recruiters.
+
 - Serve only regular files from the static directories and contain a failed file read to the request that triggered it, so one malformed asset request cannot interrupt the service for everyone else.
 - Deliver the home page and `/job-search` already rendered for signed-out visitors, so the page appears without a loading spinner and its content is readable by search and AI crawlers that do not run JavaScript. Signed-in visitors still open straight into the workspace.
 - Add a favicon and home-screen icon to every public page.
