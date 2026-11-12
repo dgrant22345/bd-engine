@@ -24,3 +24,19 @@ test('people review keeps unsupported assessment and outreach claims out of defa
   assert.match(people, /I already sent this message outside the app/);
   assert.doesNotMatch(people, /pre-vetted|Verified & Available|\/api\/bootstrap/);
 });
+
+test('workspace copy stays plain: no decorative emoji and no combat metaphors', async () => {
+  // Arrows, check marks, crosses and geometric shapes are functional and allowed.
+  const decorative = /(?![←-⇿■-◿✓-✖©®™])\p{Extended_Pictographic}/gu;
+  for (const file of ['app.js', 'index.html', 'people-workspace.js', 'workflow-tools.js', 'saved-work.js']) {
+    const source = await asset(file);
+    assert.deepEqual([...new Set(source.match(decorative) || [])], [], `${file} contains decorative emoji`);
+    // Emoji written as numeric character references (search glass, high-voltage sign).
+    assert.doesNotMatch(source, /&#(?:9889|1[0-9]{5}|x1F[0-9A-Fa-f]{3});/, `${file} contains an emoji character reference`);
+    assert.doesNotMatch(source, /Battle Board|Battle Plan|Battle Card|Strike Zone|Cross-Hunt|Cold Surge|\bDossier\b|1-Click|White-glove|High-Conviction|Viral share/, `${file} contains hype wording`);
+  }
+  const [app, html] = await Promise.all([asset('app.js'), asset('index.html')]);
+  assert.match(app, /Account priority matrix/);
+  assert.match(app, /Q1: Warm and hiring/);
+  assert.match(html, /<strong>Daily plan<\/strong>/);
+});

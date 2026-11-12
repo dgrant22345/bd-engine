@@ -4,6 +4,10 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Remove decorative emoji from the workspace: headings, buttons, confirmations, badges, pipeline stages, location filters, and copied briefings are now plain text. Check marks, close buttons, and arrows are unchanged.
+- Replace combat and hype wording with plain descriptions. The account matrix quadrants are now "Warm and hiring", "Warm, hiring is quiet", "Hiring, few contacts", and "Watchlist"; "Executive Battle Plan" is "Daily plan"; "Cross-Hunt Sibling Cluster" is "Similar companies"; and "1-Click" buttons say what they do ("Copy plan", "Copy script").
+- Stop describing roles open for 45 days or more as "fast-track" with a "high response rate" in job seeker mode. The badge now reads "Open 45+ days".
+
 - Publish two guides for staffing recruiters: how to find companies that are hiring, and how to export LinkedIn connections to CSV. Both are listed on the guide index and in the sitemap.
 - Keep the campaign that brought a visitor to a guide when they continue to the free audit or the product, so results from a post that links to a guide are attributed to that post.
 - Show a new workspace its four first steps at the top of the Dashboard, and replace the grid of zero-value metrics with a single prompt until a company is ranked.

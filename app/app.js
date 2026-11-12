@@ -703,7 +703,7 @@ const cmdActions = [
     else if (v === 'jobs') exportJobsCsv();
     else showToast('Export not available for this view', 'warning');
   }},
-  { id: 'focus-search', label: 'Focus search', icon: '&#128269;', key: '/', action: () => { searchInput?.focus(); } },
+  { id: 'focus-search', label: 'Focus search', icon: '&#9632;', key: '/', action: () => { searchInput?.focus(); } },
 ];
 
 let cmdPaletteIndex = 0;
@@ -1228,10 +1228,10 @@ function detectSmartAlerts(accounts) {
 
 function renderSmartAlerts(alerts) {
   if (!alerts || !alerts.length) return '';
-  const icons = { warning: '&#9888;', danger: '&#10071;', success: '&#9889;', info: '&#8505;' };
+  const icons = { warning: '&#9888;', danger: '&#10071;', success: '&#10003;', info: '&#8505;' };
   return `
     <section class="smart-alerts-panel">
-      <div class="panel-header"><div><h3>&#9889; Smart Alerts</h3><p class="muted small">Anomalies and opportunities detected from your pipeline signals.</p></div><span class="smart-alerts-badge">${alerts.length}</span></div>
+      <div class="panel-header"><div><h3>Smart Alerts</h3><p class="muted small">Anomalies and opportunities detected from your pipeline signals.</p></div><span class="smart-alerts-badge">${alerts.length}</span></div>
       <div class="smart-alerts-list">
         ${alerts.slice(0, 8).map(a => `
           <div class="smart-alert smart-alert--${a.severity}">
@@ -2104,8 +2104,8 @@ function render3StepValueSprint(dashboard = {}, personaCopy = {}) {
     <section class="value-sprint-card">
       <div class="value-sprint-header">
         <div class="value-sprint-title-group">
-          <h3>⚡ 3-Step Outbound Value Sprint <span class="status-pill status-pill--success">${completedCount}/3 Complete (${percent}%)</span></h3>
-          <p>Get from cold workspace to live, verified warm conversations in under 3 minutes.</p>
+          <h3>Quick start: three steps to first outreach <span class="status-pill status-pill--success">${completedCount}/3 Complete (${percent}%)</span></h3>
+          <p>Import your network, review the companies it matches, then draft your first outreach.</p>
         </div>
         <div class="value-sprint-meter">
           <div class="value-sprint-progress"><div class="value-sprint-progress-fill" style="width: ${Math.max(percent, 5)}%"></div></div>
@@ -2124,7 +2124,7 @@ function render3StepValueSprint(dashboard = {}, personaCopy = {}) {
           <div class="sprint-step-cta">
             ${step1Done
               ? '<a class="ghost-button ghost-button--xs" href="#/contacts">View Network →</a>'
-              : '<button class="primary-button primary-button--xs" type="button" data-action="open-network-import-modal">⚡ Import Network</button> <button class="secondary-button secondary-button--xs" type="button" data-action="quick-load-sample-workspace">Sample</button>'}
+              : '<button class="primary-button primary-button--xs" type="button" data-action="open-network-import-modal">Import Network</button> <button class="secondary-button secondary-button--xs" type="button" data-action="quick-load-sample-workspace">Sample</button>'}
           </div>
         </div>
 
@@ -2147,7 +2147,7 @@ function render3StepValueSprint(dashboard = {}, personaCopy = {}) {
           <div class="sprint-step-top">
             <span class="sprint-step-number">${step3Done ? 'Outbound Active' : '3. Launch Outreach'}</span>
             <div class="sprint-step-content">
-              <h4>${step3Done ? 'First Outreach Sent' : '3. 1-Click Outreach'}</h4>
+              <h4>${step3Done ? 'First Outreach Sent' : '3. Draft outreach'}</h4>
               <p>${step3Done ? `${formatNumber(contactedCount)} contacts engaged with durable follow-ups.` : 'Use Batch Outreach Studio to generate grounded notes for your top targets.'}</p>
             </div>
           </div>
@@ -2169,19 +2169,19 @@ function renderDashboardCommandCenterTabs(dashboard = {}, extended = {}) {
   return `
     <nav class="dashboard-tab-bar" role="tablist" aria-label="Dashboard views">
       <button class="dashboard-tab-btn ${currentTab === 'battle-board' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'battle-board'}" data-action="dashboard-switch-tab" data-tab="battle-board">
-        <span>🎯 Today's Battle Board</span>
+        <span>Today's priorities</span>
         <span class="tab-badge">${formatNumber(battleCount)}</span>
       </button>
       <button class="dashboard-tab-btn ${currentTab === 'hiring-radar' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'hiring-radar'}" data-action="dashboard-switch-tab" data-tab="hiring-radar">
-        <span>📡 Hiring & Network Radar</span>
+        <span>Hiring and network</span>
         <span class="tab-badge">${formatNumber(radarCount)}</span>
       </button>
       <button class="dashboard-tab-btn ${currentTab === 'pipeline' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'pipeline'}" data-action="dashboard-switch-tab" data-tab="pipeline">
-        <span>📊 Pipeline & Outcomes</span>
+        <span>Pipeline and outcomes</span>
         <span class="tab-badge">${formatNumber(pipelineCount)}</span>
       </button>
       <button class="dashboard-tab-btn ${currentTab === 'all' ? 'active' : ''}" type="button" role="tab" aria-selected="${currentTab === 'all'}" data-action="dashboard-switch-tab" data-tab="all">
-        <span>⚡ All Sections</span>
+        <span>All sections</span>
       </button>
     </nav>
   `;
@@ -2744,14 +2744,14 @@ function bindEvents() {
       return;
     }
 
-    // "c" / "C" to open Cold Call Battle Card
+    // "c" / "C" to open Cold Call Prompter
     if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
       openCallStudioModal();
       return;
     }
 
-    // "p" / "P" to open Executive Battle Plan
+    // "p" / "P" to open the daily plan
     if (e.key === 'p' || e.key === 'P') {
       e.preventDefault();
       openBattlePlanModal();
@@ -3382,7 +3382,7 @@ function bindEvents() {
     }
     if (actionName === 'quick-log-call-success') {
       playActionChime('success');
-      showToast('🎉 Call logged as Successful Connect!', 'success');
+      showToast('Call logged as Successful Connect!', 'success');
       closeCallStudioModal();
       return;
     }
@@ -3544,7 +3544,7 @@ function bindEvents() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast(`📥 Exported ${items.length} selected contacts to CSV!`, 'success');
+      showToast(`Exported ${items.length} selected contacts to CSV!`, 'success');
       return;
     }
     if (actionName === 'launch-batch-outreach-jobs') {
@@ -4521,7 +4521,6 @@ function applyPersonaChrome() {
   const adminLabel = document.querySelector('[data-route="admin"] .nav-label');
   const topbarEyebrow = document.querySelector('.topbar .eyebrow');
   const personaBtn = document.getElementById('persona-mode-btn');
-  const personaIcon = document.getElementById('persona-mode-icon');
   const personaLabel = document.getElementById('persona-mode-label');
 
   if (accountLabel) accountLabel.textContent = 'Companies';
@@ -4558,7 +4557,6 @@ function applyPersonaChrome() {
     menu.dataset.organized = 'true';
   }
   if (topbarEyebrow) topbarEyebrow.textContent = jobSeeker ? 'Job search workspace' : 'Recruiter workspace';
-  if (personaIcon) personaIcon.textContent = jobSeeker ? '🎯' : '💼';
   if (personaLabel) personaLabel.textContent = jobSeeker ? 'Job seeker' : 'Recruiting';
   const modeDescription = `Current mode: ${jobSeeker ? 'Job seeker' : 'Recruiting / business development'}. Switch to ${jobSeeker ? 'Recruiting / business development' : 'Job seeker'}.`;
   if (personaBtn) {
@@ -4604,7 +4602,7 @@ async function togglePersonaMode() {
     // People facts and drafts do not depend on mode. Keep the active editor,
     // unsaved notes and list position rather than replacing the workspace.
     else if (routeRoot === 'admin') await renderAdminView();
-    showToast(`Switched mode: ${appState.persona === 'jobseeker' ? '🎯 Job Seeker Mode' : '💼 Business Development Mode'}. ${formatNumber(result.rescoredJobs || 0)} jobs rescored.`, 'success');
+    showToast(`Switched mode: ${appState.persona === 'jobseeker' ? 'Job Seeker Mode' : 'Business Development Mode'}. ${formatNumber(result.rescoredJobs || 0)} jobs rescored.`, 'success');
   } catch (error) {
     showToast(`Could not switch mode: ${error.message || error}`, 'error');
   } finally {
@@ -4837,7 +4835,7 @@ async function applyJobPreset(presetId) {
       minRelevance: String(getTargetRoleThreshold()),
       page: 1,
     };
-    showToast('🎯 Filtered to your target role family and saved search focus.', 'success');
+    showToast('Filtered to your target role family and saved search focus.', 'success');
   } else if (presetId === 'all_titles') {
     appState.jobQuery = { ...appState.jobQuery, minRelevance: '', page: 1 };
     showToast('Focus filter removed. Your other filters and saved preferences are unchanged.', 'info');
@@ -5977,12 +5975,12 @@ function renderSetupStepContent(stepKey) {
         </div>
         ${carriedAudit}
         <div class="setup-starter-kits">
-          <span class="setup-brief-label">Or load a 1-click Industry Starter Kit:</span>
+          <span class="setup-brief-label">Or load an industry starter kit:</span>
           <div class="setup-kit-chips">
-            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="fintech">🚀 Fintech (10)</button>
-            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="cybersecurity">🛡️ Cybersecurity (10)</button>
-            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="ai-devtools">💻 AI & DevTools (10)</button>
-            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="healthtech">🏥 HealthTech (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="fintech">Fintech (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="cybersecurity">Cybersecurity (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="ai-devtools">AI & DevTools (10)</button>
+            <button class="ghost-button micro-button" type="button" data-action="load-niche-kit" data-kit="healthtech">HealthTech (10)</button>
           </div>
         </div>
         <label>Company domains or careers URLs
@@ -7077,7 +7075,6 @@ function renderNetworkImportModal() {
     <div class="modal-dialog modal-dialog--lg network-import-dialog${alreadyShown ? ' modal-dialog--settled' : ''}" role="dialog" aria-modal="true" aria-labelledby="network-import-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">⚡</span>
           <div>
             <h3 id="network-import-title">Import LinkedIn Connections</h3>
             <p class="muted small">Import first-degree connection details. Review which employers to track; job discovery depends on supported sources and your plan limits.</p>
@@ -7088,14 +7085,12 @@ function renderNetworkImportModal() {
 
       <div class="modal-body network-import-body">
         <div class="data-use-notice data-use-notice--compact" role="note">
-          <span class="notice-icon" aria-hidden="true">🛡️</span>
           <span><strong>Privacy & Security:</strong> BD Engine never accesses your LinkedIn account credentials. It only reads the exported <code>Connections.csv</code> file you choose on your device.</span>
         </div>
 
         ${!isDone ? `
           <input id="network-modal-csv-input" class="hidden" type="file" accept="${IMPORT_FILE_ACCEPT}" />
           <div id="network-modal-dropzone" class="setup-drop-zone network-modal-dropzone ${hasFile ? 'is-populated' : ''}" tabindex="0" role="button" aria-label="Drop Connections.csv file here">
-            <div class="dropzone-icon" aria-hidden="true">📁</div>
             <strong>${hasFile ? escapeHtml(appState.modalCsvFileName || 'Connections.csv') : 'Drag & Drop Connections.csv Here'}</strong>
             <span class="muted small">${appState.modalCsvChecking ? 'Checking the file...' : hasFile ? 'Checked and ready to import.' : 'or browse from your computer'}</span>
             <button class="secondary-button" type="button" data-action="network-modal-browse-csv">${hasFile ? 'Change File' : 'Browse File'}</button>
@@ -7114,8 +7109,8 @@ function renderNetworkImportModal() {
 
       <div class="modal-footer">
         <div class="modal-footer-left">
-          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">📥 How to get Connections.csv</button>
-          <button class="ghost-button ghost-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button>
+          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">How to get Connections.csv</button>
+          <button class="ghost-button ghost-button--sm" type="button" data-action="quick-load-sample-workspace">Try Sample Network</button>
         </div>
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-network-import-modal">${isDone ? 'Close' : 'Cancel'}</button>
@@ -7136,7 +7131,6 @@ function renderLinkedInGuideModal() {
     <div class="modal-dialog modal-dialog--md linkedin-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="linkedin-guide-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">📥</span>
           <div>
             <h3 id="linkedin-guide-title">How to Export LinkedIn Connections</h3>
             <p class="muted small">Request your connection data directly from LinkedIn. Export preparation time varies.</p>
@@ -7273,7 +7267,7 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
     <section class="detail-card network-radar-card" aria-label="LinkedIn Network Matching Radar">
       <div class="network-radar-header">
         <div class="network-radar-title-lockup">
-          <div class="network-radar-badge"><span class="pill-dot"></span>⚡ Network Match Radar</div>
+          <div class="network-radar-badge"><span class="pill-dot"></span>Network Match Radar</div>
           <h3>${hasContacts ? `${formatNumber(contactCount)} Connections Matched Across Your Target Companies` : 'Turn LinkedIn Connections into Warm Job Opportunities'}</h3>
           <p class="muted small">${hasContacts
             ? 'Companies where you have 1st-degree contacts are prioritized with direct warm paths to open roles.'
@@ -7281,18 +7275,17 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
         </div>
         <div class="network-radar-actions">
           <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal">
-            <span class="btn-icon">⚡</span> <span>${hasContacts ? 'Update Connections CSV' : 'Upload Connections.csv'}</span>
+            <span>${hasContacts ? 'Update Connections CSV' : 'Upload Connections.csv'}</span>
           </button>
-          ${!hasContacts ? `<button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button>` : ''}
-          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">📥 Export Guide</button>
-          <button class="ghost-button ghost-button--sm" type="button" data-action="share-network-stats" title="Share your network matches on LinkedIn">📢 Share Stats</button>
-          <button class="secondary-button secondary-button--sm" type="button" data-action="open-pricing-modal">💎 Upgrade ($5/mo)</button>
+          ${!hasContacts ? `<button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">Try Sample Network</button>` : ''}
+          <button class="ghost-button ghost-button--sm" type="button" data-action="open-linkedin-guide">Export Guide</button>
+          <button class="ghost-button ghost-button--sm" type="button" data-action="share-network-stats" title="Share your network matches on LinkedIn">Share Stats</button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="open-pricing-modal">Upgrade ($5/mo)</button>
         </div>
       </div>
 
       <div class="network-radar-grid">
         <div class="network-radar-step-card">
-          <div class="radar-step-icon">📁</div>
           <div class="radar-step-content">
             <strong>1. Import Connections</strong>
             <span class="muted small">Request your <code>Connections.csv</code> from LinkedIn settings, then upload it to your workspace. Export preparation can take time; BD Engine never needs your LinkedIn password.</span>
@@ -7303,7 +7296,6 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
         </div>
 
         <div class="network-radar-step-card">
-          <div class="radar-step-icon">🏢</div>
           <div class="radar-step-content">
             <strong>2. Auto-Match Companies</strong>
             <span class="muted small">Checks supported sources such as Greenhouse, Lever, Ashby and Workday. Coverage varies by company; review unresolved sources before relying on the shortlist.</span>
@@ -7314,10 +7306,9 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
         </div>
 
         <div class="network-radar-step-card">
-          <div class="radar-step-icon">🎯</div>
           <div class="radar-step-content">
             <strong>3. Warm Job Openings</strong>
-            <span class="muted small">Filter Local GTA & Remote roles with 1-click tailored intro notes.</span>
+            <span class="muted small">Filter local GTA and remote roles, then draft tailored intro notes.</span>
           </div>
           <a class="radar-step-link secondary-button secondary-button--xs" href="#/jobs?hasContacts=true&workStyle=local_remote">
             View Matched Roles →
@@ -7332,8 +7323,8 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
             ${networkLeaders.slice(0, 6).map((item) => `
               <a class="network-leader-chip" href="#/accounts/${item.id}">
                 <span class="network-leader-name">${escapeHtml(item.displayName)}</span>
-                <span class="network-leader-count">⚡ ${formatNumber(item.connectionCount || 0)}</span>
-                ${item.openRoleCount ? `<span class="network-leader-jobs">🎯 ${formatNumber(item.openRoleCount)} roles</span>` : ''}
+                <span class="network-leader-count">${formatNumber(item.connectionCount || 0)} contacts</span>
+                ${item.openRoleCount ? `<span class="network-leader-jobs">${formatNumber(item.openRoleCount)} roles</span>` : ''}
               </a>
             `).join('')}
           </div>
@@ -7343,7 +7334,7 @@ function renderDashboardNetworkRadar(dashboard = {}, extended = {}, personaCopy 
   `;
 }
 
-/* ── Phase 7: Warm Referral Studio & 1-Click Outreach Powerhouse ── */
+/* ── Phase 7: Warm Referral Studio and outreach drafts ── */
 
 async function openWarmStudioModal(jobId, contactId) {
   if (!warmStudioModalBackdrop) return;
@@ -7532,7 +7523,6 @@ function renderWarmStudioModal() {
     <div class="modal-dialog modal-dialog--lg warm-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="warm-studio-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">💌</span>
           <div>
             <h3 id="warm-studio-title">Warm Referral & Outreach Studio</h3>
             <p class="muted small">${escapeHtml(job?.title || 'Role')} · ${escapeHtml(job?.companyName || job?.company || account?.displayName || 'Company')}. Review all facts before sending. Save your draft to keep it after closing.</p>
@@ -7559,7 +7549,7 @@ function renderWarmStudioModal() {
         <!-- Sequence Step Switcher -->
         <div class="warm-studio-sequence-bar">
           <div class="sequence-timeline-header">
-            <span>⚡ Multi-Touch Sequence Strategy</span>
+            <span>Multi-Touch Sequence Strategy</span>
             <span class="muted">3-Step Cadence</span>
           </div>
           <div class="sequence-steps-grid">
@@ -7605,16 +7595,16 @@ function renderWarmStudioModal() {
 
         <div class="warm-studio-format-tabs" role="group" aria-label="Message format">
           <button class="format-tab-btn ${selectedFormat === 'referral_dm' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="referral_dm">
-            💌 Direct message
+            Direct message
           </button>
           <button class="format-tab-btn ${selectedFormat === 'linkedin_note' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="linkedin_note">
-            💬 LinkedIn Note (<300 chars)
+            LinkedIn Note (<300 chars)
           </button>
           <button class="format-tab-btn ${selectedFormat === 'email_pitch' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="email_pitch">
-            📧 Direct Email Pitch
+            Direct Email Pitch
           </button>
           <button class="format-tab-btn ${selectedFormat === 'recruiter_pitch' ? 'is-active' : ''}" type="button" data-action="warm-studio-switch-format" data-format="recruiter_pitch">
-            🎯 Recruiter Pitch
+            Recruiter Pitch
           </button>
         </div>
 
@@ -7624,10 +7614,10 @@ function renderWarmStudioModal() {
             <div class="output-header-actions">
               ${charLimit ? `<span class="char-count-meter ${isOverLimit ? 'is-overflow' : ''}">${charCount} / ${charLimit} chars</span>` : `<span class="char-count-meter">${charCount} chars</span>`}
               <a class="mailto-draft-btn" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer" title="Open formatted email in your default mail app">
-                ✉️ Draft in Mail &nearr;
+                Draft in Mail &nearr;
               </a>
               <button class="primary-button primary-button--xs" type="button" data-action="warm-studio-copy">
-                📋 Copy Step Message
+                Copy Step Message
               </button>
             </div>
           </div>
@@ -7800,11 +7790,11 @@ async function copyWarmStudioText(buttonEl) {
   const text = textarea.value;
   try {
     await navigator.clipboard.writeText(text);
-    showToast('📋 Message copied to clipboard!', 'success');
+    showToast('Message copied to clipboard!', 'success');
   } catch {
     textarea.select();
     document.execCommand('copy');
-    showToast('📋 Message copied!', 'success');
+    showToast('Message copied!', 'success');
   }
 }
 
@@ -7877,9 +7867,9 @@ function calculateHiringVelocity(account = {}, jobs = []) {
     staleJobs,
     isSurge,
     surgeVelocity,
-    surgeBadge: isSurge ? `🔥 Hiring Surge (+${jobs3d} in 72h)` : '',
-    hardToFillBadge: staleJobs > 0 ? `⏳ ${staleJobs} Hard-to-Fill (45d+)` : '',
-    freshBadge: freshJobs > 0 ? `⚡ ${freshJobs} Just Opened (<48h)` : '',
+    surgeBadge: isSurge ? `Hiring Surge (+${jobs3d} in 72h)` : '',
+    hardToFillBadge: staleJobs > 0 ? `${staleJobs} Hard-to-Fill (45d+)` : '',
+    freshBadge: freshJobs > 0 ? `${freshJobs} Just Opened (<48h)` : '',
   };
 }
 
@@ -7892,7 +7882,7 @@ function detectRoleVelocity(job = {}) {
     ageDays,
     isJustOpened,
     isHardToFill,
-    badgeLabel: isJustOpened ? '⚡ Just Opened (<48h)' : isHardToFill ? `⏳ Hard-to-Fill (${ageDays}d)` : '',
+    badgeLabel: isJustOpened ? 'Just Opened (<48h)' : isHardToFill ? `Hard-to-Fill (${ageDays}d)` : '',
     badgeClass: isJustOpened ? 'signal-badge--just-opened' : isHardToFill ? 'signal-badge--hard-to-fill' : '',
   };
 }
@@ -7910,7 +7900,6 @@ function rankContactsForJob(job = {}, contacts = []) {
     let category = 'other';
     let score = 10;
     let reason = '1st-degree contact at company';
-    let badgeIcon = '👤';
     let badgeLabel = 'Contact';
     let chipClass = 'align-chip--peer';
 
@@ -7918,21 +7907,18 @@ function rankContactsForJob(job = {}, contacts = []) {
       category = 'recruiter';
       score = 70;
       reason = 'Talent Acquisition & Sourcing Lead';
-      badgeIcon = '📋';
       badgeLabel = 'Talent Lead';
       chipClass = 'align-chip--recruiter';
     } else if (/\b(vp|vice president|chief|cto|cro|cmo|cpo|coo|head of|director|founder|managing director|partner|lead)\b/.test(title)) {
       category = 'decision_maker';
       score = 95;
       reason = 'Probable Hiring Decision Maker & Executive';
-      badgeIcon = '👑';
       badgeLabel = 'Decision Maker';
       chipClass = 'align-chip--dm';
     } else if (/\b(engineer|developer|architect|designer|manager|account executive|representative|analyst|scientist|consultant)\b/.test(title)) {
       category = 'peer';
       score = 60;
       reason = 'Peer in relevant domain (Warm Referrer)';
-      badgeIcon = '🤝';
       badgeLabel = 'Peer / Warm Path';
       chipClass = 'align-chip--peer';
     }
@@ -7949,7 +7935,6 @@ function rankContactsForJob(job = {}, contacts = []) {
       category,
       alignmentScore: score,
       alignmentReason: reason,
-      badgeIcon,
       badgeLabel,
       chipClass,
     };
@@ -7988,7 +7973,6 @@ function renderFeePipelineSimulator(dashboard = {}, outcomeSummary = {}) {
     <section class="fee-simulator-card" aria-label="Fee Pipeline & BD ROI Simulator">
       <div class="fee-simulator-header">
         <div class="fee-simulator-title">
-          <span style="font-size: 1.3rem;">💼</span>
           <div>
             <h3>${isJobSeeker ? 'Target Compensation & Offer Pipeline' : 'Executive Fee Pipeline & Deal Flow Simulator'}</h3>
             <p class="muted small">${isJobSeeker ? 'Simulate your compensation upside across active warm referral roles.' : 'Real-time forecast of addressable agency staffing fees and projected quarterly billings.'}</p>
@@ -8087,9 +8071,7 @@ function renderIcpQuadrantMatrix(accounts = [], jobs = []) {
     <section class="icp-matrix-card" aria-label="Interactive ICP Priority Matrix">
       <div class="icp-matrix-header">
         <div>
-          <h3 style="display:flex; align-items:center; gap:8px;">
-            <span>📊</span> Strategic 4-Quadrant Account Matrix
-          </h3>
+          <h3>Account priority matrix</h3>
           <p class="muted small">Interactive account positioning mapped by <strong>Live Hiring Urgency</strong> vs <strong>Network Warmth</strong>. Click any quadrant to focus.</p>
         </div>
         ${selectedQ ? `
@@ -8100,11 +8082,11 @@ function renderIcpQuadrantMatrix(accounts = [], jobs = []) {
       </div>
 
       <div class="icp-matrix-grid">
-        <!-- Q1: Strike Zone -->
-        <div class="icp-quadrant icp-quadrant--q1 ${selectedQ === 'q1' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q1" role="button" tabindex="0" title="Click to view Strike Zone accounts">
+        <!-- Q1: Warm and hiring -->
+        <div class="icp-quadrant icp-quadrant--q1 ${selectedQ === 'q1' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q1" role="button" tabindex="0" title="Show accounts with warm contacts and active hiring">
           <div class="icp-quadrant-top">
             <div class="icp-quadrant-title">
-              <strong>🔥 Q1: Immediate Strike Zone</strong>
+              <strong>Q1: Warm and hiring</strong>
               <span>High Warmth (2+ conns) & High Hiring (3+ reqs)</span>
             </div>
             <span class="icp-quadrant-badge">${q1.length} Target${q1.length === 1 ? '' : 's'}</span>
@@ -8118,11 +8100,11 @@ function renderIcpQuadrantMatrix(accounts = [], jobs = []) {
           </div>
         </div>
 
-        <!-- Q2: Warm Nurture -->
-        <div class="icp-quadrant icp-quadrant--q2 ${selectedQ === 'q2' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q2" role="button" tabindex="0" title="Click to view Warm Nurture accounts">
+        <!-- Q2: Warm, hiring is quiet -->
+        <div class="icp-quadrant icp-quadrant--q2 ${selectedQ === 'q2' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q2" role="button" tabindex="0" title="Show accounts with warm contacts and little hiring">
           <div class="icp-quadrant-top">
             <div class="icp-quadrant-title">
-              <strong>🤝 Q2: Warm Nurture & Relationship</strong>
+              <strong>Q2: Warm, hiring is quiet</strong>
               <span>High Warmth (2+ conns) & Low Hiring (&lt;3 reqs)</span>
             </div>
             <span class="icp-quadrant-badge">${q2.length} Target${q2.length === 1 ? '' : 's'}</span>
@@ -8136,11 +8118,11 @@ function renderIcpQuadrantMatrix(accounts = [], jobs = []) {
           </div>
         </div>
 
-        <!-- Q3: Cold Surge -->
-        <div class="icp-quadrant icp-quadrant--q3 ${selectedQ === 'q3' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q3" role="button" tabindex="0" title="Click to view Cold Surge accounts">
+        <!-- Q3: Hiring, few contacts -->
+        <div class="icp-quadrant icp-quadrant--q3 ${selectedQ === 'q3' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q3" role="button" tabindex="0" title="Show accounts that are hiring where you have few contacts">
           <div class="icp-quadrant-top">
             <div class="icp-quadrant-title">
-              <strong>🚀 Q3: Cold Surge / Agency Pitch</strong>
+              <strong>Q3: Hiring, few contacts</strong>
               <span>Low Warmth (&lt;2 conns) & High Hiring (3+ reqs)</span>
             </div>
             <span class="icp-quadrant-badge">${q3.length} Target${q3.length === 1 ? '' : 's'}</span>
@@ -8155,10 +8137,10 @@ function renderIcpQuadrantMatrix(accounts = [], jobs = []) {
         </div>
 
         <!-- Q4: Watchlist -->
-        <div class="icp-quadrant icp-quadrant--q4 ${selectedQ === 'q4' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q4" role="button" tabindex="0" title="Click to view Watchlist accounts">
+        <div class="icp-quadrant icp-quadrant--q4 ${selectedQ === 'q4' ? 'is-selected' : ''}" data-action="select-icp-quadrant" data-quadrant="q4" role="button" tabindex="0" title="Show accounts with few contacts and little hiring">
           <div class="icp-quadrant-top">
             <div class="icp-quadrant-title">
-              <strong>💤 Q4: Long-Term Watchlist</strong>
+              <strong>Q4: Watchlist</strong>
               <span>Low Warmth (&lt;2 conns) & Low Hiring (&lt;3 reqs)</span>
             </div>
             <span class="icp-quadrant-badge">${q4.length} Target${q4.length === 1 ? '' : 's'}</span>
@@ -8254,7 +8236,7 @@ function toggleSoundEffects() {
   if (appState.soundEnabled) playActionChime('success');
   const sub = document.getElementById('sound-toggle-sub');
   if (sub) sub.textContent = appState.soundEnabled ? 'Chimes: ON' : 'Chimes: OFF';
-  showToast(appState.soundEnabled ? '🔔 Sound effects enabled!' : '🔕 Sound effects muted.', 'info');
+  showToast(appState.soundEnabled ? 'Sound effects enabled!' : 'Sound effects muted.', 'info');
 }
 
 function openShortcutsModal() {
@@ -8280,7 +8262,6 @@ function renderKeyboardShortcutsModal() {
     <div class="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-dialog-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">⌨️</span>
           <div>
             <h3 id="shortcuts-dialog-title">Power-User Keyboard Shortcuts</h3>
             <p class="muted small">Navigate and operate BD Engine at lightning speed.</p>
@@ -8291,7 +8272,7 @@ function renderKeyboardShortcutsModal() {
 
       <div class="shortcuts-body">
         <div class="shortcuts-group">
-          <span class="shortcuts-group-title">⚡ Instant Command & Intelligence</span>
+          <span class="shortcuts-group-title">Open a tool</span>
           <div class="shortcut-row">
             <span class="shortcut-desc">Open Executive Morning Radar Briefing</span>
             <div class="shortcut-keys"><kbd>M</kbd></div>
@@ -8311,7 +8292,7 @@ function renderKeyboardShortcutsModal() {
         </div>
 
         <div class="shortcuts-group">
-          <span class="shortcuts-group-title">🎯 Navigation & Chord Hotkeys</span>
+          <span class="shortcuts-group-title">Navigation</span>
           <div class="shortcut-row">
             <span class="shortcut-desc">Go to Dashboard</span>
             <div class="shortcut-keys"><kbd>G</kbd> then <kbd>D</kbd></div>
@@ -8339,7 +8320,7 @@ function renderKeyboardShortcutsModal() {
         </div>
 
         <div class="shortcuts-group">
-          <span class="shortcuts-group-title">📋 Table & Sequence Operations</span>
+          <span class="shortcuts-group-title">Tables and drafts</span>
           <div class="shortcut-row">
             <span class="shortcut-desc">Navigate Next / Previous Record</span>
             <div class="shortcut-keys"><kbd>J</kbd> / <kbd>K</kbd></div>
@@ -8486,12 +8467,12 @@ function renderCompetitorClusterPills(account = {}) {
   return `
     <div class="cluster-box">
       <div class="cluster-header">
-        <span class="cluster-title">⚔️ Cross-Hunt Sibling Cluster · ${escapeHtml(cluster.clusterName)}</span>
+        <span class="cluster-title">Similar companies · ${escapeHtml(cluster.clusterName)}</span>
       </div>
       <div class="cluster-pill-grid">
         ${cluster.competitors.map(c => `
-          <button class="cluster-pill" type="button" data-action="cross-hunt-cluster" data-company="${escapeAttr(c)}" title="1-click search and outreach for ${escapeAttr(c)}">
-            + Cross-Hunt ${escapeHtml(c)} →
+          <button class="cluster-pill" type="button" data-action="cross-hunt-cluster" data-company="${escapeAttr(c)}" title="Search for ${escapeAttr(c)}">
+            + Search ${escapeHtml(c)} →
           </button>
         `).join('')}
       </div>
@@ -8504,19 +8485,19 @@ function renderCompetitorClusterPills(account = {}) {
    ══════════════════════════════════════════════════ */
 
 const REVENUE_STAGES = [
-  { id: 'identified', label: 'Identified', prob: 0.10, icon: '🔍' },
-  { id: 'outreach_sent', label: 'Outreach Sent', prob: 0.25, icon: '💬' },
-  { id: 'meeting_booked', label: 'Meeting Booked', prob: 0.50, icon: '📞' },
-  { id: 'terms_sent', label: 'Terms Sent', prob: 0.75, icon: '📝' },
-  { id: 'placement_won', label: 'Placement Won', prob: 1.00, icon: '🏆' },
+  { id: 'identified', label: 'Identified', prob: 0.10 },
+  { id: 'outreach_sent', label: 'Outreach Sent', prob: 0.25 },
+  { id: 'meeting_booked', label: 'Meeting Booked', prob: 0.50 },
+  { id: 'terms_sent', label: 'Terms Sent', prob: 0.75 },
+  { id: 'placement_won', label: 'Placement Won', prob: 1.00 },
 ];
 
 const JOBSEEKER_STAGES = [
-  { id: 'identified', label: 'Saved Target', prob: 0.10, icon: '📌' },
-  { id: 'outreach_sent', label: 'Referral Outreach', prob: 0.30, icon: '💌' },
-  { id: 'meeting_booked', label: 'Intro / Applied', prob: 0.50, icon: '🤝' },
-  { id: 'terms_sent', label: 'Interview Loop', prob: 0.75, icon: '🎯' },
-  { id: 'placement_won', label: 'Offer Received', prob: 1.00, icon: '🎉' },
+  { id: 'identified', label: 'Saved Target', prob: 0.10 },
+  { id: 'outreach_sent', label: 'Referral Outreach', prob: 0.30 },
+  { id: 'meeting_booked', label: 'Intro / Applied', prob: 0.50 },
+  { id: 'terms_sent', label: 'Interview Loop', prob: 0.75 },
+  { id: 'placement_won', label: 'Offer Received', prob: 1.00 },
 ];
 
 function updateDealStage(accountId, newStage) {
@@ -8526,7 +8507,7 @@ function updateDealStage(accountId, newStage) {
   
   if (newStage === 'placement_won') {
     playActionChime('success');
-    showToast(isJobSeekerPersona() ? '🎉 Offer Received! Congratulations!' : '🎉 Placement Won! Commission revenue recognized!', 'success');
+    showToast(isJobSeekerPersona() ? 'Offer Received! Congratulations!' : 'Placement Won! Commission revenue recognized!', 'success');
   } else {
     playActionChime('nav');
     showToast(`✓ Stage moved to ${newStage.replace(/_/g, ' ')}`, 'success');
@@ -8568,7 +8549,7 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
     totalWeightedValue += stageWeighted;
   });
 
-  const boardTitle = isJobSeeker ? '🎯 Application & Interview Career Pipeline' : '💼 Deal Flow & Executive Revenue Pipeline';
+  const boardTitle = isJobSeeker ? 'Application and interview pipeline' : 'Deal pipeline';
   const boardSubtitle = isJobSeeker
     ? 'Track target companies from warm networking and referrals through interview loops and offers.'
     : 'Drag deals or update stages to track probability-weighted commission revenue in real time.';
@@ -8599,7 +8580,7 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
             <div class="revenue-kanban-col" data-stage="${stage.id}">
               <div class="revenue-col-header">
                 <div class="revenue-col-title-row">
-                  <span class="revenue-col-title">${stage.icon} ${stage.label}</span>
+                  <span class="revenue-col-title">${stage.label}</span>
                   <span class="revenue-col-badge">${items.length}</span>
                 </div>
                 ${!isJobSeeker ? `<span class="revenue-col-total">$${formatNumber(colValue)} (${Math.round(stage.prob * 100)}% → $${formatNumber(Math.round(colWeighted))})</span>` : `<span class="revenue-col-total">${items.length} ${pluralize(items.length, 'company')}</span>`}
@@ -8621,7 +8602,7 @@ function renderRevenueKanbanBoard(accounts = [], jobs = []) {
                       ` : ''}
                       <div style="margin-top:6px;">
                         <select class="compact-select" data-action="update-deal-stage" data-account-id="${escapeAttr(acc.id)}" aria-label="Move ${escapeAttr(acc.displayName)} to another pipeline stage" style="width:100%;font-size:0.72rem;">
-                          ${stages.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.icon} ${s.label}</option>`).join('')}
+                          ${stages.map(s => `<option value="${s.id}" ${s.id === stage.id ? 'selected' : ''}>Move: ${s.label}</option>`).join('')}
                         </select>
                       </div>
                     </div>
@@ -8711,7 +8692,7 @@ async function copyObjectionScript(tabId, tone) {
   try {
     await navigator.clipboard.writeText(text);
     playActionChime('copy');
-    showToast('📋 Objection counter-script copied to clipboard!', 'success');
+    showToast('Objection counter-script copied to clipboard!', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -8733,7 +8714,6 @@ function renderObjectionStudioModal() {
     <div class="modal-dialog objection-dialog" role="dialog" aria-modal="true" aria-labelledby="objection-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">🛡️</span>
           <div>
             <h3 id="objection-modal-title">Objection Buster & Counter-Pitch Studio</h3>
             <p class="muted small">Editable response templates. Respect contact preferences and verify every detail before use.</p>
@@ -8756,7 +8736,7 @@ function renderObjectionStudioModal() {
 
         <div class="objection-content">
           <div class="objection-meta-box">
-            <strong style="font-size:0.8rem;color:var(--text);display:block;margin-bottom:4px;">🧠 Psychological Angle & Carve-Out Strategy:</strong>
+            <strong style="font-size:0.8rem;color:var(--text);display:block;margin-bottom:4px;">Psychological Angle & Carve-Out Strategy:</strong>
             <p class="objection-psychology">${escapeHtml(current.psychology)}</p>
           </div>
 
@@ -8768,7 +8748,7 @@ function renderObjectionStudioModal() {
                 <button class="objection-tone-btn ${activeTone === 'direct' ? 'active' : ''}" type="button" data-action="switch-objection-tone" data-tone="direct">Direct</button>
                 <button class="objection-tone-btn ${activeTone === 'casual' ? 'active' : ''}" type="button" data-action="switch-objection-tone" data-tone="casual">Casual</button>
               </div>
-              <button class="primary-button primary-button--sm" type="button" data-action="copy-objection-script" data-tab="${activeKey}" data-tone="${activeTone}">📋 1-Click Copy Script</button>
+              <button class="primary-button primary-button--sm" type="button" data-action="copy-objection-script" data-tab="${activeKey}" data-tone="${activeTone}">Copy script</button>
             </div>
           </div>
         </div>
@@ -8824,7 +8804,7 @@ function closeCandidateSlateModal() {
 async function copyCandidateSlateMarkdown() {
   const job = appState.activeCandidateSlateJob || { title: 'Senior Role', companyName: 'Company' };
   const slate = generateCandidateSlate(job);
-  let md = `## 📄 Candidate Profile Template for ${slate.companyName} (${slate.jobTitle})\n\n`;
+  let md = `## Candidate Profile Template for ${slate.companyName} (${slate.jobTitle})\n\n`;
   slate.candidates.forEach(c => {
     md += `### ${c.specimenCode}\n`;
     md += `* **Target Level**: ${c.title} (${c.experienceYears})\n`;
@@ -8839,7 +8819,7 @@ async function copyCandidateSlateMarkdown() {
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast('📋 Candidate specimen slate copied to clipboard (Markdown)!', 'success');
+    showToast('Candidate specimen slate copied to clipboard (Markdown)!', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -8854,7 +8834,6 @@ function renderCandidateSlateModal() {
     <div class="modal-dialog candidate-slate-dialog" role="dialog" aria-modal="true" aria-labelledby="slate-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">📄</span>
           <div>
             <h3 id="slate-modal-title">Candidate profile templates</h3>
             <p class="muted small">Blank templates — no candidate database is connected. Verify every claim for ${escapeHtml(slate.companyName)} · ${escapeHtml(slate.jobTitle)}.</p>
@@ -8891,7 +8870,7 @@ function renderCandidateSlateModal() {
 
       <div class="modal-footer">
         <button class="ghost-button" type="button" data-action="close-candidate-slate-modal">Cancel</button>
-        <button class="primary-button" type="button" data-action="copy-candidate-slate">📋 Copy Candidate Slate</button>
+        <button class="primary-button" type="button" data-action="copy-candidate-slate">Copy Candidate Slate</button>
       </div>
     </div>
   `;
@@ -8902,12 +8881,12 @@ function renderCandidateSlateModal() {
    ══════════════════════════════════════════════════ */
 
 const GEO_HUBS = [
-  { id: 'all', label: 'All Hubs', icon: '🌍' },
-  { id: 'gta', label: 'Canada / GTA', icon: '🍁', keywords: ['toronto', 'ontario', 'waterloo', 'vancouver', 'montreal', 'canada', 'ottawa'] },
-  { id: 'us_east', label: 'US East Coast', icon: '🗽', keywords: ['new york', 'nyc', 'boston', 'atlanta', 'miami', 'virginia', 'washington'] },
-  { id: 'us_west', label: 'US West Coast', icon: '🌲', keywords: ['san francisco', 'sf', 'bay area', 'seattle', 'los angeles', 'california', 'ca'] },
-  { id: 'us_central', label: 'US Central / South', icon: '⚡', keywords: ['austin', 'texas', 'chicago', 'denver', 'dallas', 'colorado'] },
-  { id: 'remote', label: 'Remote First', icon: '🌐', keywords: ['remote', 'anywhere', 'distributed', 'work from home'] },
+  { id: 'all', label: 'All Hubs' },
+  { id: 'gta', label: 'Canada / GTA', keywords: ['toronto', 'ontario', 'waterloo', 'vancouver', 'montreal', 'canada', 'ottawa'] },
+  { id: 'us_east', label: 'US East Coast', keywords: ['new york', 'nyc', 'boston', 'atlanta', 'miami', 'virginia', 'washington'] },
+  { id: 'us_west', label: 'US West Coast', keywords: ['san francisco', 'sf', 'bay area', 'seattle', 'los angeles', 'california', 'ca'] },
+  { id: 'us_central', label: 'US Central / South', keywords: ['austin', 'texas', 'chicago', 'denver', 'dallas', 'colorado'] },
+  { id: 'remote', label: 'Remote First', keywords: ['remote', 'anywhere', 'distributed', 'work from home'] },
 ];
 
 function getGeographicHub(jobOrAccount = {}) {
@@ -8926,10 +8905,10 @@ function renderGeographicHubFilter() {
   const selected = appState.selectedGeoHub || 'all';
   return `
     <div class="geo-hub-bar" role="toolbar" aria-label="Geographic talent hub filter">
-      <span class="geo-hub-label">🗺️ Talent Hub:</span>
+      <span class="geo-hub-label">Talent Hub:</span>
       ${GEO_HUBS.map(hub => `
         <button class="geo-hub-pill ${hub.id === selected ? 'active' : ''}" type="button" data-action="select-geo-hub" data-hub="${hub.id}">
-          <span>${hub.icon} ${hub.label}</span>
+          <span>${hub.label}</span>
         </button>
       `).join('')}
     </div>
@@ -9145,7 +9124,6 @@ function renderNetworkGraphModal(account, contacts, jobs) {
     <div class="modal-dialog network-graph-dialog" role="dialog" aria-modal="true" aria-labelledby="graph-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">🕸️</span>
           <div>
             <h3 id="graph-modal-title">Visual Entity & Relationship Graph: ${escapeHtml(acc.displayName)}</h3>
             <p class="muted small">Interactive organizational topology connecting Decision Makers, Warm Referrers, and Active ATS Roles.</p>
@@ -9160,10 +9138,10 @@ function renderNetworkGraphModal(account, contacts, jobs) {
 
       <div class="network-legend">
         <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--center"></span> Target Account</div>
-        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--dm"></span> 👑 Hiring Decision Maker</div>
-        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--peer"></span> 🤝 Domain Peer / Warm Path</div>
-        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--recruiter"></span> 📋 Talent Lead</div>
-        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--job"></span> 🔥 Active ATS Role</div>
+        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--dm"></span> Hiring Decision Maker</div>
+        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--peer"></span> Domain Peer / Warm Path</div>
+        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--recruiter"></span> Talent Lead</div>
+        <div class="network-legend-item"><span class="network-legend-dot network-legend-dot--job"></span> Active ATS Role</div>
       </div>
 
       <div class="modal-footer">
@@ -9218,7 +9196,7 @@ function openCallStudioModal(jobId, contactId) {
       const elapsed = Math.floor((Date.now() - callStartTime) / 1000);
       const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
       const secs = String(elapsed % 60).padStart(2, '0');
-      el.textContent = `⏱️ ${mins}:${secs}`;
+      el.textContent = `${mins}:${secs}`;
     }
   }, 1000);
 }
@@ -9267,13 +9245,12 @@ function renderCallStudioModal() {
     <div class="modal-dialog call-studio-dialog" role="dialog" aria-modal="true" aria-labelledby="call-modal-title">
       <div class="modal-header call-studio-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">🎙️</span>
           <div>
             <h3 id="call-modal-title">${modalTitle}</h3>
             <p class="muted small">${modalSub}</p>
           </div>
         </div>
-        <span class="call-timer-badge" id="call-live-timer">⏱️ 00:00</span>
+        <span class="call-timer-badge" id="call-live-timer">00:00</span>
         <button class="modal-close-btn" type="button" data-action="close-call-studio" aria-label="Close modal">&times;</button>
       </div>
 
@@ -9309,7 +9286,7 @@ function generateMorningBattlePlanDossier(accounts = [], jobs = []) {
   const todayDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return {
-    title: isJobSeeker ? `Daily Career Radar & Target Company Dossier` : `BD Engine Executive Morning Battle Plan`,
+    title: isJobSeeker ? `Daily job search plan` : `BD Engine daily plan`,
     date: todayDate,
     topAccounts: topAccounts.map(a => ({
       name: a.displayName || a.name || 'Account',
@@ -9351,14 +9328,14 @@ function closeBattlePlanModal() {
 async function copyBattlePlanMarkdown() {
   const isJobSeeker = isJobSeekerPersona();
   const dossier = generateMorningBattlePlanDossier(appState.accounts || [], appState.jobs || []);
-  let md = `# 📰 ${dossier.title} (${dossier.date})\n\n`;
-  md += `## 🎯 ${isJobSeeker ? 'Top Target Hiring Companies' : 'Top Priority Strike Zone Accounts'}\n`;
+  let md = `# ${dossier.title} (${dossier.date})\n\n`;
+  md += `## ${isJobSeeker ? 'Top target hiring companies' : 'Top priority accounts'}\n`;
   dossier.topAccounts.forEach(a => {
     md += `* **${a.name}** (Fit Score: ${a.score} | ${a.jobsCount} Live Roles)\n`;
     if (a.hiringVelocity.surgeBadge) md += `  - Signal: ${a.hiringVelocity.surgeBadge}\n`;
     if (a.cluster.competitors.length) md += `  - Peer Lookalikes: ${a.cluster.competitors.join(', ')}\n`;
   });
-  md += `\n## 🔥 Priority Requisitions & Tech Stack Grounding\n`;
+  md += `\n## Priority Requisitions & Tech Stack Grounding\n`;
   dossier.topJobs.forEach(j => {
     md += `* **${j.title}** @ ${j.company} (${j.contactsCount} warm network contacts)\n`;
     if (j.techStack.length) md += `  - Tech Stack: ${j.techStack.map(s => s.name).join(', ')}\n`;
@@ -9368,7 +9345,7 @@ async function copyBattlePlanMarkdown() {
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast(isJobSeeker ? '📋 Career Dossier copied to clipboard!' : '📋 Executive Battle Plan copied to clipboard!', 'success');
+    showToast(isJobSeeker ? 'Job search plan copied to clipboard.' : 'Daily plan copied to clipboard.', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -9379,9 +9356,9 @@ function renderBattlePlanModal() {
   const isJobSeeker = isJobSeekerPersona();
   const dossier = generateMorningBattlePlanDossier(appState.accounts || [], appState.jobs || []);
 
-  const headerTitle = isJobSeeker ? 'Daily Career Radar & Target Company Dossier' : 'Executive Morning Battle Plan Dossier';
-  const headerSub = isJobSeeker ? `${escapeHtml(dossier.date)} · Daily high-conviction job search and warm referral briefing` : `${escapeHtml(dossier.date)} · Daily high-conviction BD briefing`;
-  const heroTitle = isJobSeeker ? '🎯 Daily Strike Zone & Priority Hiring Targets' : '🎯 Daily Strike Zone & Priority Outreach Targets';
+  const headerTitle = isJobSeeker ? 'Daily job search plan' : 'Daily plan';
+  const headerSub = isJobSeeker ? `${escapeHtml(dossier.date)} · Job search and warm referral briefing` : `${escapeHtml(dossier.date)} · Business development briefing`;
+  const heroTitle = isJobSeeker ? 'Priority hiring targets today' : 'Priority outreach targets today';
   const heroPipeline = isJobSeeker
     ? `Target Career Opportunities: <strong>${dossier.topAccounts.length} High-Fit Companies</strong>`
     : `Estimated Addressable Pipeline: <strong>$${formatNumber(dossier.pipelineSummary.addressableFeePipeline)}</strong>`;
@@ -9390,7 +9367,6 @@ function renderBattlePlanModal() {
     <div class="modal-dialog battle-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="battle-plan-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">📰</span>
           <div>
             <h3 id="battle-plan-title">${headerTitle}</h3>
             <p class="muted small">${headerSub}</p>
@@ -9406,7 +9382,7 @@ function renderBattlePlanModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">🏢 ${isJobSeeker ? 'Top 5 High-Momentum Hiring Employers' : 'Top 5 High-Momentum Accounts'}</div>
+          <div class="battle-plan-section-title">${isJobSeeker ? 'Top 5 High-Momentum Hiring Employers' : 'Top 5 High-Momentum Accounts'}</div>
           <div class="battle-plan-grid">
             ${dossier.topAccounts.map(a => `
               <div class="battle-plan-item">
@@ -9419,7 +9395,7 @@ function renderBattlePlanModal() {
         </div>
 
         <div>
-          <div class="battle-plan-section-title">🔥 ${isJobSeeker ? 'Priority Requisitions & Tech Stack Match' : 'Priority Requisitions & Stack DNA'}</div>
+          <div class="battle-plan-section-title">${isJobSeeker ? 'Priority Requisitions & Tech Stack Match' : 'Priority Requisitions & Stack DNA'}</div>
           <div class="battle-plan-grid">
             ${dossier.topJobs.map(j => `
               <div class="battle-plan-item">
@@ -9434,7 +9410,7 @@ function renderBattlePlanModal() {
 
       <div class="modal-footer">
         <button class="ghost-button" type="button" data-action="close-battle-plan-modal">Close</button>
-        <button class="primary-button" type="button" data-action="copy-battle-plan">📋 1-Click Copy Dossier</button>
+        <button class="primary-button" type="button" data-action="copy-battle-plan">Copy plan</button>
       </div>
     </div>
   `;
@@ -9455,7 +9431,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     if (vel.surgeBadge) {
       alerts.push({
         type: 'surge',
-        badge: isJobSeeker ? '🔥 HIRING WAVE' : '🔥 HIRING SURGE',
+        badge: 'HIRING SURGE',
         text: isJobSeeker ? `${a.displayName}: Expanding tech team (${vel.surgeBadge})` : `${a.displayName}: ${vel.surgeBadge}`,
         company: a.displayName,
         accountId: a.id,
@@ -9469,7 +9445,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     if (hasConn) {
       alerts.push({
         type: 'dm',
-        badge: isJobSeeker ? '🤝 WARM CONNECTION' : '👑 DECISION MAKER',
+        badge: 'IN YOUR NETWORK',
         text: isJobSeeker ? `${j.companyName} (${j.title}): ${j.connectionCount} colleagues in network` : `${j.companyName} (${j.title}): ${j.connectionCount} in network`,
         company: j.companyName,
         jobId: j.id,
@@ -9484,8 +9460,8 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
     if (vel.hardToFillBadge) {
       alerts.push({
         type: 'stale',
-        badge: isJobSeeker ? '⚡ FAST-TRACK ROLE' : '⏳ HARD TO FILL',
-        text: isJobSeeker ? `${a.displayName}: Role open 45d+ (High response rate)` : `${a.displayName}: Requisitions open 45d+`,
+        badge: 'OPEN 45+ DAYS',
+        text: isJobSeeker ? `${a.displayName}: Role open 45d+` : `${a.displayName}: Requisitions open 45d+`,
         company: a.displayName,
         accountId: a.id,
       });
@@ -9495,7 +9471,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
   if (!alerts.length) {
     alerts.push({
       type: 'surge',
-      badge: '⚡ SIGNAL INTEL',
+      badge: 'NO NEW SIGNALS',
       text: isJobSeeker ? 'No recent hiring signals in the loaded data. Refresh your configured sources.' : 'No recent hiring signals in the loaded data. Refresh your configured sources.',
     });
   }
@@ -9505,7 +9481,7 @@ function renderLiveSignalTicker(accounts = [], jobs = []) {
 
   return `
     <div class="intel-wire-ticker" role="region" aria-label="Real-time hiring signal intelligence ticker">
-      <span class="ticker-label">${isJobSeeker ? '🎯 Job Radar Wire:' : '📡 Live Wire:'}</span>
+      <span class="ticker-label">${isJobSeeker ? 'Latest roles:' : 'Latest signals:'}</span>
       <div class="ticker-track">
         ${alerts.map(a => `
           <button class="ticker-pill ticker-pill--${a.type}" type="button" data-action="ticker-jump-action" data-company="${escapeAttr(a.company || '')}" data-account-id="${escapeAttr(a.accountId || '')}" data-job-id="${escapeAttr(a.jobId || '')}">
@@ -9609,8 +9585,8 @@ function renderAutopilotModal() {
     ? 'Drafts based on loaded roles and contacts. Review and send manually; nothing is sent automatically.'
     : 'Drafts based on loaded roles and contacts. Review and send manually; nothing is sent automatically.';
   const heroTitle = isJobSeeker
-    ? `⚡ High-Conviction Career Pipeline Ready (${queue.length} Target Employers)`
-    : `⚡ High-Conviction Daily Pipeline Ready (${queue.length} Target Accounts)`;
+    ? `${queue.length} target employers ready for review`
+    : `${queue.length} target accounts ready for review`;
   const heroSub = isJobSeeker
     ? 'Context comes from imported data; verify the role and relationship before sending.'
     : 'Context comes from imported data; verify the role and relationship before sending.';
@@ -9619,7 +9595,6 @@ function renderAutopilotModal() {
     <div class="modal-dialog autopilot-dialog" role="dialog" aria-modal="true" aria-labelledby="autopilot-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">🤖</span>
           <div>
             <h3 id="autopilot-title">${modalTitle}</h3>
             <p class="muted small">${modalSub}</p>
@@ -9712,11 +9687,11 @@ async function copyPitchDeckMarkdown() {
   const isJobSeeker = isJobSeekerPersona();
   const account = appState.activePitchDeckAccount || { displayName: 'Client' };
   const deck = generateClientPitchDeck(account, appState.jobs || []);
-  let md = `# 💎 ${isJobSeeker ? 'Career Candidate Capability Dossier' : 'BD Engine Talent Capability & Market Dossier'}: ${deck.companyName}\n\n`;
-  md += `## 🎯 Executive Summary\nPrepared exclusively for leadership at **${deck.companyName}**.\n\n`;
-  md += `## 🧠 Keywords inferred from job titles — verify with the source\n`;
+  let md = `# ${isJobSeeker ? 'Candidate capability summary' : 'BD Engine talent capability summary'}: ${deck.companyName}\n\n`;
+  md += `## Executive Summary\nPrepared exclusively for leadership at **${deck.companyName}**.\n\n`;
+  md += `## Keywords inferred from job titles — verify with the source\n`;
   deck.techStack.forEach(s => { md += `* **${s.name}** (${s.category.toUpperCase()})\n`; });
-  md += `\n## 📄 Blank Candidate Profile Templates — Not Real Candidates\n`;
+  md += `\n## Blank Candidate Profile Templates — Not Real Candidates\n`;
   deck.candidateSlate.candidates.forEach(c => {
     md += `### ${c.specimenCode}\n- Role: ${c.title} (${c.experienceYears})\n- Compensation Band: ${c.salaryExpectation}\n`;
   });
@@ -9725,7 +9700,7 @@ async function copyPitchDeckMarkdown() {
   try {
     await navigator.clipboard.writeText(md);
     playActionChime('copy');
-    showToast('💎 Presentation Dossier copied to clipboard!', 'success');
+    showToast('Presentation copied to clipboard.', 'success');
   } catch {
     showToast('Failed to copy', 'error');
   }
@@ -9742,13 +9717,12 @@ function renderPitchDeckModal() {
     : `Client-Ready Talent Presentation Deck: ${escapeHtml(deck.companyName)}`;
   const modalSub = isJobSeeker
     ? `Candidate capability summary and technical stack alignment for hiring leadership.`
-    : `White-glove executive talent capability deck formatted for hiring leaders.`;
+    : `Talent capability summary formatted for hiring leaders.`;
 
   pitchDeckModalBackdrop.innerHTML = `
     <div class="modal-dialog pitch-deck-dialog" role="dialog" aria-modal="true" aria-labelledby="pitch-deck-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">💎</span>
           <div>
             <h3 id="pitch-deck-title">${modalTitle}</h3>
             <p class="muted small">${modalSub}</p>
@@ -9764,14 +9738,14 @@ function renderPitchDeckModal() {
         </div>
 
         <div style="margin-bottom:16px;">
-          <div class="battle-plan-section-title">🧠 Technical Stack Grounding & Requisition Profile</div>
+          <div class="battle-plan-section-title">Technical Stack Grounding & Requisition Profile</div>
           <div class="tech-dna-cluster">
             ${deck.techStack.map(s => `<span class="tech-dna-chip">${escapeHtml(s.name)}</span>`).join('')}
           </div>
         </div>
 
         <div>
-          <div class="battle-plan-section-title">📄 Blank profile templates — verify before sharing</div>
+          <div class="battle-plan-section-title">Blank profile templates — verify before sharing</div>
           <div class="candidate-slate-grid">
             ${deck.candidateSlate.candidates.map(c => `
               <div class="candidate-slate-card">
@@ -9790,7 +9764,7 @@ function renderPitchDeckModal() {
 
       <div class="modal-footer">
         <button class="ghost-button" type="button" data-action="close-pitch-deck-modal">Close</button>
-        <button class="primary-button" type="button" data-action="copy-pitch-deck">📋 1-Click Copy Presentation</button>
+        <button class="primary-button" type="button" data-action="copy-pitch-deck">Copy presentation</button>
       </div>
     </div>
   `;
@@ -9936,7 +9910,7 @@ function renderBatchOutreachModal() {
     <div class="modal-panel modal-panel--batch" role="dialog" aria-modal="true" aria-labelledby="batch-studio-title">
       <div class="batch-modal-header">
         <div class="batch-header-title">
-          <h3 id="batch-studio-title">⚡ Batch Outreach & Sequence Studio <span class="status-pill status-pill--accent">${items.length} Recipient${items.length === 1 ? '' : 's'}</span></h3>
+          <h3 id="batch-studio-title">Batch Outreach & Sequence Studio <span class="status-pill status-pill--accent">${items.length} Recipient${items.length === 1 ? '' : 's'}</span></h3>
           <p>Grounded multi-touch sequence generation using verified hiring signals and 1st-degree warm network paths.</p>
         </div>
         <button class="modal-close" type="button" data-action="close-batch-outreach" aria-label="Close modal">&times;</button>
@@ -9945,22 +9919,22 @@ function renderBatchOutreachModal() {
       <!-- 3-Touch Sequence Switcher -->
       <div class="sequence-touch-bar" role="tablist" aria-label="Sequence Touches">
         <button class="sequence-touch-btn ${sequenceTouch === 1 ? 'is-active' : ''}" type="button" role="tab" aria-selected="${sequenceTouch === 1}" data-action="batch-switch-touch" data-touch="1">
-          <span>🎯 Touch 1: Opening Hook</span>
+          <span>Touch 1: Opening Hook</span>
           <span class="sequence-touch-day">Day 1</span>
         </button>
         <button class="sequence-touch-btn ${sequenceTouch === 2 ? 'is-active' : ''}" type="button" role="tab" aria-selected="${sequenceTouch === 2}" data-action="batch-switch-touch" data-touch="2">
-          <span>💡 Touch 2: Value Teaser</span>
+          <span>Touch 2: Value Teaser</span>
           <span class="sequence-touch-day">Day 3</span>
         </button>
         <button class="sequence-touch-btn ${sequenceTouch === 3 ? 'is-active' : ''}" type="button" role="tab" aria-selected="${sequenceTouch === 3}" data-action="batch-switch-touch" data-touch="3">
-          <span>🚪 Touch 3: Breakaway</span>
+          <span>Touch 3: Breakaway</span>
           <span class="sequence-touch-day">Day 7</span>
         </button>
       </div>
 
       <div class="batch-studio-toolbar">
         <label class="batch-toolbar-field">
-          <span>🎯 Tactical Angle:</span>
+          <span>Tactical Angle:</span>
           <select id="batch-template-select">
             ${isJobSeeker ? `
               <option value="job_referral" ${selected(template, 'job_referral')}>1st-Degree Colleague Referral</option>
@@ -9979,7 +9953,7 @@ function renderBatchOutreachModal() {
         </label>
 
         <label class="batch-toolbar-field">
-          <span>🎭 Tone:</span>
+          <span>Tone:</span>
           <select id="batch-tone-select">
             <option value="casual" ${selected(tone, 'casual')}>Casual & Warm</option>
             <option value="direct" ${selected(tone, 'direct')}>Direct & Concise</option>
@@ -10003,7 +9977,7 @@ function renderBatchOutreachModal() {
                     ${isLogged ? '<span class="status-pill status-pill--success">Logged</span>' : isCopied ? '<span class="status-pill status-pill--accent">Copied</span>' : ''}
                   </span>
                   <span class="batch-recipient-meta">${escapeHtml(item.company)} · ${escapeHtml(item.title)}</span>
-                  ${item.jobTitle ? `<span class="small muted">⚡ Role: ${escapeHtml(item.jobTitle)}</span>` : ''}
+                  ${item.jobTitle ? `<span class="small muted">Role: ${escapeHtml(item.jobTitle)}</span>` : ''}
                 </button>
               `;
             }).join('')}
@@ -10012,10 +9986,10 @@ function renderBatchOutreachModal() {
 
         <main class="batch-draft-pane">
           <div class="batch-grounding-chips">
-            <span class="batch-grounding-chip">🏢 <strong>${escapeHtml(activeItem.company)}</strong></span>
-            <span class="batch-grounding-chip">👤 <strong>${escapeHtml(activeItem.name)}</strong> (${escapeHtml(activeItem.title)})</span>
+            <span class="batch-grounding-chip"><strong>${escapeHtml(activeItem.company)}</strong></span>
+            <span class="batch-grounding-chip"><strong>${escapeHtml(activeItem.name)}</strong> (${escapeHtml(activeItem.title)})</span>
             ${activeItem.jobTitle ? `<span class="batch-grounding-chip"><strong>Role context to verify:</strong> ${escapeHtml(activeItem.jobTitle)}</span>` : ''}
-            ${activeItem.email ? `<span class="batch-grounding-chip">✉️ ${escapeHtml(activeItem.email)}</span>` : ''}
+            ${activeItem.email ? `<span class="batch-grounding-chip">${escapeHtml(activeItem.email)}</span>` : ''}
           </div>
 
           <div class="batch-editor-group">
@@ -10031,7 +10005,7 @@ function renderBatchOutreachModal() {
           <!-- LinkedIn Note Optimizer -->
           <div class="linkedin-char-meter">
             <div class="linkedin-char-meter__header">
-              <span>💼 <strong>LinkedIn Connection Note (Touch ${sequenceTouch})</strong></span>
+              <span><strong>LinkedIn Connection Note (Touch ${sequenceTouch})</strong></span>
               <span class="linkedin-char-meter__label">${linkedinNoteLen} / 300 chars ${linkedinNoteLen > 300 ? '<span style="color:#ef4444; font-weight:700;">(Over limit!)</span>' : '✓'}</span>
             </div>
             <div class="linkedin-char-meter__track">
@@ -10040,7 +10014,7 @@ function renderBatchOutreachModal() {
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
               <small class="muted" style="font-style:italic;">"${escapeHtml(linkedinNoteText)}"</small>
               <button class="ghost-button ghost-button--xs" type="button" data-action="batch-copy-linkedin" title="Copy 300-char LinkedIn connection note">
-                📋 Copy Note
+                Copy Note
               </button>
             </div>
           </div>
@@ -10057,11 +10031,11 @@ function renderBatchOutreachModal() {
 
       <footer class="batch-footer-actions">
         <div class="batch-footer-primary">
-          <button class="primary-button primary-button--sm" type="button" data-action="batch-copy-active">📋 Copy Email Draft</button>
-          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-copy-linkedin">💼 Copy LinkedIn Note</button>
-          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-copy-all">📑 Copy All (${items.length})</button>
-          <a class="secondary-button secondary-button--sm mailto-link" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer" title="Open active draft in default email client">✉️ Mailto Link &nearr;</a>
-          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-export-csv">📥 Export Sequencer CSV</button>
+          <button class="primary-button primary-button--sm" type="button" data-action="batch-copy-active">Copy Email Draft</button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-copy-linkedin">Copy LinkedIn Note</button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-copy-all">Copy All (${items.length})</button>
+          <a class="secondary-button secondary-button--sm mailto-link" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer" title="Open active draft in default email client">Mailto Link &nearr;</a>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="batch-export-csv">Export Sequencer CSV</button>
         </div>
         <button class="primary-button primary-button--sm" type="button" data-action="batch-log-all">
           ✓ Log All Sent & Auto-Schedule Follow-Ups
@@ -10123,7 +10097,7 @@ async function copyBatchLinkedInNote() {
   try {
     await navigator.clipboard.writeText(item.draft.linkedinNote);
     playActionChime('success');
-    showToast(`💼 LinkedIn note copied for ${item.name} (${item.draft.linkedinNote.length} chars)`, 'success');
+    showToast(`LinkedIn note copied for ${item.name} (${item.draft.linkedinNote.length} chars)`, 'success');
   } catch {
     showToast('Failed to copy to clipboard', 'error');
   }
@@ -10145,7 +10119,7 @@ async function copyActiveBatchDraft() {
     await navigator.clipboard.writeText(fullText);
     appState.batchOutreach.copiedMap[item.id] = true;
     playActionChime('success');
-    showToast(`📋 Draft copied for ${item.name}!`, 'success');
+    showToast(`Draft copied for ${item.name}!`, 'success');
     renderBatchOutreachModal();
   } catch {
     showToast('Failed to copy to clipboard', 'error');
@@ -10169,7 +10143,7 @@ async function copyAllBatchOutreachDrafts() {
     await navigator.clipboard.writeText(aggregated);
     items.forEach(item => { appState.batchOutreach.copiedMap[item.id] = true; });
     playActionChime('success');
-    showToast(`📑 All ${items.length} outreach drafts copied to clipboard!`, 'success');
+    showToast(`All ${items.length} outreach drafts copied to clipboard!`, 'success');
     renderBatchOutreachModal();
   } catch {
     showToast('Failed to copy drafts', 'error');
@@ -10224,7 +10198,7 @@ function exportBatchOutreachCsv() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 
-  showToast(`📥 Exported ${items.length} drafts for Apollo/GMass/Lemlist/Salesloft!`, 'success');
+  showToast(`Exported ${items.length} drafts for Apollo/GMass/Lemlist/Salesloft!`, 'success');
 }
 
 async function logAllBatchOutreachSent() {
@@ -10297,11 +10271,11 @@ function shareNetworkStats() {
   const companyCount = Number(summary.accountCount || 0);
   const jobCount = Number(summary.activeJobCount || summary.jobCount || 0);
 
-  const shareText = `I just mapped my LinkedIn network against live tech job boards using BD Engine. 🚀\n\nMy workspace contains ${contactCount} imported contacts, ${companyCount} companies, and ${jobCount} active imported roles. I'm using it to research possible introductions.\n\nCheck out your network matches for free here:`;
+  const shareText = `I just mapped my LinkedIn network against live tech job boards using BD Engine.\n\nMy workspace contains ${contactCount} imported contacts, ${companyCount} companies, and ${jobCount} active imported roles. I'm using it to research possible introductions.\n\nCheck out your network matches for free here:`;
   const shareUrl = 'https://bd-engine-production.up.railway.app';
 
   navigator.clipboard?.writeText?.(`${shareText} ${shareUrl}`).catch(() => {});
-  showToast('📢 Viral share text copied to clipboard! Opening LinkedIn...', 'success');
+  showToast('Share text copied to clipboard. Opening LinkedIn...', 'success');
 
   const linkedinShareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`;
   window.open(linkedinShareUrl, '_blank', 'noopener,noreferrer,width=600,height=600');
@@ -10333,7 +10307,6 @@ function renderPricingModal() {
     <div class="modal-dialog modal-dialog--lg pricing-dialog" role="dialog" aria-modal="true" aria-labelledby="pricing-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">💎</span>
           <div>
             <h3 id="pricing-modal-title">Transparent, Recurring Monthly Plans</h3>
             <p class="muted small">Plans renew monthly. Review billing and cancellation options in your Stripe customer portal.</p>
@@ -10348,7 +10321,7 @@ function renderPricingModal() {
           <div class="pricing-card ${currentPlan === 'jobseeker' ? 'is-current' : 'is-popular'}">
             <div class="pricing-badge-popular">FOR YOUR JOB SEARCH</div>
             <div class="pricing-card-header">
-              <h4>🎯 Job Seeker</h4>
+              <h4>Job Seeker</h4>
               <p class="muted small">Dedicated job search workspace to skip ATS queues & land warm referrals.</p>
               <div class="pricing-price-tag">
                 <span class="price-currency">$</span>
@@ -10360,12 +10333,12 @@ function renderPricingModal() {
               <li>✓ <strong>Full Access to Job Seeker Mode</strong></li>
               <li>✓ <strong>50 LinkedIn connections CSV imports per billing period</strong></li>
               <li>✓ <strong>Track selected employers within plan limits</strong> using supported careers boards</li>
-              <li>✓ <strong>1-Click Warm Referral Intro Request Generator</strong></li>
+              <li>✓ <strong>Warm referral intro request drafts</strong></li>
               <li>✓ <strong>Recruiter & Hiring Manager Screen Teleprompter</strong></li>
-              <li>✓ <strong>Daily Career Radar & Target Company Dossier</strong></li>
+              <li>✓ <strong>Daily job search plan</strong></li>
               <li>✓ <strong>Job Application & Interview Pipeline Board</strong></li>
               <li>✓ <strong>Up to 1,000 Network Contacts & 200 Tracked Companies</strong></li>
-              <li style="opacity:0.75;font-size:0.8rem;margin-top:6px;">⚠️ <em>Includes Job Seeker Mode only</em></li>
+              <li style="opacity:0.75;font-size:0.8rem;margin-top:6px;"><em>Includes Job Seeker Mode only</em></li>
             </ul>
             <a class="primary-button pricing-cta-btn" href="#/admin" data-action="close-pricing-modal">
               ${currentPlan === 'jobseeker' ? 'Current Plan' : 'Subscribe to Job Seeker — $5/mo'}
@@ -10376,7 +10349,7 @@ function renderPricingModal() {
           <div class="pricing-card ${currentPlan === 'sales' ? 'is-current' : ''}">
             <div class="pricing-badge-popular" style="background:#3b82f6;">FULL DUAL-MODE ACCESS</div>
             <div class="pricing-card-header">
-              <h4>💼 Sales & Staffing Pro</h4>
+              <h4>Sales & Staffing Pro</h4>
               <p class="muted small">Complete dual-mode access for recruiters, staffing BD reps, and founders.</p>
               <div class="pricing-price-tag">
                 <span class="price-currency">$</span>
@@ -10385,7 +10358,7 @@ function renderPricingModal() {
               </div>
             </div>
             <ul class="pricing-feature-list">
-              <li>💎 <strong>Full Access to BOTH Modes (Job Seeker + Staffing BD)</strong></li>
+              <li>✓ <strong>Full access to both modes (Job Seeker + Staffing BD)</strong></li>
               <li>✓ <strong>Deal Flow & Executive Revenue Pipeline Board</strong></li>
               <li>✓ <strong>10-Second Pattern Interrupt Cold Call Teleprompter</strong></li>
               <li>✓ <strong>3-Touch B2B Prospecting & Search Sequencer</strong></li>
@@ -10401,14 +10374,13 @@ function renderPricingModal() {
         </div>
 
         <div class="pricing-guarantee-strip">
-          <span class="shield-icon" aria-hidden="true">🛡️</span>
           <span>Review the plan, coverage limits, and cancellation terms before subscribing. Hiring outcomes and referrals are not guaranteed.</span>
         </div>
       </div>
 
       <div class="modal-footer">
         <div class="modal-footer-left">
-          <span class="muted small">🔒 Secure checkout powered by Stripe</span>
+          <span class="muted small">Secure checkout powered by Stripe</span>
         </div>
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-pricing-modal">Close</button>
@@ -10441,7 +10413,6 @@ async function openReferralShareModal() {
     <div class="modal-dialog referral-dialog" role="dialog" aria-modal="true" aria-labelledby="referral-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">🎁</span>
           <div>
             <h3 id="referral-modal-title">Share BD Engine</h3>
             <p class="muted small">Review the message before sharing. Post only where community rules allow promotion.</p>
@@ -10452,7 +10423,6 @@ async function openReferralShareModal() {
 
       <div class="modal-body referral-body">
         <div class="referral-reward-banner">
-          <span class="referral-reward-icon" aria-hidden="true">🏆</span>
           <div class="referral-reward-copy">
             <strong>${referral.link ? `Earn $${credit} USD invoice credit` : 'Public product link'}</strong>
             <p>${referral.link ? 'When a referred workspace becomes a qualifying paid subscriber, credit is applied to your BD Engine invoice. The recipient does not receive a free paid month.' : 'Workspace referral credit is not available here.'}</p>
@@ -10464,28 +10434,28 @@ async function openReferralShareModal() {
           <div class="referral-link-input-group">
             <input id="referral-link-input" class="referral-link-input" type="text" value="${escapeAttr(referralUrl)}" readonly>
             <button class="primary-button" type="button" data-action="copy-referral-link">
-              📋 Copy Link
+              Copy Link
             </button>
           </div>
         </div>
 
         <div class="referral-share-section">
-          <label class="small muted"><strong>1-Click Share to Network:</strong></label>
+          <label class="small muted"><strong>Share:</strong></label>
           <div class="viral-share-grid">
             <button class="share-btn share-btn--discord" type="button" data-action="copy-discord-message" title="Copy formatted Discord post">
-              <span>👾 Discord</span>
+              <span>Discord</span>
             </button>
             <a class="share-btn share-btn--linkedin" href="${escapeAttr(linkedinShareUrl)}" target="_blank" rel="noopener noreferrer">
-              <span>💼 LinkedIn</span>
+              <span>LinkedIn</span>
             </a>
             <a class="share-btn share-btn--twitter" href="${escapeAttr(twitterShareUrl)}" target="_blank" rel="noopener noreferrer">
-              <span>🐦 X / Twitter</span>
+              <span>X / Twitter</span>
             </a>
             <a class="share-btn share-btn--reddit" href="${escapeAttr(redditShareUrl)}" target="_blank" rel="noopener noreferrer">
-              <span>💬 Reddit</span>
+              <span>Reddit</span>
             </a>
             <a class="share-btn share-btn--email" href="${escapeAttr(emailShareUrl)}" target="_blank" rel="noopener noreferrer">
-              <span>✉️ Email / Slack</span>
+              <span>Email / Slack</span>
             </a>
           </div>
         </div>
@@ -10494,7 +10464,7 @@ async function openReferralShareModal() {
           <p class="small muted"><strong>Pre-composed Post Preview:</strong></p>
           <p id="viral-post-text"><em>"${escapeHtml(viralText)} ${escapeHtml(referralUrl)}"</em></p>
           <button class="ghost-button ghost-button--xs" type="button" data-action="copy-referral-message">
-            📋 Copy Post Copy
+            Copy Post Copy
           </button>
         </div>
       </div>
@@ -10546,16 +10516,16 @@ function getJobSignalBadges(item) {
   const daysOld = postedDate && !isNaN(postedDate.getTime()) ? Math.floor((Date.now() - postedDate.getTime()) / (24 * 60 * 60 * 1000)) : 0;
   
   if (Number(item.connectionCount || 0) > 0) {
-    badges.push(`<span class="signal-badge signal-badge--warm" title="1st-degree connection at company">👥 1st-Degree Match</span>`);
+    badges.push(`<span class="signal-badge signal-badge--warm" title="1st-degree connection at company">1st-Degree Match</span>`);
   }
   if (item.isNew || (daysOld >= 0 && daysOld <= 2)) {
-    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours — first-mover advantage">🔥 Hiring Surge (New)</span>`);
+    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours — first-mover advantage">Hiring Surge (New)</span>`);
   }
   if (daysOld >= 45) {
-    badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days — high leverage for direct placement or candidate outreach">⏳ Hard to Fill (${daysOld}d)</span>`);
+    badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days — high leverage for direct placement or candidate outreach">Hard to Fill (${daysOld}d)</span>`);
   }
   if (/(recruiter|talent|head of|vp|director|lead|manager|staff|founding)/i.test(item.title || '')) {
-    badges.push(`<span class="signal-badge signal-badge--expansion" title="Strategic hiring signal indicating team expansion">🚀 Expansion Signal</span>`);
+    badges.push(`<span class="signal-badge signal-badge--expansion" title="Strategic hiring signal indicating team expansion">Expansion Signal</span>`);
   }
   return badges;
 }
@@ -10568,7 +10538,6 @@ async function openMorningRadarModal() {
     <div class="modal-dialog modal-dialog--lg morning-radar-dialog" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">📡</span>
           <div>
             <h3>Executive Morning Radar & Hiring Digest</h3>
             <p class="muted small">Assembling overnight hiring signals and network matches...</p>
@@ -10601,12 +10570,12 @@ async function openMorningRadarModal() {
 
     const topOpportunities = (connectedJobs.length ? connectedJobs : jobs).slice(0, 3);
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
-    let briefing = `📡 **BD Engine Daily Hiring Intelligence Digest — ${todayStr}**\n\n`;
+    let briefing = `**BD Engine Daily Hiring Intelligence Digest — ${todayStr}**\n\n`;
     briefing += `**Executive Summary:**\n`;
-    briefing += `• ⚡ **${newJobs24h} New Roles Posted** across tracked companies in the last 24-48h\n`;
-    briefing += `• 👥 **${connectedJobs.length} Warm Intro Opportunities** with 1st-degree colleague connections\n`;
-    briefing += `• ⏳ **${hardToFillJobs.length} Hard-to-Fill Roles (45d+)** representing high placement leverage\n\n`;
-    briefing += `**Top Priority 1-Click Outreach Targets Today:**\n`;
+    briefing += `• **${newJobs24h} New Roles Posted** across tracked companies in the last 24-48h\n`;
+    briefing += `• **${connectedJobs.length} Warm Intro Opportunities** with 1st-degree colleague connections\n`;
+    briefing += `• **${hardToFillJobs.length} Hard-to-Fill Roles (45d+)** representing high placement leverage\n\n`;
+    briefing += `**Top priority outreach targets today:**\n`;
 
     topOpportunities.forEach((job, idx) => {
       const company = job.companyName || job.company || 'Company';
@@ -10643,7 +10612,6 @@ function renderMorningRadarModal(data) {
     <div class="modal-dialog modal-dialog--lg morning-radar-dialog" role="dialog" aria-modal="true" aria-labelledby="radar-modal-title">
       <div class="modal-header">
         <div class="modal-title-lockup">
-          <span class="modal-icon-badge" aria-hidden="true">📡</span>
           <div>
             <h3 id="radar-modal-title">Executive Morning Radar & Hiring Digest</h3>
             <p class="muted small">Daily executive briefing for <strong>${escapeHtml(todayStr)}</strong></p>
@@ -10655,21 +10623,18 @@ function renderMorningRadarModal(data) {
       <div class="modal-body morning-radar-body">
         <div class="radar-summary-strip">
           <div class="radar-stat-box">
-            <span class="radar-stat-icon" aria-hidden="true">⚡</span>
             <div class="radar-stat-copy">
               <strong>${formatNumber(newJobs24h)}</strong>
               <span>New Roles (24-48h)</span>
             </div>
           </div>
           <div class="radar-stat-box">
-            <span class="radar-stat-icon" aria-hidden="true">👥</span>
             <div class="radar-stat-copy">
               <strong>${formatNumber(connectedCount)}</strong>
               <span>Warm Intro Matches</span>
             </div>
           </div>
           <div class="radar-stat-box">
-            <span class="radar-stat-icon" aria-hidden="true">⏳</span>
             <div class="radar-stat-copy">
               <strong>${formatNumber(hardToFillCount)}</strong>
               <span>Hard-to-Fill (45d+)</span>
@@ -10679,7 +10644,7 @@ function renderMorningRadarModal(data) {
 
         <div class="radar-section">
           <div class="radar-section-heading">
-            <h4>🎯 Top 3 Priority Outreach Targets For Today</h4>
+            <h4>Top 3 Priority Outreach Targets For Today</h4>
             <span class="small muted">Ranked by warm connection strength & relevance</span>
           </div>
           <div class="radar-opportunities-list">
@@ -10692,11 +10657,11 @@ function renderMorningRadarModal(data) {
                     <strong>${escapeHtml(job.title)}</strong>
                     <p>${escapeHtml(job.companyName || job.company || 'Company')} · ${escapeHtml(job.location || (job.isRemote ? 'Remote' : 'Location unspecified'))}</p>
                     <div class="radar-opp-meta">
-                      ${contacts.length ? `<span class="signal-badge signal-badge--warm">👥 Warm Contact: ${escapeHtml(contacts.map(c => c.fullName).join(', '))}</span>` : '<span class="signal-badge signal-badge--expansion">🚀 Direct Outreach</span>'}
+                      ${contacts.length ? `<span class="signal-badge signal-badge--warm">Warm Contact: ${escapeHtml(contacts.map(c => c.fullName).join(', '))}</span>` : '<span class="signal-badge signal-badge--expansion">Direct Outreach</span>'}
                     </div>
                   </div>
                   <button class="primary-button primary-button--xs" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(job.id || '')}" data-contact-id="${escapeAttr(firstContact?.id || firstContact?.fullName || '')}">
-                    💌 Open Warm Studio →
+                    Open Warm Studio →
                   </button>
                 </div>
               `;
@@ -10706,7 +10671,7 @@ function renderMorningRadarModal(data) {
 
         <div class="radar-briefing-preview">
           <div class="radar-preview-header">
-            <span>📋 Executive Summary (Ready for Slack / Notion / Team Sync)</span>
+            <span>Executive Summary (Ready for Slack / Notion / Team Sync)</span>
             <button class="ghost-button ghost-button--xs" type="button" data-action="morning-radar-copy">
               Copy Summary
             </button>
@@ -10718,13 +10683,13 @@ function renderMorningRadarModal(data) {
       <div class="modal-footer">
         <div class="modal-footer-left">
           <a class="mailto-draft-btn" href="${escapeAttr(mailtoHref)}" target="_blank" rel="noopener noreferrer">
-            ✉️ Email Briefing to Me &nearr;
+            Email Briefing to Me &nearr;
           </a>
         </div>
         <div class="modal-footer-right">
           <button class="ghost-button" type="button" data-action="close-morning-radar">Close</button>
           <button class="primary-button" type="button" data-action="morning-radar-copy">
-            📋 Copy Executive Briefing
+            Copy Executive Briefing
           </button>
         </div>
       </div>
@@ -10745,12 +10710,12 @@ async function copyMorningRadarText() {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    showToast('📋 Executive Morning Radar briefing copied!', 'success');
+    showToast('Executive Morning Radar briefing copied!', 'success');
   } catch {
     if (textarea) {
       textarea.select();
       document.execCommand('copy');
-      showToast('📋 Executive Morning Radar briefing copied!', 'success');
+      showToast('Executive Morning Radar briefing copied!', 'success');
     }
   }
 }
@@ -11718,8 +11683,8 @@ async function renderContactsView() {
       <div class="panel-header">
         <div><h3>${jobSeeker ? 'Search network' : 'Contact intelligence'}</h3><p class="muted small">${jobSeeker ? 'Find the strongest relationship path into each target company.' : 'Your network ranked by company overlap and title relevance.'}</p></div>
         <div class="panel-actions">
-          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal"><span class="btn-icon">⚡</span><span>Import LinkedIn CSV</span></button>
-          <button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">✨ Sample Network</button>
+          <button class="primary-button primary-button--sm" type="button" data-action="open-network-import-modal"><span>Import LinkedIn CSV</span></button>
+          <button class="secondary-button secondary-button--sm" type="button" data-action="quick-load-sample-workspace">Sample Network</button>
           ${renderExportOptions('contacts', 'Contact options')}
         </div>
       </div>
@@ -11735,7 +11700,7 @@ async function renderContactsView() {
           </div>
         </details>
       </form>
-      ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts in workspace yet', copy: 'Upload your LinkedIn Connections.csv to discover warm paths, or load a sample network to explore immediately.', action: '<button class="primary-button" type="button" data-action="open-network-import-modal">⚡ Import LinkedIn CSV</button><button class="secondary-button" type="button" data-action="quick-load-sample-workspace">✨ Try Sample Network</button><button class="ghost-button" type="button" data-action="open-linkedin-guide">📥 Export Guide</button>' })}
+      ${result.items.length ? renderContactsTable(result.items) : renderEmptyState({ icon: 'People', title: 'No contacts in workspace yet', copy: 'Upload your LinkedIn Connections.csv to discover warm paths, or load a sample network to explore immediately.', action: '<button class="primary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button><button class="secondary-button" type="button" data-action="quick-load-sample-workspace">Try Sample Network</button><button class="ghost-button" type="button" data-action="open-linkedin-guide">Export Guide</button>' })}
       ${renderPagination('contacts', result.page, result.pageSize, result.total)}
     </section>
   `;
@@ -12475,7 +12440,7 @@ async function exportJobsCsv() {
       ];
     })
   );
-  showToast('📥 Pipeline and network roles exported to CSV!', 'success');
+  showToast('Pipeline and network roles exported to CSV!', 'success');
 }
 
 function renderDailyPriorityAction(item, primary = false) {
@@ -12507,7 +12472,7 @@ function renderAccountsTable(items) {
   return `
     <div id="bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Bulk actions">
       <span id="bulk-count" class="bulk-count-badge">0 selected</span>
-      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-accounts">⚡ Batch Outreach Studio</button>
+      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-accounts">Batch Outreach Studio</button>
       <select id="bulk-status" aria-label="Bulk status change"><option value="">Change status...</option><option value="new">New</option><option value="researching">Researching</option><option value="contacted">Contacted</option><option value="in_conversation">In conversation</option><option value="client">Client</option><option value="paused">Paused</option></select>
       <select id="bulk-priority" aria-label="Bulk priority change"><option value="">Change priority...</option><option value="strategic">Strategic</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
       ${renderOwnerSelect('bulk-owner', '', true).replace('name="bulk-owner"', 'id="bulk-owner" aria-label="Bulk owner change"')}
@@ -12530,8 +12495,8 @@ function renderAccountsTable(items) {
             ${vel.hardToFillBadge ? `<div style="margin-top:3px;"><span class="signal-badge signal-badge--hard-to-fill">${vel.hardToFillBadge}</span></div>` : ''}
             ${renderCompetitorClusterPills(item)}
             <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
-              <button class="inline-action-link" type="button" data-action="open-network-graph-modal" data-account-id="${item.id}">🕸️ Entity Graph</button>
-              <button class="inline-action-link" type="button" data-action="open-pitch-deck-modal" data-account-id="${item.id}">💎 Pitch Deck</button>
+              <button class="inline-action-link" type="button" data-action="open-network-graph-modal" data-account-id="${item.id}">Entity Graph</button>
+              <button class="inline-action-link" type="button" data-action="open-pitch-deck-modal" data-account-id="${item.id}">Pitch Deck</button>
             </div>
             </details>
           </td>
@@ -12564,8 +12529,8 @@ function renderContactsTable(items) {
   return `
     <div id="contacts-bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Contact bulk actions">
       <span class="bulk-count-badge" id="contacts-bulk-count">0 selected</span>
-      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-contacts">⚡ Batch Outreach Studio</button>
-      <button class="secondary-button secondary-button--sm" type="button" data-action="export-selected-contacts-csv">📥 Export Selected CSV</button>
+      <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-contacts">Batch Outreach Studio</button>
+      <button class="secondary-button secondary-button--sm" type="button" data-action="export-selected-contacts-csv">Export Selected CSV</button>
       <button class="ghost-button ghost-button--sm" type="button" data-action="clear-contacts-bulk">Clear</button>
     </div>
     <div class="table-scroll"><table class="table responsive-table contacts-table"><thead><tr><th><input type="checkbox" id="contacts-bulk-select-all" aria-label="Select all contacts"></th><th>Contact</th><th>Company</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>
@@ -12594,7 +12559,7 @@ function renderJobsTable(items, compact) {
     ${compact ? '' : `
       <div id="jobs-bulk-action-bar" class="bulk-action-bar hidden" role="toolbar" aria-label="Job bulk actions">
         <span class="bulk-count-badge" id="jobs-bulk-count">0 selected</span>
-        <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-jobs">⚡ Batch Outreach Studio</button>
+        <button class="primary-button primary-button--sm" type="button" data-action="launch-batch-outreach-jobs">Batch Outreach Studio</button>
         <button class="ghost-button ghost-button--sm" type="button" data-action="clear-jobs-bulk">Clear</button>
       </div>
     `}
@@ -12623,9 +12588,9 @@ function renderJobsTable(items, compact) {
             ${compact ? '' : `
               <div class="small muted">${escapeHtml(item.department || '')}</div>
               <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
-                <button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">💌 Warm Studio</button>
-                <button class="inline-action-link" type="button" data-action="open-candidate-slate-modal" data-job-id="${escapeAttr(item.id || '')}">📄 Candidate Slate</button>
-                <button class="inline-action-link" type="button" data-action="open-call-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">🎙️ Call Prompter</button>
+                <button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Warm Studio</button>
+                <button class="inline-action-link" type="button" data-action="open-candidate-slate-modal" data-job-id="${escapeAttr(item.id || '')}">Candidate Slate</button>
+                <button class="inline-action-link" type="button" data-action="open-call-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Call Prompter</button>
               </div>
             `}
             </details>
@@ -12636,15 +12601,15 @@ function renderJobsTable(items, compact) {
           <td data-label="Network / Contacts">
             ${hasConn ? `
               <div class="job-network-cell">
-                <span class="status-pill status-pill--success"><span class="pill-dot"></span>⚡ ${formatNumber(item.connectionCount)} in network</span>
+                <span class="status-pill status-pill--success"><span class="pill-dot"></span>${formatNumber(item.connectionCount)} in network</span>
                 ${rankedContacts.length ? `
                   <details class="job-row-context"><summary>View ${rankedContacts.length} people</summary><div class="job-contacts-list">
                     ${rankedContacts.slice(0, 3).map((c) => `
                       <div class="job-contact-chip">
-                        <span class="align-chip ${c.chipClass}" title="${escapeAttr(c.alignmentReason)}">${c.badgeIcon} ${c.badgeLabel}</span>
+                        <span class="align-chip ${c.chipClass}" title="${escapeAttr(c.alignmentReason)}">${c.badgeLabel}</span>
                         <span class="job-contact-name">${escapeHtml(c.fullName)}</span>
                         ${c.title ? `<span class="job-contact-title"> · ${escapeHtml(c.title)}</span>` : ''}
-                        <button class="inline-action-link job-contact-outreach-btn" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(c.id || c.fullName || '')}" title="Generate 1-click warm intro to ${escapeAttr(c.fullName)}">Warm path →</button>
+                        <button class="inline-action-link job-contact-outreach-btn" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(c.id || c.fullName || '')}" title="Draft a warm intro to ${escapeAttr(c.fullName)}">Warm path →</button>
                       </div>
                     `).join('')}
                     ${rankedContacts.length > 3 ? `<span class="small muted">+${rankedContacts.length - 3} more contacts</span>` : ''}
@@ -12662,11 +12627,11 @@ function renderJobsTable(items, compact) {
             <div class="job-pipeline-cell">
               <select class="job-pipeline-select compact-select" aria-label="Pipeline stage for ${escapeAttr(item.title || 'role')} at ${escapeAttr(item.companyName || 'company')}" data-action="update-job-pipeline-stage" data-job-id="${escapeAttr(item.id || '')}">
                 <option value="" ${!pipelineStage ? 'selected' : ''}>+ Track</option>
-                <option value="saved" ${pipelineStage === 'saved' ? 'selected' : ''}>🔖 Saved</option>
-                <option value="contacted" ${pipelineStage === 'contacted' ? 'selected' : ''}>💬 Intro Sent</option>
-                <option value="replied" ${pipelineStage === 'replied' ? 'selected' : ''}>💌 Replied</option>
-                <option value="interviewing" ${pipelineStage === 'interviewing' ? 'selected' : ''}>🎯 Interview</option>
-                <option value="offer" ${pipelineStage === 'offer' ? 'selected' : ''}>🎉 Offer</option>
+                <option value="saved" ${pipelineStage === 'saved' ? 'selected' : ''}>Saved</option>
+                <option value="contacted" ${pipelineStage === 'contacted' ? 'selected' : ''}>Intro Sent</option>
+                <option value="replied" ${pipelineStage === 'replied' ? 'selected' : ''}>Replied</option>
+                <option value="interviewing" ${pipelineStage === 'interviewing' ? 'selected' : ''}>Interview</option>
+                <option value="offer" ${pipelineStage === 'offer' ? 'selected' : ''}>Offer</option>
               </select>
             </div>
           </td>
@@ -14017,7 +13982,7 @@ function updateContactsBulkBar() {
   if (bar) {
     if (checked.length > 0) {
       bar.classList.remove('hidden');
-      if (count) count.textContent = `⚡ ${checked.length} contact${checked.length === 1 ? '' : 's'} selected`;
+      if (count) count.textContent = `${checked.length} contact${checked.length === 1 ? '' : 's'} selected`;
     } else {
       bar.classList.add('hidden');
     }
@@ -14031,7 +13996,7 @@ function updateJobsBulkBar() {
   if (bar) {
     if (checked.length > 0) {
       bar.classList.remove('hidden');
-      if (count) count.textContent = `⚡ ${checked.length} role${checked.length === 1 ? '' : 's'} selected`;
+      if (count) count.textContent = `${checked.length} role${checked.length === 1 ? '' : 's'} selected`;
     } else {
       bar.classList.add('hidden');
     }
@@ -14720,13 +14685,13 @@ function renderGeneratedOutreach(outreach) {
         <article class="outreach-piece outreach-piece--primary">
           <div class="outreach-piece-header">
             <strong>Primary email</strong>
-            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="outreach-subject-chip ${option === outreach.subjectLine ? 'active' : ''}" data-action="select-outreach-subject" data-index="${index}" type="button">✨ ${escapeHtml(option)}</button>`).join('')}</div>` : ''}
+            ${outreach.subjectOptions.length > 1 ? `<div class="outreach-subject-options">${outreach.subjectOptions.map((option, index) => `<button class="outreach-subject-chip ${option === outreach.subjectLine ? 'active' : ''}" data-action="select-outreach-subject" data-index="${index}" type="button">${escapeHtml(option)}</button>`).join('')}</div>` : ''}
           </div>
           <label class="outreach-edit-label" for="outreach-subject-input">Subject</label>
           <input id="outreach-subject-input" class="outreach-editable outreach-editable--subject" data-outreach-field="subjectLine" value="${escapeAttr(outreach.subjectLine)}">
           <div class="outreach-piece-options-bar">
             <label class="outreach-edit-label" for="outreach-email-body">Message</label>
-            <span class="outreach-stats-badge">📝 ${outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0} words · ~${Math.max(5, Math.round((outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0) / 3.5))}s read</span>
+            <span class="outreach-stats-badge">${outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0} words · ~${Math.max(5, Math.round((outreach.messageBody ? outreach.messageBody.trim().split(/\s+/).filter(Boolean).length : 0) / 3.5))}s read</span>
           </div>
           <textarea id="outreach-email-body" class="outreach-editable outreach-editable--email" data-outreach-field="messageBody">${escapeHtml(outreach.messageBody)}</textarea>
           <div class="button-row outreach-piece-actions">
