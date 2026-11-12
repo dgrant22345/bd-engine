@@ -30,6 +30,9 @@ export function buildAuditOnboardingIntent(audit, persona = 'bd') {
     .filter((result) => result?.status === 'recognized' || result?.status === 'review')
     .map((result) => String(result.submittedUrl || '').trim())
     .filter(Boolean)
+    // The audit accepts "careers.example.com/jobs"; the workspace only
+    // accepts absolute URLs, so add the scheme the audit assumed.
+    .map((url) => (/^https?:\/\//i.test(url) ? url : `https://${url}`))
     .slice(0, 50);
 
   return {

@@ -119,6 +119,12 @@ test('quick start and manual add work without companies; drafts do not send or c
   const { app, frame } = await workspace(page, { count: 0, setup: false });
   await app.getByRole('button', { name: 'Start with people' }).click();
   await expect(app.getByRole('heading', { name: 'Your people workspace starts here' })).toBeVisible();
+  // A new workspace is not blocked on the LinkedIn export: the empty state
+  // points to the request steps and to adding a company in the meantime.
+  const waitNote = app.locator('.people-empty-wait');
+  await expect(waitNote).toContainText('Waiting for your LinkedIn export?');
+  await expect(waitNote.getByRole('link', { name: 'How to request the file' })).toHaveAttribute('href', '/guides/export-linkedin-connections-csv');
+  await expect(waitNote.getByRole('link', { name: 'add a company you want to watch' })).toHaveAttribute('href', '#/accounts/new');
   await app.getByRole('button', { name: 'Add your first person' }).click();
   await expect(app.getByLabel('Full name', { exact: true })).toBeFocused();
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze()).violations).toEqual([]);
