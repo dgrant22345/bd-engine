@@ -116,6 +116,8 @@ for (const viewport of [
       '/guides/ats-job-board-coverage',
       '/guides/workday-job-search',
       '/guides/linkedin-connections-job-search',
+      '/guides/find-hiring-companies-staffing',
+      '/guides/export-linkedin-connections-csv',
     ];
 
     for (const path of paths) {
