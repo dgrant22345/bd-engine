@@ -19,12 +19,18 @@ test('saved recovery code resets a password once and revokes the signed-in sessi
   await trial.locator('summary').press('Space');
   await page.screenshot({ path: testInfo.outputPath('account-notices-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Phones show one account notice at a time: the reminder first, with the
+  // days remaining kept in the header.
+  await expect(trial).toBeHidden();
+  await expect(page.locator('.cloud-trial-badge')).toBeVisible();
   await page.locator('#cloud-recovery-reminder summary').click();
   await expect(page.locator('#cloud-recovery-reminder p')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('account-notices-mobile.png') });
   await page.locator('#cloud-dismiss-recovery-btn').click();
   await expect(page.locator('#cloud-recovery-reminder')).toHaveCount(0);
+  await expect(trial).toBeVisible();
+  await expect(page.locator('.cloud-trial-badge')).toBeHidden();
   await page.reload();
   await expect(page.locator('#cloud-avatar-btn')).toBeVisible();
   await expect(page.locator('#cloud-recovery-reminder')).toHaveCount(0);

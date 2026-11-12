@@ -4,6 +4,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- On phones, show one account notice at a time. A new trial account sees the recovery-code reminder first, with the days remaining shown in the header; the trial notice returns once the reminder is saved or dismissed. This gives back a row of screen height on first use.
+- Plainer wording in the optional tools: confirmations end with a period, "Executive Morning Radar & Hiring Digest" is "Morning Radar and hiring digest", "Top 5 High-Momentum Accounts" is "Top 5 accounts by hiring activity", and badge tooltips no longer claim a "first-mover advantage" or "high leverage".
+- Remove 17 unused functions from the workspace script (about 13 KB). No visible change.
 - Add three public guides: writing a first business development email to a hiring manager (with the Canadian and United States email rules to check), building a target account list for a staffing desk, and finding the hiring manager for a job posting. Each is listed on the guides page and in the sitemap, and the launch kit has a company Page post for each.
 - Remove decorative emoji from the workspace: headings, buttons, confirmations, badges, pipeline stages, location filters, and copied briefings are now plain text. Check marks, close buttons, and arrows are unchanged.
 - Replace combat and hype wording with plain descriptions. The account matrix quadrants are now "Warm and hiring", "Warm, hiring is quiet", "Hiring, few contacts", and "Watchlist"; "Executive Battle Plan" is "Daily plan"; "Cross-Hunt Sibling Cluster" is "Similar companies"; and "1-Click" buttons say what they do ("Copy plan", "Copy script").

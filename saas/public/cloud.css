@@ -3452,5 +3452,10 @@ a:hover { text-decoration: underline; }
   .cloud-shell .cloud-demo-banner .btn { width: auto; margin-left: auto; }
   .cloud-shell .cloud-trial-cta-actions { width: auto; margin-left: auto; flex: 0 0 auto; }
   .cloud-shell .cloud-trial-cta-actions .btn { flex: 0 0 auto; }
+  /* Phones show one account notice at a time. The recovery reminder can be
+     dismissed and comes first; until then the days remaining stay in the
+     header and the plan is under "Billing and plan" in the account menu. */
+  .cloud-account-status:has(> #cloud-recovery-reminder) > .cloud-trial-cta:not(#cloud-recovery-reminder) { display: none; }
+  .cloud-shell:has(#cloud-recovery-reminder) .cloud-trial-badge { display: inline-flex; background: transparent; border: 0; padding: 0; color: #b6eee2; font-size: 11px; font-weight: 600; }
 }
 
