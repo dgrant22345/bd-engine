@@ -62,3 +62,19 @@ test('signed-in bar follows the Bold look from one place', async () => {
   assert.match(bold, /\.cloud-shell \.brand-icon-xs svg rect \{ fill: #c6f432; \}/);
   assert.match(bold, /\.cloud-shell \.cloud-avatar \{ background: #232f17; color: #d8fa6b;/);
 });
+
+test('public pages settle on the Bold dark palette, last in brand.css', async () => {
+  const site = name => readFile(new URL(`../public/${name}`, import.meta.url), 'utf8');
+  const [brand, mark, landing, ats, notFound, guides] = await Promise.all([
+    site('brand.css'), site('brand-mark.svg'), site('index.html'), site('ats-checker.html'), site('404.html'), site('guides/index.html'),
+  ]);
+  const start = brand.indexOf('/* ── Bold dark (November 2026)');
+  assert.ok(start > 0, 'Bold dark block present');
+  const bold = brand.slice(start);
+  // Nothing after the Bold block may reintroduce a light public palette.
+  assert.doesNotMatch(bold, /#(?:f3f6fa|f8fafc|ffffff|fff)\b/i);
+  assert.match(bold, /\.landing, \.auth-page, \.trust-page, \.public-premium \{[^}]*color-scheme: dark;[^}]*--bold-bg: #0b0f14;[^}]*--bold-accent: #c6f432;/);
+  assert.match(brand, /@font-face \{\s*font-family: 'Space Grotesk';[^}]*url\('\/fonts\/space-grotesk-latin-wght-normal\.woff2'\)/);
+  assert.match(mark, /fill="#c6f432"/);
+  for (const html of [landing, ats, notFound, guides]) assert.match(html, /<meta name="theme-color" content="#0b0f14">/);
+});
