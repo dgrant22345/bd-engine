@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- The public site now has the same look as the workspace: the home page, sign-in and sign-up, the trust and status pages, the free ATS audit, the walkthrough, the guides and the not-found page are near-black with lime actions and Space Grotesk headings. The BD mark in the site header is now the lime tile, and the browser toolbar colour matches the page.
 - The bar across the top of the signed-in app now matches the new look: near-black, with the lime BD mark, the plan badge and the account button in the same lime-on-dark style as the workspace. It had kept the older navy and teal because an earlier stylesheet loaded after the new rules.
 - The dashboard now opens on who to call today: a large count and the three people at the top of your People list (people at companies with an open role first, then relationship priority), each with their role, why now, their last outreach and one next step that opens them in People. If none of them work at a hiring company, it says so instead of counting calls. It can be hidden from Dashboard options.
 - New look for the workspace: dark by default, with a near-black background, one lime accent for actions and selection, and Space Grotesk for page headings and headline numbers. Both fonts are now served by BD Engine itself. The signed-in top bar and notices match. Light is still available under Workspace options, and anyone who already chose Light or System keeps their choice.

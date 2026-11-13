@@ -1,4 +1,4 @@
-/* Public companion to the navy/teal workspace. All assets are local. */
+/* Public site styles. Layout and type first; the Bold dark block at the end sets every colour. All assets are local. */
 /* Inter variable font, self-hosted (SIL Open Font License, see /fonts/OFL.txt).
    Every public page loads this stylesheet, so the family is declared once here. */
 @font-face {
@@ -10,6 +10,11 @@
   font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap;
   src: url('/fonts/inter-latin-ext-wght-normal.woff2') format('woff2');
   unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+/* Space Grotesk variable font for headings (SIL OFL, see /fonts/SpaceGrotesk-OFL.txt). */
+@font-face {
+  font-family: 'Space Grotesk'; font-style: normal; font-weight: 300 700; font-display: swap;
+  src: url('/fonts/space-grotesk-latin-wght-normal.woff2') format('woff2');
 }
 .landing, .auth-page, .trust-page {
   --landing-bg: #f3f6fa; --landing-ink: #152538; --landing-muted: #526272;
@@ -139,3 +144,153 @@
 @media (prefers-reduced-motion: reduce) {
   .landing *, .auth-page * { animation: none; transition: none; scroll-behavior: auto; }
 }
+
+/* ── Bold dark (November 2026) ─────────────────────────────────────────────
+   Public pages follow the workspace's Bold dark look: a near-black ground,
+   one lime accent for actions, Space Grotesk headings. This block is last so
+   it settles every earlier public palette (cloud.css and the rules above). */
+.landing, .auth-page, .trust-page, .public-premium {
+  color-scheme: dark;
+  --bold-bg: #0b0f14; --bold-surface: #141b24; --bold-surface-2: #18212b; --bold-line: #222b36;
+  --bold-text: #f2f5f7; --bold-soft: #c3ccd5; --bold-muted: #9aa7b4;
+  --bold-accent: #c6f432; --bold-accent-hover: #d8fa6b; --bold-on-accent: #0b0f14;
+  --bold-accent-soft: #232f17; --bold-accent-line: #3b4c1d; --bold-control: #64748b;
+  --landing-bg: var(--bold-bg); --landing-surface: var(--bold-surface); --landing-surface-soft: var(--bold-accent-soft);
+  --landing-ink: var(--bold-text); --landing-muted: var(--bold-muted);
+  --landing-border: var(--bold-line); --landing-border-strong: var(--bold-control);
+  --landing-accent: var(--bold-accent); --landing-accent-hover: var(--bold-accent-hover);
+  --bg-base: var(--bold-bg); --bg-surface: var(--bold-surface); --bg-card: var(--bold-surface); --bg-card-hover: var(--bold-surface-2); --bg-input: var(--bold-bg);
+  --text-primary: var(--bold-text); --text-secondary: var(--bold-soft); --text-muted: var(--bold-muted); --text-inverse: var(--bold-on-accent);
+  --accent: var(--bold-accent); --accent-hover: var(--bold-accent-hover); --accent-text: var(--bold-accent); --accent-soft: var(--bold-accent-soft); --accent-strong: var(--bold-accent);
+  --green: #4ade80; --amber: #fbbf24; --red: #f87171;
+  --border: var(--bold-line); --border-subtle: var(--bold-line); --border-strong: var(--bold-control); --control-border: var(--bold-control);
+  --surface: var(--bold-surface); --surface-strong: var(--bold-surface-2); --muted: var(--bold-muted);
+  --shadow-sm: 0 1px 3px #0006; --shadow-md: 0 4px 16px #0008; --shadow-lg: 0 16px 48px #000a;
+  background: var(--bold-bg); color: var(--bold-text);
+}
+.landing :is(.hero-title, .section-title, h1, h2), .auth-header :is(h1, h2), .trust-page :is(h1, h2), .public-premium :is(h1, h2) {
+  font-family: 'Space Grotesk', Inter, system-ui, sans-serif; color: var(--bold-text);
+}
+.landing :is(h3, h4), .public-premium h3, .trust-page h3 { color: var(--bold-text); }
+.landing :is(p, li, dd, dt), .trust-page :is(p, li) { color: var(--bold-soft); }
+.landing a:not(.btn, .link-btn), .auth-page a:not(.btn, .link-btn), .trust-page a:not(.btn, .link-btn), .public-premium a:not(.btn, .button-link, .header-cta) { color: var(--bold-accent); }
+.landing :focus-visible, .auth-page :focus-visible, .trust-page :focus-visible, .public-premium :focus-visible { outline-color: var(--bold-accent); }
+
+/* Navigation */
+.landing .landing-nav, .trust-page .landing-nav, .public-premium .site-header { background: var(--bold-bg); border-bottom: 1px solid var(--bold-line); color: var(--bold-text); }
+.landing .landing-nav .nav-link, .trust-page .landing-nav .nav-link, .public-premium .site-header :is(nav a, .site-nav a) { color: var(--bold-soft); }
+.landing .landing-nav .nav-link:hover, .public-premium .site-header :is(nav a, .site-nav a):hover { background: #ffffff0d; color: var(--bold-text); }
+
+/* Actions: lime fill with dark text; secondary actions are outlined. */
+.landing .btn-primary, .auth-page .btn-primary, .trust-page .btn-primary, .landing .coverage-proof .btn-primary,
+.landing .landing-nav .btn-primary, .public-premium :is(.button-link, .header-cta, .btn-primary, button[type="submit"]), .public-premium .site-header .header-cta {
+  background: var(--bold-accent); border-color: var(--bold-accent); color: var(--bold-on-accent); box-shadow: none; font-weight: 700;
+}
+.landing .btn-primary:hover, .auth-page .btn-primary:hover, .trust-page .btn-primary:hover, .landing .coverage-proof .btn-primary:hover,
+.landing .landing-nav .btn-primary:hover, .public-premium :is(.button-link, .header-cta, .btn-primary, button[type="submit"]):hover, .public-premium .site-header .header-cta:hover {
+  background: var(--bold-accent-hover); border-color: var(--bold-accent-hover); color: var(--bold-on-accent);
+}
+.landing :is(.btn-ghost, .btn-secondary), .auth-page :is(.btn-ghost, .btn-secondary), .trust-page :is(.btn-ghost, .btn-secondary) {
+  background: transparent; border-color: var(--bold-control); color: var(--bold-text);
+}
+.landing :is(.btn-ghost, .btn-secondary):hover, .auth-page :is(.btn-ghost, .btn-secondary):hover, .trust-page :is(.btn-ghost, .btn-secondary):hover { background: var(--bold-surface-2); border-color: var(--bold-soft); color: var(--bold-text); }
+
+/* Hero */
+.landing .hero { background: radial-gradient(ellipse at 82% 30%, #c6f43214 0, transparent 46%); }
+.landing .hero-title em { color: var(--bold-accent); }
+.landing .hero-badge { color: var(--bold-accent); }
+.landing .hero-badge::before { background: var(--bold-accent); box-shadow: 0 0 0 4px #c6f4321f; }
+.landing .persona-switch { background: var(--bold-surface); border-color: var(--bold-line); box-shadow: none; }
+.landing .persona-option { color: var(--bold-soft); }
+.landing .persona-option.is-active { background: var(--bold-accent-soft); color: var(--bold-accent-hover); }
+.landing :is(.hero-note, .hero-subtitle) { color: var(--bold-muted); }
+.landing .hero-subtitle { color: var(--bold-soft); }
+
+/* Product preview: drawn like the dark workspace. */
+.landing .product-preview { background: var(--bold-surface); border-color: var(--bold-line); box-shadow: 0 24px 56px #0009; }
+.landing .product-preview-header { background: var(--bold-bg); color: var(--bold-soft); border-bottom: 1px solid var(--bold-line); }
+.landing .product-preview-header .preview-status { background: var(--bold-accent-soft); color: var(--bold-accent-hover); border-color: var(--bold-accent-line); }
+.landing .preview-tabs { background: var(--bold-surface); border-color: var(--bold-line); }
+.landing .preview-tabs button { color: var(--bold-soft); }
+.landing .preview-tabs button[aria-selected="true"] { background: var(--bold-accent-soft); color: var(--bold-accent-hover); }
+.landing .preview-score { border-color: #2a3644; border-top-color: var(--bold-accent); border-right-color: var(--bold-accent); border-bottom-color: var(--bold-accent); }
+.landing .preview-score :is(strong, span) { color: var(--bold-text); }
+.landing .preview-stats > div { background: var(--bold-bg); border-color: var(--bold-line); }
+.landing .preview-stats dd { color: var(--bold-text); }
+.landing .preview-avatar { background: var(--bold-accent-soft); color: var(--bold-accent-hover); }
+.landing .preview-draft { background: var(--bold-bg); border-left-color: var(--bold-accent); color: var(--bold-soft); }
+.landing .preview-interactive-cta { border-top-color: var(--bold-line); }
+.landing .landing-pill--surge, .landing .pricing-badge, .landing .workflow-step-number, .public-premium .utility-promises li {
+  background: var(--bold-accent-soft); color: var(--bold-accent-hover); border-color: var(--bold-accent-line);
+}
+
+/* Sections and cards */
+.landing .social-proof-bar { background: var(--bold-surface); border-color: var(--bold-line); }
+.landing .social-proof-bar .proof-item strong { color: var(--bold-text); }
+.landing .social-proof-bar .proof-item span { color: var(--bold-muted); }
+.landing :is(.workflow-step, .pricing-card, .faq-item) { background: var(--bold-surface); border-color: var(--bold-line); box-shadow: none; }
+.landing .faq-item[open], .landing .pricing-card { border-color: var(--bold-accent-line); }
+.landing .coverage-proof { background: radial-gradient(ellipse at 100% 0%, #c6f4321a, transparent 60%), var(--bold-surface); border: 1px solid var(--bold-line); }
+.landing .coverage-proof .section-kicker, .landing .section-kicker, .public-premium :is(.eyebrow, .card-label) { color: var(--bold-accent); }
+.landing .coverage-proof p { color: var(--bold-soft); }
+.landing .coverage-proof .coverage-caveat { color: var(--bold-muted); }
+
+/* Sign-in, sign-up and trust pages */
+.auth-page { background: radial-gradient(ellipse at 15% 0%, #c6f43212 0, transparent 45%), var(--bold-bg); }
+.auth-card { background: var(--bold-surface); border-color: var(--bold-line); border-top-color: var(--bold-accent); box-shadow: 0 18px 52px #0009; }
+.auth-page .form-group :is(input, select), .public-premium :is(.checker-panel textarea, .checker-panel input, input, select, textarea) {
+  background: var(--bold-bg); border-color: var(--bold-control); color: var(--bold-text);
+}
+.auth-page .form-group :is(input, select):focus, .public-premium :is(input, select, textarea):focus { border-color: var(--bold-accent); box-shadow: 0 0 0 3px #c6f43226; }
+.auth-page ::placeholder, .public-premium ::placeholder { color: #8a97a5; }
+.trust-page .trust-meta span { background: var(--bold-surface-2); color: var(--bold-soft); }
+
+/* Utility and guide pages */
+.public-premium :is(h1, h2, h3), .public-premium .article-body strong { color: var(--bold-text); }
+.public-premium .article-body :is(p, li), .public-premium .note, .public-premium :is(.site-footer, footer) { color: var(--bold-soft); }
+.public-premium :is(.site-footer, footer) { border-color: var(--bold-line); }
+.public-premium :is(.checker-panel, .guide-card, .guide-section, .guide-callout, .article-aside) { background: var(--bold-surface); border-color: var(--bold-line); box-shadow: none; }
+.public-premium .guide-cta { background: var(--bold-accent-soft); border-color: var(--bold-accent-line); }
+.public-premium .sample-button { background: transparent; border-color: var(--bold-control); color: var(--bold-text); }
+.public-premium .sample-button:hover { background: var(--bold-surface-2); border-color: var(--bold-soft); color: var(--bold-text); }
+
+/* Status pills keep their meaning in dark: green for a warm path, amber for an ageing role. */
+.landing .landing-pill--warm { background: #12301f; color: #86efac; border-color: #1f5135; }
+.landing .landing-pill--stale { background: #2b2210; color: #fcd34d; border-color: #5a4512; }
+
+/* Brand marks drawn inline (trust and sign-in pages) use the lime tile. */
+:is(.trust-page, .auth-page) :is(.brand-icon, .brand-icon-sm) svg rect { fill: var(--bold-accent); }
+:is(.trust-page, .auth-page) :is(.brand-icon, .brand-icon-sm) svg path { fill: var(--bold-on-accent); }
+:is(.trust-page, .auth-page) :is(.brand-icon, .brand-icon-sm) svg path + path { fill-opacity: .72; }
+
+/* Footer links: one colour, and the Guides link lines up with the buttons beside it. */
+.landing-footer { background: var(--bold-bg); border-top-color: var(--bold-line); }
+.landing-footer-links .link-btn { display: inline-flex; align-items: center; color: var(--bold-soft); }
+.landing-footer-links .link-btn:hover { color: var(--bold-accent); }
+.landing-footer :is(.brand-text, .landing-footer-copy) { color: var(--bold-muted); }
+.landing-footer .brand-text { color: var(--bold-text); }
+
+.landing .skip-link, .public-premium .skip-link { background: var(--bold-accent); color: var(--bold-on-accent); }
+html:has(> body.public-premium) { background: #0b0f14; color-scheme: dark; }
+
+/* ATS audit results */
+.public-premium { --success: #4ade80; --warning: #fbbf24; --danger: #f87171; }
+.public-premium :is(.checker-result h2, .coverage-notes h2, .coverage-notes h3, .coverage-summary dd) { color: var(--bold-text); }
+.public-premium .audit-table-wrap { background: var(--bold-surface); border-color: var(--bold-line); }
+.public-premium :is(th, td) { border-bottom-color: var(--bold-line); }
+.public-premium th { color: var(--bold-muted); }
+.public-premium td { color: var(--bold-soft); }
+.public-premium .audit-status { background: #1c2530; color: var(--bold-soft); }
+.public-premium .audit-status-recognized { background: #12301f; color: #86efac; }
+.public-premium .audit-status-review { background: #2b2210; color: #fcd34d; }
+.public-premium .audit-status-invalid { background: #3a1518; color: #fca5a5; }
+.public-premium .result-actions :is(a, button) { background: transparent; border-color: var(--bold-control); color: var(--bold-text); }
+.public-premium .result-actions :is(a, button):hover { background: var(--bold-surface-2); border-color: var(--bold-soft); color: var(--bold-text); }
+.public-premium .result-actions .primary-workflow { background: var(--bold-accent-soft); border-color: var(--bold-accent); color: var(--bold-accent-hover); }
+
+/* Sign-in messages */
+.auth-error { background: #3a1518; border-color: #7f1d1d; color: #fca5a5; }
+.auth-notice--intent { background: var(--bold-accent-soft); border-color: var(--bold-accent-line); color: var(--bold-accent-hover); }
+.auth-notice--success { background: #12301f; border-color: #1f5135; color: #86efac; }
+/* The header button sits inside the nav, whose link colour would otherwise win. */
+.public-premium .site-header :is(nav a, .site-nav a).header-cta, .public-premium .site-header :is(nav a, .site-nav a).header-cta:hover { color: var(--bold-on-accent); }
