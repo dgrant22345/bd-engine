@@ -3442,6 +3442,20 @@ a:hover { text-decoration: underline; }
 .landing .social-proof-bar { background: #edf3f2; border-color: #d5dce2; }
 .landing .social-proof-bar .proof-item strong { color: #18232f; }
 .landing .social-proof-bar .proof-item span { color: #526272; }
+/* Signed-in chrome follows the workspace's Bold dark look (November 2026):
+   near-black bars, light text and the lime accent for actions. */
+.cloud-shell { --accent: #c6f432; --accent-hover: #d8fa6b; --accent-soft: #232f17; }
+.cloud-shell .cloud-topbar { background: #0b0f14; border-bottom-color: #222b36; }
+.cloud-shell .cloud-demo-banner, .cloud-shell .cloud-trial-cta, .cloud-account-status { background: #141b24; color: #d6dde3; }
+.cloud-shell .cloud-demo-banner, .cloud-shell .cloud-trial-cta, .cloud-account-status:has(> .cloud-trial-cta) { border-bottom-color: #222b36; }
+.cloud-shell .cloud-demo-banner strong { color: #f2f5f7; }
+.cloud-shell .cloud-demo-banner span, .cloud-shell .cloud-trial-cta-copy > strong, .cloud-shell .cloud-trial-cta .cloud-notice-close, .cloud-trial-details { color: #c3ccd5; }
+.cloud-shell .cloud-trial-cta-copy .cloud-trial-cta-kicker { color: #c6f432; }
+.cloud-shell .cloud-demo-banner .btn, .cloud-shell .cloud-trial-cta .btn { background: #c6f432; border-color: #c6f432; color: #0b0f14; font-weight: 700; }
+.cloud-shell .cloud-demo-banner .btn:hover, .cloud-shell .cloud-trial-cta .btn:hover { background: #d8fa6b; border-color: #d8fa6b; color: #0b0f14; }
+.cloud-trial-details > summary:focus-visible, .cloud-shell .cloud-user-menu button:focus-visible { outline-color: #c6f432; }
+.cloud-shell .cloud-plan-badge { background: #232f17; color: #d8fa6b; border-color: #3b4c1d; }
+.cloud-app-container, .cloud-app-frame { background: #0b0f14; }
 @media (max-width: 760px) {
   .cloud-shell .cloud-account-status > .cloud-trial-cta { flex-wrap: wrap; }
   .cloud-account-status .cloud-trial-details { flex: 1 1 140px; }
@@ -3456,6 +3470,6 @@ a:hover { text-decoration: underline; }
      dismissed and comes first; until then the days remaining stay in the
      header and the plan is under "Billing and plan" in the account menu. */
   .cloud-account-status:has(> #cloud-recovery-reminder) > .cloud-trial-cta:not(#cloud-recovery-reminder) { display: none; }
-  .cloud-shell:has(#cloud-recovery-reminder) .cloud-trial-badge { display: inline-flex; background: transparent; border: 0; padding: 0; color: #b6eee2; font-size: 11px; font-weight: 600; }
+  .cloud-shell:has(#cloud-recovery-reminder) .cloud-trial-badge { display: inline-flex; background: transparent; border: 0; padding: 0; color: #d8fa6b; font-size: 11px; font-weight: 600; }
 }
 
