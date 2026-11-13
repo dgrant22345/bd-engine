@@ -494,3 +494,45 @@ test('a delayed outreach load does not pull focus away from another person secti
     await expect(app.getByLabel('Message', { exact: true })).toBeFocused();
   } finally { release(); await page.unroute(path); }
 });
+
+test('People opens ranked by who is worth contacting, with the evidence on each row', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('#app')).toBeVisible();
+  const frame = page.frames().find(item => item.url().includes('/app/'));
+  await frame.evaluate(() => { window.location.hash = '#/contacts'; });
+
+  const rows = app.locator('[data-person-row]');
+  await expect(rows).toHaveCount(4);
+  await expect(app.getByLabel('Sort people')).toHaveValue('call');
+  await expect(app.locator('.people-list-caption')).toContainText('Companies with open roles first, then relationship priority');
+  const first = rows.first();
+  await expect(first.locator('.person-name')).toHaveText('Priya Shah');
+  await expect(first.locator('.person-avatar')).toHaveText('PS');
+  await expect(first.locator('td .people-hiring')).toHaveText('2 open roles · 2 new this week');
+  await expect(first.locator('td .people-hiring')).toHaveAttribute('data-hiring', 'new');
+  await expect(first.locator('.people-priority-value')).toHaveText('93');
+  await expect(first.locator('.people-stage')).toHaveText('Contacted');
+  await expect(first.locator('.people-next')).toContainText('Follow up');
+  await expect(rows.nth(1).locator('.people-next')).toHaveText('Send your message');
+
+  // The priority heading sorts by relationship priority and the address keeps the choice.
+  await app.getByRole('button', { name: /^Priority/ }).click();
+  await expect(app.getByLabel('Sort people')).toHaveValue('priority');
+  expect(await frame.evaluate(() => window.location.hash)).toContain('sort=priority');
+  await app.getByLabel('Sort people').selectOption('call');
+  await app.locator('#contacts-filter-form').evaluate(form => form.requestSubmit());
+  await expect.poll(() => frame.evaluate(() => window.location.hash)).toBe('#/contacts');
+
+  const table = await new AxeBuilder({ page }).include('iframe.cloud-app-frame').analyze();
+  expect(table.violations.filter(violation => violation.nodes.some(node => JSON.stringify(node.target).includes('people')))).toEqual([]);
+
+  // Phone: the company and its hiring line move under the name; nothing overflows.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(first.locator('.people-company-compact')).toHaveText('Northstar Robotics · 2 open roles · 2 new this week');
+  await expect(first.locator('.people-priority')).toBeHidden();
+  expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect(errors).toEqual([]);
+});

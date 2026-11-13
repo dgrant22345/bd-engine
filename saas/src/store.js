@@ -3,7 +3,7 @@ import { EXPECTED_CONTACT_HEADERS, assertContactImportReadable, parseAccountList
 import { XMLParser } from 'fast-xml-parser';
 import { dbClassifyLegacyAccounts, dbCreateCommercialOutcome, dbDeleteCommercialOutcomes, dbGetCommercialOutcomeSummary, dbListCommercialOutcomes, dbListLegalConsents, dbLoadAllCommercialOutcomes, dbLoadAllTenantData, dbLoadBackgroundJob, dbLoadRecentBackgroundJobs, dbLoadRecoverableBackgroundJobs, dbRebalanceTrackedAccounts, dbRecordAuditLog, dbRecordImportRun, dbRecordProductEvent, dbSaveBackgroundJob, dbSaveTenantData, isDbEnabled } from './db.js';
 import { primeTenantRelationalMirror, syncTenantRelationalChanges, syncTenantRelationalMirror, wipeTenantRelationalMirror } from './relational-writes.js';
-import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
+import { compareTenantDataCounts, findTenantAccountsRelational, findTenantConfigsRelational, findTenantContactsRelational, findTenantJobsRelational, getPeopleContextRelational, getTenantFiltersRelational, getTenantRelationalStats, getTenantUsageCountsRelational, loadTenantRelationalData } from './relational-reads.js';
 import { buildProductEvent } from './product-analytics.js';
 import { summarizeOperationalJobs } from './operational-metrics.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
@@ -2839,8 +2839,55 @@ export function createStore() {
       const minScore = Number(query.minScore || 0);
       if (minScore > 0) items = items.filter((item) => Number(item.priorityScore || 0) >= minScore);
       if (query.outreachStatus) items = items.filter((item) => normalizeKey(item.outreachStatus) === normalizeKey(query.outreachStatus));
-      items.sort((a, b) => compareContacts(a, b, query.sortBy));
+      const hiringAccounts = query.sortBy === 'call'
+        ? new Set(jobsForTenant(tenantId).filter(job => job.active && job.accountId).map(job => job.accountId))
+        : null;
+      items.sort((a, b) => compareContacts(a, b, query.sortBy, person => hiringAccounts?.has(person.accountId)));
       return paginate(items, query);
+    },
+
+    // Context for one page of the People list: active roles at each person's
+    // company (and how many were first seen in the past week) and the date of
+    // the last outreach recorded for the person. Returned separately so stored
+    // person records are never altered.
+    async getPeopleContext(tenantId, people = [], { now = new Date() } = {}) {
+      assertTenant(tenantId);
+      const startedAt = performance.now();
+      const accountIds = [...new Set(people.map(person => person.accountId).filter(Boolean))];
+      const contactIds = people.map(person => person.id).filter(Boolean);
+      const since = new Date(now.getTime() - 7 * 86400000).toISOString();
+      let context = null;
+      if (relationalContactSqlEnabledForTenant(tenantId)) {
+        try {
+          if (await hasRelationalParity(tenantId, true)) context = await getPeopleContextRelational(tenantId, { accountIds, contactIds, since });
+        } catch (error) {
+          console.error('Relational people context failed; using memory:', safeErrorSummary(error));
+        }
+      }
+      if (!context) {
+        await ensureDataLoaded(tenantId, true);
+        const wantedAccounts = new Set(accountIds); const wantedContacts = new Set(contactIds);
+        context = { roles: new Map(), lastOutreach: new Map() };
+        for (const job of jobsForTenant(tenantId)) {
+          if (!job.active || !wantedAccounts.has(job.accountId)) continue;
+          const entry = context.roles.get(job.accountId) || { openRoles: 0, newRoles7d: 0 };
+          entry.openRoles += 1;
+          if (String(job.firstSeenAt || job.createdAt || '') >= since) entry.newRoles7d += 1;
+          context.roles.set(job.accountId, entry);
+        }
+        for (const activity of activitiesForTenant(tenantId)) {
+          if (activity.type !== 'outreach' || !wantedContacts.has(activity.contactId)) continue;
+          if (String(activity.occurredAt || '') > (context.lastOutreach.get(activity.contactId) || '')) context.lastOutreach.set(activity.contactId, String(activity.occurredAt || ''));
+        }
+      }
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs > 250) console.warn(`Slow people context: saas/src/store.js getPeopleContext ${elapsedMs}ms`);
+      return Object.fromEntries(people.map(person => [person.id, {
+        linked: Boolean(person.accountId),
+        openRoles: context.roles.get(person.accountId)?.openRoles || 0,
+        newRoles7d: context.roles.get(person.accountId)?.newRoles7d || 0,
+        lastOutreachAt: context.lastOutreach.get(person.id) || '',
+      }]));
     },
 
     async patchContact(tenantId, contactId, patch) {

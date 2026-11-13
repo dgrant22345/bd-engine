@@ -40,7 +40,7 @@ export function validateSavedWork(kind, input = {}) {
     if (body.minRelevance && (!/^\d{1,3}$/.test(body.minRelevance) || Number(body.minRelevance) > 100)) throw fail('Use a fit score from 0 to 100.');
   } else {
     if (source.viewType && source.viewType !== 'people') throw fail('Unknown saved view type.');
-    const allowedSorts = ['name', 'name_desc', 'company', 'recent', 'priority'];
+    const allowedSorts = ['name', 'name_desc', 'company', 'recent', 'priority', 'call'];
     const allowedStages = ['', 'not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];
     body = { q: text(source.q || '', 240), outreachStatus: source.outreachStatus || '', sortBy: source.sortBy || 'name', minScore: String(source.minScore || '') };
     if (!allowedSorts.includes(body.sortBy) || !allowedStages.includes(body.outreachStatus) || (body.minScore && !/^\d{1,3}$/.test(body.minScore))) throw fail('Invalid People filters.');

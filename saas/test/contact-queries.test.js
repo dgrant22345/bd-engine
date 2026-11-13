@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.js';
-import { buildContactQuerySql, normalizeContactQuery, validateContactInput, resolveContactCompany } from '../src/contact-queries.js';
+import { buildContactQuerySql, compareContacts, normalizeContactQuery, validateContactInput, resolveContactCompany } from '../src/contact-queries.js';
 
 test('people filters and sorting operate across pages and remain tenant scoped', async () => {
   const store = createStore();
@@ -86,4 +86,35 @@ test('manual company changes update both rollups but preserve historical task an
   assert.equal((await store.getAccountDetail(tenant, newCompany.id)).account.connectionCount, 0);
   await store.patchContact(tenant, person.id, { notes: 'A note must not relink a person' });
   assert.equal(person.accountId, '');
+});
+
+test('"worth contacting first" puts people at companies with an active role ahead, then relationship priority', async () => {
+  const people = [
+    { id: 'a', fullName: 'Avery', accountId: 'quiet', priorityScore: 95 },
+    { id: 'b', fullName: 'Blake', accountId: 'hiring', priorityScore: 40 },
+    { id: 'c', fullName: 'Casey', accountId: 'hiring', priorityScore: 70 },
+    { id: 'd', fullName: 'Drew', accountId: '', priorityScore: 99 },
+    { id: 'e', fullName: 'Eden', accountId: 'hiring', priorityScore: 70 },
+  ];
+  const isHiring = person => person.accountId === 'hiring';
+  assert.deepEqual(people.slice().sort((x, y) => compareContacts(x, y, 'call', isHiring)).map(person => person.fullName), ['Casey', 'Eden', 'Blake', 'Drew', 'Avery']);
+  // Without hiring information it falls back to relationship priority.
+  assert.deepEqual(people.slice().sort((x, y) => compareContacts(x, y, 'call')).map(person => person.fullName), ['Drew', 'Avery', 'Casey', 'Eden', 'Blake']);
+
+  assert.equal(normalizeContactQuery({ sortBy: 'call' }).sortBy, 'call');
+  const built = buildContactQuerySql('tenant-a', { sortBy: 'call' });
+  assert.match(built.order, /^\(EXISTS \(SELECT 1 FROM jobs j WHERE j\.tenant_id = contacts\.tenant_id AND j\.account_id = contacts\.account_id AND j\.active\)\) DESC, priority_score DESC, /);
+  assert.deepEqual(built.params, ['tenant-a', 25, 0]);
+});
+
+test('the People list carries hiring and outreach context without altering stored people', async () => {
+  const store = createStore();
+  const tenantId = 'people-context';
+  store.ensureTenant({ id: tenantId, name: tenantId }, { id: `${tenantId}-owner` });
+  const unlinked = await store.addContact(tenantId, { fullName: 'No Company' });
+  const context = await store.getPeopleContext(tenantId, [unlinked, { id: 'missing', accountId: 'unknown-account' }]);
+  assert.deepEqual(context[unlinked.id], { linked: false, openRoles: 0, newRoles7d: 0, lastOutreachAt: '' });
+  assert.deepEqual(context.missing, { linked: true, openRoles: 0, newRoles7d: 0, lastOutreachAt: '' });
+  assert.equal(Object.hasOwn((await store.findContacts(tenantId, { id: unlinked.id })).items[0], 'listContext'), false);
+  assert.deepEqual(await store.getPeopleContext(tenantId, []), {});
 });

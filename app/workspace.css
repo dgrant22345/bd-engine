@@ -142,6 +142,30 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .people-role { margin-top: 3px; font-size: 12px; color: var(--muted); }
 .people-stage { display: inline-block; border: 1px solid var(--line); background: var(--surface-muted); color: var(--muted); border-radius: 4px; padding: 3px 6px; font-size: 11px; line-height: 1.35; }
 .people-stage[data-stage="ready_to_contact"], .people-stage[data-stage="replied"] { background: var(--accent-soft); color: var(--accent); border-color: var(--line-strong); }
+/* People list: who is worth contacting, and why. */
+.people-table .people-priority-col { width: 124px; }
+.people-table .people-stage-col { width: 200px; }
+.person-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.person-cell-text { min-width: 0; }
+.person-avatar { flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--line); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.people-company { font-weight: 550; }
+.people-hiring { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.people-hiring::before { content: ""; flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.people-hiring[data-hiring="new"] { color: var(--accent); font-weight: 600; }
+.people-hiring[data-hiring="new"]::before { background: var(--accent-fill); box-shadow: 0 0 0 3px var(--accent-soft); }
+.people-hiring[data-hiring="open"] { color: var(--text); }
+.people-hiring[data-hiring="open"]::before { background: var(--accent-fill); opacity: 0.55; }
+.people-hiring[data-hiring="unlinked"]::before { background: transparent; border: 1px solid var(--line-strong); }
+.people-priority { display: flex; align-items: center; gap: 8px; }
+.people-priority svg { flex: 1 1 auto; height: 6px; min-width: 36px; max-width: 64px; }
+.people-priority-track { fill: var(--line); }
+.people-priority-fill { fill: var(--accent-fill); }
+.people-priority-value { min-width: 2ch; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+.people-next { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.people-company-compact { display: none; margin-top: 3px; font-size: 12px; color: var(--muted); }
+/* With a person open the list keeps name, company and stage. */
+.has-person .people-table .people-priority-col, .has-person .people-table .people-priority-head, .has-person .people-table .people-priority-cell, .has-person .people-next, .has-person .person-avatar { display: none; }
+.has-person .people-table .people-stage-col { width: 128px; }
 .people-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line); padding: 12px 16px; font-size: 12px; color: var(--muted); }
 .people-pagination > div { display: flex; align-items: center; gap: 8px; }
 .people-empty { padding: 40px 24px; text-align: center; }
@@ -267,7 +291,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
   .people-table { min-width: 0; }
   .people-table col.people-name-col { width: auto; }
   .people-table col.people-stage-col { width: 108px; }
-  .people-table th:nth-child(3), .people-table td:nth-child(3), .people-table col:nth-child(3) { display: none; }
+  .people-table th:nth-child(3), .people-table td:nth-child(3), .people-table col:nth-child(3), .people-table th:nth-child(4), .people-table td:nth-child(4), .people-table col:nth-child(4) { display: none; }
+  .people-company-compact { display: block; }
+  .people-next { display: none; }
   .people-table th, .people-table td { padding: 10px 8px; }
   .people-table-scroll { max-height: none; }
   .people-pagination { flex-wrap: wrap; padding: 12px; }
