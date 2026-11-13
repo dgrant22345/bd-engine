@@ -68,8 +68,9 @@ test('reminders respect verified identity, retry with a stable key, deduplicate 
 });
 
 test('growth reports separate pending cohorts and never expose excluded inboxes', async () => {
-  const rows = [{ is_total: 1, signups: 5, paid: 2, eligible: 3, returned: 1 }, { is_total: 0, source: 'linkedin', campaign: 'audit', persona: 'bd', signups: 4, paid: 2, eligible: 2, returned: 1 }];
-  const summary = summarizeGrowthRows(rows); assert.deepEqual(summary.totals, { signups: 5, paid: 2, eligible: 3, returned: 1, pending: 2 });
+  const rows = [{ is_total: 1, signups: 5, paid: 2, eligible: 3, returned: 1, setup_completed: 4, target_added: 3, people_added: 2, outreach_drafted: 1 }, { is_total: 0, source: 'linkedin', campaign: 'audit', persona: 'bd', signups: 4, paid: 2, eligible: 2, returned: 1, setup_completed: 3 }];
+  const summary = summarizeGrowthRows(rows); assert.deepEqual(summary.totals, { signups: 5, paid: 2, eligible: 3, returned: 1, pending: 2, activation: { setupCompleted: 4, targetAdded: 3, peopleAdded: 2, outreachDrafted: 1 } });
+  assert.deepEqual(summary.bySource[0].activation, { setupCompleted: 3, targetAdded: 0, peopleAdded: 0, outreachDrafted: 0 });
   const output = await getGrowthOutcomes({ excludedEmails: ['OWNER@EXAMPLE.TEST'], now: new Date('2026-10-08T14:00:00Z'), ready: () => true, query: async (sql, params) => { assert.match(sql, /GROUPING SETS/); assert.equal(params[0], '2026-09-09'); assert.deepEqual(params[1], ['owner@example.test']); return { rows }; } });
   assert.doesNotMatch(JSON.stringify(output), /OWNER|owner@example/);
 });

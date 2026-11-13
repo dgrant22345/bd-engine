@@ -44,12 +44,23 @@ try {
     events.push(event(tenant, 'workspace_visited', '2026-09-23T12:00:00Z'));
   }
   events.push(event('duplicate', 'subscription_started', '2026-10-07T12:00:00Z'));
+  // Activation steps count once per workspace, only after signup, and never for excluded traffic.
+  for (const tenant of ['customer', 'duplicate', 'pending', 'test', 'demo', 'internal', 'reserved']) {
+    events.push(event(tenant, 'setup_completed', '2026-10-06T13:00:00Z', tenant === 'test' ? { trafficClass: 'test' } : {}));
+  }
+  for (const type of ['target_created', 'people_added', 'outreach_draft_saved']) events.push(event('customer', type, '2026-09-16T12:00:00Z'));
+  events.push(event('duplicate', 'target_created', '2026-09-16T12:00:00Z'), event('duplicate', 'target_created', '2026-09-17T12:00:00Z'));
+  events.push(event('duplicate', 'outreach_generated', '2026-09-16T12:00:00Z'), event('duplicate', 'outreach_draft_saved', '2026-09-16T13:00:00Z'));
+  events.push(event('pending', 'people_added', '2026-10-01T12:00:00Z'), event('pending', 'target_created', '2026-10-09T12:00:00Z'));
+  events.push(event('customer', 'people_added', '2026-09-16T12:00:00Z', { trafficClass: 'test' }));
   const users = ['customer','duplicate','pending','test','demo','internal','reserved'].map(tenant => ({ id: `${tenant}-user`, email: tenant === 'reserved' ? 'qa@example.com' : `${tenant}@company.io` }));
   const tenants = users.map(user => ({ id: user.id.replace('-user',''), slug: user.id === 'demo-user' ? 'bd-engine-demo' : user.id }));
   const prefix = `WITH analytics_events AS (SELECT * FROM jsonb_to_recordset($4::jsonb) AS e(tenant_id text,user_id text,event_type text,day text,created_at text,metadata jsonb)),users AS (SELECT * FROM jsonb_to_recordset($5::jsonb) AS u(id text,email text)),tenants AS (SELECT * FROM jsonb_to_recordset($6::jsonb) AS t(id text,slug text)), `;
   const result = await dbQuery(prefix + GROWTH_SQL.replace(/^WITH /,''), ['2026-09-09', ['internal@company.io'], '2026-10-08T14:00:00Z', JSON.stringify(events), JSON.stringify(users), JSON.stringify(tenants)]);
-  assert.deepEqual(summarizeGrowthRows(result.rows).totals, { signups: 3, paid: 3, eligible: 2, returned: 2, pending: 1 });
-  console.log('PostgreSQL workflow tools: scoped feedback, stale snapshots, reminder concurrency, and growth cohort exclusions passed.');
+  // 'pending' signed up on Oct 5: its people_added (Oct 1) precedes signup and its
+  // target_created (Oct 9) is after the report time, so neither counts.
+  assert.deepEqual(summarizeGrowthRows(result.rows).totals, { signups: 3, paid: 3, eligible: 2, returned: 2, pending: 1, activation: { setupCompleted: 3, targetAdded: 2, peopleAdded: 1, outreachDrafted: 2 } });
+  console.log('PostgreSQL workflow tools: scoped feedback, stale snapshots, reminder concurrency, growth cohort exclusions, and activation steps passed.');
 } finally {
   for (const table of ['saved_work','tasks','activities','board_configs','jobs','contacts','accounts','tenant_data','memberships']) await dbQuery(`DELETE FROM ${table} WHERE tenant_id=$1`, [id]);
   await dbQuery('DELETE FROM tenants WHERE id=$1', [id]); await dbQuery('DELETE FROM users WHERE id=$1', [userId]);
