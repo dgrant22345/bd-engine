@@ -26,7 +26,7 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
   }
   await explanation.locator('summary').press('Enter');
   expect((await app.locator('.jobs-table tbody > tr').boundingBox()).height).toBeLessThan(550);
-  const timing = app.locator('td[data-label="Timing"] details');
+  const timing = app.locator('td[data-label="Role"] details.job-timing');
   await timing.locator('summary').click();
   await expect(timing).toContainText('Retrieved');
   expect(await app.locator('html').evaluate(el => el.scrollWidth <= el.ownerDocument.defaultView.innerWidth + 1)).toBeTruthy();

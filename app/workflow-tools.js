@@ -7,7 +7,7 @@ window.bdWorkflowTools = (() => {
     const feedback = item.relevanceFeedback || {};
     const disabled = context.canMutate() ? '' : ' disabled';
     return `<div class="job-feedback" data-job-feedback="${esc(item.id)}" data-version="${esc(feedback.updatedAt || '')}" role="group" aria-label="Workspace feedback for ${esc(item.title)}">
-      <span class="small muted">Workspace feedback</span><div class="micro-button-row">
+      <span class="visually-hidden">Workspace feedback</span><div class="micro-button-row">
       ${[['relevant', 'Relevant'], ['not_relevant', 'Not relevant']].map(([vote, label]) => `<button type="button" class="micro-button" data-job-vote="${vote}" aria-pressed="${feedback.vote === vote}"${disabled}>${label}</button>`).join('')}
       <button type="button" class="micro-button" data-job-vote=""${disabled}${feedback.vote ? '' : ' hidden'}>Clear</button></div>
       <p class="small" data-feedback-status role="status"></p>

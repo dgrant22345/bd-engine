@@ -11620,53 +11620,16 @@ async function renderJobsView() {
   };
 
   appRoot.innerHTML = `
-    <div class="compact-page-intro"><p>Source-backed openings. Role relevance describes the job, not candidate suitability.</p><strong>${pluralize(result.total, 'result')}</strong></div>
-
-    <section class="table-card">
-      <div class="panel-header">
-        <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><p class="muted small">${focusConfigured ? 'Jobs are ranked against your saved role, industry, and work-style focus.' : 'Rank jobs by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>, then filter by company, platform, and recency.'}</p></div>
+    <section class="table-card jobs-board">
+      <div class="panel-header jobs-board__head">
+        <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><div class="compact-page-intro jobs-board__summary"><strong>${pluralize(result.total, 'result')}</strong><p>${focusConfigured ? 'Source-backed openings, ranked against your saved role, industry and work-style focus.' : 'Source-backed openings. Rank them by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>.'} Fit describes the role, not a candidate.</p></div></div>
         <div class="panel-actions">
           <a class="secondary-button secondary-button--sm" href="#/admin/jobs">Check sources & refresh</a>
           ${stateBootstrap.session?.readOnly ? '' : '<button class="ghost-button ghost-button--sm" type="button" data-action="save-job-search">Save search</button><button class="ghost-button ghost-button--sm" type="button" data-action="open-job-searches">Saved searches</button>'}
           ${renderExportOptions('jobs', 'Job options')}
         </div>
       </div>
-      <div class="job-preset-strip" role="group" aria-label="Job quick filters">
-        <span class="job-preset-label">Quick filters:</span>
-        <button class="job-preset-chip${activeJobPresets.all ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.all}" data-action="apply-job-preset" data-preset="all">All Roles</button>
-        <button class="job-preset-chip${activeJobPresets.target_roles ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.target_roles}" data-action="apply-job-preset" data-preset="target_roles">My target roles only</button>
-        <button class="job-preset-chip${activeJobPresets.canada ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.canada}" data-action="apply-job-preset" data-preset="canada">Canada only</button>
-        <button class="job-preset-chip${activeJobPresets.network ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.network}" data-action="apply-job-preset" data-preset="network">In my network</button>
-        <button class="job-preset-chip${activeJobPresets.pipeline ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.pipeline}" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
-      </div>
-      <div class="job-results-context muted small">
-        <p role="status">${pluralize(result.total, 'result')}${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}. This is your imported inventory, not a search of every job on the web.</p>
-        <details class="job-results-help" id="job-filter-explanation">
-          <summary>Why am I seeing these jobs?</summary>
-          <div class="job-results-help__body">
-            <p><strong>Import coverage and shortlist filters are different</strong></p>
-            <p>Posting status: ${appState.jobQuery.active === 'true' ? 'active jobs only' : appState.jobQuery.active === 'false' ? 'inactive jobs only' : 'active and inactive jobs'}.</p>
-            <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
-            <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
-            <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>
-            <p>Open a job’s relevance reasons to understand its score. Excluded title phrases lower relevance; they are not proof of a failed import. Adjust your <a href="#/admin/search-focus">saved focus</a>, use <strong>All Roles</strong> to broaden the list, or <a href="#/admin/jobs">check source coverage and refresh errors</a>.</p>
-          </div>
-        </details>
-        ${focusConfigured ? `<details class="job-focus-explanation"><summary>Saved focus &amp; how matching works</summary>
-          <dl>
-            <dt>Target titles</dt><dd>${escapeHtml(searchFocus.targetRoles || 'No title restriction')}</dd>
-            <dt>Excluded titles</dt><dd>${escapeHtml(searchFocus.excludedRoles || 'None')}</dd>
-            <dt>Preferred industries</dt><dd>${escapeHtml(searchFocus.targetIndustries || 'Any')}</dd>
-            <dt>Work-style preference</dt><dd>${escapeHtml(searchFocus.workStyle || 'any')}</dd>
-            <dt>Saved threshold</dt><dd>${escapeHtml(targetRoleThreshold)}+</dd>
-          </dl>
-          <p>Exact titles rank highest; related recruiting titles can include different seniority levels. When the focus filter is on, jobs must match your focus as well as meet the score cutoff. Lowering the cutoff does not include titles outside your focus or excluded listings.</p>
-          <p>Industry and work-style preferences affect ranking; they are not strict filters. Saving your focus recalculates existing jobs; it does not search new sources.</p>
-        </details>` : ''}
-        <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a>
-        ${appState.jobQuery.minRelevance ? '<button class="ghost-button ghost-button--xs" type="button" data-action="apply-job-preset" data-preset="all_titles">Remove focus filter</button>' : ''}
-      </div>
-      ${getActiveJobFilters().length ? `<div class="job-active-filters" role="group" aria-label="Applied role filters"><span class="muted small">Applied:</span>${getActiveJobFilters().map(filter => `<button class="job-preset-chip" type="button" data-action="remove-job-filter" data-filter="${escapeAttr(filter.key)}" aria-label="${escapeAttr(`Remove ${filter.text}`)}"><span>${escapeHtml(filter.text)}</span><span aria-hidden="true">×</span></button>`).join('')}</div>` : ''}
+      <div class="jobs-filter-bar">
       <form id="jobs-filter-form" class="filter-grid filter-grid--compact list-filter-grid list-filter-grid--jobs">
         ${renderField('Search', `<input name="q" value="${escapeAttr(appState.jobQuery.q)}" placeholder="Role, company, location">`)}
         ${renderField('Network', `<select name="hasContacts"><option value="">All companies</option><option value="true" ${selected(appState.jobQuery.hasContacts, 'true')}>In my network (has contacts)</option></select>`)}
@@ -11688,6 +11651,44 @@ async function renderJobsView() {
           </div>
         </details>
       </form>
+      <div class="job-preset-strip" role="group" aria-label="Job quick filters">
+        <span class="job-preset-label">Show</span>
+        <button class="job-preset-chip${activeJobPresets.all ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.all}" data-action="apply-job-preset" data-preset="all">All Roles</button>
+        <button class="job-preset-chip${activeJobPresets.target_roles ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.target_roles}" data-action="apply-job-preset" data-preset="target_roles">My target roles only</button>
+        <button class="job-preset-chip${activeJobPresets.canada ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.canada}" data-action="apply-job-preset" data-preset="canada">Canada only</button>
+        <button class="job-preset-chip${activeJobPresets.network ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.network}" data-action="apply-job-preset" data-preset="network">In my network</button>
+        <button class="job-preset-chip${activeJobPresets.pipeline ? ' is-active' : ''}" type="button" aria-pressed="${activeJobPresets.pipeline}" data-action="apply-job-preset" data-preset="pipeline">In Pipeline (${formatNumber(result.summary?.pipelineTotal ?? Object.keys(appState.jobPipelineStages || {}).length)})</button>
+      </div>
+      ${getActiveJobFilters().length ? `<div class="job-active-filters" role="group" aria-label="Applied role filters"><span class="muted small">Applied:</span>${getActiveJobFilters().map(filter => `<button class="job-preset-chip" type="button" data-action="remove-job-filter" data-filter="${escapeAttr(filter.key)}" aria-label="${escapeAttr(`Remove ${filter.text}`)}"><span>${escapeHtml(filter.text)}</span><span aria-hidden="true">×</span></button>`).join('')}</div>` : ''}
+      </div>
+      <div class="job-results-context jobs-board__context muted small">
+        <p role="status">${pluralize(result.total, 'result')}${appState.jobQuery.geography ? ` · ${escapeHtml(appState.jobQuery.geography.replaceAll('_', ' '))}` : ' · all imported locations'}${appState.jobQuery.minRelevance ? ` · saved focus, score ${escapeHtml(appState.jobQuery.minRelevance)}+` : ' · no focus cutoff'}.</p>
+        <details class="job-results-help" id="job-filter-explanation">
+          <summary>Why am I seeing these jobs?</summary>
+          <div class="job-results-help__body">
+            <p><strong>Import coverage and shortlist filters are different</strong></p>
+            <p>This list is your imported inventory, not a search of every job on the web.</p>
+            <p>Posting status: ${appState.jobQuery.active === 'true' ? 'active jobs only' : appState.jobQuery.active === 'false' ? 'inactive jobs only' : 'active and inactive jobs'}.</p>
+            <p>${appState.jobQuery.minRelevance ? `This list requires a relevance score of at least ${escapeHtml(appState.jobQuery.minRelevance)}. Jobs below that score can still be imported successfully.` : 'No minimum relevance score is applied to this list.'}</p>
+            <p>${appState.jobQuery.geography ? `Country/region filter: ${escapeHtml(appState.jobQuery.geography)}. Jobs without matching location evidence may be excluded.` : 'No country/region filter is selected.'}</p>
+            <p>Other active filters: ${escapeHtml(Object.entries(appState.jobQuery).filter(([key, value]) => ['q', 'company', 'accountId', 'workStyle', 'hasContacts', 'minConnections', 'ats', 'recencyDays', 'isNew', 'pipelineOnly', 'ids'].includes(key) && value).map(([key, value]) => `${({ q: 'Search', company: 'Company', accountId: 'Account', workStyle: 'Work style', hasContacts: 'Has contacts', minConnections: 'Minimum connections', ats: 'Source platform', recencyDays: 'Recent days', isNew: 'New only', pipelineOnly: 'Saved pipeline', ids: 'Selected roles' })[key]}: ${key === 'ids' ? 'yes' : value}`).join(' · ') || 'None')}.</p>
+            <p>Open a job’s relevance reasons to understand its score. Excluded title phrases lower relevance; they are not proof of a failed import. Adjust your <a href="#/admin/search-focus">saved focus</a>, use <strong>All Roles</strong> to broaden the list, or <a href="#/admin/jobs">check source coverage and refresh errors</a>.</p>
+          </div>
+        </details>
+        ${focusConfigured ? `<details class="job-focus-explanation"><summary>Saved focus &amp; how matching works</summary>
+          <dl>
+            <dt>Target titles</dt><dd>${escapeHtml(searchFocus.targetRoles || 'No title restriction')}</dd>
+            <dt>Excluded titles</dt><dd>${escapeHtml(searchFocus.excludedRoles || 'None')}</dd>
+            <dt>Preferred industries</dt><dd>${escapeHtml(searchFocus.targetIndustries || 'Any')}</dd>
+            <dt>Work-style preference</dt><dd>${escapeHtml(searchFocus.workStyle || 'any')}</dd>
+            <dt>Saved threshold</dt><dd>${escapeHtml(targetRoleThreshold)}+</dd>
+          </dl>
+          <p>Exact titles rank highest; related recruiting titles can include different seniority levels. When the focus filter is on, jobs must match your focus as well as meet the score cutoff. Lowering the cutoff does not include titles outside your focus or excluded listings.</p>
+          <p>Industry and work-style preferences affect ranking; they are not strict filters. Saving your focus recalculates existing jobs; it does not search new sources.</p>
+        </details>` : ''}
+        <a class="inline-action-link" href="#/admin/search-focus">Edit search focus</a>
+        ${appState.jobQuery.minRelevance ? '<button class="ghost-button ghost-button--xs" type="button" data-action="apply-job-preset" data-preset="all_titles">Remove focus filter</button>' : ''}
+      </div>
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: result.summary?.activeTotal ? 'Your workspace has active jobs. Broaden a filter or edit your role focus. Importing contacts will not expand the job boards being searched.' : 'No active jobs have been imported yet. Check that your target companies have approved careers boards, then refresh those sources.', action: '<button class="primary-button" type="button" data-action="reset-filters" data-view="jobs">Clear filters</button><a class="secondary-button" href="#/admin/jobs">Check job sources</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
@@ -12419,47 +12420,72 @@ function renderJobsTable(items, compact) {
         <button class="ghost-button ghost-button--sm" type="button" data-action="clear-jobs-bulk">Clear</button>
       </div>
     `}
-    <div class="table-scroll"><table class="table responsive-table jobs-table${compact ? '' : ' jobs-table--selectable'}"><thead><tr>${compact ? '' : '<th><input type="checkbox" id="jobs-bulk-select-all" aria-label="Select all jobs"></th>'}<th>Role</th><th>Company</th><th>Network</th><th>Pipeline</th><th>Role match</th><th>Location</th><th>Source</th><th>Timing</th></tr></thead><tbody>
+    <div class="table-scroll"><table class="table responsive-table jobs-table jobs-table--board${compact ? ' jobs-table--compact' : ' jobs-table--selectable'}"><thead><tr>${compact ? '' : '<th><input type="checkbox" id="jobs-bulk-select-all" aria-label="Select all jobs"></th>'}<th>Role</th><th>Fit</th><th>Network</th><th>Next step</th></tr></thead><tbody>
       ${items.map((item) => {
         const hasConn = Number(item.connectionCount || 0) > 0;
         const rawContacts = Array.isArray(item.contacts) ? item.contacts : [];
         const rankedContacts = rankContactsForJob(item, rawContacts);
         const roleVel = detectRoleVelocity(item);
-        const isJobSeeker = isJobSeekerPersona();
         const pipelineStage = (appState.bootstrap?.capabilities?.jobPipeline ? item.pipelineStage : appState.jobPipelineStages?.[item.id]) || '';
         const skills = extractRoleSkills(item.title, item.department);
         const stack = extractTechStack(item.title, item.department, '');
+        const scored = item.relevanceScore !== null && item.relevanceScore !== undefined;
+        const fitClass = scored ? ` job-row--fit-${escapeAttr(item.relevanceBand || 'low')}` : '';
+        const postingHref = safeExternalHref(item.jobUrl || item.url);
+        const topContact = rankedContacts[0];
+        const firstName = String(topContact?.fullName || '').trim().split(/\s+/)[0];
+        // One main action per role: draft to the best-placed contact when there
+        // is one, otherwise open the company (or the posting) to find a way in.
+        const nextAction = hasConn && topContact
+          ? `<button class="primary-button primary-button--sm job-next-action" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(topContact.id || topContact.fullName || '')}">${firstName ? `Draft intro to ${escapeHtml(firstName)}` : 'Draft intro'}</button>`
+          : item.accountId && !compact
+            ? `<a class="secondary-button secondary-button--sm job-next-action" href="#/accounts/${escapeAttr(item.accountId)}">Open company</a>`
+            : postingHref ? `<a class="secondary-button secondary-button--sm job-next-action" href="${escapeAttr(postingHref)}" target="_blank" rel="noreferrer">Open posting</a>` : '';
+        const workStyle = [
+          item.isRemote || item.workStyle === 'remote' ? '<span class="status-pill status-pill--accent" title="Remote work eligible">Remote</span>' : '',
+          item.workStyle === 'hybrid' ? '<span class="status-pill status-pill--info" title="Hybrid work">Hybrid</span>' : '',
+          item.workStyle === 'onsite' ? '<span class="status-pill status-pill--neutral" title="On-site work">On-site</span>' : '',
+          item.isGta || item.isLocal ? '<span class="status-pill status-pill--success" title="Local GTA priority">Local</span>' : '',
+        ].join('');
         return `
-        <tr class="${hasConn ? 'job-row--connected' : ''}${pipelineStage ? ' job-row--pipelined' : ''}">
+        <tr class="${hasConn ? 'job-row--connected' : ''}${pipelineStage ? ' job-row--pipelined' : ''}${fitClass}">
           ${compact ? '' : `<td data-label=""><input type="checkbox" class="jobs-bulk-checkbox" value="${item.id}" data-job-title="${escapeAttr(item.title || '')}" data-company="${escapeAttr(item.companyName || item.company || '')}" data-account-id="${escapeAttr(item.accountId || '')}" data-job-url="${escapeAttr(item.jobUrl || item.url || '')}" data-job-location="${escapeAttr(item.location || (item.isRemote ? 'Remote' : ''))}" data-contacts="${escapeAttr(JSON.stringify(rawContacts))}" aria-label="Select ${escapeAttr(item.title || '')}"></td>`}
           <td data-label="Role">
-            ${safeExternalHref(item.jobUrl || item.url) ? `<a class="row-link job-title-link" href="${escapeAttr(safeExternalHref(item.jobUrl || item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
-            <details class="job-row-context"><summary>Context & preparation</summary><p class="muted small">Tags below are inferred from the role title, not candidate evidence.</p>
-            ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
-            ${renderTechDnaCluster(stack)}
-            <div class="job-signals-cluster">
-              ${getJobSignalBadges(item).join('')}
-              ${roleVel.badgeLabel ? `<span class="signal-badge ${roleVel.badgeClass}">${roleVel.badgeLabel}</span>` : ''}
-            </div>
-            ${compact ? '' : `
-              <div class="small muted">${escapeHtml(item.department || '')}</div>
-              <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
-                <button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Warm Studio</button>
-                <button class="inline-action-link" type="button" data-action="open-candidate-slate-modal" data-job-id="${escapeAttr(item.id || '')}">Candidate Slate</button>
-                <button class="inline-action-link" type="button" data-action="open-call-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Call Prompter</button>
+            <div class="job-role">
+              ${postingHref ? `<a class="row-link job-title-link" href="${escapeAttr(postingHref)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : `<strong class="job-title">${escapeHtml(item.title || '')}</strong>`}
+              <div class="job-meta">
+                ${item.accountId ? `<a class="row-link company-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : `<span class="company-name">${escapeHtml(item.companyName || '')}</span>`}
+                <span class="job-location-text">${escapeHtml(item.location || 'Location unspecified')}</span>
+                ${workStyle ? `<span class="job-workstyle-pills">${workStyle}</span>` : ''}
               </div>
-            `}
-            </details>
+              <div class="job-row-details">
+                <details class="job-row-context job-timing"><summary>${item.postedAt ? `Posted ${formatDate(item.postedAt)}` : escapeHtml(item.postingAgeText || 'Posting date unavailable')}</summary><div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)} from ${escapeHtml(item.atsType || 'an unknown source')} · ${item.active === false ? 'Marked inactive' : 'Marked active'}${item.isNew ? ' · Recent posting' : ''}</div></details>
+              <details class="job-row-context"><summary>Preparation</summary><p class="muted small">Tags below are inferred from the role title, not candidate evidence.</p>
+              ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
+              ${renderTechDnaCluster(stack)}
+              <div class="job-signals-cluster">
+                ${getJobSignalBadges(item).join('')}
+                ${roleVel.badgeLabel ? `<span class="signal-badge ${roleVel.badgeClass}">${roleVel.badgeLabel}</span>` : ''}
+              </div>
+              ${compact ? '' : `
+                <div class="small muted">${escapeHtml(item.department || '')}</div>
+                <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
+                  <button class="inline-action-link job-outreach-link" type="button" data-action="open-warm-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Warm Studio</button>
+                  <button class="inline-action-link" type="button" data-action="open-candidate-slate-modal" data-job-id="${escapeAttr(item.id || '')}">Candidate Slate</button>
+                  <button class="inline-action-link" type="button" data-action="open-call-studio" data-job-id="${escapeAttr(item.id || '')}" data-contact-id="${escapeAttr(rankedContacts[0]?.id || '')}">Call Prompter</button>
+                </div>
+              `}
+              </details>
+              </div>
+            </div>
           </td>
-          <td data-label="Company">
-            ${item.accountId ? `<a class="row-link company-link" href="#/accounts/${item.accountId}">${escapeHtml(item.companyName || '')}</a>` : `<span class="company-name">${escapeHtml(item.companyName || '')}</span>`}
-          </td>
-          <td data-label="Network / Contacts">
+          <td data-label="Fit">${renderJobRelevance(item)}</td>
+          <td data-label="Network">
             ${hasConn ? `
               <div class="job-network-cell">
                 <span class="status-pill status-pill--success"><span class="pill-dot"></span>${formatNumber(item.connectionCount)} in network</span>
                 ${rankedContacts.length ? `
-                  <details class="job-row-context"><summary>View ${rankedContacts.length} people</summary><div class="job-contacts-list">
+                  <details class="job-row-context"><summary>View ${rankedContacts.length} ${rankedContacts.length === 1 ? 'person' : 'people'}</summary><div class="job-contacts-list">
                     ${rankedContacts.slice(0, 3).map((c) => `
                       <div class="job-contact-chip">
                         <span class="align-chip ${c.chipClass}" title="${escapeAttr(c.alignmentReason)}">${c.badgeLabel}</span>
@@ -12475,12 +12501,12 @@ function renderJobsTable(items, compact) {
             ` : `
               <div class="job-network-cell job-network-cell--empty">
                 <span class="status-pill status-pill--neutral">No contacts</span>
-                ${item.accountId ? `<div class="small muted"><a class="inline-action-link" href="#/accounts/${item.accountId}">View company</a></div>` : ''}
               </div>
             `}
           </td>
-          <td data-label="Pipeline">
+          <td data-label="Next step">
             <div class="job-pipeline-cell">
+              ${nextAction}
               <select class="job-pipeline-select compact-select" aria-label="Pipeline stage for ${escapeAttr(item.title || 'role')} at ${escapeAttr(item.companyName || 'company')}" data-action="update-job-pipeline-stage" data-job-id="${escapeAttr(item.id || '')}">
                 <option value="" ${!pipelineStage ? 'selected' : ''}>+ Track</option>
                 <option value="saved" ${pipelineStage === 'saved' ? 'selected' : ''}>Saved</option>
@@ -12491,20 +12517,6 @@ function renderJobsTable(items, compact) {
               </select>
             </div>
           </td>
-          <td data-label="Role match">${renderJobRelevance(item)}</td>
-          <td data-label="Location">
-            <div class="job-location-cell">
-              <span class="job-location-text">${escapeHtml(item.location || 'Location unspecified')}</span>
-              <div class="job-workstyle-pills">
-                ${item.isRemote || item.workStyle === 'remote' ? `<span class="status-pill status-pill--accent" title="Remote work eligible">Remote</span>` : ''}
-                ${item.workStyle === 'hybrid' ? `<span class="status-pill status-pill--info" title="Hybrid work">Hybrid</span>` : ''}
-                ${item.workStyle === 'onsite' ? `<span class="status-pill status-pill--neutral" title="On-site work">On-site</span>` : ''}
-                ${item.isGta || item.isLocal ? `<span class="status-pill status-pill--success" title="Local GTA priority">Local</span>` : ''}
-              </div>
-            </div>
-          </td>
-          <td data-label="Source"><span>${escapeHtml(item.atsType || 'Unknown source')}</span><div class="small muted">${item.active === false ? 'Marked inactive' : 'Marked active'}</div></td>
-          <td data-label="Timing"><details class="job-row-context"><summary>${item.postedAt ? formatDate(item.postedAt) : escapeHtml(item.postingAgeText || 'Posting date unavailable')}</summary><div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)}${item.isNew ? ' · Recent posting' : ''}</div></details></td>
         </tr>`;
       }).join('')}
     </tbody></table></div>`;
@@ -12513,7 +12525,7 @@ function renderJobsTable(items, compact) {
 function renderJobRelevance(item) {
   const feedback = window.bdWorkflowTools.renderFeedback(item);
   if (item.relevanceScore === null || item.relevanceScore === undefined) {
-    return `${renderStatusPill('Not scored', 'neutral')}<div class="small muted">No saved relevance score.</div><a class="small" href="#/admin/search-focus">Set or refresh search focus</a>${feedback}`;
+    return `<div class="job-fit job-fit--unscored">${renderStatusPill('Not scored', 'neutral')}<a class="small" href="#/admin/search-focus">Set or refresh search focus</a></div>${feedback}`;
   }
   const band = item.relevanceBand || 'low';
   const tone = band === 'strong' ? 'success' : band === 'possible' ? 'warning' : 'neutral';
@@ -12523,7 +12535,7 @@ function renderJobRelevance(item) {
   const outcome = item.matchesSearchFocus === false ? 'Outside your saved focus. Lowering the score cutoff alone will not include this role.'
     : Number(item.relevanceScore) < threshold ? `Below your saved ${threshold}+ cutoff.`
       : `Meets your saved ${threshold}+ cutoff. Other list filters still apply.`;
-  return `${renderStatusPill(`${formatNumber(item.relevanceScore)} ${band}`, tone)}${reasons.length ? `<div class="small muted job-match-preview">${escapeHtml(reasons[0])}</div>` : ''}<details class="job-row-context"><summary aria-label="${escapeAttr(`Why this score for ${item.title || 'this role'}${item.companyName ? ` at ${item.companyName}` : ''}?`)}">Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>${feedback}`;
+  return `<div class="job-fit job-fit--${escapeAttr(band)}">${renderScoreRing(item.relevanceScore, 'Role fit', 34)}${renderStatusPill(band, tone)}</div>${reasons.length ? `<div class="small muted job-match-preview">${escapeHtml(reasons[0])}</div>` : ''}<details class="job-row-context"><summary aria-label="${escapeAttr(`Why this score for ${item.title || 'this role'}${item.companyName ? ` at ${item.companyName}` : ''}?`)}">Why this score?</summary><p class="small">${escapeHtml(outcome)}</p>${reasons.length ? `<ul class="small">${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p class="small muted">No scoring reasons were saved for this role.</p>'}<p class="small muted">Role relevance, not candidate suitability. These are saved scoring reasons; source details may have changed.</p><a href="#/admin/search-focus">Review saved focus</a></details>${feedback}`;
 }
 
 function renderMiniStatList(items) {
