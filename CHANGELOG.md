@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Operator growth report: show activation steps for signup cohorts (finished setup, added a company, added people, drafted outreach, paid), each counted once per workspace. "Added people" is a new privacy-safe milestone recorded the first time a workspace holds at least one person; it stores no names or contact details.
 - Setup now leads with your audit. If you sign up after running the free ATS audit, the first setup step says how many career sites are waiting and offers "Review your career sites" as the main action; "Start with people" remains available.
 - Career sites entered in the audit without "https://" are now carried into setup instead of being dropped.
 - The empty People screen no longer stalls on the LinkedIn export. It links to the steps for requesting the file and to adding a company to watch while you wait.

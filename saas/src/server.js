@@ -1755,7 +1755,9 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/dashboard') {
-    return sendJson(res, 200, await store.getDashboard(tenantId));
+    const dashboard = await store.getDashboard(tenantId);
+    if (Number(dashboard?.readiness?.metrics?.contactCount || 0) > 0) await recordPeopleAddedOnce(tenant, user, session);
+    return sendJson(res, 200, dashboard);
   }
 
   if (pathname === '/api/dashboard/extended') {
@@ -1860,9 +1862,12 @@ self.addEventListener('activate', (event) => {
       try { validated = validateContactInput(payload, { create: true }); }
       catch (error) { return sendJson(res, 400, { error: error.message }); }
       const item = await store.addContact(tenantId, { ...payload, ...validated });
+      await recordPeopleAddedOnce(tenant, user, session);
       return sendJson(res, 201, item);
     }
-    return sendJson(res, 200, await store.findContacts(tenantId, Object.fromEntries(url.searchParams)));
+    const contacts = await store.findContacts(tenantId, Object.fromEntries(url.searchParams));
+    if (Number(contacts?.total || 0) > 0) await recordPeopleAddedOnce(tenant, user, session);
+    return sendJson(res, 200, contacts);
   }
 
   const contactMatch = pathname.match(/^\/api\/contacts\/([^/]+)$/);
@@ -2334,6 +2339,19 @@ async function recordProductMilestone(event) {
     console.error('Product milestone recording failed:', safeErrorSummary(error));
     return { recorded: false, reason: error.message };
   }
+}
+
+// Activation step: the first time a customer workspace is seen holding at
+// least one person, whether typed in or imported. The event key allows one
+// row per workspace; the set avoids repeating that write on every request.
+const peopleAddedRecorded = new Set();
+async function recordPeopleAddedOnce(tenant, user, session) {
+  if (!tenant?.id || peopleAddedRecorded.has(tenant.id) || isReadOnlyDemoSession(session, tenant)) return;
+  peopleAddedRecorded.add(tenant.id);
+  await recordProductMilestone({
+    eventType: 'people_added', tenantId: tenant.id, userId: user.id, eventKey: tenant.id,
+    dimensions: { persona: tenant.persona },
+  });
 }
 
 async function recordCommercialOutcomeMilestone(outcome, tenant, user) {
