@@ -75,7 +75,7 @@ test('People drafts use the chosen opening and goal, protect edits, and keep con
     await page.screenshot({ path: `test-results/people-drafting-${width}.png` });
   }
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
-  await expect(page.locator('[data-people="generate-draft"]')).toHaveCSS('background-color', 'rgb(128, 212, 197)');
+  await expect(page.locator('[data-people="generate-draft"]')).toHaveCSS('background-color', 'rgb(198, 244, 50)');
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'test-results/people-drafting-dark.png' });
 });
@@ -156,8 +156,8 @@ test('obsolete follow-ups cancel without completion, retain history, and reopen 
     await page.screenshot({ path: `test-results/cancelled-follow-ups-${width}.png` });
   }
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
-  await expect(page.locator('#tasks-tab-cancelled')).toHaveCSS('color', 'rgb(16, 41, 35)');
-  await expect(page.locator('#tasks-tab-cancelled')).toHaveCSS('background-color', 'rgb(128, 212, 197)');
+  await expect(page.locator('#tasks-tab-cancelled')).toHaveCSS('color', 'rgb(11, 15, 20)');
+  await expect(page.locator('#tasks-tab-cancelled')).toHaveCSS('background-color', 'rgb(198, 244, 50)');
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'test-results/cancelled-follow-ups-dark.png' });
   await page.getByRole('button', { name: 'Reopen follow-up', exact: true }).click();

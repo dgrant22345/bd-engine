@@ -169,3 +169,45 @@ input, select, textarea { border-radius: 8px; }
   .hero-card--dashboard { background: #fff; --text: #152538; --ink: #152538; --muted: #526272; --accent: #0f6b65; --accent-fill: #0f6b65; --on-accent: #fff; box-shadow: none; }
   .hero-card--dashboard :is(.eyebrow, .kpi-tile span, .kpi-tile strong, .signal-chip span, .signal-chip strong, .hero-secondary-links a) { color: #152538; }
 }
+
+/* ── Bold dark (chosen November 2026) ──
+   Dark is the default theme: a near-black ground, one lime accent and
+   Space Grotesk for headings and headline numbers. Light keeps the teal
+   palette above. Every pairing here meets 4.5:1 for text. */
+[data-theme="dark"] {
+  --bg: #0b0f14; --bg-soft: #111821; --surface: #141b24; --surface-strong: #18212b;
+  --surface-muted: #19222d; --surface-hover: #1c2530; --surface-selected: #232f17;
+  --ink: #f2f5f7; --text: #f2f5f7; --muted: #9aa7b4; --text-muted: #9aa7b4; --text-subtle: #9aa7b4;
+  --line: #222b36; --border: #222b36; --line-strong: #364252; --control-border: #5b6878;
+  --accent: #c6f432; --accent-fill: #c6f432; --accent-hover: #d8fa6b; --accent-soft: #232f17; --on-accent: #0b0f14;
+  --focus: #c6f432; --focus-halo: #c6f43240;
+  --sidebar-bg: #0b0f14; --sidebar-text: #f2f5f7; --sidebar-muted: #9aa7b4; --sidebar-line: #222b36;
+  --shadow-sm: none; --shadow-md: none;
+}
+[data-theme="dark"] .sidebar { background: var(--sidebar-bg); }
+[data-theme="dark"] .brand-mark { background: var(--accent); color: var(--on-accent); border-color: transparent; box-shadow: none; font-family: var(--font-display); }
+[data-theme="dark"] .nav a { color: #b7c2cd; }
+[data-theme="dark"] .nav a:hover { background: #ffffff0a; color: #ffffff; border-color: #ffffff12; }
+[data-theme="dark"] .nav .nav-icon { color: #b7c2cd; }
+[data-theme="dark"] .nav a.active, [data-theme="dark"] .nav a[aria-current="page"] { background: var(--surface-selected); color: var(--accent); border-color: #3b4c1d; box-shadow: inset 3px 0 var(--accent); }
+[data-theme="dark"] .nav a.active .nav-icon, [data-theme="dark"] .nav a[aria-current="page"] .nav-icon { color: var(--accent); background: #ffffff0a; }
+[data-theme="dark"] .sidebar :where(a, button):focus-visible { outline-color: var(--accent); }
+[data-theme="dark"] .sidebar-footnote { background: #ffffff06; color: #d6dde3; }
+[data-theme="dark"] .sidebar-footnote .dot { background: var(--accent); box-shadow: 0 0 0 4px #c6f43226; }
+[data-theme="dark"] .primary-button { box-shadow: none; }
+[data-theme="dark"] .hero-card--dashboard {
+  --text: #f2f5f7; --ink: #f2f5f7; --muted: #9aa7b4;
+  --accent: #c6f432; --accent-fill: #c6f432; --accent-hover: #d8fa6b; --on-accent: #0b0f14;
+  --accent-soft: #232f17; --focus: #c6f432; --line: #ffffff1f;
+  background: var(--surface); border-color: var(--line); box-shadow: none;
+}
+[data-theme="dark"] .hero-card--dashboard .eyebrow { color: var(--accent); }
+[data-theme="dark"] .hero-card--dashboard .hero-copy h3 { font-family: var(--font-display); font-weight: 700; }
+[data-theme="dark"] .hero-card--dashboard .hero-secondary-links a { color: #e5eaee; }
+[data-theme="dark"] .hero-card--dashboard .headline-metrics { background: #ffffff05; border-color: #ffffff1a; }
+[data-theme="dark"] .hero-card--dashboard :is(.kpi-tile span, .signal-chip span) { color: #b7c2cd; }
+[data-theme="dark"] .hero-card--dashboard :is(.kpi-tile strong, .signal-chip strong) { color: #f2f5f7; font-family: var(--font-display); }
+[data-theme="dark"] .hero-card--dashboard > .dash-customizer > summary { color: #e5eaee; }
+[data-theme="dark"] .hero-card--dashboard .dash-customizer-dropdown { --text: #f2f5f7; --ink: #f2f5f7; --muted: #9aa7b4; --surface-strong: #18212b; --line: #222b36; --accent: #c6f432; --focus: #c6f432; }
+[data-theme="dark"] .workspace-health__counts strong { font-family: var(--font-display); }
+[data-theme="dark"] .kpi-ribbon.headline-metrics .kpi-tile span.score-ring, [data-theme="dark"] .kpi-ribbon.headline-metrics .kpi-tile span.score-meter { color: var(--accent); }

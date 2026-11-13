@@ -1,12 +1,12 @@
 # Recruiter design system
 
-Implementation brief, 6 September 2026. Scope: shared app + cloud shell. See the [baseline audit](recruiter-ux-audit-2026-09-06.md).
+Implementation brief, 6 September 2026; look revised 13 November 2026 (Bold dark, chosen by the owner from three directions). Scope: shared app + cloud shell. See the [baseline audit](recruiter-ux-audit-2026-09-06.md).
 
 ## Foundations
 
-- System sans-serif (`Inter`, `Segoe UI`, system-ui) throughout. No serif display face in table headings. Body 14px/1.5, data/helper 12–13px/1.45, row name 14px/600, panel title 18px/650, page title 22px/650. Avoid uppercase paragraphs or giant promotional headings inside the workspace.
+- Self-hosted Inter for body, controls and tables; self-hosted Space Grotesk (`--font-display`) for page and panel headings and headline numbers only. No third-party font requests. Body 14px/1.5, data/helper 12–13px/1.45, row name 14px/600, panel title 18px/650, page title 22px/700. Large numerals are welcome where a number is the point (counts, scores); avoid uppercase paragraphs and promotional slogans.
 - Spacing: 4, 8, 12, 16, 20, 24, 32. Desktop page gutter 24px; compact 16px; mobile 12px. Row height target 60–72px for name+role, not fixed if content must wrap. Avoid six different near-identical paddings.
-- Restrained neutral/teal palette: canvas #f5f7f8, surface #ffffff, secondary surface #f0f3f5, text #18232f, muted #526272, border #d5dce2, accent #0f6b65, accent-hover #0b5550, selected #e7f3f1. Dark: canvas #10191f, surface #17232b, muted surface #1e2d36, text #ecf2f5, muted #a7b8c3, border #344650, accent #80d4c5 with dark text. Validate actual computed combinations, not just token swatches.
+- Dark is the default theme (Bold dark): canvas #0b0f14, surface #141b24, raised surface #18212b, muted surface #19222d, text #f2f5f7, muted #9aa7b4, border #222b36, one accent lime #c6f432 (hover #d8fa6b) with #0b0f14 text on it, selected #232f17. The signed-in shell bars use the same ground. Light remains available with the neutral/teal palette: canvas #f5f7f8, surface #ffffff, text #18232f, muted #526272, border #d5dce2, accent #0f6b65, selected #e7f3f1. One accent per theme; a second hue only for a status that also carries text. Validate actual computed combinations, not just token swatches.
 - Semantic success/warning/error must pair color with text/icon; no red/green-only decision indicators. Candidate fit is not a color inferred from seniority or employer prestige.
 - Border radius: 6px controls, 8px panels/dialogs, no pill-shaped paragraph containers. 1px borders and very limited elevation for overlays only. No gradients, glass or decorative animation in working surfaces.
 

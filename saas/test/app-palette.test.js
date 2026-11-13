@@ -40,7 +40,10 @@ test('palette refresh preserves semantic statuses and Light Dark System behavior
   assert.match(palette, /--danger:\s*#9c3240/);
   assert.match(app, /const order = \['light', 'dark', 'system'\]/);
   assert.match(app, /prefers-color-scheme:\s*dark/);
-  assert.match(app, /effective === 'dark' \? '#0b1120' : '#f8fafc'/);
+  // Browser chrome follows the Bold dark ground and the light workspace background.
+  assert.match(app, /effective === 'dark' \? '#0b0f14' : '#f5f7f8'/);
+  // Dark is the default until a person picks Light or System.
+  assert.match(app, /theme: localStorage\.getItem\('bd_theme'\) \|\| 'dark'/);
   assert.doesNotMatch(
     `${palette}\n${styles}`,
     /#(?:5a56d6|4844bd|9893ff|aaa6ff|0b746b|0f766e|58c7ba|1f63d8)/i,

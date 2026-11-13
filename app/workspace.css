@@ -1,5 +1,8 @@
 /* Shared recruiter workspace foundations. Legacy tools keep their layout;
    core navigation, controls and new People components share these tokens. */
+/* Self-hosted variable fonts (SIL Open Font License: /fonts/OFL.txt, /fonts/SpaceGrotesk-OFL.txt). */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('/fonts/inter-latin-wght-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 300 700; font-display: swap; src: url('/fonts/space-grotesk-latin-wght-normal.woff2') format('woff2'); }
 :root, [data-theme="light"] {
   --bg: #f5f7f8; --bg-soft: #f0f3f5; --surface: #fff; --surface-strong: #fff;
   --surface-muted: #f5f7f8; --surface-hover: #f0f3f5; --surface-selected: #e7f3f1;
@@ -10,20 +13,27 @@
   --sidebar-bg: #f0f3f5; --sidebar-text: #18232f; --sidebar-muted: #526272; --sidebar-line: #d5dce2;
   --shadow-sm: none; --radius: 8px;
   --font-ui: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", Inter, "Segoe UI", system-ui, sans-serif;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px;
 }
 [data-theme="dark"] {
-  --bg: #10191f; --bg-soft: #1e2d36; --surface: #17232b; --surface-strong: #17232b;
-  --surface-muted: #1e2d36; --surface-hover: #223640; --surface-selected: #203d3b;
-  --ink: #ecf2f5; --text: #ecf2f5; --muted: #a7b8c3; --text-muted: #a7b8c3; --text-subtle: #a7b8c3;
-  --line: #344650; --border: #344650; --line-strong: #536a77; --control-border: #738b98;
-  --accent: #80d4c5; --accent-fill: #80d4c5; --accent-hover: #a4e5d9; --accent-soft: #203d3b; --on-accent: #102923;
-  --focus: #80d4c5; --focus-halo: #80d4c530;
-  --sidebar-bg: #142027; --sidebar-text: #ecf2f5; --sidebar-muted: #a7b8c3; --sidebar-line: #344650;
+  /* Bold dark (chosen November 2026): near-black ground, one lime accent. */
+  --bg: #0b0f14; --bg-soft: #111821; --surface: #141b24; --surface-strong: #141b24;
+  --surface-muted: #19222d; --surface-hover: #1c2530; --surface-selected: #232f17;
+  --ink: #f2f5f7; --text: #f2f5f7; --muted: #9aa7b4; --text-muted: #9aa7b4; --text-subtle: #9aa7b4;
+  --line: #222b36; --border: #222b36; --line-strong: #364252; --control-border: #5b6878;
+  --accent: #c6f432; --accent-fill: #c6f432; --accent-hover: #d8fa6b; --accent-soft: #232f17; --on-accent: #0b0f14;
+  --focus: #c6f432; --focus-halo: #c6f43240;
+  --sidebar-bg: #0e141b; --sidebar-text: #f2f5f7; --sidebar-muted: #9aa7b4; --sidebar-line: #222b36;
   --danger: #ffacb5; --danger-soft: #412b33;
-  --success: #86e2b5; --success-soft: #203d34;
+  --success: #86e2b5; --success-soft: #1d3329;
 }
 body, button, input, select, textarea, label, .eyebrow, h1, h2, h3, h4, .table th { font-family: var(--font-ui); }
+/* Display type: headings and headline numbers. */
+.brand-card h1, .topbar .view-heading h2, #app h2, #app h3, .modal-dialog h2, .modal-dialog h3,
+.kpi-tile strong, .metric-value, .jobs-board__summary strong, .score-ring-text { font-family: var(--font-display); }
+.topbar .view-heading h2 { font-weight: 700; }
+#app .panel-header h3, #app .section-heading h3 { font-weight: 650; letter-spacing: -.01em; }
 body { font-size: 14px; line-height: 1.5; background: var(--bg); }
 .page-noise { display: none; }
 .brand-card { background: none; border: 0; box-shadow: none; padding: 16px 12px; }

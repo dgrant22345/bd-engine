@@ -40,3 +40,13 @@ test('workspace copy stays plain: no decorative emoji and no combat metaphors', 
   assert.match(app, /Q1: Warm and hiring/);
   assert.match(html, /<strong>Daily plan<\/strong>/);
 });
+
+test('Bold dark look: lime accent on a near-black ground, self-hosted display type', async () => {
+  const [visual, workspace, html] = await Promise.all([asset('visual.css'), asset('workspace.css'), asset('index.html')]);
+  const bold = visual.slice(visual.indexOf('/* ── Bold dark'));
+  assert.match(bold, /\[data-theme="dark"\] \{[^}]*--bg: #0b0f14;[^}]*--accent: #c6f432;[^}]*--on-accent: #0b0f14;/);
+  assert.match(workspace, /@font-face \{ font-family: 'Space Grotesk';[^}]*url\('\/fonts\/space-grotesk-latin-wght-normal\.woff2'\)/);
+  assert.match(workspace, /--font-display: "Space Grotesk"/);
+  assert.match(html, /<html lang="en" data-theme="dark"/);
+  assert.doesNotMatch(`${visual}\n${workspace}`, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
+});

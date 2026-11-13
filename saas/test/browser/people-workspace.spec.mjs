@@ -438,8 +438,11 @@ test('person shortcuts support keyboard review and accessible dark surfaces', as
   await page.setViewportSize({ width: 1440, height: 1000 });
   const { app } = await workspace(page, { count: 2 });
   await app.locator('.person-name').first().click();
-  await app.locator('summary[aria-label="Workspace options"]').click();
-  await app.locator('#theme-toggle').click();
+  // Dark is the default theme; switch only if this browser chose another.
+  for (let attempt = 0; attempt < 3 && await app.locator('html').getAttribute('data-theme') !== 'dark'; attempt += 1) {
+    await app.locator('summary[aria-label="Workspace options"]').click();
+    await app.locator('#theme-toggle').click();
+  }
   await expect(app.locator('html')).toHaveAttribute('data-theme', 'dark');
   await app.getByRole('button', { name: 'Notes', exact: true }).press('Enter');
   await expect(app.getByLabel('Notes', { exact: true })).toBeFocused();
