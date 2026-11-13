@@ -1,6 +1,10 @@
 // Shared query contract: global filtering/sorting, not client-side page sorting.
 export const CONTACT_STAGES = ['not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];
 
+// 'call' puts people at companies with an active role first, then orders by
+// relationship priority. It is the People screen's default.
+export const CONTACT_SORTS = ['name', 'name_desc', 'company', 'recent', 'priority', 'call'];
+
 export function normalizeContactQuery(query = {}) {
   const bounded = (value, fallback, max) => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.min(max, Math.floor(Number(value))) : fallback;
   return {
@@ -8,16 +12,17 @@ export function normalizeContactQuery(query = {}) {
     q: String(query.q || '').trim(), id: String(query.id || '').trim(),
     minScore: Number.isFinite(Number(query.minScore)) ? Math.max(0, Number(query.minScore)) : 0,
     outreachStatus: String(query.outreachStatus || '').trim().toLowerCase(),
-    sortBy: ['name', 'name_desc', 'company', 'recent', 'priority'].includes(query.sortBy) ? query.sortBy : 'priority',
+    sortBy: CONTACT_SORTS.includes(query.sortBy) ? query.sortBy : 'priority',
   };
 }
 
-export function compareContacts(a, b, sortBy = 'priority') {
+export function compareContacts(a, b, sortBy = 'priority', isHiring = () => false) {
   const name = () => String(a.fullName || '').toLowerCase().localeCompare(String(b.fullName || '').toLowerCase()) || String(a.id).localeCompare(String(b.id));
   if (sortBy === 'name') return name();
   if (sortBy === 'name_desc') return -name();
   if (sortBy === 'company') return String(a.companyName || '').toLowerCase().localeCompare(String(b.companyName || '').toLowerCase()) || name();
   if (sortBy === 'recent') return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')) || name();
+  if (sortBy === 'call') return Number(Boolean(isHiring(b))) - Number(Boolean(isHiring(a))) || Number(b.priorityScore || 0) - Number(a.priorityScore || 0) || name();
   return Number(b.priorityScore || 0) - Number(a.priorityScore || 0) || name();
 }
 
@@ -34,7 +39,8 @@ export function buildContactQuerySql(tenantId, input = {}) {
   if (query.minScore) where.push(`priority_score >= ${bind(query.minScore)}`);
   if (query.outreachStatus) where.push(`LOWER(COALESCE(raw->>'outreachStatus', 'not_started')) = ${bind(query.outreachStatus)}`);
   const name = "LOWER(COALESCE(full_name, '')) ASC, id ASC";
-  const orders = { name, name_desc: "LOWER(COALESCE(full_name, '')) DESC, id DESC", company: `LOWER(COALESCE(company_name, '')) ASC, ${name}`, recent: `updated_at DESC, ${name}`, priority: `priority_score DESC, ${name}` };
+  const orders = { name, name_desc: "LOWER(COALESCE(full_name, '')) DESC, id DESC", company: `LOWER(COALESCE(company_name, '')) ASC, ${name}`, recent: `updated_at DESC, ${name}`, priority: `priority_score DESC, ${name}`,
+    call: `(EXISTS (SELECT 1 FROM jobs j WHERE j.tenant_id = contacts.tenant_id AND j.account_id = contacts.account_id AND j.active)) DESC, priority_score DESC, ${name}` };
   const countParams = [...params];
   const limit = bind(query.pageSize);
   const offset = bind((query.page - 1) * query.pageSize);

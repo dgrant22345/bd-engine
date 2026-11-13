@@ -9,24 +9,35 @@ const people = Array.from({ length: 43 }, (_, i) => ({
   id: `ct-${String(i).padStart(2, '0')}`, tenantId: tenant,
   fullName: `Person ${String(42 - i).padStart(2, '0')}`,
   companyName: `Company ${i % 3}`, title: i % 2 ? 'Talent Partner' : 'Engineer',
+  accountId: i % 4 === 0 ? '' : `acct-${i % 5}`,
   email: `fixture-${i}@example.com`, notes: i === 7 ? "O'Neil_100% \\ Montréal" : '',
   priorityScore: i * 2, outreachStatus: ['not_started', 'researching', 'replied'][i % 3],
   updatedAt: `2026-09-${String(i % 6 + 1).padStart(2, '0')}T00:00:00.000Z`,
 }));
 const rows = [...people, { ...people[0], tenantId: 'another-tenant', id: 'foreign' }].map(p => ({
-  id: p.id, tenant_id: p.tenantId, full_name: p.fullName, company_name: p.companyName,
+  id: p.id, tenant_id: p.tenantId, account_id: p.accountId || null, full_name: p.fullName, company_name: p.companyName,
   title: p.title, email: p.email, notes: p.notes, priority_score: p.priorityScore,
   updated_at: p.updatedAt, raw: p,
 }));
+
+// Roles for the "worth contacting first" order: acct-1 and acct-3 have an
+// active role; acct-2 has only a closed one; acct-4's role belongs to another workspace.
+const jobs = [
+  { tenant_id: tenant, account_id: 'acct-1', active: true }, { tenant_id: tenant, account_id: 'acct-1', active: true },
+  { tenant_id: tenant, account_id: 'acct-3', active: true }, { tenant_id: tenant, account_id: 'acct-2', active: false },
+  { tenant_id: 'another-tenant', account_id: 'acct-4', active: true },
+];
+const hiringAccounts = new Set(jobs.filter(job => job.tenant_id === tenant && job.active).map(job => job.account_id));
 
 function statements(built, fixture = false) {
   const make = (sql, values) => {
     const params = [...values];
     if (!fixture) return { text: sql, params };
-    params.push(JSON.stringify(rows));
-    return { text: `WITH contacts AS (SELECT * FROM jsonb_to_recordset($${params.length}::jsonb)
-      AS x(id text, tenant_id text, full_name text, company_name text, title text,
-      email text, notes text, priority_score integer, updated_at timestamptz, raw jsonb)) ${sql}`, params };
+    params.push(JSON.stringify(rows), JSON.stringify(jobs));
+    return { text: `WITH contacts AS (SELECT * FROM jsonb_to_recordset($${params.length - 1}::jsonb)
+      AS x(id text, tenant_id text, account_id text, full_name text, company_name text, title text,
+      email text, notes text, priority_score integer, updated_at timestamptz, raw jsonb)),
+      jobs AS (SELECT * FROM jsonb_to_recordset($${params.length}::jsonb) AS j(tenant_id text, account_id text, active boolean)) ${sql}`, params };
   };
   return {
     count: make(`SELECT COUNT(*)::int AS total FROM contacts WHERE ${built.where}`, built.countParams),
@@ -34,22 +45,23 @@ function statements(built, fixture = false) {
   };
 }
 const queries = [];
-for (const sortBy of ['name', 'name_desc', 'company', 'recent', 'priority']) {
+for (const sortBy of ['name', 'name_desc', 'company', 'recent', 'priority', 'call']) {
   for (const page of [1, 2, 3]) queries.push({ sortBy, page, pageSize: 20 });
 }
 for (const outreachStatus of ['not_started', 'researching', 'replied', 'contacted']) queries.push({ outreachStatus, sortBy: 'name', pageSize: 10 });
 for (const q of ["O'Neil_100%", '_', '%', '\\', 'Montréal', 'Talent Partner', 'Company 2', 'no match']) queries.push({ q, sortBy: 'name' });
 queries.push({ minScore: 45, sortBy: 'priority', pageSize: 5, page: 2 }, { id: 'ct-07' }, { id: 'foreign' });
+queries.push({ sortBy: 'call', outreachStatus: 'researching', pageSize: 10 }, { sortBy: 'call', q: 'Talent Partner', pageSize: 7, page: 2 });
 const tests = queries.map(query => {
   const built = buildContactQuerySql(tenant, query);
   const expected = people.filter(p => (!built.id || p.id === built.id)
     && (!built.minScore || p.priorityScore >= built.minScore)
     && (!built.outreachStatus || p.outreachStatus === built.outreachStatus)
     && (!built.q || ['fullName', 'companyName', 'title', 'email', 'notes'].some(key => p[key].toLowerCase().includes(built.q.toLowerCase()))))
-    .sort((a, b) => compareContacts(a, b, built.sortBy));
+    .sort((a, b) => compareContacts(a, b, built.sortBy, person => hiringAccounts.has(person.accountId)));
   return { query, ...statements(built, true), total: expected.length, ids: expected.slice((built.page - 1) * built.pageSize, built.page * built.pageSize).map(p => p.id) };
 });
-const live = process.argv.includes('--owner-readonly') ? ['name', 'company', 'recent', 'priority'].map(sortBy => ({
+const live = process.argv.includes('--owner-readonly') ? ['name', 'company', 'recent', 'priority', 'call'].map(sortBy => ({
   name: sortBy, ...statements(buildContactQuerySql('', { sortBy, pageSize: 20 })),
 })) : [];
 

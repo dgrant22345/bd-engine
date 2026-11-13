@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- People now opens ranked by who is worth contacting. People at companies with an open role come first, then relationship priority. Each row shows the open roles at the person's company (and how many are new this week), a relationship-priority meter, the outreach stage, the next step, and the date of the last recorded outreach. On phones the company and its hiring line appear under the name. Name, company and priority orders remain in the sort menu, and saved views keep their own order.
 - Weekly email digest of new roles (optional). On Hiring activity you can turn on one email a week, from Monday at your chosen local hour, listing roles first seen in the past seven days at companies in your workspace. It is off unless you turn it on, goes only to a verified account email, is skipped in a week with nothing new, and every message links to the setting that turns it off.
 - Operator growth report: show activation steps for signup cohorts (finished setup, added a company, added people, drafted outreach, paid), each counted once per workspace. "Added people" is a new privacy-safe milestone recorded the first time a workspace holds at least one person; it stores no names or contact details.
 - Setup now leads with your audit. If you sign up after running the free ATS audit, the first setup step says how many career sites are waiting and offers "Review your career sites" as the main action; "Start with people" remains available.

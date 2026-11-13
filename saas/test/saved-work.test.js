@@ -66,6 +66,9 @@ test('stale saves and deletes cannot overwrite another device', async () => {
   assert.equal(await store.get('t', 'u', 'draft', 'd'), null);
 });
 test('saved views retain supported filters, not arbitrary data or page positions', () => {
+  // The People screen's default order can be saved in a view; unknown orders cannot.
+  assert.equal(validateSavedWork('view', { title: 'Call list', version: 0, body: { sortBy: 'call' } }).body.sortBy, 'call');
+  assert.throws(() => validateSavedWork('view', { title: 'Bad', version: 0, body: { sortBy: 'call; DROP TABLE' } }), { status: 400 });
   const item = validateSavedWork('view', { title: 'Ready people', version: 0, body: { q: 'manager', outreachStatus: 'ready_to_contact', sortBy: 'recent', page: 9, tenantId: 'other' } });
   assert.deepEqual(item.body, { q: 'manager', outreachStatus: 'ready_to_contact', sortBy: 'recent', minScore: '' });
   assert.throws(() => validateSavedWork('view', { title: 'Bad', version: 0, body: { sortBy: 'DROP TABLE contacts' } }), { status: 400 });

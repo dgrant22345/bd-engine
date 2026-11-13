@@ -216,6 +216,32 @@ export async function findTenantContactsRelational(tenantId, query = {}) {
   };
 }
 
+// Hiring and outreach context for one page of people: active roles at each
+// person's company and the date of the last outreach recorded for the person.
+export async function getPeopleContextRelational(tenantId, { accountIds = [], contactIds = [], since = '' } = {}) {
+  if (!isDbReady()) return null;
+  const startedAt = performance.now();
+  const [roles, outreach] = await Promise.all([
+    accountIds.length ? dbQuery(
+      `SELECT account_id, COUNT(*)::int AS open_roles,
+         COUNT(*) FILTER (WHERE COALESCE(NULLIF(first_seen_at, ''), created_at) >= $3)::int AS new_roles
+       FROM jobs WHERE tenant_id = $1 AND active AND account_id = ANY($2::text[]) GROUP BY account_id`,
+      [tenantId, accountIds, since]
+    ) : { rows: [] },
+    contactIds.length ? dbQuery(
+      `SELECT contact_id, MAX(occurred_at) AS last_outreach_at
+       FROM activities WHERE tenant_id = $1 AND type = 'outreach' AND contact_id = ANY($2::text[]) GROUP BY contact_id`,
+      [tenantId, contactIds]
+    ) : { rows: [] },
+  ]);
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 250) console.warn(`Slow people context query: saas/src/relational-reads.js getPeopleContextRelational ${elapsedMs}ms`);
+  return {
+    roles: new Map((roles?.rows || []).map(row => [row.account_id, { openRoles: Number(row.open_roles), newRoles7d: Number(row.new_roles) }])),
+    lastOutreach: new Map((outreach?.rows || []).map(row => [row.contact_id, row.last_outreach_at || ''])),
+  };
+}
+
 export async function findTenantConfigsRelational(tenantId, query = {}) {
   if (!isDbReady()) return null;
   const page = Math.max(1, Number(query.page || 1));

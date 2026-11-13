@@ -1883,7 +1883,9 @@ self.addEventListener('activate', (event) => {
     }
     const contacts = await store.findContacts(tenantId, Object.fromEntries(url.searchParams));
     if (Number(contacts?.total || 0) > 0) await recordPeopleAddedOnce(tenant, user, session);
-    return sendJson(res, 200, contacts);
+    // The People list shows why each person may be worth contacting now.
+    const context = contacts.items.length ? await store.getPeopleContext(tenantId, contacts.items) : {};
+    return sendJson(res, 200, { ...contacts, items: contacts.items.map(item => ({ ...item, listContext: context[item.id] || null })) });
   }
 
   const contactMatch = pathname.match(/^\/api\/contacts\/([^/]+)$/);

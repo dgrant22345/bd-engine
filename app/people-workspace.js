@@ -7,6 +7,32 @@
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const safeUrl = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
   const label = value => stages[value] || 'Not started';
+  // People open ranked by who is worth contacting: companies with an active
+  // role first, then relationship priority.
+  const DEFAULT_SORT = 'call';
+  const nextSteps = { not_started: 'Review and draft', researching: 'Finish research', ready_to_contact: 'Send your message', contacted: 'Follow up', replied: 'Reply', opportunity: 'Advance the opportunity' };
+  const initials = name => String(name || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?';
+  const shortDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  // What the workspace knows about hiring at the person's company right now.
+  function hiringSummary(person) {
+    const context = person.listContext;
+    if (!context) return { state: 'unknown', text: '' };
+    if (!context.linked) return { state: 'unlinked', text: person.companyName ? 'Company not linked to a watched account' : '' };
+    if (!context.openRoles) return { state: 'none', text: 'No open roles on record' };
+    const roles = `${context.openRoles.toLocaleString()} open role${context.openRoles === 1 ? '' : 's'}`;
+    return context.newRoles7d
+      ? { state: 'new', text: `${roles} · ${context.newRoles7d.toLocaleString()} new this week` }
+      : { state: 'open', text: roles };
+  }
+  const hiringLine = person => { const hiring = hiringSummary(person); return hiring.text ? `<div class="people-hiring" data-hiring="${hiring.state}">${escape(hiring.text)}</div>` : ''; };
+  function priorityMeter(person) {
+    const score = Math.max(0, Math.min(100, Math.round(Number(person.priorityScore) || 0)));
+    return `<div class="people-priority" title="Relationship priority ${score} of 100. Based on title and employer signals, not candidate fit."><svg viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="people-priority-track" width="100" height="6" rx="3"></rect><rect class="people-priority-fill" width="${score}" height="6" rx="3"></rect></svg><span class="people-priority-value">${score}</span><span class="visually-hidden"> of 100 relationship priority</span></div>`;
+  }
+  function nextStep(person) {
+    const last = shortDate(person.listContext?.lastOutreachAt);
+    return `<div class="people-next">${escape(nextSteps[person.outreachStatus] || nextSteps.not_started)}${last ? ` · last outreach ${escape(last)}` : ''}</div>`;
+  }
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Not provided';
   const options = (items, value) => Object.entries(items).map(([key, text]) => `<option value="${escape(key)}"${key === value ? ' selected' : ''}>${escape(text)}</option>`).join('');
   const field = (name, title, control) => `<div class="people-field"><label for="person-${name}">${escape(title)}</label>${control}</div>`;
@@ -58,11 +84,11 @@
     const alive = () => Boolean(root.querySelector('.people-workspace'));
     const readQuery = () => {
       const params = new URLSearchParams(location.hash.split('?')[1] || '');
-      return { q: params.get('q') || '', outreachStatus: params.get('stage') || '', sortBy: params.get('sort') || 'name', page: Math.max(1, Math.min(1000000, Number(params.get('page')) || 1)), pageSize: 20, minScore: params.get('minScore') || '' };
+      return { q: params.get('q') || '', outreachStatus: params.get('stage') || '', sortBy: params.get('sort') || DEFAULT_SORT, page: Math.max(1, Math.min(1000000, Number(params.get('page')) || 1)), pageSize: 20, minScore: params.get('minScore') || '' };
     };
     function hash(query = state.query, person = state.selected) {
       const params = new URLSearchParams();
-      for (const [key, value] of Object.entries({ q: query.q, stage: query.outreachStatus, sort: query.sortBy === 'name' ? '' : query.sortBy, page: query.page > 1 ? query.page : '', minScore: query.minScore, person })) if (value) params.set(key, value);
+      for (const [key, value] of Object.entries({ q: query.q, stage: query.outreachStatus, sort: query.sortBy === DEFAULT_SORT ? '' : query.sortBy, page: query.page > 1 ? query.page : '', minScore: query.minScore, person })) if (value) params.set(key, value);
       return `#/contacts${params.size ? `?${params}` : ''}`;
     }
     function allowLeave() {
@@ -192,10 +218,10 @@
             <form id="contacts-filter-form" class="people-filters" data-people-form="filters">
               <div class="people-search"><label class="visually-hidden" for="people-search">Search people</label><input id="people-search" type="search" name="q" value="${escape(query.q)}" placeholder="Name, role, company or notes" autocomplete="off"><button class="ghost-button" type="submit" aria-label="Search people">Search</button></div>
               <label><span class="visually-hidden">Outreach stage</span><select name="outreachStatus" aria-label="Outreach stage">${options({ '': 'All outreach stages', ...stages }, query.outreachStatus)}</select></label>
-              <label><span class="visually-hidden">Sort people</span><select name="sortBy" aria-label="Sort people">${options({ name: 'Name A–Z', name_desc: 'Name Z–A', company: 'Company A–Z', recent: 'Recently updated', priority: 'Relationship priority' }, query.sortBy)}</select></label>
+              <label><span class="visually-hidden">Sort people</span><select name="sortBy" aria-label="Sort people">${options({ call: 'Worth contacting first', priority: 'Relationship priority', name: 'Name A–Z', name_desc: 'Name Z–A', company: 'Company A–Z', recent: 'Recently updated' }, query.sortBy)}</select></label>
               ${filtered ? button('clear', 'Clear filters') : ''}
             </form>
-            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
+            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'call' ? ' · Companies with open roles first, then relationship priority' : ''}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
             <div class="people-feedback" data-people-feedback role="status"></div>
             <div class="people-selection" data-people-selection hidden></div>
             ${result.items.length ? table() : `<div class="people-empty"><h3>${filtered ? 'No people match these filters' : 'Your people workspace starts here'}</h3><p>${filtered ? 'Try another name, role or company, or clear the filters to see your saved people.' : 'Add someone you want to review, or import your LinkedIn connections. CSV imports include connection details—not complete candidate profiles.'}</p>${filtered ? button('clear', 'Clear filters') : `${button('add', 'Add your first person')}<button class="secondary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button>${exportWaitNote()}`}</div>`}
@@ -218,18 +244,20 @@
       return `<p class="people-empty-wait"><strong>Waiting for your LinkedIn export?</strong> LinkedIn sends the file by email on its own schedule. ${guide}. In the meantime, <a href="#/accounts/new">add a company you want to watch</a> so its job board can be read.</p>`;
     }
     function table() {
-      return `<div class="people-table-scroll" tabindex="0" role="region" aria-label="People results"><table class="table contacts-table people-table"><colgroup><col class="people-select-col"><col class="people-name-col"><col><col class="people-stage-col"></colgroup><thead><tr><th scope="col"><input type="checkbox" data-people="select-page" aria-label="Select people on this page"></th><th scope="col" aria-sort="${state.query.sortBy === 'name' ? 'ascending' : state.query.sortBy === 'name_desc' ? 'descending' : 'none'}">${button('sort-name', 'Person <span aria-hidden="true">↕</span>')}</th><th scope="col" aria-sort="${state.query.sortBy === 'company' ? 'ascending' : 'none'}">${button('sort-company', 'Company <span aria-hidden="true">↕</span>')}</th><th scope="col">Outreach</th></tr></thead><tbody>${state.result.items.map(row).join('')}</tbody></table></div>`;
+      return `<div class="people-table-scroll" tabindex="0" role="region" aria-label="People results"><table class="table contacts-table people-table"><colgroup><col class="people-select-col"><col class="people-name-col"><col><col class="people-priority-col"><col class="people-stage-col"></colgroup><thead><tr><th scope="col"><input type="checkbox" data-people="select-page" aria-label="Select people on this page"></th><th scope="col" aria-sort="${state.query.sortBy === 'name' ? 'ascending' : state.query.sortBy === 'name_desc' ? 'descending' : 'none'}">${button('sort-name', 'Person <span aria-hidden="true">↕</span>')}</th><th scope="col" aria-sort="${state.query.sortBy === 'company' ? 'ascending' : 'none'}">${button('sort-company', 'Company and hiring <span aria-hidden="true">↕</span>')}</th><th scope="col" class="people-priority-head" aria-sort="${state.query.sortBy === 'priority' ? 'descending' : 'none'}">${button('sort-priority', 'Priority <span aria-hidden="true">↕</span>')}</th><th scope="col">Outreach</th></tr></thead><tbody>${state.result.items.map(row).join('')}</tbody></table></div>`;
     }
     function row(person) {
       return `<tr data-person-row="${escape(person.id)}"${person.id === state.selected ? ' class="is-selected"' : ''}>
         <td><input type="checkbox" class="contacts-bulk-checkbox" data-people="select-person" value="${escape(person.id)}" data-name="${escape(person.fullName)}" data-company="${escape(person.companyName)}" data-title="${escape(person.title)}" data-account-id="${escape(person.accountId)}" data-email="${escape(person.email)}" data-linkedin="${escape(person.linkedinUrl)}" aria-label="Select ${escape(person.fullName)}" ${state.checked.has(person.id) ? 'checked' : ''}></td>
-        <td><a class="person-name" href="${escape(hash(state.query, person.id))}" data-people="open" data-id="${escape(person.id)}" ${person.id === state.selected ? 'aria-current="true"' : ''}>${escape(person.fullName || 'Unnamed person')}</a><div class="people-role">${escape(person.title || 'Role not provided')}</div></td>
-        <td><span>${escape(person.companyName || 'Not provided')}</span></td><td><span class="people-stage" data-stage="${escape(person.outreachStatus || 'not_started')}">${escape(label(person.outreachStatus))}</span></td>
+        <td><div class="person-cell"><span class="person-avatar" aria-hidden="true">${escape(initials(person.fullName))}</span><div class="person-cell-text"><a class="person-name" href="${escape(hash(state.query, person.id))}" data-people="open" data-id="${escape(person.id)}" ${person.id === state.selected ? 'aria-current="true"' : ''}>${escape(person.fullName || 'Unnamed person')}</a><div class="people-role">${escape(person.title || 'Role not provided')}</div><div class="people-company-compact">${escape(person.companyName || 'Company not provided')}${hiringSummary(person).text && ['new', 'open'].includes(hiringSummary(person).state) ? ` · ${escape(hiringSummary(person).text)}` : ''}</div></div></div></td>
+        <td><span class="people-company">${escape(person.companyName || 'Not provided')}</span>${hiringLine(person)}</td>
+        <td class="people-priority-cell">${priorityMeter(person)}</td>
+        <td><span class="people-stage" data-stage="${escape(person.outreachStatus || 'not_started')}">${escape(label(person.outreachStatus))}</span>${nextStep(person)}</td>
       </tr>`;
     }
     function updateRow(person) {
       const index = state.result?.items.findIndex(item => item.id === person.id) ?? -1;
-      if (index >= 0) state.result.items[index] = person;
+      if (index >= 0) state.result.items[index] = person = { ...person, listContext: person.listContext ?? state.result.items[index].listContext };
       const element = [...root.querySelectorAll('[data-person-row]')].find(item => item.dataset.personRow === person.id);
       if (element) element.outerHTML = row(person);
       onUpdated(person);
@@ -556,6 +584,7 @@
       if (action === 'previous-page' || action === 'next-page') { state.scroll = 0; navigate({ ...state.query, page: state.query.page + (action === 'next-page' ? 1 : -1) }); }
       if (action === 'sort-name') navigate({ ...state.query, sortBy: state.query.sortBy === 'name' ? 'name_desc' : 'name', page: 1 });
       if (action === 'sort-company') navigate({ ...state.query, sortBy: 'company', page: 1 });
+      if (action === 'sort-priority') navigate({ ...state.query, sortBy: 'priority', page: 1 });
       if (action === 'next-person' || action === 'previous-person') move(action === 'next-person' ? 1 : -1);
       if (action === 'person-overview') {
         root.querySelector('.person-panel').scrollTo({ top: 0, behavior: 'instant' });
