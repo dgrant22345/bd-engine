@@ -56,7 +56,8 @@ test('the import dialog previews with the server rules and reports what was real
   expect(await frame.evaluate(() => location.hash)).toContain('#/contacts');
   await app.locator('[data-action="close-network-import-modal"]').first().click();
   await expect(app.getByText('Jos\u00e9 Mu\u00f1oz').first()).toBeVisible();
-  await expect(app.getByText('Soci\u00e9t\u00e9 G\u00e9n\u00e9rale').first()).toBeVisible();
+  // The company column, not the phone-only line under the name.
+  await expect(app.locator('.people-company', { hasText: 'Soci\u00e9t\u00e9 G\u00e9n\u00e9rale' }).first()).toBeVisible();
   expect(errors).toEqual([]);
 });
 
