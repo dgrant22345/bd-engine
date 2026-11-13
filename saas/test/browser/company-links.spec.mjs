@@ -87,7 +87,7 @@ test('company correction preserves the draft, reloads roles, and survives lookup
     await page.screenshot({ path: `test-results/company-link-edit-${width}.png` });
   }
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
-  await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toHaveCSS('background-color', 'rgb(128, 212, 197)');
+  await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toHaveCSS('background-color', 'rgb(198, 244, 50)');
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'test-results/company-link-edit-dark.png' });
 });
