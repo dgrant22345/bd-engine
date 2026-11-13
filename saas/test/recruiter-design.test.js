@@ -50,3 +50,15 @@ test('Bold dark look: lime accent on a near-black ground, self-hosted display ty
   assert.match(html, /<html lang="en" data-theme="dark"/);
   assert.doesNotMatch(`${visual}\n${workspace}`, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
 });
+
+test('signed-in bar follows the Bold look from one place', async () => {
+  const site = name => readFile(new URL(`../public/${name}`, import.meta.url), 'utf8');
+  const [brand, cloud] = await Promise.all([site('brand.css'), site('cloud.css')]);
+  // brand.css loads after cloud.css, so any .cloud-shell rule there would put
+  // the older navy and teal back over the Bold block.
+  assert.doesNotMatch(brand, /\.cloud-shell/);
+  const bold = cloud.slice(cloud.indexOf("/* Signed-in chrome follows the workspace's Bold dark look"));
+  assert.match(bold, /\.cloud-shell \.cloud-topbar \{ background: #0b0f14;/);
+  assert.match(bold, /\.cloud-shell \.brand-icon-xs svg rect \{ fill: #c6f432; \}/);
+  assert.match(bold, /\.cloud-shell \.cloud-avatar \{ background: #232f17; color: #d8fa6b;/);
+});
