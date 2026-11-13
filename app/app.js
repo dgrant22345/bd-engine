@@ -11691,7 +11691,9 @@ async function renderJobsView() {
       ${result.items.length ? renderJobsTable(result.items) : renderEmptyState({ icon: 'Jobs', title: 'No jobs match these filters', copy: result.summary?.activeTotal ? 'Your workspace has active jobs. Broaden a filter or edit your role focus. Importing contacts will not expand the job boards being searched.' : 'No active jobs have been imported yet. Check that your target companies have approved careers boards, then refresh those sources.', action: '<button class="primary-button" type="button" data-action="reset-filters" data-view="jobs">Clear filters</button><a class="secondary-button" href="#/admin/jobs">Check job sources</a>' })}
       ${renderPagination('jobs', result.page, result.pageSize, result.total)}
     </section>
+    ${window.bdWorkflowTools.renderRoleDigest()}
   `;
+  window.bdWorkflowTools.openRoleDigestFromLink(appRoot);
 }
 
 function renderCollapsibleStart(sectionId, title, subtitle) {

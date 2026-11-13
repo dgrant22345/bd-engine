@@ -12,7 +12,7 @@ import { extractSession, createSession, destroySession, forgetUserSessions, isRe
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbQuery, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail } from './email.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail, sendRoleDigestEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
@@ -34,7 +34,7 @@ import { buildActivityApiResponse, productEventTypeForOutcomeStage } from './com
 import { applyCommercialCheckoutReadiness, isCommercialCheckoutReady } from './production-readiness.js';
 import { validateContactInput } from './contact-queries.js';
 import { getGrowthOutcomes } from './growth-outcomes.js';
-import { createReminderStore, REMINDER_ID } from './followup-reminders.js';
+import { createReminderStore, getNewRoleDigest, REMINDER_ID, ROLE_DIGEST_ID } from './followup-reminders.js';
 import { buildTaskCalendar } from './task-calendar.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
@@ -47,6 +47,7 @@ const host = process.env.BD_CLOUD_HOST || '0.0.0.0';
 const store = createStore();
 const savedWork = createSavedWorkStore();
 const reminders = createReminderStore();
+const roleDigests = createReminderStore({ id: ROLE_DIGEST_ID, title: 'Weekly role digest', viewType: 'jobs', cadence: 'weekly' });
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
@@ -513,8 +514,15 @@ function logRequestError(status, req, error) {
     : `${entry.status} on ${entry.method} ${entry.path} [${entry.requestId}]: ${entry.error}`);
 }
 
+// Recheck current DB identity inside the delivery transaction.
+async function getReminderRecipient(tenantId, userId) {
+  const row = (await dbQuery(`SELECT u.email,u.email_verified_at,u.status,t.status AS tenant_status,t.slug,m.role FROM users u
+    JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=$1 AND t.id=$2`, [userId, tenantId])).rows[0];
+  return { to: row?.email, eligible: Boolean(row?.email_verified_at && row.status === 'active' && ['active','trialing'].includes(row.tenant_status) && row.slug !== PUBLIC_DEMO_SLUG && ['owner','admin','member'].includes(row.role)) };
+}
+
 function startReminderRunner(startupPromise) {
-  let running = false; let cursor = '';
+  let running = false; let cursor = ''; let digestCursor = '';
   const scan = async () => {
     if (running || !isEmailConfigured()) return;
     running = true; const startedAt = performance.now();
@@ -526,12 +534,7 @@ function startReminderRunner(startupPromise) {
       for (const candidate of candidates) {
         try {
           await reminders.deliver(candidate.tenant_id, candidate.user_id, {
-            getRecipient: async (tenantId, userId) => {
-              // Recheck current DB identity inside the delivery transaction.
-              const row = (await dbQuery(`SELECT u.email,u.email_verified_at,u.status,t.status AS tenant_status,t.slug,m.role FROM users u
-                JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=$1 AND t.id=$2`, [userId, tenantId])).rows[0];
-              return { to: row?.email, eligible: Boolean(row?.email_verified_at && row.status === 'active' && ['active','trialing'].includes(row.tenant_status) && row.slug !== PUBLIC_DEMO_SLUG && ['owner','admin','member'].includes(row.role)) };
-            },
+            getRecipient: getReminderRecipient,
             getTasks: async (tenantId, date) => {
               const result = await dbQuery(`SELECT raw, count(*) OVER() AS total FROM tasks WHERE tenant_id=$1 AND status='pending'
                 AND substring(due_date,1,10)<=$2 AND due_date<>'' ORDER BY due_date,id LIMIT 20`, [tenantId, date]);
@@ -540,6 +543,18 @@ function startReminderRunner(startupPromise) {
             send: payload => sendFollowupReminderEmail({ ...payload, appUrl: `${PUBLIC_ORIGIN}/app/#/tasks` }),
           });
         } catch (error) { console.error('Follow-up reminder failed:', safeErrorSummary(error)); }
+      }
+      // Weekly role digest: same eligibility rules, separate opt-in.
+      const digestCandidates = await roleDigests.candidates(digestCursor);
+      digestCursor = digestCandidates.length === 20 ? `${digestCandidates.at(-1).tenant_id}:${digestCandidates.at(-1).user_id}` : '';
+      for (const candidate of digestCandidates) {
+        try {
+          await roleDigests.deliver(candidate.tenant_id, candidate.user_id, {
+            getRecipient: getReminderRecipient,
+            getTasks: async (tenantId) => getNewRoleDigest(tenantId),
+            send: payload => sendRoleDigestEmail({ ...payload, appUrl: `${PUBLIC_ORIGIN}/app/#/jobs`, settingsUrl: `${PUBLIC_ORIGIN}/app/#/jobs?digest=settings` }),
+          });
+        } catch (error) { console.error('Weekly role digest failed:', safeErrorSummary(error)); }
       }
     } finally {
       running = false;
@@ -1591,6 +1606,7 @@ self.addEventListener('activate', (event) => {
     const result = await store.clearTenantWorkspaceData(tenantId);
     await savedWork.clearTenant(tenantId);
     await reminders.clearTenant(tenantId);
+    await roleDigests.clearTenant(tenantId);
     return sendJson(res, 200, {
       ...result,
       message: 'Workspace data deleted. Your account and workspace shell remain available.',
@@ -2073,6 +2089,18 @@ self.addEventListener('activate', (event) => {
       const input = await readJson(req);
       if (input?.emailEnabled && (!status.providerConfigured || !status.emailVerified)) return sendJson(res, 409, { error: status.providerConfigured ? 'Verify your account email before enabling reminders.' : 'Email delivery needs setup. Calendar export is available now.' });
       return sendJson(res, 200, { ...await reminders.put(tenantId, user.id, input), ...status });
+    }
+  }
+
+  // Weekly role digest preference: off unless the person turns it on, and
+  // only for a verified account email.
+  if (pathname === '/api/jobs/digest') {
+    const status = { providerConfigured: isEmailConfigured(), emailVerified: Boolean(user.emailVerifiedAt) };
+    if (req.method === 'GET') return sendJson(res, 200, { ...await roleDigests.get(tenantId, user.id), ...status });
+    if (req.method === 'PUT') {
+      const input = await readJson(req);
+      if (input?.emailEnabled && (!status.providerConfigured || !status.emailVerified)) return sendJson(res, 409, { error: status.providerConfigured ? 'Verify your account email before turning on the weekly digest.' : 'Email delivery is not set up for this workspace yet.' });
+      return sendJson(res, 200, { ...await roleDigests.put(tenantId, user.id, input), ...status });
     }
   }
 

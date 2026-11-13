@@ -101,3 +101,43 @@ test('walkthrough rejects personal campaign values and keeps its direct-visit au
   await expect(page.getByRole('link', { name: 'Run free ATS audit →' })).toHaveAttribute('href', '/ats-checker?utm_source=linkedin');
   await expect(page.getByRole('link', { name: 'Recruiter workspace' })).toHaveAttribute('href', '/?utm_source=linkedin');
 });
+
+test('weekly role digest is off by default, opens from the email link, and saves the choice', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await workspace(page);
+  let saved = { version: 0, emailEnabled: false, timezone: 'UTC', hour: 9 }; const puts = [];
+  await page.route('**/api/jobs/digest', route => {
+    if (route.request().method() === 'PUT') { const input = route.request().postDataJSON(); puts.push(input); saved = { ...input, version: input.version + 1 }; }
+    return route.fulfill({ json: { ...saved, providerConfigured: true, emailVerified: true } });
+  });
+
+  // Reached from the email's "Turn it off" link: the settings are already open.
+  await page.goto('/app/#/jobs?digest=settings');
+  const tools = page.locator('[data-role-digest-tools]');
+  await expect(tools).toHaveAttribute('open', '');
+  const optIn = tools.getByLabel('Email me a weekly digest of new roles');
+  await expect(optIn).not.toBeChecked();
+  await expect(tools).toContainText('No email is sent in a week with no new roles');
+  await optIn.check();
+  await tools.getByRole('button', { name: 'Save digest settings' }).click();
+  await expect(tools).toContainText('Weekly digest is on. The first one covers next week.');
+  expect(puts.at(-1)).toMatchObject({ version: 0, emailEnabled: true, hour: 9 });
+  await optIn.uncheck();
+  await tools.getByRole('button', { name: 'Save digest settings' }).click();
+  await expect(tools).toContainText('Weekly digest is off. Your settings are saved.');
+  expect(puts.at(-1)).toMatchObject({ version: 1, emailEnabled: false });
+
+  // Without the link the section stays closed until opened.
+  await page.goto('/app/#/jobs');
+  await page.reload();
+  await expect(page.locator('[data-role-digest-tools]')).not.toHaveAttribute('open', '');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  }
+  await page.locator('[data-role-digest-tools] > summary').click();
+  await page.locator('[data-digest-open]').click();
+  await expect(page.locator('[data-digest-settings] form')).toBeVisible();
+  const a11y = await new AxeBuilder({ page }).include('[data-role-digest-tools]').analyze(); expect(a11y.violations).toEqual([]);
+  expect(errors).toEqual([]);
+});
