@@ -325,3 +325,29 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 /* Email preference forms: the explanation sits above the fields. */
 [data-reminder-settings] .task-create-form > p:first-child, [data-digest-settings] .task-create-form > p:first-child { grid-column: 1 / -1; margin: 0; }
 [data-reminder-settings], [data-digest-settings] { margin-top: 12px; }
+/* Drawn scores: ring for a headline score, bar for supporting ones, three
+   bars for weekly posting pace. Colour comes from the surrounding text so the
+   same marks work on the dark dashboard header. */
+.score-ring { display: inline-grid; place-items: center; line-height: 0; color: var(--accent); }
+.score-ring-track { fill: none; stroke: var(--line); stroke-width: 4; }
+.score-ring-value { fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; }
+.score-ring-text { fill: var(--text); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.score-meter { display: block; max-width: 96px; line-height: 0; margin: 4px 0; color: var(--accent); }
+.score-meter svg { display: block; width: 100%; height: 6px; }
+.score-meter-track { fill: var(--line); }
+.score-meter-fill { fill: currentColor; }
+.role-pace { display: inline-block; line-height: 0; color: var(--accent); }
+.role-pace-bar { fill: var(--line-strong); }
+.role-pace-bar--now { fill: currentColor; }
+.score-cell { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.score-cell-trend { display: inline-flex; align-items: center; gap: 4px; }
+.hiring-cell { display: flex; align-items: flex-end; gap: 10px; margin: 4px 0 6px; }
+.hiring-cell .score-meter { flex: 1 1 auto; max-width: 72px; margin: 0 0 2px; }
+.hiring-cell-value { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi-tile--ring { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kpi-tile--meter .score-meter { max-width: 120px; margin-top: 8px; }
+.kpi-ribbon.headline-metrics .kpi-tile span.score-ring, .kpi-ribbon.headline-metrics .kpi-tile span.score-meter { color: #7fe0cf; }
+.headline-metrics .score-ring-track, .headline-metrics .score-meter-track { stroke: #ffffff26; fill: #ffffff26; }
+.headline-metrics .score-ring-track { fill: none; }
+.headline-metrics .score-ring-text { fill: #ffffff; font-size: 14px; }
+.headline-metrics .kpi-tile--meter .score-meter { margin-top: 6px; }

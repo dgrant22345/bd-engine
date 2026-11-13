@@ -10706,10 +10706,10 @@ async function renderDashboardView(options = {}) {
           </div>` : ''}
         </div>
         ${topCompany ? `<div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Target score', formatNumber(getTargetScore(topCompany)))}
+          ${renderMetricTile('Target score', formatNumber(getTargetScore(topCompany)), 'ring')}
           ${renderMetricTile('Open roles', formatNumber(topCompany.openRoleCount || topCompany.jobCount))}
-          ${renderMetricTile('Hiring velocity', formatNumber(topCompany.hiringVelocity || 0))}
-          ${renderMetricTile('Engagement', formatNumber(topCompany.engagementScore || 0))}
+          ${renderMetricTile('Hiring velocity', formatNumber(topCompany.hiringVelocity || 0), 'meter')}
+          ${renderMetricTile('Engagement', formatNumber(topCompany.engagementScore || 0), 'meter')}
         </div>` : ''}
       </div>
 
@@ -11258,8 +11258,8 @@ async function renderAccountDetail(accountId) {
           </div>
         </div>
         <div class="kpi-ribbon headline-metrics">
-          ${renderMetricTile('Target score', formatNumber(targetScore))}
-          ${renderMetricTile('Hiring velocity', formatNumber(detail.account.hiringVelocity || 0))}
+          ${renderMetricTile('Target score', formatNumber(targetScore), 'ring')}
+          ${renderMetricTile('Hiring velocity', formatNumber(detail.account.hiringVelocity || 0), 'meter')}
           ${renderMetricTile('Engagement', formatNumber(detail.account.engagementScore || 0))}
           ${renderMetricTile('Jobs 30d', formatNumber(detail.account.jobsLast30Days || 0))}
           ${renderMetricTile('Jobs 90d', formatNumber(detail.account.jobsLast90Days || 0))}
@@ -12355,9 +12355,10 @@ function renderAccountsTable(items) {
             </div>
             </details>
           </td>
-          <td data-label="Target score">${formatNumber(getTargetScore(item))}${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}<div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
+          <td data-label="Target score"><div class="score-cell">${renderScoreRing(getTargetScore(item), 'Target score')}<span class="score-cell-trend">${renderScoreDelta(item.id, getTargetScore(item))}${renderSparkline(item.id)}</span></div><div class="small muted">${escapeHtml(getTargetScoreExplanation(item) || humanize(item.priority || 'medium'))}</div></td>
           <td data-label="Hiring">
-            ${formatNumber(item.hiringVelocity || 0)} velocity
+            <span class="hiring-cell-value">${formatNumber(item.hiringVelocity || 0)} <span class="small muted">velocity</span></span>
+            <div class="hiring-cell">${renderScoreMeter(item.hiringVelocity || 0, 'Hiring velocity')}${renderRolePace(item)}</div>
             <div class="small muted">${pluralize(item.jobsLast30Days || 0, 'job')} / 30d \u00b7 ${formatNumber(item.jobsLast90Days || 0)} / 90d</div>
             ${item.networkStrength ? renderStatusPill(item.networkStrength, toneForNetwork(item.networkStrength)) : ''}
             ${vel.freshBadge ? `<span class="signal-badge signal-badge--just-opened">${vel.freshBadge}</span>` : ''}
@@ -13182,7 +13183,44 @@ function renderMetricCard(label, value, subtitle) {
   return `<article class="metric-card"><span class="metric-label">${escapeHtml(label)}</span><strong class="metric-value">${formatNumber(value)}</strong><span class="small muted">${escapeHtml(subtitle)}</span></article>`;
 }
 
-function renderMetricTile(label, value) {
+// Scores out of 100 are drawn as well as printed: a ring for the headline
+// score and a bar for supporting ones. Each still carries its value as text.
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(String(value ?? '').replace(/[^0-9.-]/g, '')) || 0)));
+}
+
+function renderScoreRing(value, label, size = 44) {
+  const score = clampScore(value);
+  return `<span class="score-ring" role="img" aria-label="${escapeAttr(label)} ${score} of 100"><svg viewBox="0 0 40 40" width="${size}" height="${size}" aria-hidden="true" focusable="false"><circle class="score-ring-track" cx="20" cy="20" r="16"></circle><circle class="score-ring-value" cx="20" cy="20" r="16" pathLength="100" stroke-dasharray="${score} 100" transform="rotate(-90 20 20)"></circle><text class="score-ring-text" x="20" y="20" text-anchor="middle" dominant-baseline="central">${score}</text></svg></span>`;
+}
+
+function renderScoreMeter(value, label) {
+  const score = clampScore(value);
+  return `<span class="score-meter" role="img" aria-label="${escapeAttr(label)} ${score} of 100"><svg viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="score-meter-track" width="100" height="6" rx="3"></rect><rect class="score-meter-fill" width="${score}" height="6" rx="3"></rect></svg></span>`;
+}
+
+// Approximate weekly posting pace from the three role counts the workspace
+// keeps: 31 to 90 days ago, 8 to 30 days ago, and the past 7 days.
+function renderRolePace(item) {
+  if (item?.newRoleCount7d === undefined || item?.jobsLast30Days === undefined || item?.jobsLast90Days === undefined) return '';
+  const week = Number(item.newRoleCount7d) || 0;
+  const month = Math.max(week, Number(item.jobsLast30Days) || 0);
+  const quarter = Math.max(month, Number(item.jobsLast90Days) || 0);
+  if (!quarter) return '';
+  const pace = [(quarter - month) / (60 / 7), (month - week) / (23 / 7), week];
+  const peak = Math.max(...pace);
+  const show = value => (value >= 10 ? Math.round(value) : Math.round(value * 10) / 10).toLocaleString();
+  const summary = `Roles posted per week, approximately. 31 to 90 days ago: ${show(pace[0])}. 8 to 30 days ago: ${show(pace[1])}. Past 7 days: ${show(pace[2])}.`;
+  const bars = pace.map((value, index) => {
+    const height = Math.max(1.5, (value / peak) * 18);
+    return `<rect class="role-pace-bar${index === 2 ? ' role-pace-bar--now' : ''}" x="${index * 9}" y="${(20 - height).toFixed(1)}" width="6" height="${height.toFixed(1)}" rx="1.5"></rect>`;
+  }).join('');
+  return `<span class="role-pace" role="img" aria-label="${escapeAttr(summary)}" title="${escapeAttr(summary)}"><svg viewBox="0 0 24 20" width="24" height="20" aria-hidden="true" focusable="false">${bars}</svg></span>`;
+}
+
+function renderMetricTile(label, value, visual = '') {
+  if (visual === 'ring') return `<div class="kpi-tile kpi-tile--ring"><span class="small muted">${escapeHtml(label)}</span>${renderScoreRing(value, label, 44)}</div>`;
+  if (visual === 'meter') return `<div class="kpi-tile kpi-tile--meter"><span class="small muted">${escapeHtml(label)}</span><strong>${value}</strong>${renderScoreMeter(value, label)}</div>`;
   return `<div class="kpi-tile"><span class="small muted">${escapeHtml(label)}</span><strong>${value}</strong></div>`;
 }
 
