@@ -1879,6 +1879,7 @@ function wireBulkKeyboard() {
 /* ── Phase 6: Dashboard layout customization ── */
 function getDashboardSections() {
   return [
+    { id: 'today', label: 'Who to call today' },
     { id: 'hero', label: 'Daily summary', required: true },
     { id: 'network-radar', label: 'Network matches' },
     { id: 'workflow', label: 'Quick working lanes' },
@@ -10573,6 +10574,71 @@ async function copyMorningRadarText() {
   }
 }
 
+// Home: who to call today. The three people the People list ranks first
+// ("worth contacting first": companies with an active role, then
+// relationship priority), drawn as cards, with a plain count above them.
+const TODAY_NEXT_STEP = {
+  not_started: 'Draft intro',
+  researching: 'Finish research',
+  ready_to_contact: 'Send message',
+  contacted: 'Follow up',
+  replied: 'Reply',
+  opportunity: 'Advance',
+};
+
+function renderDashboardToday(people, dashboard = {}) {
+  const items = Array.isArray(people?.items) ? people.items.slice(0, 3) : [];
+  if (!items.length) return '';
+  const hiring = items.filter(person => Number(person.listContext?.openRoles || 0) > 0);
+  const count = hiring.length;
+  const shortDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const activeRoles = Number(getDashboardActiveJobCount(dashboard.summary) || 0);
+  const hiringCompanies = Number(dashboard.summary?.hiringAccountCount || 0);
+  const heading = count
+    ? `${count === 1 ? 'One call' : `${count} calls`} worth making today`
+    : 'Your highest-priority people';
+  const summary = count
+    ? `${pluralize(activeRoles, 'open role')} across ${pluralize(hiringCompanies, 'hiring company', 'hiring companies')} in your workspace.`
+    : 'None of the people at the top of your list work at a company with an open role on record.';
+  const cards = items.map((person) => {
+    const context = person.listContext || {};
+    const openRoles = Number(context.openRoles || 0);
+    const newRoles = Number(context.newRoles7d || 0);
+    const why = openRoles
+      ? `${pluralize(openRoles, 'open role')} at ${escapeHtml(person.companyName || 'their company')}${newRoles ? `, ${formatNumber(newRoles)} new this week` : ''}.`
+      : `${escapeHtml(person.companyName || 'Company not recorded')}: no open role on record.`;
+    const last = shortDate(context.lastOutreachAt);
+    const score = Math.max(0, Math.min(100, Math.round(Number(person.priorityScore) || 0)));
+    const step = TODAY_NEXT_STEP[person.outreachStatus] || TODAY_NEXT_STEP.not_started;
+    return `<article class="today-card${openRoles ? ' today-card--hiring' : ''}">
+      <div class="today-card__head">
+        <div class="today-card__who">
+          <h3>${escapeHtml(person.fullName || 'Unnamed person')}</h3>
+          <p>${escapeHtml([person.title, person.companyName].filter(Boolean).join(', ') || 'Role not recorded')}</p>
+        </div>
+        <p class="today-card__score" title="Relationship priority ${score} of 100. Based on title and employer signals, not candidate fit."><strong>${score}</strong><span>priority</span></p>
+      </div>
+      <p class="today-card__why">${why}</p>
+      <div class="today-card__foot">
+        <span>${last ? `Last outreach ${escapeHtml(last)}` : 'No outreach recorded'}</span>
+        <a class="primary-button today-card__action" href="#/contacts?person=${encodeURIComponent(person.id)}" aria-label="${escapeAttr(`${step}: ${person.fullName || 'person'}`)}">${escapeHtml(step)}</a>
+      </div>
+    </article>`;
+  }).join('');
+  return `<section class="today-board" aria-labelledby="today-board-heading">
+    <div class="today-board__lead">
+      ${count ? `<p class="today-board__count" aria-hidden="true">${count}</p>` : ''}
+      <div class="today-board__copy">
+        <p class="eyebrow">${escapeHtml(today)}</p>
+        <h2 id="today-board-heading">${escapeHtml(heading)}</h2>
+        <p class="today-board__summary">${escapeHtml(summary)} <a href="#/contacts">See everyone, ranked</a></p>
+      </div>
+    </div>
+    <div class="today-board__cards">${cards}</div>
+  </section>`;
+}
+
 function renderDashboardRoiHero(dashboard = {}) {
   const summary = dashboard.summary || {};
   const incomplete = Number(summary.incompleteBoardCount || 0);
@@ -10626,7 +10692,11 @@ async function renderDashboardView(options = {}) {
         })
       : Promise.resolve({}));
   const savedDraftPromise = isJobSeekerPersona() || appState.bootstrap?.session?.readOnly ? Promise.resolve(null) : api('/api/saved-work/draft?summary=1', { skipCache: true }).catch(() => null);
-  const [dashboardPayload, outcomeSummary, savedDrafts] = await Promise.all([dashboardPromise, outcomePromise, savedDraftPromise]);
+  // The same first page the People list opens on, limited to three people.
+  const todayPeoplePromise = options.todayPeople
+    ? Promise.resolve(options.todayPeople)
+    : api(`/api/contacts?${new URLSearchParams({ sortBy: 'call', pageSize: 3 })}`, { skipCache: true }).catch(() => null);
+  const [dashboardPayload, outcomeSummary, savedDrafts, todayPeople] = await Promise.all([dashboardPromise, outcomePromise, savedDraftPromise, todayPeoplePromise]);
   // A slow overview response must not replace the newer People/Follow-ups view.
   if (!isCurrent()) return;
   appState.outcomeSummary = outcomeSummary || {};
@@ -10678,6 +10748,8 @@ async function renderDashboardView(options = {}) {
   const dupeGroups = detectDuplicates(dashboard.todayQueue);
 
   appRoot.innerHTML = `
+    ${dashSection('today', renderDashboardToday(todayPeople, dashboard))}
+
     ${renderDashboardRoiHero(dashboard, appState.outcomeSummary)}
 
     ${topCompany ? '' : renderFirstValueChecklist(dashboard, personaCopy)}
@@ -10982,6 +11054,7 @@ async function renderDashboardView(options = {}) {
           dashboardPayload,
           extendedPayload: payload,
           outcomeSummary,
+          todayPeople,
           skipLoading: true,
         });
       }).catch((e) => {

@@ -34,6 +34,9 @@ export default defineConfig({
       // stays intact — only the harness raises the ceiling.
       BD_SIGNUP_MAX: '1000',
       BD_LOGIN_MAX: '1000',
+      // Each journey that opens the demo is a demo start from the one test
+      // IP; the production limit of 30 an hour stays as it is.
+      BD_DEMO_MAX: '1000',
       // Shared test IP sees every synthetic visit; production keeps its default.
       BD_ANALYTICS_MAX: '10000',
       BD_ANALYTICS_ADMIN_EMAILS: [
