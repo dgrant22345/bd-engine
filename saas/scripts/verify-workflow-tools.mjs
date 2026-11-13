@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { initDb, closeDb, dbQuery, dbSaveUser, dbSaveTenant, dbSaveMembership, dbSaveTenantData } from '../src/db.js';
 import { syncTenantRelationalChanges } from '../src/relational-writes.js';
 import { persistJobFeedback, loadWorkspaceFeedback } from '../src/job-feedback.js';
-import { createReminderStore } from '../src/followup-reminders.js';
+import { createReminderStore, getNewRoleDigest, ROLE_DIGEST_ID } from '../src/followup-reminders.js';
 import { GROWTH_SQL, summarizeGrowthRows } from '../src/growth-outcomes.js';
 
 const target = new URL(process.env.DATABASE_URL || 'postgres://missing');
@@ -35,6 +35,27 @@ try {
   assert.equal(sent, 1); assert.equal(deliveries.filter(result => result.sent).length, 1);
   assert.equal((await reminders.get(id, userId)).version, 1);
   await assert.rejects(reminders.put(id, userId, { version: 0, emailEnabled: false, timezone: 'UTC', hour: 9 }), error => error.status === 409);
+  // Weekly role digest: a separate opt-in in the same table, and the real new-role SQL.
+  const digests = createReminderStore({ id: ROLE_DIGEST_ID, title: 'Weekly role digest', viewType: 'jobs', cadence: 'weekly' });
+  await digests.put(id, userId, { version: 0, emailEnabled: true, timezone: 'UTC', hour: 0 }, { now: new Date('2026-11-12T12:00:00Z') });
+  assert.ok((await digests.candidates()).some(row => row.tenant_id === id));
+  assert.equal((await reminders.get(id, userId)).version, 1);
+  assert.equal((await dbQuery("SELECT title FROM saved_work WHERE tenant_id=$1 AND id=$2", [id, ROLE_DIGEST_ID])).rows[0].title, 'Weekly role digest');
+  const digestNow = new Date('2026-11-16T09:00:00Z');
+  const seen = days => new Date(digestNow.getTime() - days * 86400000).toISOString();
+  const roles = [['a', 'Controls Engineer', 'Northstar', 1, true], ['b', 'PLC Programmer', 'Northstar', 2, true], ['c', 'Automation Lead', 'Northstar', 3, true], ['d', 'Recruiter', 'Luma', 6, true], ['e', 'Old role', 'Old Co', 9, true], ['f', 'Closed role', 'Closed Co', 1, false]];
+  for (const [suffix, title, company, days, active] of roles) {
+    await dbQuery("INSERT INTO jobs (id,tenant_id,title,company_name,active,created_at,first_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$6)", [`${id}-digest-${suffix}`, id, title, company, active, seen(days)]);
+  }
+  const digest = await getNewRoleDigest(id, { now: digestNow });
+  assert.deepEqual(digest, { items: [{ companyName: 'Northstar', newRoles: 3, titles: ['Controls Engineer', 'PLC Programmer', 'Automation Lead'] }, { companyName: 'Luma', newRoles: 1, titles: ['Recruiter'] }], total: 4, summary: { companyCount: 2 } });
+  assert.equal((await getNewRoleDigest('foreign-workspace', { now: digestNow })).total, 0);
+  let digestSent = 0;
+  const digestOptions = { now: digestNow, getRecipient: async () => ({ eligible: true }), getTasks: tenant => getNewRoleDigest(tenant, { now: digestNow }), send: async () => { digestSent++; return { sent: true }; } };
+  await Promise.all([digests.deliver(id, userId, digestOptions), digests.deliver(id, userId, digestOptions)]);
+  assert.equal(digestSent, 1);
+  assert.equal((await digests.deliver(id, userId, { ...digestOptions, now: new Date('2026-11-18T09:00:00Z') })).reason, 'not_due');
+  assert.equal((await digests.get(id, userId)).version, 1);
   // Evaluate the real cohort SQL against CTE fixtures, without touching analytics.
   const events = [];
   const event = (tenant, type, day, metadata = {}) => ({ tenant_id: tenant, user_id: `${tenant}-user`, event_type: type, day: day.slice(0,10), created_at: day, metadata });
@@ -60,7 +81,7 @@ try {
   // 'pending' signed up on Oct 5: its people_added (Oct 1) precedes signup and its
   // target_created (Oct 9) is after the report time, so neither counts.
   assert.deepEqual(summarizeGrowthRows(result.rows).totals, { signups: 3, paid: 3, eligible: 2, returned: 2, pending: 1, activation: { setupCompleted: 3, targetAdded: 2, peopleAdded: 1, outreachDrafted: 2 } });
-  console.log('PostgreSQL workflow tools: scoped feedback, stale snapshots, reminder concurrency, growth cohort exclusions, and activation steps passed.');
+  console.log('PostgreSQL workflow tools: scoped feedback, stale snapshots, reminder concurrency, weekly digest delivery, growth cohort exclusions, and activation steps passed.');
 } finally {
   for (const table of ['saved_work','tasks','activities','board_configs','jobs','contacts','accounts','tenant_data','memberships']) await dbQuery(`DELETE FROM ${table} WHERE tenant_id=$1`, [id]);
   await dbQuery('DELETE FROM tenants WHERE id=$1', [id]); await dbQuery('DELETE FROM users WHERE id=$1', [userId]);

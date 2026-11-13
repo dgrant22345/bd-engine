@@ -126,6 +126,28 @@ export async function sendFollowupReminderEmail({ to, tasks, total, date, appUrl
     kind: 'follow-up reminder', idempotencyKey });
 }
 
+// Weekly digest of roles first seen in the past seven days, grouped by
+// company. Sent only to people who turned it on; every message says why it
+// was sent and links to the setting that turns it off.
+export function buildRoleDigestEmail({ companies, total, companyCount, appUrl, settingsUrl }) {
+  const roles = `${total} new role${total === 1 ? '' : 's'}`;
+  const where = `${companyCount} compan${companyCount === 1 ? 'y' : 'ies'}`;
+  const lines = companies.map(company => `${company.companyName}: ${company.newRoles} new role${company.newRoles === 1 ? '' : 's'}${company.titles?.length ? ` (${company.titles.join('; ')}${company.newRoles > company.titles.length ? '; and more' : ''})` : ''}`);
+  const more = companyCount > companies.length ? `${companyCount - companies.length} more compan${companyCount - companies.length === 1 ? 'y has' : 'ies have'} new roles in your workspace.` : '';
+  const footer = 'You are receiving this because you turned on the weekly role digest in BD Engine.';
+  return {
+    subject: `BD Engine: ${roles} at ${where} this week`,
+    text: [`Roles first seen in the past seven days at companies in your workspace: ${roles} at ${where}.`, '', ...lines, '', more, `Review them: ${appUrl}`, '', footer, `Turn it off: ${settingsUrl}`].filter((line, index, all) => line || all[index - 1]).join('\n'),
+    html: `<p>Roles first seen in the past seven days at companies in your workspace: <strong>${escapeHtml(roles)}</strong> at ${escapeHtml(where)}.</p><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>${more ? `<p>${escapeHtml(more)}</p>` : ''}<p><a href="${escapeAttr(appUrl)}">Review these roles</a></p><p style="color:#5b6770;font-size:13px">${escapeHtml(footer)} <a href="${escapeAttr(settingsUrl)}">Turn it off</a>.</p>`,
+  };
+}
+
+export async function sendRoleDigestEmail({ to, tasks, total, summary, appUrl, settingsUrl, idempotencyKey }) {
+  if (!isEmailConfigured()) return { sent: false, reason: 'email_not_configured' };
+  const message = buildRoleDigestEmail({ companies: tasks, total, companyCount: Number(summary?.companyCount || tasks.length), appUrl, settingsUrl });
+  return sendEmail({ recipient: to, ...message, kind: 'weekly role digest', idempotencyKey });
+}
+
 async function sendEmail({ recipient, recipients, subject, text, html, kind, idempotencyKey }) {
   const to = normalizeRecipients(recipients || recipient);
   const response = await fetch('https://api.resend.com/emails', {

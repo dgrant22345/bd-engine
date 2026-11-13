@@ -2418,7 +2418,7 @@ export function createStore() {
         },
         ownerRoster: profile.settings.ownerRoster,
         session: session || this.getSession(),
-        capabilities: { commercialOutcomes: true, jobPipeline: true, peopleWorkspace: true, jobFeedback: true, followupReminders: true },
+        capabilities: { commercialOutcomes: true, jobPipeline: true, peopleWorkspace: true, jobFeedback: true, followupReminders: true, roleDigest: true },
         ...(includeFilters ? { filters } : {}),
       };
       timings.shapeMs = Math.round(performance.now() - shapeStartedAt);

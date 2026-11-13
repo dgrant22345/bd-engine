@@ -296,3 +296,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .task-create-form label.reminder-optin { display: flex; align-items: center; gap: .6rem; }
 .reminder-optin input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 auto; }
 [data-reminder-status]:empty, [data-calendar-status]:empty { display: none; }
+/* Email preference forms: the explanation sits above the fields. */
+[data-reminder-settings] .task-create-form > p:first-child, [data-digest-settings] .task-create-form > p:first-child { grid-column: 1 / -1; margin: 0; }
+[data-reminder-settings], [data-digest-settings] { margin-top: 12px; }
