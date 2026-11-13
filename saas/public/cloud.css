@@ -3455,6 +3455,13 @@ a:hover { text-decoration: underline; }
 .cloud-shell .cloud-demo-banner .btn:hover, .cloud-shell .cloud-trial-cta .btn:hover { background: #d8fa6b; border-color: #d8fa6b; color: #0b0f14; }
 .cloud-trial-details > summary:focus-visible, .cloud-shell .cloud-user-menu button:focus-visible { outline-color: #c6f432; }
 .cloud-shell .cloud-plan-badge { background: #232f17; color: #d8fa6b; border-color: #3b4c1d; }
+.cloud-shell .brand-cloud { color: #c6f432; }
+/* The bar's mark matches the workspace's: a lime tile with the dark BD glyph. */
+.cloud-shell .brand-icon-xs svg rect { fill: #c6f432; }
+.cloud-shell .brand-icon-xs svg path { fill: #0b0f14; }
+.cloud-shell .brand-icon-xs svg path + path { fill-opacity: .72; }
+.cloud-shell .cloud-avatar { background: #232f17; color: #d8fa6b; border: 1px solid #3b4c1d; box-shadow: none; }
+.cloud-shell .cloud-avatar:hover { box-shadow: 0 0 0 3px #3b4c1d; }
 .cloud-app-container, .cloud-app-frame { background: #0b0f14; }
 @media (max-width: 760px) {
   .cloud-shell .cloud-account-status > .cloud-trial-cta { flex-wrap: wrap; }

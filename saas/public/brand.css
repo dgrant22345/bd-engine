@@ -88,10 +88,6 @@
 .auth-page .btn { border-radius: 9px; }
 .auth-page .form-group :is(input, select) { border-radius: 9px; min-height: 44px; border-color: #a8bbc9; background: #f6f8fb; }
 .auth-page .form-group :is(input, select):focus { border-color: #0f6b65; box-shadow: 0 0 0 3px #0f6b6518; }
-.cloud-shell .cloud-topbar { background: #101e31; border-bottom-color: #2c3c50; }
-.cloud-shell .brand-cloud { color: #9de9dc; }
-.cloud-shell .cloud-avatar { background: #234449; color: #b8f4e9; border: 1px solid #39615f; box-shadow: none; }
-.cloud-shell .cloud-plan-badge { background: #234449; color: #b8f4e9; }
 /* Utility and guide pages opt in with this class, keeping their existing forms. */
 .public-premium { color-scheme: light; background: #f3f6fa; color: #152538; --surface: #fff; --surface-strong: #f6f8fb; --border: #dce5ed; --muted: #526272; --accent: #0f6b65; --accent-strong: #0f6b65; --control-border: #a8bbc9; }
 .public-premium .site-header { background: #101e31; color: #edf4fc; width: 100%; padding-inline: max(20px, calc((100% - 1120px) / 2)); border-color: #2c3c50; }
