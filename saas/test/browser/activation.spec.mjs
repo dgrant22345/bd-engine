@@ -24,13 +24,13 @@ async function submitSignup(page, prefix) {
   return { email, app: page.frameLocator('iframe.cloud-app-frame') };
 }
 
-async function continueProfile(app) {
+async function continueProfile(app, buttonName = 'Continue guided setup') {
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
   // A reloaded iframe can render this form before its document finishes loading.
   await expect.poll(() => profile.evaluate(form => form.ownerDocument.readyState)).toBe('complete');
   await expect(profile.locator('#setup-workspace-name')).toHaveValue('Activation Workspace');
-  await profile.getByRole('button', { name: 'Continue guided setup' }).click();
+  await profile.getByRole('button', { name: buttonName }).click();
 }
 
 async function finishSetup(app) {
@@ -115,7 +115,14 @@ test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ 
   await page.reload();
   await expect(page.locator('iframe.cloud-app-frame')).toBeVisible({ timeout: 15000 });
   expect((await readFrameIntentScope(page)).scope).toBe(initialFrame.scope);
-  await continueProfile(app);
+  // The first step acknowledges the audit and leads with it; starting from
+  // people stays available as the secondary choice.
+  await expect(app.locator('.setup-header')).toContainText('The 2 career sites from your audit are waiting in the next step.');
+  await expect(app.locator('.setup-value-guide')).toContainText('A watchlist from your audit');
+  await expect(app.locator('.setup-value-guide')).toContainText('2 career sites ready');
+  await expect(profile.getByRole('button', { name: 'Start with people' })).toHaveClass(/secondary-button/);
+  await expect(profile.getByRole('button', { name: 'Continue guided setup' })).toHaveCount(0);
+  await continueProfile(app, 'Review your 2 career sites');
 
   const targetForm = app.locator('#setup-target-form');
   await expect(targetForm).toBeVisible({ timeout: 10000 });

@@ -198,7 +198,7 @@
             <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
             <div class="people-feedback" data-people-feedback role="status"></div>
             <div class="people-selection" data-people-selection hidden></div>
-            ${result.items.length ? table() : `<div class="people-empty"><h3>${filtered ? 'No people match these filters' : 'Your people workspace starts here'}</h3><p>${filtered ? 'Try another name, role or company, or clear the filters to see your saved people.' : 'Add someone you want to review, or import your LinkedIn connections. CSV imports include connection details—not complete candidate profiles.'}</p>${filtered ? button('clear', 'Clear filters') : `${button('add', 'Add your first person')}<button class="secondary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button>`}</div>`}
+            ${result.items.length ? table() : `<div class="people-empty"><h3>${filtered ? 'No people match these filters' : 'Your people workspace starts here'}</h3><p>${filtered ? 'Try another name, role or company, or clear the filters to see your saved people.' : 'Add someone you want to review, or import your LinkedIn connections. CSV imports include connection details—not complete candidate profiles.'}</p>${filtered ? button('clear', 'Clear filters') : `${button('add', 'Add your first person')}<button class="secondary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button>${exportWaitNote()}`}</div>`}
             <footer class="people-pagination"><span>${result.total ? `${(result.page - 1) * result.pageSize + 1}–${Math.min(result.page * result.pageSize, result.total)} of ${result.total.toLocaleString()}` : '0 results'}</span><div>${button('previous-page', 'Previous', result.page <= 1 ? 'disabled' : '')}<span>Page ${result.page} of ${Math.max(1, Math.ceil(result.total / result.pageSize))}</span>${button('next-page', 'Next', result.page * result.pageSize >= result.total ? 'disabled' : '')}</div></footer>
           </div>
           <aside class="person-panel" aria-label="Person review" ${state.selected ? '' : 'hidden'}></aside>
@@ -206,6 +206,16 @@
       </section>`;
       const scroll = root.querySelector('.people-table-scroll');
       if (scroll) scroll.scrollTop = state.scroll;
+    }
+    // LinkedIn delivers the export by email on its own schedule, so a new
+    // workspace should not stall on it: point to the request steps and to
+    // the company path that works without the file.
+    function exportWaitNote() {
+      const hosted = window.self !== window.top;
+      const guide = hosted
+        ? '<a href="/guides/export-linkedin-connections-csv" target="_blank" rel="noopener">How to request the file</a>'
+        : '<a href="https://www.linkedin.com/help/linkedin/answer/a566336/export-connections-from-linkedin" target="_blank" rel="noopener">LinkedIn\'s export steps</a>';
+      return `<p class="people-empty-wait"><strong>Waiting for your LinkedIn export?</strong> LinkedIn sends the file by email on its own schedule. ${guide}. In the meantime, <a href="#/accounts/new">add a company you want to watch</a> so its job board can be read.</p>`;
     }
     function table() {
       return `<div class="people-table-scroll" tabindex="0" role="region" aria-label="People results"><table class="table contacts-table people-table"><colgroup><col class="people-select-col"><col class="people-name-col"><col><col class="people-stage-col"></colgroup><thead><tr><th scope="col"><input type="checkbox" data-people="select-page" aria-label="Select people on this page"></th><th scope="col" aria-sort="${state.query.sortBy === 'name' ? 'ascending' : state.query.sortBy === 'name_desc' ? 'descending' : 'none'}">${button('sort-name', 'Person <span aria-hidden="true">↕</span>')}</th><th scope="col" aria-sort="${state.query.sortBy === 'company' ? 'ascending' : 'none'}">${button('sort-company', 'Company <span aria-hidden="true">↕</span>')}</th><th scope="col">Outreach</th></tr></thead><tbody>${state.result.items.map(row).join('')}</tbody></table></div>`;

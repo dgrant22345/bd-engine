@@ -5684,6 +5684,13 @@ function syncSetupTargetFeedback({ forceError = false } = {}) {
   }
 }
 
+// Career sites carried in from the public ATS audit, while they are still
+// waiting on the watchlist step.
+function getAuditedSetupSiteCount() {
+  if (appState.onboardingIntent?.source !== 'ats-checker') return 0;
+  return parseSetupTargetSites(appState.setupDraft?.targetSites || '').targets.length;
+}
+
 async function renderSetupWizard() {
   await loadSetupStatus(false);
   if (appState.setupResult) {
@@ -5703,9 +5710,12 @@ async function renderSetupWizard() {
     ? 'You are ready to go'
     : current.label;
   const setupEyebrow = `${steps.length} quick steps`;
-  const setupIntro = jobSeeker
-    ? 'Start with companies you care about, then add contacts when you are ready to map warm paths.'
-    : 'Start reviewing people immediately, or continue guided setup to configure optional company and hiring intelligence.';
+  const auditedSites = current.key === 'profile' ? getAuditedSetupSiteCount() : 0;
+  const setupIntro = auditedSites
+    ? `The ${auditedSites === 1 ? 'career site' : `${formatNumber(auditedSites)} career sites`} from your audit ${auditedSites === 1 ? 'is' : 'are'} waiting in the next step. Confirm the workspace name to review ${auditedSites === 1 ? 'it' : 'them'}.`
+    : jobSeeker
+      ? 'Start with companies you care about, then add contacts when you are ready to map warm paths.'
+      : 'Start reviewing people immediately, or continue guided setup to configure optional company and hiring intelligence.';
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -5728,7 +5738,7 @@ async function renderSetupWizard() {
             `).join('')}
           </ol>
         </div>
-        ${renderSetupValueGuide(appState.setupStatus?.readiness, jobSeeker)}
+        ${renderSetupValueGuide(appState.setupStatus?.readiness, jobSeeker, auditedSites)}
         ${renderSetupStepContent(current.key)}
       </div>
     </section>
@@ -5741,7 +5751,8 @@ async function renderSetupWizard() {
   }
 }
 
-function renderSetupValueGuide(readiness = {}, jobSeeker = false) {
+function renderSetupValueGuide(readiness = {}, jobSeeker = false, auditedSites = 0) {
+  if (!jobSeeker && auditedSites) return `<div class="setup-value-guide"><div><strong>A watchlist from your audit</strong><p class="muted small">BD Engine will add these companies and look for current roles on the job boards it can read. You can import connections or add people at any time.</p></div><div class="setup-people-count"><strong>${formatNumber(auditedSites)}</strong><span> career site${auditedSites === 1 ? '' : 's'} ready</span></div></div>`;
   if (!jobSeeker) return `<div class="setup-value-guide"><div><strong>A workspace for your recruiting network</strong><p class="muted small">Import connections or add one person. Review source details, keep notes, and prepare outreach. Company tracking can be configured later.</p></div><div class="setup-people-count"><strong>${formatNumber(readiness?.metrics?.contactCount || 0)}</strong><span> people saved</span></div></div>`;
   const metrics = readiness?.metrics || {};
   const visibleChecks = [
@@ -5787,6 +5798,7 @@ function renderSetupStepContent(stepKey) {
     const hasSignupIdentity = Boolean(defaultName && defaultEmail);
     const workspaceLabel = jobSeeker ? 'Search workspace name' : 'Workspace or company name';
     const workspacePlaceholder = jobSeeker ? 'My Job Search 2026' : 'Your company or team';
+    const auditedSetupSites = getAuditedSetupSiteCount();
     return `
       <form id="setup-profile-form" class="setup-form">
         <div class="setup-grid">
@@ -5808,8 +5820,9 @@ function renderSetupStepContent(stepKey) {
             </label>`}
         </div>
         <div class="button-row">
-          ${!jobSeeker && !appState.setupStatus?.licensingEnabled ? '<button class="primary-button" type="submit" value="people">Start with people</button>' : ''}
-          <button class="secondary-button" type="submit">Continue guided setup</button>
+          ${auditedSetupSites ? `<button class="primary-button" type="submit">Review your ${auditedSetupSites === 1 ? 'career site' : `${formatNumber(auditedSetupSites)} career sites`}</button>` : ''}
+          ${!jobSeeker && !appState.setupStatus?.licensingEnabled ? `<button class="${auditedSetupSites ? 'secondary-button' : 'primary-button'}" type="submit" value="people">Start with people</button>` : ''}
+          ${auditedSetupSites ? '' : '<button class="secondary-button" type="submit">Continue guided setup</button>'}
         </div>
       </form>
     `;

@@ -84,6 +84,19 @@ test('ATS coverage CSV exports every audited row and neutralizes formulas', () =
   assert.match(csv, /"'=not-a-url","","Invalid",""/);
 });
 
+test('ATS audit handoff keeps entries typed without a scheme', () => {
+  const audit = buildCoverageAudit(['boards.greenhouse.io/example', 'careers.example.com/jobs', 'HTTP://jobs.lever.co/acme'].join('\n'));
+  const intent = buildAuditOnboardingIntent(audit, 'bd');
+
+  // The workspace accepts only absolute URLs, so each one must parse.
+  assert.deepEqual(intent.careerUrls, [
+    'https://boards.greenhouse.io/example',
+    'https://careers.example.com/jobs',
+    'HTTP://jobs.lever.co/acme',
+  ]);
+  for (const url of intent.careerUrls) assert.match(new URL(url).protocol, /^https?:$/);
+});
+
 test('ATS audit builds a bounded onboarding handoff from valid public URLs', () => {
   const audit = buildCoverageAudit([
     'https://boards.greenhouse.io/example',

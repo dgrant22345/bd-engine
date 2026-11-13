@@ -136,7 +136,11 @@ test('account entry and workspace avoid horizontal overflow at phone width', asy
   await page.locator('[data-demo-start]').first().click();
   const frame = page.locator('iframe.cloud-app-frame');
   await expect(frame).toBeVisible({ timeout: 15000 });
-  const appFrame = page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes('/app/'));
+  // The iframe element is visible before it has navigated to /app/, so wait
+  // for the frame itself instead of looking it up once.
+  const findAppFrame = () => page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes('/app/'));
+  await expect.poll(() => Boolean(findAppFrame()), { timeout: 15000 }).toBe(true);
+  const appFrame = findAppFrame();
   await expect.poll(async () => appFrame?.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await expect.poll(async () => appFrame?.locator('.topbar').evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBeLessThanOrEqual(120);
   await expect(appFrame.locator('.nav a[aria-current="page"]')).toHaveAttribute('data-route', 'dashboard');

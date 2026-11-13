@@ -148,6 +148,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .people-empty h3 { font-size: 18px; margin: 0 0 8px; }
 .people-empty p { color: var(--muted); max-width: 480px; margin: 0 auto 16px; font-size: 13px; }
 .people-empty button, .people-empty a { margin: 4px; }
+.people-empty .people-empty-wait { margin: 20px auto 0; padding-top: 16px; border-top: 1px solid var(--border, #d5dce2); font-size: 12px; line-height: 1.6; }
+.people-empty .people-empty-wait a { margin: 0; }
 .person-panel { position: sticky; top: 0; border-left: 1px solid var(--line); max-height: calc(100dvh - 200px); overflow: auto; scroll-padding: calc(var(--person-nav-height, 48px) + 12px) 12px 12px; }
 .person-panel-nav { display: flex; justify-content: space-between; align-items: center; gap: 4px; position: sticky; top: 0; z-index: 2; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .person-panel-nav button { padding: 4px 8px; font-size: 12px; }
