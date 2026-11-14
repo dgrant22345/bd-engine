@@ -3983,8 +3983,11 @@ function bindEvents() {
       }
       invalidateAppData();
       await renderAccountsView();
-      const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+      const allSkipped = Array.isArray(result.skipped) ? result.skipped : [];
+      const skipped = allSkipped.filter((row) => row.reason !== 'now_tracked');
+      const nowTracked = allSkipped.length - skipped.length;
       let message = `Imported ${formatNumber(result.count || 0)} target accounts.`;
+      if (nowTracked) message += ` ${formatNumber(nowTracked)} ${nowTracked === 1 ? 'company' : 'companies'} already in your workspace ${nowTracked === 1 ? 'is' : 'are'} now tracked for hiring.`;
       if (skipped.length) {
         const preview = skipped.slice(0, 3)
           .map((row) => `line ${row.line}${row.company ? ` (${row.company})` : ''}: ${row.reason === 'duplicate' ? 'already in workspace' : row.reason === 'missing_company' ? 'no company name' : row.reason}`)

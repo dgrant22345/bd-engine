@@ -1,3 +1,4 @@
+import { compactCompanyKey } from './company-matching.js';
 // Shared query contract: global filtering/sorting, not client-side page sorting.
 export const CONTACT_STAGES = ['not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];
 
@@ -111,7 +112,13 @@ export function resolveContactCompany(accounts, input, current = {}) {
     return { accountId: account.id, companyName: account.displayName };
   }
   const key = normalize(companyName);
-  const matches = key ? accounts.filter(account => [account.displayName, account.normalizedName, ...(Array.isArray(account.aliases) ? account.aliases : [])].some(name => normalize(name) === key)) : [];
+  const names = account => [account.displayName, account.normalizedName, ...(Array.isArray(account.aliases) ? account.aliases : [])];
+  let matches = key ? accounts.filter(account => names(account).some(name => normalize(name) === key)) : [];
+  if (!matches.length && key) {
+    // "Sun Life" for a company saved as "Sunlife": the same letters without spaces or punctuation.
+    const compact = compactCompanyKey(companyName);
+    matches = compact ? accounts.filter(account => names(account).some(name => compactCompanyKey(name) === compact)) : [];
+  }
   if (matches.length > 1) fail('More than one saved company matches this name. Choose a saved company or keep the name unlinked.', 409);
   return { accountId: matches[0]?.id || '', companyName: matches[0]?.displayName || companyName };
 }

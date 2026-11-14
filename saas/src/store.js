@@ -10,6 +10,7 @@ import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { safeErrorSummary } from './operational-logging.js';
 import { validatePublicUrl } from './public-url.js';
 import { CommercialOutcomeValidationError, normalizeActivityOccurredAt, outcomeStageForActivity, validateCommercialOutcomeInput, validateCommercialOutcomeQuery } from './commercial-outcomes.js';
+import { betterCompanyDisplayName, createAccountNameIndex } from './company-matching.js';
 import { classifyJobRegion, classifyWorkStyle, isGtaLocation, jobMatchesGeography, locationMatchesGeography, parseGeographyFocus } from './job-geography.js';
 import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } from './ats-pagination.js';
 import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
@@ -5659,13 +5660,11 @@ export function createStore() {
     async countNewAccountImports(tenantId, text) {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
-      const existing = new Set(
-        accountsForTenant(tenantId).map((item) => item.normalizedName).filter(Boolean)
-      );
+      const existing = createAccountNameIndex(accountsForTenant(tenantId), normalizeKey);
       const pending = new Set();
       for (const row of this.parseAccountImportText(text)) {
         const key = normalizeKey(row.company);
-        if (key && !existing.has(key)) pending.add(key);
+        if (key && !existing.has(key) && !existing.getByDomain(row.domain)) pending.add(key);
       }
       return pending.size;
     },
@@ -5674,19 +5673,30 @@ export function createStore() {
       assertTenant(tenantId);
       await ensureDataLoaded(tenantId);
       const rows = this.parseAccountImportText(text);
-      const existing = new Set(
-        accountsForTenant(tenantId).map((item) => item.normalizedName).filter(Boolean)
-      );
+      const existing = createAccountNameIndex(accountsForTenant(tenantId), normalizeKey);
       const skipped = [];
       const created = [];
+      const tracked = [];
       for (const row of rows) {
         if (!row.company) {
           skipped.push({ line: row.line, reason: 'missing_company' });
           continue;
         }
         const key = normalizeKey(row.company);
-        if (existing.has(key)) {
-          skipped.push({ line: row.line, company: row.company, reason: 'duplicate' });
+        const match = existing.getByDomain(row.domain) || existing.get(key);
+        if (match) {
+          // A company already here from a LinkedIn import is a network company,
+          // not a refreshed target. Adding it to the watchlist makes it one.
+          if (match.tracked === false) {
+            match.tracked = true;
+            if (!match.domain && row.domain) match.domain = row.domain;
+            if (!match.careersUrl && row.careersUrl) match.careersUrl = row.careersUrl;
+            match.updatedAt = now();
+            tracked.push(match);
+            skipped.push({ line: row.line, company: row.company, reason: 'now_tracked' });
+          } else {
+            skipped.push({ line: row.line, company: row.company, reason: 'duplicate' });
+          }
           continue;
         }
         const item = await this.addAccount(tenantId, {
@@ -5698,14 +5708,14 @@ export function createStore() {
           notes: row.notes || '',
           status: row.status || 'new',
         }, true);
-        existing.add(key);
+        existing.set(key, item);
         created.push(item);
       }
-      if (created.length) {
+      if (created.length || tracked.length) {
         getTenantArray(accountsByTenant, tenantId).sort((a, b) => (b.targetScore || 0) - (a.targetScore || 0));
         persistTenant(tenantId);
       }
-      return { count: created.length, skipped, total: rows.length };
+      return { count: created.length, tracked: tracked.length, skipped, total: rows.length };
     },
 
     // ── Contact creation ──────────────────────────────────────────────────
@@ -5891,10 +5901,9 @@ export function createStore() {
         indexContactDedupeKeys(existingContactsMap, indexedContact);
       }
 
-      const existingAccountsMap = new Map();
-      for (const a of tenantAcctArray) {
-        existingAccountsMap.set(normalizeKey(a.displayName), a);
-      }
+      // Matches "Sun Life" to a company added as sunlife.com ("Sunlife"), not
+      // only exact names; see company-matching.js.
+      const existingAccountsMap = createAccountNameIndex(tenantAcctArray, normalizeKey);
 
       const companyCandidates = rankLinkedInCompanyCandidates(
         companyMap,
@@ -5933,6 +5942,7 @@ export function createStore() {
             });
             accounts.push(existingAccount);
             tenantAcctArray.push(existingAccount);
+            existingAccountsMap.set(normName, existingAccount);
           } else {
             existingAccount = { id: `dry-${normName}`, tenantId, displayName: companyData.displayName };
           }
@@ -5941,6 +5951,7 @@ export function createStore() {
         } else {
           if (!dryRun) {
             if (selectedTrackedCompanies.has(normName)) existingAccount.tracked = true;
+            renameDomainNamedAccount(tenantId, existingAccount, companyData.displayName, timestamp);
             existingAccount.updatedAt = timestamp;
           }
           accountsUpdated++;
@@ -7389,6 +7400,26 @@ function configMatchesAccount(config = {}, account = {}) {
 // existing workspaces keep their current behavior until curated.
 function isTrackedTarget(item) {
   return Boolean(item) && item.tracked !== false;
+}
+
+// A company added by domain is named from it ("Sunlife"); once people at
+// "Sun Life" are linked to it, use their name and keep the old one as an
+// alias. Its job boards follow so lists and digests agree.
+function renameDomainNamedAccount(tenantId, accountItem, candidateName, timestamp = now()) {
+  const name = betterCompanyDisplayName(accountItem, candidateName);
+  if (!name) return false;
+  const previous = accountItem.displayName;
+  accountItem.aliases = [...new Set([...(Array.isArray(accountItem.aliases) ? accountItem.aliases : []), previous].filter(Boolean))];
+  accountItem.displayName = name;
+  accountItem.normalizedName = normalizeKey(name);
+  accountItem.updatedAt = timestamp;
+  for (const config of boardConfigs) {
+    if (config.tenantId !== tenantId || config.accountId !== accountItem.id) continue;
+    config.companyName = name;
+    config.normalizedCompanyName = accountItem.normalizedName;
+    config.updatedAt = timestamp;
+  }
+  return true;
 }
 
 const PORTFOLIO_PLACEHOLDER_NAMES = new Set([
