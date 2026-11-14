@@ -3964,7 +3964,7 @@ function bindEvents() {
         body: JSON.stringify(payload),
       });
       invalidateAppData();
-      window.bdLocalApi.setAlert(`Added ${created.displayName} to target accounts.`, appAlert);
+      window.bdLocalApi.setAlert(`Added ${created.displayName} to target accounts.`, appAlert, { tone: 'success' });
       location.hash = `#/accounts/${created.id}`;
       return;
     }
@@ -3995,7 +3995,7 @@ function bindEvents() {
         message += ` Skipped ${skipped.length}: ${preview}${skipped.length > 3 ? '…' : ''}`;
         showToast(message, 'warning', 9000);
       }
-      window.bdLocalApi.setAlert(message, appAlert);
+      window.bdLocalApi.setAlert(message, appAlert, { tone: skipped.length ? 'warning' : 'success' });
       return;
     }
 
@@ -4250,7 +4250,7 @@ function bindEvents() {
       resetConfigForm();
       invalidateAppData();
       await renderAdminView();
-      window.bdLocalApi.setAlert(`${isEditing ? 'Updated' : 'Added'} ATS config for ${payload.companyName || 'the selected company'}.`, appAlert);
+      window.bdLocalApi.setAlert(`${isEditing ? 'Updated' : 'Added'} ATS config for ${payload.companyName || 'the selected company'}.`, appAlert, { tone: 'success' });
       return;
     }
 
@@ -13552,7 +13552,7 @@ async function runLiveImport(buttonEl) {
     const status = run?.status === 'completed_with_errors'
       ? `${baseStatus} ${formatNumber(stats.errors || 0)} boards had issues.`
       : baseStatus;
-    window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert);
+    window.bdLocalApi.setAlert(warnings.length ? `${status} ${warnings[0]}` : status, appAlert, { tone: warnings.length || run?.status === 'completed_with_errors' ? 'warning' : 'success' });
   });
 }
 
@@ -13571,7 +13571,7 @@ async function runDiscovery(buttonEl) {
     const warnings = job?.result?.warnings || [];
     window.bdLocalApi.setAlert(
       `Discovery checked ${formatNumber(stats.checked || 0)} configs. Mapped ${formatNumber(stats.mapped || 0)}, discovered ${formatNumber(stats.discovered || 0)}, high confidence ${formatNumber(stats.highConfidence || 0)}, unresolved ${formatNumber(stats.unresolved || 0)}.${warnings.length ? ` ${warnings[0]}` : ''}`,
-      appAlert
+      appAlert, { tone: warnings.length ? 'warning' : 'success' }
     );
   });
 }
@@ -13631,7 +13631,7 @@ async function runTargetScoreRollout(buttonEl) {
     const timings = result.timings || {};
     window.bdLocalApi.setAlert(
       `Target-score rollout refreshed ${formatNumber(result.accountCount || result.count || 0)} accounts across ${formatNumber(result.batchCount || 0)} batches. ${formatNumber(result.remainingCount || 0)} remain. Derive ${formatNumber(timings.deriveMs || 0)}ms, scope ${formatNumber(timings.scopeLoadMs || 0)}ms, persist ${formatNumber(timings.persistMs || 0)}ms.`,
-      appAlert
+      appAlert, { tone: 'success' }
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Run rollout'; }
@@ -13644,7 +13644,7 @@ async function syncConfigs() {
     resetConfigForm();
     showToast('Config rebuild queued.', 'success');
     const job = await watchBackgroundJob(accepted.jobId, { label: 'Config rebuild' });
-    window.bdLocalApi.setAlert(`Rebuilt ${formatNumber(job?.result?.count || 0)} job board config rows.`, appAlert);
+    window.bdLocalApi.setAlert(`Rebuilt ${formatNumber(job?.result?.count || 0)} job board config rows.`, appAlert, { tone: 'success' });
   });
 }
 
@@ -13653,7 +13653,7 @@ async function rerunEnrichmentResolution(accountId, options = {}) {
     method: 'POST',
     body: JSON.stringify({ deepVerify: Boolean(options.deepVerify) }),
   });
-  window.bdLocalApi.setAlert(options.deepVerify ? 'Deep ATS resolution queued for this company.' : 'ATS resolution queued for this company.', appAlert);
+  window.bdLocalApi.setAlert(options.deepVerify ? 'Deep ATS resolution queued for this company.' : 'ATS resolution queued for this company.', appAlert, { tone: 'success' });
   hydrateAdminRuntimePanels(await loadRuntimeStatus(true));
   void watchBackgroundJob(accepted.jobId, { label: options.deepVerify ? 'Deep ATS resolution' : 'ATS resolution', refreshRoute: false }).catch((err) => { window.bdLocalApi.setAlert(`ATS resolution failed: ${err.message || err}`, appAlert); });
 }
@@ -13671,7 +13671,7 @@ async function quickEnrichAccount(accountId) {
     const stats = result?.stats || {};
     window.bdLocalApi.setAlert(
       `Quick enrich refreshed ${formatNumber(stats.totalUpdated || 0)} local signals in ${formatNumber(result.durationMs || 0)}ms.`,
-      appAlert
+      appAlert, { tone: 'success' }
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Quick enrich'; }
@@ -13703,7 +13703,7 @@ async function resolveAccountNow(accountId) {
       resolutionQueued
         ? `Resolve now finished. Balanced verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time, then reran ATS resolution.`
         : `Resolve now finished. Balanced verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time.`,
-      appAlert
+      appAlert, { tone: 'success' }
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Resolve now'; }
@@ -13735,7 +13735,7 @@ async function deepVerifyAccount(accountId) {
       resolutionQueued
         ? `Deep verify finished. Extended verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time, then reran ATS resolution.`
         : `Deep verify finished. Extended verification used ${formatNumber(timings.enrichmentMs || 0)}ms of probe time.`,
-      appAlert
+      appAlert, { tone: 'success' }
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Deep verify'; }
@@ -13755,7 +13755,7 @@ async function runFullBdEngine() {
     if (!spreadsheetId) {
       const message = 'Run Full Engine is the legacy Google Sheets pipeline. Enter a Spreadsheet ID in the Google Sheets card before running it.';
       showToast(message, 'warning', 8000);
-      window.bdLocalApi.setAlert(message, appAlert);
+      window.bdLocalApi.setAlert(message, appAlert, { tone: 'warning' });
       document.getElementById('google-sheet-id')?.focus();
       return;
     }
@@ -13774,7 +13774,7 @@ async function runFullBdEngine() {
     const tabs = result?.tabsWritten || {};
     window.bdLocalApi.setAlert(
       `Full BD run complete. Companies: ${formatNumber(result?.companies || 0)}, Contacts: ${formatNumber(result?.contacts || 0)}, Jobs: ${formatNumber(result?.jobs || 0)}. Tabs updated: Connections ${formatNumber(tabs.Connections || 0)}, Target_Accounts ${formatNumber(tabs.Target_Accounts || 0)}, Hiring_Import ${formatNumber(tabs.Hiring_Import || 0)}, Daily_Hot_List ${formatNumber(tabs.Daily_Hot_List || 0)}, Today_View ${formatNumber(tabs.Today_View || 0)}, Top_Contacts ${formatNumber(tabs.Top_Contacts || 0)}, Job_Boards_Config ${formatNumber(tabs.Job_Boards_Config || 0)}.`,
-      appAlert
+      appAlert, { tone: 'success' }
     );
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Run Full Engine'; }
@@ -13800,7 +13800,7 @@ async function runLaunchWorkflow(buttonEl) {
       : '';
     window.bdLocalApi.setAlert(
       `Launch workflow complete for ${result.plan?.displayName || 'current plan'}: enriched ${formatNumber(stats.enriched || 0)} accounts, created ${formatNumber(stats.configsCreated || 0)} configs, mapped ${formatNumber(stats.boardsMapped || stats.configsResolved || 0)} boards, fetched ${formatNumber(stats.jobsFetched || 0)} jobs, kept ${formatNumber(stats.jobsKept || 0)} Canada jobs, updated ${formatNumber(stats.jobsTouched || 0)} tracked jobs, and refreshed ${formatNumber(stats.scoresRefreshed || 0)} scores.${warnings}`,
-      appAlert
+      appAlert, { tone: warnings ? 'warning' : 'success' }
     );
     invalidateAppData();
   } catch (error) {
@@ -13841,7 +13841,7 @@ async function runConnectionsCsvImport(dryRun) {
     if (!dryRun) {
       const queuedMessage = `Connections import queued (${uploadSummary}). Large exports can take several minutes; you can keep working while it runs.`;
       showToast(queuedMessage, 'success', 9000);
-      window.bdLocalApi.setAlert(queuedMessage, appAlert);
+      window.bdLocalApi.setAlert(queuedMessage, appAlert, { tone: 'success' });
       if (run.jobId) {
         void watchBackgroundJob(run.jobId, { label: 'Connections import', refreshRoute: false }).then((job) => {
           const result = job?.result || run || {};
@@ -13849,7 +13849,7 @@ async function runConnectionsCsvImport(dryRun) {
           const warnings = formatConnectionsImportWarnings(result.warnings || result.importRun?.warnings || run.warnings);
           const message = `Connections import complete: ${formatConnectionsImportStats(stats)}. Contacts now ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${warnings}`;
           invalidateAppData();
-          window.bdLocalApi.setAlert(message, appAlert);
+          window.bdLocalApi.setAlert(message, appAlert, { tone: warnings ? 'warning' : 'success' });
         }).catch((err) => {
           window.bdLocalApi.setAlert(`Connections import failed: ${err.message || err}`, appAlert);
         });
@@ -13858,7 +13858,7 @@ async function runConnectionsCsvImport(dryRun) {
     }
     const stats = run?.stats || {};
     const message = `Dry run succeeded (${uploadSummary}): ${formatConnectionsImportStats(stats)}. Contacts would total ${formatNumber(stats.contacts || 0)} across ${formatNumber(stats.companies || 0)} companies.${formatConnectionsImportWarnings(run?.warnings)}`;
-    window.bdLocalApi.setAlert(message, appAlert);
+    window.bdLocalApi.setAlert(message, appAlert, { tone: 'success' });
   } catch (error) {
     const message = `Connections import failed: ${formatConnectionsImportError(error)}`;
     showToast(message, 'error', 9000);
@@ -13887,7 +13887,7 @@ async function reviewConfig(configId, decision) {
   });
   invalidateAppData();
   await renderAdminView();
-  window.bdLocalApi.setAlert(`Config ${decision}d.`, appAlert);
+  window.bdLocalApi.setAlert(`Config ${decision}d.`, appAlert, { tone: 'success' });
 }
 
 function syncCommercialActivityFields(form) {
@@ -14768,7 +14768,7 @@ function applyGeneratedOutreachVariant(index, buttonEl) {
     buttonEl.textContent = 'Angle selected';
     setTimeout(() => { buttonEl.textContent = originalText; }, 1400);
   }
-  window.bdLocalApi.setAlert(`${nextPrimary.templateLabel || 'Alternate angle'} is now the primary draft.`, appAlert);
+  window.bdLocalApi.setAlert(`${nextPrimary.templateLabel || 'Alternate angle'} is now the primary draft.`, appAlert, { tone: 'success' });
 }
 
 async function generateSmartOutreach(accountId, buttonEl, options = {}) {
@@ -14808,7 +14808,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
     }
     window.bdLocalApi.setAlert(includeVariants
       ? `${outreach.templateLabel} plus ${outreach.variants?.length || 0} alternate angles generated.`
-      : `${outreach.templateLabel} generated. Review the email, LinkedIn note, follow-up, and call opener in the outreach card.`, appAlert);
+      : `${outreach.templateLabel} generated. Review the email, LinkedIn note, follow-up, and call opener in the outreach card.`, appAlert, { tone: 'success' });
   } catch (err) {
     showToast('Failed to generate outreach: ' + (err.message || err), 'error');
   } finally {

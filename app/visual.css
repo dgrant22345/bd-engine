@@ -225,6 +225,15 @@ input, select, textarea { border-radius: 8px; }
   border-color: var(--line); color: var(--text);
   background: var(--surface) linear-gradient(var(--accent), var(--accent)) left bottom / var(--alert-progress, 0%) 3px no-repeat;
 }
+/* Finished work: a completed import or a saved change is not an error. */
+.app-alert.app-alert--success {
+  border-color: color-mix(in srgb, var(--success) 36%, var(--line)); color: var(--text);
+  background: var(--success-soft);
+}
+.app-alert.app-alert--warning {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--line)); color: var(--text);
+  background: var(--warning-soft);
+}
 /* The Connections.csv how-to folds away once a file is chosen. */
 details.onboarding-guide > summary.onboarding-guide__title { cursor: pointer; margin-bottom: 0; min-height: 24px; }
 details.onboarding-guide[open] > summary.onboarding-guide__title { margin-bottom: 12px; }

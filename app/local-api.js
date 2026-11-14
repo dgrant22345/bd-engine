@@ -132,12 +132,15 @@
     return appState.bootstrap;
   }
 
-  // tone 'progress' shows a neutral status line with a progress bar (0-100)
-  // instead of the default error styling.
+  // The default tone is an error. 'progress' shows a neutral status line with
+  // a progress bar (0-100); 'success' and 'warning' show finished work, so a
+  // completed import is not styled as a failure.
+  const ALERT_TONES = ['progress', 'success', 'warning'];
   function setAlert(message, alertElement, { tone = '', progress = null } = {}) {
     if (!alertElement) return;
-    const isProgress = tone === 'progress' && Boolean(message);
-    alertElement.classList.toggle('app-alert--progress', isProgress);
+    const shownTone = message && ALERT_TONES.includes(tone) ? tone : '';
+    for (const name of ALERT_TONES) alertElement.classList.toggle(`app-alert--${name}`, shownTone === name);
+    const isProgress = shownTone === 'progress';
     const percent = Number(progress);
     if (isProgress && progress !== null && Number.isFinite(percent)) {
       alertElement.style.setProperty('--alert-progress', `${Math.max(0, Math.min(100, percent))}%`);
