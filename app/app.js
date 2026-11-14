@@ -3,6 +3,7 @@ const defaultAdminCollapsed = {
   'search-focus': true,
   'background-jobs': true,
   'billing-subscription': true,
+  team: true,
   'coverage-health': true,
   'ats-config-records': true,
   'review-queues': true,
@@ -12162,6 +12163,7 @@ async function renderAdminView() {
       <a href="#/admin/coverage-health">Source coverage</a>
       <a href="#/admin/background-jobs">Import history</a>
       <a href="#/admin/billing-subscription">Plan & workspace</a>
+      <a href="#/admin/team">Team</a>
       <a href="#/admin/runtime-status">Advanced diagnostics</a>
     </nav>
 
@@ -12266,6 +12268,10 @@ async function renderAdminView() {
         ${renderCollapsibleEnd()}
       </div>
 
+      ${renderCollapsibleStart('team', 'Team', 'People who share this workspace, and invitations to join it.')}
+        ${window.bdWorkflowTools.renderTeam()}
+      ${renderCollapsibleEnd()}
+
       <div class="two-column">
         ${renderCollapsibleStart('coverage-health', 'Job coverage health', 'See which companies can refresh jobs now, what is blocking the rest, and the next action to take.')}
           ${renderJobCoverageHealth(ingestionDiagnostics)}
@@ -12351,6 +12357,7 @@ async function renderAdminView() {
   hydrateAdminRuntimePanels(runtime);
   wireCollapsibleSections();
   void window.bdWorkflowTools.loadTrialEmails(appRoot);
+  void window.bdWorkflowTools.loadTeam(appRoot);
   // Wire automation rules
   document.getElementById('add-auto-rule')?.addEventListener('click', () => {
     const trigger = document.getElementById('auto-trigger')?.value;

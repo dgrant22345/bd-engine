@@ -34,8 +34,12 @@ test('public product claims match implemented job-board coverage and team sync',
   assert.match(app, /Job search workspace/);
 });
 
-test('Recruiter Pro does not advertise unavailable login seats', () => {
-  assert.equal(getPlan('sales').limits.users, 1);
+test('Recruiter Pro advertises exactly the seats a team workspace allows', async () => {
+  const landing = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.equal(getPlan('sales').limits.users, 3);
+  assert.match(landing, /'Up to 3 users in a shared workspace'/);
+  assert.match(landing, /sales: \{[^}]*users: 3,/);
+  assert.match(landing, /jobseeker: \{[^}]*users: 1,/);
 });
 
 test('shared app shell copy stays within capabilities available in every build', async () => {
@@ -114,9 +118,9 @@ test('public prices and limits match enforced plan entitlements', async () => {
     assert.match(landing, contacts, `${planId} public contact limit drifted`);
     assert.match(landing, finalClaim, `${planId} public feature limit drifted`);
   }
-  assert.deepEqual(getPlan('trial').limits, { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 });
+  assert.deepEqual(getPlan('trial').limits, { accounts: 25, contacts: 100, jobBoards: 50, users: 3, csvImports: 3 });
   assert.deepEqual(getPlan('jobseeker').limits, { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 });
-  assert.deepEqual(getPlan('sales').limits, { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 });
+  assert.deepEqual(getPlan('sales').limits, { accounts: 1000, contacts: 10000, jobBoards: -1, users: 3, csvImports: -1 });
 });
 
 test('password recovery gives users a next step when email delivery is unavailable', async () => {

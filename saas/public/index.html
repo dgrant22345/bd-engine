@@ -102,6 +102,9 @@
       resetMessage: '',
       verificationToken: getInitialVerificationToken(),
       verificationMessage: '',
+      inviteToken: getInitialInviteToken(),
+      invitation: null,
+      inviteMode: '',
       accountClosedMessage: '',
       emailVerificationAvailable: false,
       canManageSupport: false,
@@ -124,7 +127,7 @@
     // #cloud-root (signed-out request) and this URL asks for no other first view.
     let serverRenderedLanding = root.dataset.prerendered === 'landing' && (() => {
       const params = new URLSearchParams(window.location.search);
-      return !state.resetToken && !state.verificationToken && !params.has('legal')
+      return !state.resetToken && !state.verificationToken && !state.inviteToken && !params.has('legal')
         && params.get('login') !== '1' && params.get('signup') !== '1';
     })();
 
@@ -141,6 +144,28 @@
 
     function getInitialResetToken() {
       return String(new URLSearchParams(window.location.search).get('reset') || '').trim();
+    }
+
+    // An invitation link (/?invite=…) is kept for this tab only and taken out
+    // of the address bar, so it is not left in history or shared by accident.
+    const INVITE_TOKEN_KEY = 'bd_invite_token';
+    function getInitialInviteToken() {
+      const url = new URL(window.location.href);
+      const fromUrl = String(url.searchParams.get('invite') || '').trim();
+      if (fromUrl) {
+        try { sessionStorage.setItem(INVITE_TOKEN_KEY, fromUrl); } catch {}
+        url.searchParams.delete('invite');
+        window.history?.replaceState?.({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+        return fromUrl;
+      }
+      try { return sessionStorage.getItem(INVITE_TOKEN_KEY) || ''; } catch { return ''; }
+    }
+
+    function forgetInvite() {
+      state.inviteToken = '';
+      state.invitation = null;
+      state.inviteMode = '';
+      try { sessionStorage.removeItem(INVITE_TOKEN_KEY); } catch {}
     }
 
     function getInitialVerificationToken() {
@@ -681,6 +706,13 @@
           window.history?.replaceState?.({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
         }
       }
+      if (state.inviteToken) {
+        try {
+          state.invitation = await api('/api/invitations/preview', { method: 'POST', body: JSON.stringify({ token: state.inviteToken }) });
+        } catch {
+          state.invitation = { status: 'unavailable' };
+        }
+      }
       try {
         const data = await api('/api/auth/me');
         if (data.authenticated) {
@@ -738,6 +770,7 @@
               ? 'signup'
               : 'landing';
       }
+      if (state.invitation) state.view = 'invite';
       // The landing page is already on screen and wired when the server
       // pre-rendered it; repainting would discard a visitor's open tab or FAQ.
       const landingAlreadyLive = serverRenderedLanding && state.view === 'landing' && !state.accountClosedMessage;
@@ -1019,9 +1052,9 @@
     }
 
     const fallbackPlanLimits = {
-      trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 1, csvImports: 3 },
+      trial: { accounts: 25, contacts: 100, jobBoards: 50, users: 3, csvImports: 3 },
       jobseeker: { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 },
-      sales: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 1, csvImports: -1 },
+      sales: { accounts: 1000, contacts: 10000, jobBoards: -1, users: 3, csvImports: -1 },
       owner: { accounts: -1, contacts: -1, jobBoards: -1, users: -1, csvImports: -1 },
     };
 
@@ -1071,6 +1104,7 @@
         case 'recovery-codes': return renderRecovery(false);
         case 'recover-code': return renderRecovery(true);
         case 'app': return renderApp();
+        case 'invite': return renderInvite();
         case 'trust':
         case 'privacy':
         case 'terms':
@@ -1147,9 +1181,9 @@
         name: 'Recruiter Pro',
         priceMarkup: '<span class="price-amount">$10</span><span class="price-period">USD / month after trial</span>',
         fit: 'For an independent recruiter or agency founder using live hiring signals to prioritize measurable outreach.',
-        features: ['1 user', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', '3-Step Outreach Sequence Studio', 'Executive Morning Radar & Digest', 'Placement Pipeline ROI Tracker', 'Workspace sync across your devices', 'CSV export'],
+        features: ['Up to 3 users in a shared workspace', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', '3-Step Outreach Sequence Studio', 'Executive Morning Radar & Digest', 'Placement Pipeline ROI Tracker', 'Workspace sync across your devices', 'CSV export'],
         syncNote: 'Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account.',
-        trial: 'The free trial includes 25 accounts, 100 contacts, 50 ATS boards, and 3 CSV imports.',
+        trial: 'The free trial includes 25 accounts, 100 contacts, 50 ATS boards, 3 CSV imports, and up to 3 users.',
       };
       root.innerHTML = `
         <div class="landing">
@@ -1651,6 +1685,156 @@
       root.querySelector('#goto-signup')?.addEventListener('click', () => { state.error = ''; openSignup(); });
       root.querySelector('#goto-landing')?.addEventListener('click', () => { state.view = 'landing'; state.error = ''; render(); });
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
+    }
+
+    // ── Invitation to a team workspace ────────────────────────────────────
+    async function finishInvite(work) {
+      state.busy = true;
+      state.error = '';
+      render();
+      try {
+        await work();
+        forgetInvite();
+        window.location.replace('/');
+      } catch (err) {
+        state.error = err.message || 'That did not work. Please try again.';
+        if (err.code && /^invitation_(expired|accepted|revoked|invalid)$/.test(err.code)) {
+          state.invitation = { status: err.code.replace('invitation_', '') };
+        }
+        if (err.code === 'account_exists') state.inviteMode = 'login';
+        state.busy = false;
+        render();
+      }
+    }
+
+    function acceptInvite() {
+      return api('/api/invitations/accept', { method: 'POST', body: JSON.stringify({ token: state.inviteToken }) });
+    }
+
+    function renderInvite() {
+      const invitation = state.invitation || { status: 'invalid' };
+      const signedIn = Boolean(state.user) && !state.demo;
+      const brand = `<div class="brand-icon-sm"><img src="/brand-mark.svg" width="32" height="32" alt=""></div>`;
+      if (invitation.status !== 'pending') {
+        const closed = {
+          expired: ['This invitation has expired', 'Invitations work for 7 days. Ask the person who invited you to send a new one.'],
+          accepted: ['This invitation has been used', 'Each invitation link works once. If you joined already, log in to open the workspace.'],
+          revoked: ['This invitation was withdrawn', 'Ask the person who invited you to send a new one.'],
+          unavailable: ['We could not check this invitation', 'Please reload the page in a moment.'],
+        }[invitation.status] || ['This invitation link is not valid', 'Check that you opened the whole link from the email, or ask for a new invitation.'];
+        root.innerHTML = `
+          <main class="auth-page" aria-labelledby="invite-title">
+            <div class="auth-card">
+              <div class="auth-header">${brand}<h1 id="invite-title" tabindex="-1">${escapeHtml(closed[0])}</h1><p>${escapeHtml(closed[1])}</p></div>
+              <div class="auth-footer">
+                ${signedIn ? '<button class="btn btn-primary btn-block" id="invite-open-app">Open BD Engine</button>' : '<button class="btn btn-primary btn-block" id="invite-goto-login">Log in</button>'}
+                <button class="link-btn" id="invite-goto-landing">Back to home</button>
+              </div>
+            </div>
+          </main>`;
+        root.querySelector('#invite-title')?.focus();
+        root.querySelector('#invite-open-app')?.addEventListener('click', () => { forgetInvite(); state.view = 'app'; render(); });
+        root.querySelector('#invite-goto-login')?.addEventListener('click', () => { forgetInvite(); state.view = 'login'; state.error = ''; render(); });
+        root.querySelector('#invite-goto-landing')?.addEventListener('click', () => { forgetInvite(); state.view = 'landing'; state.error = ''; render(); });
+        return;
+      }
+
+      const roleText = invitation.role === 'admin' ? 'an admin' : 'a member';
+      const inviter = invitation.inviterName || 'A teammate';
+      const sameEmail = signedIn && String(state.user.email || '').toLowerCase() === String(invitation.email || '').toLowerCase();
+      const mode = signedIn ? (sameEmail ? 'join' : 'mismatch') : (state.inviteMode || (invitation.accountExists ? 'login' : 'signup'));
+      const busyLabel = (label) => (state.busy ? `<span class="btn-spinner"></span> ${label}` : label);
+      let body = '';
+      if (mode === 'join') {
+        body = `<button class="btn btn-primary btn-block btn-lg" id="invite-join" ${state.busy ? 'disabled' : ''}>${busyLabel(`Join ${escapeHtml(invitation.workspaceName)}`)}</button>
+          <p class="form-help">You are signed in as ${escapeHtml(state.user.email)}.</p>`;
+      } else if (mode === 'mismatch') {
+        body = `<div class="auth-error" role="status">You are signed in as ${escapeHtml(state.user.email)}. This invitation is for ${escapeHtml(invitation.email)}.</div>
+          <button class="btn btn-primary btn-block" id="invite-switch-account">Log out and continue as ${escapeHtml(invitation.email)}</button>`;
+      } else if (mode === 'login') {
+        body = `<form id="invite-login-form" class="auth-form">
+            <div class="form-group"><label for="invite-login-email">Email</label><input type="email" id="invite-login-email" value="${escapeAttr(invitation.email)}" readonly autocomplete="email"></div>
+            <div class="form-group"><label for="invite-login-password">Password</label>
+              <div class="password-input-shell"><input type="password" id="invite-login-password" autocomplete="current-password" required autofocus>
+              <button class="password-toggle" type="button" data-password-toggle="invite-login-password" aria-controls="invite-login-password" aria-label="Show password" aria-pressed="false">Show</button></div></div>
+            <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>${busyLabel('Log in and join')}</button>
+          </form>
+          <p class="form-help">New to BD Engine? <button class="link-btn" id="invite-mode-signup" type="button">Create your account</button></p>`;
+      } else {
+        body = `<form id="invite-signup-form" class="auth-form">
+            <div class="form-group"><label for="invite-signup-name">Full name</label><input type="text" id="invite-signup-name" autocomplete="name" value="${escapeAttr(state.authDraft.signupName)}" required autofocus></div>
+            <div class="form-group"><label for="invite-signup-email">Email</label><input type="email" id="invite-signup-email" value="${escapeAttr(invitation.email)}" readonly autocomplete="email"><span class="form-help">The invitation was sent to this address.</span></div>
+            <div class="form-group"><label for="invite-signup-password">Password</label>
+              <div class="password-input-shell"><input type="password" id="invite-signup-password" autocomplete="new-password" required minlength="10" aria-describedby="invite-password-help">
+              <button class="password-toggle" type="button" data-password-toggle="invite-signup-password" aria-controls="invite-signup-password" aria-label="Show password" aria-pressed="false">Show</button></div>
+              <span class="form-help" id="invite-password-help">Use at least 10 characters.</span></div>
+            <div class="auth-consent">
+              <input type="checkbox" id="invite-legal-consent" required aria-describedby="invite-legal-links">
+              <div class="auth-consent__body">
+                <label for="invite-legal-consent">I agree to the Terms and confirm I have read the Privacy notice.</label>
+                <p class="auth-consent__links" id="invite-legal-links"><a href="/?legal=terms" target="_blank" rel="noopener">Open Terms</a><span aria-hidden="true"> · </span><a href="/?legal=privacy" target="_blank" rel="noopener">Open Privacy notice</a></p>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block btn-lg" ${state.busy ? 'disabled' : ''}>${busyLabel('Create account and join')}</button>
+          </form>
+          <p class="form-help">Already have an account? <button class="link-btn" id="invite-mode-login" type="button">Log in</button></p>`;
+      }
+      root.innerHTML = `
+        <main class="auth-page" aria-labelledby="invite-title">
+          <div class="auth-card">
+            <div class="auth-header">
+              ${brand}
+              <h1 id="invite-title" tabindex="-1">Join ${escapeHtml(invitation.workspaceName)}</h1>
+              <p>${escapeHtml(inviter)} invited you to join as ${roleText}. You will share its companies, people, open roles and outreach on BD Engine.</p>
+            </div>
+            ${state.error ? `<div class="auth-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
+            ${body}
+            <div class="auth-footer">
+              <p class="form-help">Not expecting this? You can ignore the invitation; it expires on its own.</p>
+              <button class="link-btn" id="invite-goto-landing">Back to home</button>
+            </div>
+          </div>
+        </main>`;
+      wirePasswordToggles();
+      if (!state.error && mode !== 'signup' && mode !== 'login') root.querySelector('#invite-title')?.focus();
+      root.querySelector('#invite-join')?.addEventListener('click', () => finishInvite(acceptInvite));
+      root.querySelector('#invite-switch-account')?.addEventListener('click', async () => {
+        try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+        state.user = null;
+        state.tenant = null;
+        state.tenants = [];
+        state.demo = false;
+        state.error = '';
+        render();
+      });
+      root.querySelector('#invite-mode-signup')?.addEventListener('click', () => { state.inviteMode = 'signup'; state.error = ''; render(); });
+      root.querySelector('#invite-mode-login')?.addEventListener('click', () => { state.inviteMode = 'login'; state.error = ''; render(); });
+      root.querySelector('#invite-login-form')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const password = root.querySelector('#invite-login-password').value;
+        finishInvite(async () => {
+          await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: invitation.email, password }) });
+          await acceptInvite();
+        });
+      });
+      root.querySelector('#invite-signup-form')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const name = root.querySelector('#invite-signup-name').value;
+        const password = root.querySelector('#invite-signup-password').value;
+        state.authDraft.signupName = name;
+        finishInvite(() => api('/api/auth/signup', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: invitation.email,
+            password,
+            name,
+            invitationToken: state.inviteToken,
+            acquisition: state.acquisition,
+            legalAcceptance: { accepted: true, termsVersion: COMMERCIAL_LEGAL_VERSION, privacyVersion: COMMERCIAL_LEGAL_VERSION, acceptedAt: new Date().toISOString() },
+          }),
+        }));
+      });
+      root.querySelector('#invite-goto-landing')?.addEventListener('click', () => { forgetInvite(); state.view = 'landing'; state.error = ''; render(); });
     }
 
     // ── Signup page ───────────────────────────────────────────────────────
@@ -2484,6 +2668,8 @@
                     ${state.demo ? '' : `<span class="cloud-verification-status ${emailVerified ? 'is-verified' : ''}">${emailVerified ? 'Email verified' : 'Email not verified'}</span>`}
                   </div>
                   <hr>
+                  ${!state.demo && (state.tenants || []).length > 1 ? `<div class="cloud-menu-group" role="group" aria-label="Workspaces"><span class="cloud-menu-label">Workspaces</span>${state.tenants.map((item) => `<button class="cloud-menu-item cloud-menu-item--workspace" type="button" role="menuitemradio" aria-checked="${item.id === state.tenant?.id ? 'true' : 'false'}" data-switch-workspace="${escapeAttr(item.id)}"><span>${escapeHtml(item.name || 'Workspace')}</span><span class="cloud-menu-role">${escapeHtml(({ owner: 'Owner', admin: 'Admin', member: 'Member' })[item.role] || '')}</span></button>`).join('')}</div><hr>` : ''}
+                  ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-team-btn" type="button" role="menuitem">Team</button>'}
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-billing-btn" type="button" role="menuitem">Billing and plan</button>'}
                   ${state.demo ? '' : '<button class="cloud-menu-item" id="cloud-recovery-menu-btn" type="button" role="menuitem">Recovery codes</button>'}
                   ${!state.demo && state.emailVerificationAvailable && !emailVerified ? '<button class="cloud-menu-item" id="cloud-verify-email-btn" type="button" role="menuitem">Send verification email</button>' : ''}
@@ -2560,6 +2746,23 @@
         setUserMenuOpen(false);
       });
       root.querySelector('#cloud-upgrade-btn')?.addEventListener('click', openBillingPage);
+      root.querySelector('#cloud-team-btn')?.addEventListener('click', () => {
+        setUserMenuOpen(false);
+        const win = root.querySelector('.cloud-app-frame')?.contentWindow;
+        try { if (win && String(win.location.href).includes('/app/')) win.location.hash = '#/admin/team'; } catch {}
+      });
+      root.querySelectorAll('[data-switch-workspace]').forEach((button) => button.addEventListener('click', async () => {
+        if (button.dataset.switchWorkspace === state.tenant?.id) { setUserMenuOpen(false); return; }
+        button.disabled = true;
+        try {
+          await api('/api/session/workspace', { method: 'POST', body: JSON.stringify({ tenantId: button.dataset.switchWorkspace }) });
+          window.location.replace('/');
+        } catch (error) {
+          button.disabled = false;
+          state.verificationMessage = error.message || 'That workspace could not be opened.';
+          render();
+        }
+      }));
       root.querySelector('#cloud-save-recovery-btn')?.addEventListener('click', () => { state.view = 'recovery-codes'; render(); });
       root.querySelector('#cloud-recovery-menu-btn')?.addEventListener('click', () => { state.view = 'recovery-codes'; render(); });
       root.querySelector('#cloud-dismiss-recovery-btn')?.addEventListener('click', () => {

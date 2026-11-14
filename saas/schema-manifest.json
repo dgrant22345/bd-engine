@@ -1,6 +1,6 @@
 {
   "generatedFrom": "src/db.js",
-  "sourceSha256": "d50a8190f774aa6ccd58c9740c275d058862583005d25bde48eb6d52b100e236",
+  "sourceSha256": "3d1e35fa7ac8c11fc70e346caa236d26751485d0f09022167cf25110e34df0a9",
   "migrations": [
     {
       "id": "20260707_persistence_foundation",
@@ -57,6 +57,10 @@
     {
       "id": "20261114_hiring_tracker",
       "description": "Weekly Canadian hiring tracker snapshots from public job sites"
+    },
+    {
+      "id": "20261115_workspace_invitations",
+      "description": "Single-use, email-bound invitations to join a workspace"
     }
   ],
   "tables": [
@@ -88,7 +92,8 @@
     "tasks",
     "tenant_data",
     "tenants",
-    "users"
+    "users",
+    "workspace_invitations"
   ],
   "indexes": [
     "account_closures_status_updated_idx",
@@ -152,6 +157,7 @@
     "support_tickets_tenant_created_idx",
     "tasks_tenant_due_idx",
     "tasks_tenant_updated_idx",
-    "tenants_referral_code_idx"
+    "tenants_referral_code_idx",
+    "workspace_invitations_tenant"
   ]
 }

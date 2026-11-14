@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { hashPassword, verifyPassword, passwordNeedsUpgrade } from './auth.js';
-import { dbSaveUser, dbSaveTenant, dbSaveMembership, dbLoadAllUsers, dbLoadAllTenants, dbLoadAllMemberships } from './db.js';
+import { dbSaveUser, dbSaveTenant, dbSaveMembership, dbLoadAllUsers, dbLoadAllTenants, dbLoadAllMemberships, dbUpdateMembershipRole, dbDeleteMembership } from './db.js';
 
 const now = () => new Date().toISOString();
 
@@ -315,6 +315,42 @@ export function addMember(tenantId, userId, role = 'member', { persist = true } 
   memberships.push(membership);
   if (persist) dbSaveMembership(membership).catch(() => {});
   return membership;
+}
+
+// Written to the database before it counts in memory.
+export async function addMemberPersisted(tenantId, userId, role) {
+  const existing = getMembership(tenantId, userId);
+  if (existing) return existing;
+  const membership = { tenantId, userId, role, createdAt: now() };
+  await dbSaveMembership(membership);
+  const raced = getMembership(tenantId, userId);
+  if (raced) return raced;
+  memberships.push(membership);
+  return membership;
+}
+
+export function listTenantMembers(tenantId) {
+  return memberships.filter((m) => m.tenantId === tenantId).map((m) => ({ ...m }));
+}
+
+// Team changes are written to the database first; memory changes only after
+// the row changed, so a failed write leaves both as they were. The owner's
+// membership is never changed here.
+export async function setMemberRole(tenantId, userId, role) {
+  const membership = getMembership(tenantId, userId);
+  if (!membership || membership.role === 'owner') return null;
+  if (!(await dbUpdateMembershipRole(tenantId, userId, role))) return null;
+  membership.role = role;
+  return { ...membership };
+}
+
+export async function removeMember(tenantId, userId) {
+  const index = memberships.findIndex((m) => m.tenantId === tenantId && m.userId === userId);
+  if (index < 0 || memberships[index].role === 'owner') return false;
+  if (!(await dbDeleteMembership(tenantId, userId))) return false;
+  const current = memberships.findIndex((m) => m.tenantId === tenantId && m.userId === userId);
+  if (current >= 0) memberships.splice(current, 1);
+  return true;
 }
 
 // ── Public user object (strip sensitive fields) ─────────────────────────────
