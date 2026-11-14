@@ -10367,15 +10367,16 @@ function getJobSignalBadges(item) {
   if (!item) return [];
   const badges = [];
   const postedDate = item.postedAt ? new Date(item.postedAt) : null;
-  const daysOld = postedDate && !isNaN(postedDate.getTime()) ? Math.floor((Date.now() - postedDate.getTime()) / (24 * 60 * 60 * 1000)) : 0;
+  // No posting date means the age is unknown, not zero days.
+  const daysOld = postedDate && !isNaN(postedDate.getTime()) ? Math.floor((Date.now() - postedDate.getTime()) / (24 * 60 * 60 * 1000)) : null;
   
   if (Number(item.connectionCount || 0) > 0) {
     badges.push(`<span class="signal-badge signal-badge--warm" title="1st-degree connection at company">1st-Degree Match</span>`);
   }
-  if (item.isNew || (daysOld >= 0 && daysOld <= 2)) {
-    badges.push(`<span class="signal-badge signal-badge--surge" title="Posted in the last 48 hours">Hiring Surge (New)</span>`);
+  if (item.isNew || (daysOld !== null && daysOld >= 0 && daysOld <= 2)) {
+    badges.push(`<span class="signal-badge signal-badge--surge" title="New in the past seven days">Hiring Surge (New)</span>`);
   }
-  if (daysOld >= 45) {
+  if (daysOld !== null && daysOld >= 45) {
     badges.push(`<span class="signal-badge signal-badge--stale" title="Open for ${daysOld} days">Hard to Fill (${daysOld}d)</span>`);
   }
   if (/(recruiter|talent|head of|vp|director|lead|manager|staff|founding)/i.test(item.title || '')) {
@@ -12532,7 +12533,7 @@ function renderJobsTable(items, compact) {
                 ${workStyle ? `<span class="job-workstyle-pills">${workStyle}</span>` : ''}
               </div>
               <div class="job-row-details">
-                <details class="job-row-context job-timing"><summary>${item.postedAt ? `Posted ${formatDate(item.postedAt)}` : escapeHtml(item.postingAgeText || 'Posting date unavailable')}</summary><div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)} from ${escapeHtml(item.atsType || 'an unknown source')} · ${item.active === false ? 'Marked inactive' : 'Marked active'}${item.isNew ? ' · Recent posting' : ''}</div></details>
+                <details class="job-row-context job-timing"><summary>${item.postedAt ? `Posted ${formatDate(item.postedAt)}` : escapeHtml(item.postingAgeText || (item.firstSeenAt ? `First seen ${formatDate(item.firstSeenAt)}; the board gives no posting date` : 'Posting date unavailable'))}</summary><div class="small muted">Retrieved ${formatDate(item.retrievedAt || item.importedAt)} from ${escapeHtml(item.atsType || 'an unknown source')} · ${item.active === false ? 'Marked inactive' : 'Marked active'}${item.isNew ? ' · Recent posting' : ''}</div></details>
               <details class="job-row-context"><summary>Preparation</summary><p class="muted small">Tags below are inferred from the role title, not candidate evidence.</p>
               ${skills.length ? `<div class="job-skills-chips">${skills.map((s) => `<span class="job-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
               ${renderTechDnaCluster(stack)}
@@ -12780,7 +12781,7 @@ function renderAccountConfigsTable(items) {
           <td data-label="ATS">${renderStatusPill(item.atsType || 'unknown', 'neutral')}</td>
           <td data-label="Board">${escapeHtml(item.boardId || item.careersUrl || '')}</td>
           <td data-label="Discovery">${renderStatusPill(item.discoveryStatus || 'unknown', 'neutral')}<div class="small muted">${escapeHtml(item.discoveryMethod || '')}</div></td>
-          <td data-label="Import">${formatDate(item.lastImportAt)}<div class="small muted">${escapeHtml(item.lastImportStatus || 'not run')}</div></td>
+          <td data-label="Import">${formatDate(item.lastImportedAt || item.lastImportAt)}<div class="small muted">${escapeHtml(item.lastImportStatus || 'not run')}</div></td>
         </tr>
       `).join('')}
     </tbody></table></div>`;
