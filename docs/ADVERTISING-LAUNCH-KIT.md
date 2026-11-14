@@ -1,6 +1,6 @@
 # BD Engine advertising launch kit
 
-Prepared October 10, 2026; updated October 11 for company-Page promotion, and November 13 for the free launch and the Bold dark look. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
+Prepared October 10, 2026; updated October 11 for company-Page promotion, November 13 for the free launch, and November 14 for the Refined teal look. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
 
 LinkedIn publishing identity: **BD Engine's company Page only**. Do not publish, reshare, comment, send promotional messages, or invite contacts through the owner's personal LinkedIn profile. The Page URL and publishing connection still need to be supplied before any post can be sent. The copy below uses the company's voice.
 
@@ -30,7 +30,7 @@ All-in-one ZIP: https://bd-engine-production.up.railway.app/media/campaign/bd-en
 | LinkedIn Page cover | 1128 × 191 | https://bd-engine-production.up.railway.app/media/campaign/linkedin-cover.png |
 | Captioned 30-second walkthrough | MP4 | https://bd-engine-production.up.railway.app/media/recruiter-walkthrough.mp4 |
 
-The graphics use the Bold dark look (November 2026) and show clearly labelled sample data; rebuild them with `scripts/build-campaign-assets.mjs` (below). The walkthrough was recorded on the earlier light interface; leave it out of new posts until it is re-recorded. It has no audio; captions and a transcript are available at https://bd-engine-production.up.railway.app/recruiter-walkthrough.
+The graphics use the Refined teal look (November 2026) and show clearly labelled sample data; rebuild them with `scripts/build-campaign-assets.mjs` (below). The walkthrough was recorded on the earlier navy-and-teal interface, which shares the palette but has a navy sidebar; it can be used, and a re-recording would show the current white sidebar. It has no audio; captions and a transcript are available at https://bd-engine-production.up.railway.app/recruiter-walkthrough.
 
 When uploading a graphic, add accessible alt text:
 

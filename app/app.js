@@ -143,7 +143,7 @@ const appState = {
   outreachModalTrigger: null,
   statusPillsExpanded: false,
   previousScores: {},
-  theme: localStorage.getItem('bd_theme') || 'dark',
+  theme: localStorage.getItem('bd_theme') || 'light',
   themePreset: localStorage.getItem('bd_theme_preset') || 'slate',
   dashboardTab: localStorage.getItem('bd_dash_tab') || 'battle-board',
   selectedContacts: new Set(),
@@ -432,7 +432,7 @@ function applyTheme(mode) {
     applyThemePreset('slate');
   }
   const themeBackground = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#0b0f14' : '#f5f7f8'));
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBackground || (effective === 'dark' ? '#10191f' : '#f5f7f8'));
   if (themeIcon) themeIcon.innerHTML = effective === 'dark' ? '&#9728;' : '&#9789;';
   if (themeLabel) themeLabel.textContent = effective === 'dark' ? 'Light' : 'Dark';
 }
