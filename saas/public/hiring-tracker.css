@@ -1,0 +1,32 @@
+/* Canadian hiring tracker (/canada-hiring). Loads after guides.css and
+   brand.css, on the light public palette. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.tracker .guide-hero { margin-bottom: 32px; }
+.tracker-updated { margin: 16px 0 0; color: #526272; font-size: 14px; }
+.tracker-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 0 0 40px; }
+.tracker-stats > div { display: grid; gap: 4px; padding: 18px 20px; background: #fff; border: 1px solid #dce5ed; border-radius: 12px; }
+.tracker-stats dt { color: #526272; font-size: 13px; font-weight: 600; }
+.tracker-stats dd { margin: 0; color: #152538; font-size: 34px; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.tracker-stats .tracker-stats__note { color: #526272; font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.tracker-section { margin: 0 0 40px; min-width: 0; max-width: 100%; }
+.tracker-section h2 { margin-bottom: 14px; font-size: 24px; }
+.tracker-table-wrap { position: relative; max-width: 100%; min-width: 0; overflow-x: auto; background: #fff; border: 1px solid #dce5ed; border-radius: 12px; }
+.tracker-table-wrap:focus-visible { outline: 2px solid #0f6b65; outline-offset: 3px; }
+.tracker-table { width: 100%; min-width: 640px; border-collapse: collapse; color: #152538; font-size: 15px; }
+.tracker-table--compact { min-width: 420px; }
+.tracker-table :is(th, td) { padding: 12px 16px; border-bottom: 1px solid #e7edf2; text-align: left; vertical-align: top; }
+.tracker-table thead th { background: #f6f8fb; color: #526272; font-size: 12px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.tracker-table tbody tr:last-child :is(th, td) { border-bottom: 0; }
+.tracker-table tbody th { font-weight: 650; }
+.tracker-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tracker-table .up { color: #0b5550; font-weight: 650; }
+.tracker-table .down { color: #9a3412; font-weight: 650; }
+.tracker-table .muted { color: #526272; font-weight: 400; }
+.tracker-table a { color: #0f6b65; font-weight: 600; }
+.tracker-pending { padding: 18px 20px; background: #fff; border: 1px solid #dce5ed; border-radius: 12px; color: #526272; }
+.tracker-method ul { display: grid; gap: 10px; margin: 0; padding-left: 20px; color: #526272; line-height: 1.55; }
+.tracker-method strong { color: #152538; }
+@media (max-width: 640px) {
+  .tracker-stats dd { font-size: 28px; }
+  .tracker-table :is(th, td) { padding: 10px 12px; }
+}

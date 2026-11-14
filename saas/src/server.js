@@ -36,6 +36,8 @@ import { validateContactInput } from './contact-queries.js';
 import { getGrowthOutcomes } from './growth-outcomes.js';
 import { createReminderStore, getNewRoleDigest, REMINDER_ID, ROLE_DIGEST_ID } from './followup-reminders.js';
 import { buildTrialEmail, createTrialEmailStore } from './trial-emails.js';
+import { compareSnapshots, createHiringTrackerStore, renderHiringTrackerPage, trackerWeek } from './hiring-tracker.js';
+import { spawn } from 'node:child_process';
 import { buildTaskCalendar } from './task-calendar.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
@@ -50,6 +52,7 @@ const savedWork = createSavedWorkStore();
 const reminders = createReminderStore();
 const roleDigests = createReminderStore({ id: ROLE_DIGEST_ID, title: 'Weekly role digest', viewType: 'jobs', cadence: 'weekly' });
 const trialEmails = createTrialEmailStore();
+const hiringTracker = createHiringTrackerStore({ query: (...args) => dbQuery(...args), enabled: isDbEnabled });
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
@@ -451,6 +454,7 @@ async function startServer() {
     console.log(`BD Engine Cloud running at http://${host}:${port}`);
     startPeriodicPipelineRunner(startupPromise);
     startReminderRunner(startupPromise);
+    startHiringTrackerRunner(startupPromise);
   });
 
   // Graceful shutdown. Order matters: wait for in-flight requests to finish
@@ -601,6 +605,83 @@ function startReminderRunner(startupPromise) {
   };
   const timer = setInterval(() => void scan().catch(error => console.error('Reminder scan failed:', safeErrorSummary(error))), 5 * 60 * 1000);
   timer.unref();
+}
+
+// ── Canadian hiring tracker ────────────────────────────────────────────────
+// Once a week (Monday from 6 a.m. Toronto), build a snapshot of public job
+// sites in a separate process with no database access, then store it. Runs in
+// production, or anywhere with BD_HIRING_TRACKER=on; BD_HIRING_TRACKER=off
+// stops it.
+function isHiringTrackerEnabled(env = process.env) {
+  if (env.BD_HIRING_TRACKER === 'off') return false;
+  return env.BD_HIRING_TRACKER === 'on' || (env.BD_CLOUD_ENV || env.NODE_ENV || 'development') === 'production';
+}
+
+// Only what the snapshot needs to reach the public web: no database URL, keys or secrets.
+function hiringTrackerChildEnv(env = process.env) {
+  const allowed = ['PATH', 'HOME', 'TZ', 'LANG', 'NODE_ENV', 'NODE_EXTRA_CA_CERTS', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'];
+  return Object.fromEntries(allowed.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]));
+}
+
+function runHiringTrackerSnapshot({ timeoutMs = 15 * 60 * 1000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(rootDir, 'scripts', 'hiring-tracker-snapshot.mjs')], {
+      cwd: rootDir, env: hiringTrackerChildEnv(), stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = ''; let stderrTail = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.stdout.on('data', (chunk) => { if (stdout.length < 8_000_000) stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderrTail = `${stderrTail}${chunk}`.slice(-2000); });
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`Hiring tracker snapshot exited with ${code}: ${stderrTail.slice(-400)}`));
+      try { resolve(JSON.parse(stdout.trim().split('\n').at(-1))); } catch (error) { reject(error); }
+    });
+  });
+}
+
+let hiringTrackerView = null;
+async function getHiringTrackerView({ refresh = false } = {}) {
+  if (!refresh && hiringTrackerView && Date.now() - hiringTrackerView.loadedAt < 10 * 60 * 1000) return hiringTrackerView.view;
+  const [current, previous] = await hiringTracker.latest(2);
+  const view = current ? compareSnapshots(current, previous || null) : null;
+  hiringTrackerView = { view, loadedAt: Date.now() };
+  return view;
+}
+
+function startHiringTrackerRunner(startupPromise) {
+  if (!isHiringTrackerEnabled()) return;
+  let running = false;
+  const scan = async () => {
+    if (running) return;
+    running = true;
+    const week = trackerWeek(new Date());
+    let claimed = false;
+    try {
+      await startupPromise;
+      if (!startupComplete || startupError) return;
+      const [latest] = await hiringTracker.latest(1);
+      if (latest?.week === week) return;
+      claimed = await hiringTracker.claim(week);
+      if (!claimed) return;
+      const startedAt = performance.now();
+      const snapshot = await runHiringTrackerSnapshot();
+      if (snapshot.week !== week) throw new Error(`Snapshot week ${snapshot.week} does not match ${week}.`);
+      await hiringTracker.save(snapshot);
+      claimed = false;
+      await getHiringTrackerView({ refresh: true });
+      const readable = snapshot.employers.filter((item) => item.status === 'complete').length;
+      console.log(`[Hiring tracker] Week of ${week}: ${readable}/${snapshot.employers.length} employers read in ${Math.round(performance.now() - startedAt)}ms.`);
+    } catch (error) {
+      console.error('[Hiring tracker] Snapshot failed:', safeErrorSummary(error));
+    } finally {
+      if (claimed) await hiringTracker.release(week).catch(() => {});
+      running = false;
+    }
+  };
+  setTimeout(() => void scan(), 60_000).unref();
+  setInterval(() => void scan(), 15 * 60 * 1000).unref();
 }
 
 function startPeriodicPipelineRunner(startupPromise) {
@@ -3212,6 +3293,9 @@ function serveStaticOrSPA(pathname, req, res) {
   if (pathname === '/job-search' || pathname === '/job-search/') {
     return sendHtml(res, getCloudIndexHtml(res.bdScriptNonce, 'jobseeker', getLandingPrerenderPersona(pathname, req)));
   }
+  if (pathname === '/canada-hiring' || pathname === '/canada-hiring/') {
+    return sendHiringTrackerPage(res);
+  }
   const guidePath = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   const guideFile = PUBLIC_GUIDE_FILES.get(guidePath);
   if (guideFile) {
@@ -3309,6 +3393,17 @@ function getGuideHtml(filePath, scriptNonce) {
     cachedGuideHtml.set(filePath, readPublicHtml(filePath));
   }
   return injectScriptNonce(cachedGuideHtml.get(filePath), scriptNonce);
+}
+
+async function sendHiringTrackerPage(res) {
+  let view = null;
+  try {
+    view = await getHiringTrackerView();
+  } catch (error) {
+    console.error('[Hiring tracker] Page data unavailable:', safeErrorSummary(error));
+  }
+  const html = versionAssetUrls(renderHiringTrackerPage(view, { origin: PUBLIC_ORIGIN }), resolveAssetVersion);
+  return sendHtml(res, injectScriptNonce(html, res.bdScriptNonce));
 }
 
 function getNotFoundHtml(scriptNonce) {
