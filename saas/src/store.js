@@ -16,6 +16,7 @@ import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } fro
 import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
 import { validateJobFeedback, persistJobFeedback, loadWorkspaceFeedback } from './job-feedback.js';
 import { rankDailyAccounts } from './daily-priorities.js';
+import { resolveWorkdayLocations } from './workday-locations.js';
 import { getPhenomBoardId, getPhenomJobUrl, getPhenomSearchUrl, readPhenomBoard, readPhenomLocation, readPhenomLocale, readPhenomSite } from './phenom.js';
 
 const now = () => new Date().toISOString();
@@ -7705,6 +7706,7 @@ async function fetchWorkdayJobs(config) {
   const descriptor = getWorkdayDescriptor(config);
   if (!descriptor) throw new Error('Workday: invalid board URL; existing jobs preserved');
   const url = descriptor.apiUrl;
+  const startedAt = performance.now();
   const pageSize = 20;
   const readPage = async (offset, { deadlineAt }) => {
     const payload = await fetchJson(url, 15000, {
@@ -7721,12 +7723,24 @@ async function fetchWorkdayJobs(config) {
     };
   };
 
-  return fetchPaginatedAtsJobs({
+  const result = await fetchPaginatedAtsJobs({
     providerName: 'Workday', pageSize, maxPages: DEFAULT_WORKDAY_MAX_PAGES,
     concurrency: ATS_PAGE_FETCH_CONCURRENCY, timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
     recheckFirstPage: true,
     readPage, jobKey: (item) => item?.externalPath || item?.id || item?.jobPostingId,
   });
+  // "3 Locations" names no country; read those roles' own pages for the places.
+  const deadlineAt = startedAt + ATS_BOARD_TIME_BUDGET_MS;
+  const locationsStartedAt = performance.now();
+  const locations = await resolveWorkdayLocations(result.jobs, {
+    apiUrl: url,
+    deadlineAt: deadlineAt - 5000,
+    getJson: (detailUrl) => fetchJson(detailUrl, 10000, {}, deadlineAt),
+  });
+  const locationsMs = Math.round(performance.now() - locationsStartedAt);
+  if (locationsMs > 5000) console.warn(`Slow Workday locations: saas/src/workday-locations.js resolveWorkdayLocations ${locationsMs}ms`, { board: getConfigBoardId(config), ...locations });
+  if (locations.multiLocation) result.pagination = { ...result.pagination, workdayLocations: { ...locations, elapsedMs: locationsMs } };
+  return result;
 }
 
 async function fetchBamboohrJobs(config, boardId) {
