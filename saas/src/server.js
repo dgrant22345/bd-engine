@@ -12,7 +12,7 @@ import { extractSession, createSession, destroySession, forgetUserSessions, isRe
 import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbQuery, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail, sendRoleDigestEmail } from './email.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail, sendRoleDigestEmail, sendTrialEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
@@ -35,6 +35,7 @@ import { applyCommercialCheckoutReadiness, isCommercialCheckoutReady } from './p
 import { validateContactInput } from './contact-queries.js';
 import { getGrowthOutcomes } from './growth-outcomes.js';
 import { createReminderStore, getNewRoleDigest, REMINDER_ID, ROLE_DIGEST_ID } from './followup-reminders.js';
+import { buildTrialEmail, createTrialEmailStore } from './trial-emails.js';
 import { buildTaskCalendar } from './task-calendar.js';
 
 const PUBLIC_SUPPORT_EMAIL = 'dgfinance15@gmail.com';
@@ -48,6 +49,7 @@ const store = createStore();
 const savedWork = createSavedWorkStore();
 const reminders = createReminderStore();
 const roleDigests = createReminderStore({ id: ROLE_DIGEST_ID, title: 'Weekly role digest', viewType: 'jobs', cadence: 'weekly' });
+const trialEmails = createTrialEmailStore();
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
 const serverStartedAt = new Date();
@@ -521,8 +523,26 @@ async function getReminderRecipient(tenantId, userId) {
   return { to: row?.email, eligible: Boolean(row?.email_verified_at && row.status === 'active' && ['active','trialing'].includes(row.tenant_status) && row.slug !== PUBLIC_DEMO_SLUG && ['owner','admin','member'].includes(row.role)) };
 }
 
+// The workspace owner of a running trial, rechecked inside the delivery lock.
+async function getTrialEmailRecipient(tenantId, userId) {
+  const row = (await dbQuery(`SELECT u.email,u.name,u.email_verified_at,u.status,t.status AS tenant_status,t.slug,t.plan,t.persona,t.created_at,m.role FROM users u
+    JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=$1 AND t.id=$2`, [userId, tenantId])).rows[0];
+  const eligible = Boolean(row?.email_verified_at && row.status === 'active' && ['active', 'trialing'].includes(row.tenant_status)
+    && row.plan === 'trial' && row.slug !== PUBLIC_DEMO_SLUG && row.role === 'owner' && !isTrialExpired(row));
+  return { to: row?.email, name: row?.name || '', persona: row?.persona || 'bd', tenantCreatedAt: row?.created_at || '', eligible };
+}
+
+function trialEmailLinks() {
+  return {
+    appUrl: `${PUBLIC_ORIGIN}/app/#/dashboard`,
+    companiesUrl: `${PUBLIC_ORIGIN}/app/#/accounts`,
+    billingUrl: `${PUBLIC_ORIGIN}/app/#/admin/billing`,
+    settingsUrl: `${PUBLIC_ORIGIN}/app/#/admin/billing`,
+  };
+}
+
 function startReminderRunner(startupPromise) {
-  let running = false; let cursor = ''; let digestCursor = '';
+  let running = false; let cursor = ''; let digestCursor = ''; let trialCursor = '';
   const scan = async () => {
     if (running || !isEmailConfigured()) return;
     running = true; const startedAt = performance.now();
@@ -555,6 +575,23 @@ function startReminderRunner(startupPromise) {
             send: payload => sendRoleDigestEmail({ ...payload, appUrl: `${PUBLIC_ORIGIN}/app/#/jobs`, settingsUrl: `${PUBLIC_ORIGIN}/app/#/jobs?digest=settings` }),
           });
         } catch (error) { console.error('Weekly role digest failed:', safeErrorSummary(error)); }
+      }
+      // Trial emails: welcome, a reminder to add companies, and a note before
+      // the trial ends. At most one per owner per scan; the owner can stop them.
+      const trialDays = getPlan('trial').trialDays;
+      const trialCandidates = await trialEmails.candidates(trialCursor, { trialDays, demoSlug: PUBLIC_DEMO_SLUG });
+      trialCursor = trialCandidates.length === 20 ? `${trialCandidates.at(-1).tenant_id}:${trialCandidates.at(-1).user_id}` : '';
+      for (const candidate of trialCandidates) {
+        try {
+          await trialEmails.deliver(candidate.tenant_id, candidate.user_id, {
+            trialDays,
+            getRecipient: getTrialEmailRecipient,
+            getCompanyCount: async (tenantId) => Number((await store.findAccounts(tenantId, { page: 1, pageSize: 1 }))?.total || 0),
+            send: ({ to, name, persona, tenantCreatedAt, kind, idempotencyKey }) => sendTrialEmail({
+              to, idempotencyKey, ...buildTrialEmail(kind, { name, persona, createdAt: tenantCreatedAt, trialDays, ...trialEmailLinks() }),
+            }),
+          });
+        } catch (error) { console.error('Trial email failed:', safeErrorSummary(error)); }
       }
     } finally {
       running = false;
@@ -2092,6 +2129,13 @@ self.addEventListener('activate', (event) => {
       if (input?.emailEnabled && (!status.providerConfigured || !status.emailVerified)) return sendJson(res, 409, { error: status.providerConfigured ? 'Verify your account email before enabling reminders.' : 'Email delivery needs setup. Calendar export is available now.' });
       return sendJson(res, 200, { ...await reminders.put(tenantId, user.id, input), ...status });
     }
+  }
+
+  // Trial emails are on for a trial workspace's owner until they turn them off.
+  if (pathname === '/api/account/trial-emails') {
+    const status = { providerConfigured: isEmailConfigured(), emailVerified: Boolean(user.emailVerifiedAt), trial: tenant?.plan === 'trial', owner: membership?.role === 'owner' };
+    if (req.method === 'GET') return sendJson(res, 200, { ...await trialEmails.get(tenantId, user.id), ...status });
+    if (req.method === 'PUT') return sendJson(res, 200, { ...await trialEmails.put(tenantId, user.id, await readJson(req)), ...status });
   }
 
   // Weekly role digest preference: off unless the person turns it on, and

@@ -12219,6 +12219,7 @@ async function renderAdminView() {
                 </div>
               </div>
             </div>
+            ${billing.plan?.id === 'trial' ? window.bdWorkflowTools.renderTrialEmails() : ''}
           </div>
         ${renderCollapsibleEnd()}
       </div>
@@ -12307,6 +12308,7 @@ async function renderAdminView() {
 
   hydrateAdminRuntimePanels(runtime);
   wireCollapsibleSections();
+  void window.bdWorkflowTools.loadTrialEmails(appRoot);
   // Wire automation rules
   document.getElementById('add-auto-rule')?.addEventListener('click', () => {
     const trigger = document.getElementById('auto-trigger')?.value;
