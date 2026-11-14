@@ -4,6 +4,10 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Preserve unfinished new follow-ups across searches, pagination, status changes and task completion; keep drafts separate for each person within the current tab.
+- Add recoverable follow-up load errors and bounded loading, retain failed-save input, and prevent duplicate pending submissions or late saves from replacing a newer screen.
+- Confirm before discarding unsaved due-date edits and protect pending edits when reloading or closing the tab.
+
 - Messages about finished work are no longer shown in red. Adding a company, saving an ATS config or completing an import now shows a green confirmation, and an import that skipped rows or had warnings shows an amber note; red is kept for failures.
 - A public Canadian hiring tracker at /canada-hiring shows open roles in Canada at 15 large Canadian employers (RBC, TD, BMO, CIBC, Desjardins, Sun Life, Bell, OpenText, Cohere and others), read from each employer's own job site every Monday morning, with new roles and the change since the week before, by employer and by sector. An employer whose site cannot be read in full that week is shown without figures rather than with a partial count.
 - Workday roles open in several places are no longer dropped. Workday lists them as "3 Locations", which names no country, so a workspace focused on Canada left them out: 178 of TD's Canadian roles, 75 of Sun Life's and 72 of CIBC's, for example. BD Engine now reads each such role's own page once for its locations and country, and shows them ("Dieppe, New Brunswick, Canada; Moncton, New Brunswick").

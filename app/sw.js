@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20261008-premium-ui-01';
+const ASSET_VERSION = '20261114-follow-up-reliability-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',

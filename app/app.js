@@ -3932,22 +3932,33 @@ function bindEvents() {
     }
 
     if (form.id === 'task-create-form') {
+      const draft = appState.taskDrafts?.items.get(appState.taskQuery.contactId || '');
+      if (!draft || draft.busy) return;
+      const routeAtStart = location.hash;
       const payload = getFormValues(form);
       if (appState.taskQuery.contactId) payload.contactId = appState.taskQuery.contactId;
       if (!payload.summary?.trim()) {
         showToast('Add a short description for the task.', 'warning');
         return;
       }
-      const submitButton = form.querySelector('button[type="submit"]');
-      if (submitButton) submitButton.disabled = true;
+      Object.assign(draft, { ...payload, busy: true, feedback: '' });
+      syncTaskCreateForm(form, draft);
       try {
         await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        Object.assign(draft, { summary: '', dueDate: toLocalDateInputValue(new Date(Date.now() + 86400000)), open: false, busy: false });
         showToast(payload.contactId ? 'Follow-up added for this person.' : 'Task added to the workspace.', 'success');
-        appState.taskQuery = { ...appState.taskQuery, status: 'pending', q: '', page: 1 };
-        await renderTasksView();
+        if (getRouteRoot() === 'tasks' && location.hash === routeAtStart) {
+          appState.taskQuery = { ...appState.taskQuery, status: 'pending', q: '', page: 1 };
+          await renderTasksView();
+        }
       } catch (error) {
-        showToast(`Could not add task: ${error.message || error}`, 'error', 7000);
-        if (submitButton) submitButton.disabled = false;
+        draft.feedback = `Could not add task: ${error.message || error}`;
+        showToast(draft.feedback, 'error', 7000);
+      } finally {
+        draft.busy = false;
+        if (appState.taskDrafts?.items.get(appState.taskQuery.contactId || '') === draft) {
+          syncTaskCreateForm(document.getElementById('task-create-form'), draft);
+        }
       }
       return;
     }
@@ -15171,6 +15182,7 @@ function endTour(options = {}) {
 }
 
 async function renderTasksView() {
+  const startedAt = performance.now();
   const isCurrent = beginViewRender();
   if (!appState.bootstrap) await loadBootstrap(false);
   if (!isCurrent()) return;
@@ -15181,13 +15193,24 @@ async function renderTasksView() {
   // Completing a task invalidates bootstrap, not the signed-in identity.
   const historyIdentity = session?.tenant?.id && session?.user?.id ? JSON.stringify([session.tenant.id, session.user.id]) : appState.activityHistory?.identity || '';
   const historyScope = JSON.stringify([historyIdentity, contactId]);
+  // Unsubmitted input stays in this tab and is isolated by workspace, login and person.
+  if (!appState.taskDrafts || (appState.taskDrafts.identity && appState.taskDrafts.identity !== historyIdentity)) {
+    appState.taskDrafts = { identity: historyIdentity, items: new Map() };
+  } else {
+    // Initial bootstrap hydration identifies input already entered in this tab.
+    appState.taskDrafts.identity = historyIdentity;
+  }
+  if (!appState.taskDrafts.items.has(contactId)) {
+    appState.taskDrafts.items.set(contactId, { summary: '', dueDate: toLocalDateInputValue(new Date(Date.now() + 86400000)), open: false, busy: false, feedback: '' });
+  }
+  const taskDraft = appState.taskDrafts.items.get(contactId);
   if (appState.activityHistory?.scope !== historyScope) {
     appState.activityHistory = { identity: historyIdentity, scope: historyScope, open: false, page: 1, query: { q: '', type: '', sort: 'newest' }, fields: { q: '', type: '', sort: 'newest' } };
   }
   const historyState = appState.activityHistory;
   renderLoadingState('Tasks & Reminders', 'Gathering your follow-up duties and upcoming outreach...');
   try {
-    const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery));
+    const tasks = await api('/api/tasks?' + new URLSearchParams(appState.taskQuery), { skipCache: true, signal: AbortSignal.timeout(15000) });
     if (!isCurrent()) return;
     appState.taskQuery.page = tasks.page;
     setViewTitle('Follow-ups');
@@ -15234,6 +15257,7 @@ async function renderTasksView() {
               <input name="dueDate" type="date" value="${toLocalDateInputValue(new Date(Date.now() + 86400000))}" required>
             </label>
             <button type="submit" class="primary-button">Add task</button>
+            <p data-task-feedback role="status"></p>
           </form>
         </details>
 
@@ -15276,6 +15300,16 @@ async function renderTasksView() {
         </div>
       </section>
     `;
+    const createForm = document.getElementById('task-create-form');
+    const createDisclosure = createForm.closest('details');
+    syncTaskCreateForm(createForm, taskDraft);
+    const rememberTaskDraft = () => {
+      if (!taskDraft.busy) Object.assign(taskDraft, getFormValues(createForm));
+    };
+    createForm.oninput = rememberTaskDraft;
+    createForm.onchange = rememberTaskDraft;
+    createDisclosure.open = taskDraft.open;
+    createDisclosure.ontoggle = () => { if (createDisclosure.isConnected) taskDraft.open = createDisclosure.open; };
     document.getElementById('task-search-form').onsubmit = async event => {
       event.preventDefault();
       const fields = new FormData(event.currentTarget);
@@ -15328,8 +15362,27 @@ async function renderTasksView() {
     history.open = historyState.open;
   } catch (error) {
     if (!isCurrent()) return;
-    appRoot.innerHTML = `<div class="error-state">Failed to load tasks: ${escapeHtml(error.message || String(error))}</div>`;
+    setViewTitle('Follow-ups');
+    appRoot.innerHTML = `<section class="error-state" role="alert"><h3>Could not load follow-ups</h3><p>${escapeHtml(error.message || String(error))}</p><p>Your search and unfinished task are kept while you retry.</p><button type="button" class="primary-button" data-task-retry>Try again</button></section>`;
+    appRoot.querySelector('[data-task-retry]').onclick = () => renderTasksView();
+  } finally {
+    const duration = performance.now() - startedAt;
+    performance.measure('bd:follow-ups:render', { start: startedAt, duration });
+    if (duration > 250) console.info(`Follow-ups: app/app.js renderTasksView ${Math.round(duration)}ms`);
   }
+}
+
+function syncTaskCreateForm(form, draft) {
+  if (!form) return;
+  form.elements.summary.value = draft.summary;
+  form.elements.dueDate.value = draft.dueDate;
+  form.setAttribute('aria-busy', String(draft.busy));
+  form.querySelectorAll('input, button').forEach(control => { control.disabled = draft.busy; });
+  form.querySelector('[type="submit"]').textContent = draft.busy ? 'Adding task…' : 'Add task';
+  const feedback = form.querySelector('[data-task-feedback]');
+  feedback.setAttribute('role', draft.feedback ? 'alert' : 'status');
+  feedback.textContent = draft.feedback || '';
+  feedback.hidden = !draft.feedback;
 }
 
 function renderTaskSection(title, tasks, tone) {
@@ -15365,11 +15418,18 @@ function renderTaskItem(task) {
 
 function editTask(task) {
   if (!task) return;
+  const routeAtStart = location.hash;
   const reopening = task.status !== 'pending';
   const dialog = window.bdSavedWork.dialog(reopening ? task.status === 'cancelled' ? 'Reopen follow-up' : 'Undo task completion' : 'Edit follow-up', `<form><p>${escapeHtml(task.summary || task.title || 'Follow-up')}</p>${reopening ? '<p>Return this task to Pending with its previous due date. Its history is preserved. Logged outreach is not undone.</p>' : `<label class="people-field">New due date<input name="dueDate" type="date" required value="${escapeAttr(calendarDateKey(task.dueDate) || '')}"></label>`}<p role="status" data-feedback></p><button class="primary-button" type="submit">${reopening ? 'Reopen task' : 'Save date'}</button></form>${reopening ? '' : '<details class="person-section"><summary>No longer needed?</summary><p>Remove this follow-up from Pending without marking it done. It stays in activity history and can be reopened.</p><button type="button" class="secondary-button" data-cancel-task>Confirm cancellation</button></details>'}`);
   let busy = false;
-  dialog.querySelector('[data-close]').onclick = () => { if (!busy) dialog.close(); };
-  dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+  const dueDate = dialog.querySelector('[name="dueDate"]');
+  const dirty = () => dueDate && dueDate.value !== (calendarDateKey(task.dueDate) || '');
+  const canClose = () => !busy && (!dirty() || window.confirm('Discard unsaved due-date changes? The saved follow-up will stay unchanged.'));
+  dialog.querySelector('[data-close]').onclick = () => { if (canClose()) dialog.close(); };
+  dialog.addEventListener('cancel', event => { event.preventDefault(); if (canClose()) dialog.close(); });
+  const unload = event => { if (busy || dirty()) { event.preventDefault(); event.returnValue = ''; } };
+  window.addEventListener('beforeunload', unload);
+  dialog.addEventListener('close', () => window.removeEventListener('beforeunload', unload));
   async function saveChange(change) {
     if (busy) return; busy = true;
     const controls = [...dialog.querySelectorAll('button, input')]; controls.forEach(control => control.disabled = true);
@@ -15377,7 +15437,7 @@ function editTask(task) {
       const payload = { expectedUpdatedAt: task.updatedAt || task.createdAt, ...change };
       await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
       dialog.close();
-      if (getRouteRoot() === 'tasks') await renderTasksView();
+      if (getRouteRoot() === 'tasks' && location.hash === routeAtStart) await renderTasksView();
       showToast(change.status === 'cancelled' ? 'Follow-up cancelled, not completed. You can reopen it from No longer needed.' : reopening ? 'Task reopened. Correction recorded in activity history.' : 'Follow-up rescheduled.', 'success');
     } catch (error) { dialog.querySelector('[data-feedback]').textContent = error.message; }
     finally { busy = false; controls.forEach(control => control.disabled = false); }
