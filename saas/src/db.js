@@ -918,6 +918,25 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
       `);
     });
 
+    await runSchemaMigration('20261115_workspace_invitations', 'Single-use, email-bound invitations to join a workspace', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS workspace_invitations (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          email TEXT NOT NULL,
+          role TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          invited_by_user_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          accepted_at TEXT NOT NULL DEFAULT '',
+          accepted_by_user_id TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS workspace_invitations_tenant ON workspace_invitations (tenant_id, created_at DESC);
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
@@ -974,7 +993,11 @@ function mapLegalConsent(row = {}) {
  * an error; only an intentionally database-free development runtime may use the
  * in-memory consent ledger.
  */
-export async function dbPersistSignupWithLegalConsent({ user, tenant, membership, termsVersion, privacyVersion } = {}) {
+// joinExistingTenant: an invited signup joins a workspace that already exists,
+// so only the user, membership and consent are inserted. withinTransaction
+// runs in the same transaction (to consume the invitation); a throw rolls the
+// whole signup back. Without a database it is called with null.
+export async function dbPersistSignupWithLegalConsent({ user, tenant, membership, termsVersion, privacyVersion, joinExistingTenant = false, withinTransaction = null } = {}) {
   if (!user?.id || !tenant?.id || !membership?.userId || !membership?.tenantId) {
     throw new Error('Signup persistence requires user, workspace, and membership records.');
   }
@@ -990,6 +1013,7 @@ export async function dbPersistSignupWithLegalConsent({ user, tenant, membership
 
   if (!dbReady || !pool) {
     if (isDbEnabled()) throw new Error('Database is not ready to record legal consent.');
+    if (withinTransaction) await withinTransaction(null);
     const key = legalConsentMemoryKey(consent);
     const existing = memoryLegalConsents.get(key);
     if (existing) return { ...existing, storage: 'memory', duplicate: true };
@@ -1003,7 +1027,7 @@ export async function dbPersistSignupWithLegalConsent({ user, tenant, membership
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [user.id, user.email, user.name, user.passwordHash, user.status, user.emailVerifiedAt || '', user.createdAt, user.updatedAt]
     );
-    await query(
+    if (!joinExistingTenant) await query(
       `INSERT INTO tenants (id, slug, name, plan, status, persona, storage_mode, stripe_customer_id, stripe_subscription_id, billing_grace_ends_at, billing_last_payment_failed_at, referral_code, referred_by_tenant_id, referral_credited_at, referral_credit_transaction_id, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [
@@ -1031,6 +1055,7 @@ export async function dbPersistSignupWithLegalConsent({ user, tenant, membership
        VALUES ($1, $2, $3, $4)`,
       [membership.tenantId, membership.userId, membership.role, membership.createdAt]
     );
+    if (withinTransaction) await withinTransaction(query);
     const result = await query(
       `INSERT INTO legal_consents (
          tenant_id, user_id, terms_version, privacy_version, accepted_at, created_at
@@ -1396,6 +1421,25 @@ export async function dbSaveMembership(m) {
     console.error('DB: Failed to save membership:', safeErrorSummary(err));
     throw err;
   }
+}
+
+export async function dbUpdateMembershipRole(tenantId, userId, role) {
+  if (!dbReady) return true;
+  const { rowCount } = await pool.query(
+    `UPDATE memberships SET role = $3 WHERE tenant_id = $1 AND user_id = $2 AND role <> 'owner'`,
+    [tenantId, userId, role]
+  );
+  return rowCount === 1;
+}
+
+// Removes a non-owner membership. The owner row is never removed this way.
+export async function dbDeleteMembership(tenantId, userId) {
+  if (!dbReady) return true;
+  const { rowCount } = await pool.query(
+    `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND role <> 'owner'`,
+    [tenantId, userId]
+  );
+  return rowCount === 1;
 }
 
 export async function dbLoadAllMemberships() {

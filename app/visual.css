@@ -238,3 +238,33 @@ input, select, textarea { border-radius: 8px; }
 details.onboarding-guide > summary.onboarding-guide__title { cursor: pointer; margin-bottom: 0; min-height: 24px; }
 details.onboarding-guide[open] > summary.onboarding-guide__title { margin-bottom: 12px; }
 
+
+/* Team: people who share the workspace, and pending invitations. */
+.team-panel { display: grid; gap: 14px; }
+.team-seats { margin: 0; color: var(--text); }
+.team-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius, 8px); background: var(--surface); }
+.team-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 14px; }
+.team-row + .team-row { border-top: 1px solid var(--line); }
+.team-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.team-avatar--pending { background: var(--surface-muted); color: var(--muted); }
+.team-person { display: grid; min-width: 0; }
+.team-person > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-role select { min-width: 110px; }
+.team-role-badge { display: inline-block; padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.team-role-badge--owner { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--accent); }
+.team-remove--confirm { border-color: var(--danger); color: var(--danger); }
+.team-subhead { margin: 4px 0 0; font-size: 14px; }
+.team-invite { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 160px) auto; gap: 12px; align-items: end; }
+.team-field { display: grid; gap: 6px; margin: 0; }
+.team-field > span { font-size: 13px; font-weight: 600; color: var(--text); }
+.team-field :is(input, select) { width: 100%; min-height: 40px; }
+.team-invite .primary-button { min-height: 40px; }
+.team-status:empty { display: none; }
+.team-status { color: var(--text); }
+.team-link { display: flex; gap: 8px; margin-top: 8px; }
+.team-link input { flex: 1; min-width: 0; }
+@media (max-width: 640px) {
+  .team-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .team-role, .team-actions { grid-column: 2; }
+  .team-invite { grid-template-columns: 1fr; }
+}

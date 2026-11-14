@@ -33,7 +33,7 @@ test('account closure blocks orphaning collaborators without another owner', () 
     tenantId: 'orphan-risk',
     tenantName: 'Needs owner',
     code: 'last_owner_with_collaborators',
-    message: 'Transfer ownership of Needs owner before closing your account.',
+    message: 'Remove the other people from Needs owner in Settings > Team before closing your account.',
   }]);
 });
 
