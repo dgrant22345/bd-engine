@@ -51,6 +51,43 @@ window.bdWorkflowTools = (() => {
       <button type="button" class="ghost-button" data-digest-open>Digest settings</button>
       <div data-digest-settings></div></div></details>`;
   }
+  // Trial emails (welcome, add-companies reminder, trial-ending note) are on
+  // for the workspace owner until they turn them off here; every email links
+  // back to this card.
+  function renderTrialEmails() {
+    if (context?.getBootstrap()?.session?.readOnly) return '';
+    return `<div class="action-card" id="trial-emails" data-trial-emails>
+      <p class="eyebrow">Trial emails</p>
+      <h4>Help during your trial</h4>
+      <p class="small muted">Up to three emails to the workspace owner: a welcome, a reminder to add companies if there are none after three days, and a note three days before the trial ends.</p>
+      <div data-trial-emails-body class="small">Loading email settings…</div>
+    </div>`;
+  }
+  async function loadTrialEmails(root = document) {
+    const body = root.querySelector('[data-trial-emails] [data-trial-emails-body]');
+    if (!body) return;
+    try {
+      const data = await context.api('/api/account/trial-emails', { skipCache: true });
+      if (!body.isConnected) return;
+      if (!data.owner) { body.textContent = 'Trial emails go to the workspace owner.'; return; }
+      const note = !data.providerConfigured ? 'Email delivery is not set up yet, so none are sent.' : !data.emailVerified ? 'Verify your account email to receive them.' : '';
+      body.innerHTML = `<label class="reminder-optin"><input type="checkbox" data-trial-emails-toggle${data.optedOut ? '' : ' checked'}${context.canMutate() ? '' : ' disabled'}> Send me trial emails</label>
+        <p class="small" role="status" data-trial-emails-status>${esc(note)}</p>`;
+      const toggle = body.querySelector('[data-trial-emails-toggle]');
+      const status = body.querySelector('[data-trial-emails-status]');
+      toggle.onchange = async () => {
+        toggle.disabled = true;
+        try {
+          const saved = await context.api('/api/account/trial-emails', { method: 'PUT', body: JSON.stringify({ version: data.version, optedOut: !toggle.checked }) });
+          data.version = saved.version;
+          status.textContent = saved.optedOut ? 'Trial emails are off.' : 'Trial emails are on.';
+        } catch (error) {
+          toggle.checked = !toggle.checked;
+          status.textContent = error.message || 'Settings could not be saved. Try again.';
+        } finally { toggle.disabled = !context.canMutate(); }
+      };
+    } catch (error) { if (body.isConnected) body.textContent = error.message || 'Email settings could not be loaded.'; }
+  }
   async function openReminders(container, config = REMINDER_SETTINGS) {
     container.textContent = config.loading;
     try {
@@ -122,5 +159,5 @@ window.bdWorkflowTools = (() => {
     tools.scrollIntoView({ block: 'center' });
     void openReminders(tools.querySelector('[data-digest-settings]'), DIGEST_SETTINGS);
   }
-  return { init, renderFeedback, renderFollowups, renderRoleDigest, openRoleDigestFromLink };
+  return { init, renderFeedback, renderFollowups, renderRoleDigest, openRoleDigestFromLink, renderTrialEmails, loadTrialEmails };
 })();

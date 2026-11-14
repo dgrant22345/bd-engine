@@ -141,3 +141,22 @@ test('weekly role digest is off by default, opens from the email link, and saves
   const a11y = await new AxeBuilder({ page }).include('[data-role-digest-tools]').analyze(); expect(a11y.violations).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test('trial emails are on for the owner and can be turned off from Plan and billing', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await workspace(page);
+  // The emails' "Stop trial emails" link opens Plan and billing.
+  await page.goto('/app/#/admin/billing');
+  const card = page.locator('[data-trial-emails]');
+  await expect(card).toContainText('a reminder to add companies if there are none after three days');
+  const toggle = card.getByLabel('Send me trial emails');
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect(card).toContainText('Trial emails are off.');
+  await page.reload();
+  await expect(page.locator('[data-trial-emails]').getByLabel('Send me trial emails')).not.toBeChecked();
+  await page.locator('[data-trial-emails]').getByLabel('Send me trial emails').check();
+  await expect(page.locator('[data-trial-emails]')).toContainText('Trial emails are on.');
+  const a11y = await new AxeBuilder({ page }).include('[data-trial-emails]').analyze(); expect(a11y.violations).toEqual([]);
+  expect(errors).toEqual([]);
+});
