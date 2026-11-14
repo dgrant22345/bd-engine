@@ -7343,33 +7343,57 @@ function readWarmStudioBackground() {
 
 function generateWarmStudioCopy(data) {
   const { job, account, selectedContact, selectedTone, selectedStep = 1 } = data;
-  const firstName = selectedContact?.firstName || selectedContact?.fullName?.split(' ')[0] || 'there';
-  const companyName = job?.companyName || job?.company || account?.displayName || 'the company';
-  const jobTitle = job?.title || '[role to discuss]';
+  const clean = (value, limit = 1000) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const firstName = clean(selectedContact?.firstName || selectedContact?.fullName, 200).split(/\s+/)[0] || 'there';
+  const companyName = clean(job?.companyName || job?.company || account?.displayName || 'your company', 300);
+  const jobTitle = job?.active !== false ? clean(job?.title, 500) : '';
   const myName = appState.bootstrap?.user?.name || '[your name]';
   const greeting = selectedTone === 'professional' ? 'Hello' : 'Hi';
   const recruiting = data.goal !== 'job_search';
-  const evidence = String(data.background || '').trim();
-  const hiringContact = /recruit|talent|human resources|hiring/i.test(selectedContact?.title || '');
+  const evidence = String(data.background || '').trim().slice(0, 1000);
+  const relationship = String(data.relationship || '').trim().slice(0, 500);
+  const hiringContact = /\b(recruit\w*|talent|human resources|hiring|hr|people operations)\b/i.test(selectedContact?.title || '');
+  const executive = /\b(chief|ceo|cfo|cto|coo|president|founder)\b/i.test(selectedContact?.title || '');
+  const location = jobTitle && job?.location && !/^(\d+ locations?|multiple locations?|not provided)$/i.test(clean(job.location)) ? clean(job.location, 180) : '';
+  const locationPhrase = location ? /remote/i.test(location) ? ` (${location})` : ` in ${location}` : '';
+  // Only use terms actually present in supplied posting text. Imported titles
+  // alone are not evidence of requirements or of a hard-to-fill search.
+  const posting = jobTitle ? clean(job?.description || job?.descriptionText || '', 16000).replace(/<[^>]*>/g, ' ') : '';
+  const clauses = posting.split(/[.!?;]+/).filter(clause => !/\b(no|not|without|unnecessary)\b/i.test(clause));
+  const skills = ['Python', 'Spark', 'SQL', 'TypeScript', 'JavaScript', 'Java', 'React', 'AWS', 'Azure', 'Salesforce', 'SAP', 'CPA', 'IFRS'].filter(skill => {
+    const pattern = new RegExp(`\\b${skill}\\b`, 'i');
+    return clauses.some(clause => pattern.test(clause) && /\b(experience|requirements?|required|skills?|proficien\w*|familiar\w*|using|work\w* with)\b/i.test(clause));
+  }).slice(0, 2);
+  const role = jobTitle ? `the ${jobTitle} opening at ${companyName}` : `recruiting at ${companyName}`;
   const opening = selectedStep === 1
-    ? recruiting ? `The ${jobTitle} opening at ${companyName} caught my attention${job?.location ? ` — especially the ${job.location} location` : ''}.` : `I'm interested in the ${jobTitle} role at ${companyName}.`
-    : selectedStep === 2 ? `Following up on my message about the ${jobTitle} opening at ${companyName}.`
-    : `I'll close the loop on my message about ${jobTitle} at ${companyName}. No reply needed if this isn't relevant.`;
-  const nextStep = selectedStep === 3 ? '' : recruiting
-    ? hiringContact ? `For the ${jobTitle} search, what experience has been hardest to find?` : `Are you the right person to ask about the ${jobTitle} search, or should I speak with someone else?`
-    : hiringContact ? 'What experience matters most for this search?' : 'Would you be open to sharing some context about the team?';
-  const personalizedAsk = String(data.ask || '').trim() || nextStep;
-  const request = selectedTone === 'direct' ? personalizedAsk : selectedTone === 'professional'
-    ? personalizedAsk ? `If appropriate, ${personalizedAsk.charAt(0).toLowerCase()}${personalizedAsk.slice(1)}` : '' : personalizedAsk;
-  const relationship = String(data.relationship || '').trim();
-  const body = [`${greeting} ${firstName},`, relationship, opening, evidence, selectedStep === 3 ? '' : request].filter(Boolean).join('\n\n');
-  const linkedinNote = [`${greeting} ${firstName},`, relationship, `I noticed the ${jobTitle} role at ${companyName}.`, recruiting ? 'Open to connecting about this search?' : 'Open to connecting about the team?'].filter(Boolean).join(' ');
+    ? jobTitle ? recruiting ? `I saw ${role}${locationPhrase}.` : `I'm interested in the ${jobTitle} role at ${companyName}${locationPhrase}.`
+      : recruiting ? `I wanted to ask about recruiting at ${companyName}.` : `I'm interested in opportunities at ${companyName}.`
+    : selectedStep === 2 ? `Following up on ${jobTitle ? `the ${jobTitle} role at ${companyName}` : `my note about ${companyName}`}.`
+    : `I'll leave this with you for now. If ${recruiting ? `recruiting support${jobTitle ? ` for ${jobTitle}` : ''}` : `a conversation about ${jobTitle || 'opportunities'}`} at ${companyName} would be useful later, you're welcome to reach out.`;
+  const detail = selectedStep === 1 && skills.length ? `The posting mentions ${skills.join(' and ')}.` : '';
+  const nextStep = selectedStep === 2
+    ? hiringContact ? recruiting ? 'Would outside recruiting support be useful, or is this covered internally?' : 'Is there someone else I should contact about this role?'
+      : 'Is there someone else I should contact about this role?'
+    : recruiting
+      ? hiringContact ? jobTitle ? 'Are you open to outside recruiting support for this role?' : 'Are there any searches where outside recruiting support would be useful?'
+        : executive ? 'Who would be best to speak with about recruiting for this area?' : jobTitle ? 'Do you know who is handling this search?' : `Do you know who handles recruiting at ${companyName}?`
+      : hiringContact ? 'Are you the right person to ask about applying?' : 'Would you be open to a question about the team before I apply?';
+  const request = String(data.ask || '').trim().slice(0, 300) || nextStep;
+  const body = [`${greeting} ${firstName},`, selectedStep === 1 ? relationship : '', [opening, detail, selectedStep === 3 ? '' : evidence].filter(Boolean).join(' '), selectedStep === 3 ? '' : request].filter(Boolean).join('\n\n');
+  const invitationAsk = 'Open to connecting?';
+  const invitations = [
+    [`${greeting} ${firstName},`, relationship, jobTitle ? `I saw ${role}.` : `I'd like to connect with you at ${companyName}.`, invitationAsk].filter(Boolean).join(' '),
+    `${greeting} ${firstName}, ${jobTitle ? `I saw ${role}.` : `I'd like to connect with you at ${companyName}.`} ${invitationAsk}`,
+    `${greeting} ${clean(firstName, 40)}, ${jobTitle ? 'I came across an opening at' : "I'd like to connect with you at"} ${clean(companyName, 100)}. ${invitationAsk}`,
+  ];
+  const linkedinNote = invitations.find(note => note.length <= 300);
   return {
     linkedinNote,
     referralDm: body,
     emailPitch: `${body}\n\n${selectedTone === 'professional' ? 'Kind regards' : 'Thanks'},\n${myName}`,
-    emailSubject: `${recruiting ? 'Recruiting support' : 'Question'}: ${jobTitle} at ${companyName}`,
-    recruiterPitch: `${body}\n\n${selectedStep === 3 ? '' : recruiting ? 'If useful, I can share how I would approach the search before arranging a call.' : 'If useful, I can send a short summary of my relevant experience.'}`.trim(),
+    emailSubject: `${selectedStep > 1 ? 'Re: ' : ''}${jobTitle ? `${jobTitle} at ${companyName}` : `A question about ${companyName}`}`,
+    recruiterPitch: body,
+    guidance: `${hiringContact ? 'Their title suggests a recruiting contact; ask whether support is welcome.' : 'Hiring responsibility is unconfirmed; start with a question or ask for the right contact.'}${evidence ? '' : ' Add one sentence about your specialty or relevant experience to make this sound like you.'}`,
   };
 }
 
@@ -7449,7 +7473,7 @@ function renderWarmStudioModal() {
         <input id="warm-studio-relationship" maxlength="500" value="${escapeAttr(data.relationship || '')}" placeholder="For example: We spoke at the Toronto recruiting meetup about technical hiring.">
         <label for="warm-studio-ask">Your specific question or next step (optional)</label>
         <input id="warm-studio-ask" maxlength="300" value="${escapeAttr(data.ask || '')}" placeholder="For example: Is backend hiring the priority, or are you focused on data engineering?">
-        <p class="small muted">${escapeHtml(selectedContact ? /recruit|talent|human resources|hiring/i.test(selectedContact.title || '') ? 'Their title suggests a hiring contact: ask about search priorities, not an immediate meeting.' : 'Hiring responsibility is unconfirmed: ask for the right person before pitching.' : 'No contact is linked. Identify a recipient before sending.')} Connection strength is not verified. Nothing is sent automatically.</p>
+        <p class="small muted">${escapeHtml(copyObj.guidance)} Nothing is sent automatically.</p>
         <!-- Sequence Step Switcher -->
         <div class="warm-studio-sequence-bar">
           <div class="sequence-timeline-header">
@@ -9683,29 +9707,30 @@ function generateBatchDraftCopy(item, template = 'sales_hiring_manager', tone = 
   const companyName = item.company || item.companyName || 'your team';
   const jobTitle = item.jobTitle || '';
   const myName = appState.bootstrap?.user?.name || '[Your name]';
-  const greeting = tone === 'casual' ? 'Hi' : tone === 'direct' ? 'Hi' : 'Dear';
-  const context = jobTitle ? `I came across the ${jobTitle} posting at ${companyName}${item.jobLocation ? ` (${item.jobLocation})` : ''}.` : `I am reaching out about hiring priorities at ${companyName}.`;
+  const greeting = tone === 'casual' ? 'Hi' : tone === 'direct' ? 'Hi' : 'Hello';
+  const context = jobTitle ? `I saw the ${jobTitle} opening at ${companyName}${item.jobLocation ? ` (${item.jobLocation})` : ''}.` : `I wanted to ask about recruiting at ${companyName}.`;
   const touch = Number(sequenceTouch) || 1;
-  let question = 'Are you the right person to ask whether outside recruiting support would be useful?';
-  let detail = '';
+  let question = /\b(recruit\w*|talent|hr|human resources)\b/i.test(item.contactTitle || item.title || '') ? 'Are you open to outside recruiting support for this role?' : 'Do you know who I should contact about this search?';
+  let detail = String(item.background || '').trim();
   if (template === 'sales_candidate_teaser') detail = '[Add only verified candidate information you have permission to share. Do not imply a candidate is available without checking.]';
   else if (template === 'sales_hard_to_fill') question = 'Is this search still active, and would additional sourcing support be useful?';
-  else if (template === 'sales_talent_leader') question = 'Which hiring priorities, if any, would benefit from additional recruiting support?';
+  else if (template === 'sales_talent_leader') question = jobTitle ? 'Are you open to outside recruiting support for this role?' : 'Are there any searches where outside recruiting support would be useful?';
   else if (template === 'sales_executive') question = 'Who would be the best person to ask about current recruiting priorities?';
-  else if (template === 'job_referral') question = 'Would you be open to sharing advice about the team or who leads this search? No pressure to make a referral.';
+  else if (template === 'job_referral') question = 'Do you know who I should contact about this role?';
   else if (template === 'job_hiring_leader') {
-    detail = '[Add one verified example of your relevant experience.]';
-    question = 'Would you be open to discussing what the team needs from this role?';
-  } else if (template === 're_engage') question = 'Would now be a useful time to compare notes about your hiring priorities?';
+    detail = detail || '[Add one example of your relevant experience.]';
+    question = 'Are you the right person to ask about applying?';
+  } else if (template === 're_engage') question = 'Would it make sense to pick this up again?';
+  question = String(item.ask || '').trim() || question;
   let subject = jobTitle ? `Question about ${jobTitle} at ${companyName}` : `Question about ${companyName}`;
-  let body = `${greeting} ${firstName},\n\n${context}${detail ? `\n\n${detail}` : ''}\n\n${question}\n\nBest,\n${myName}`;
+  let body = [`${greeting} ${firstName},`, item.relationship, [context, detail].filter(Boolean).join(' '), question, `Thanks,\n${myName}`].filter(Boolean).join('\n\n');
   if (touch > 1) {
     subject = `Re: ${subject}`;
-    const next = touch === 2 ? `Would it be useful to discuss ${jobTitle || 'your hiring priorities'}? Happy to clarify my earlier question.` : 'If this is not relevant or the timing is not right, no reply is needed. I will leave it here.';
+    const next = touch === 2 ? `Following up on ${jobTitle ? `the ${jobTitle} role at ${companyName}` : `my note about ${companyName}`}. ${question}` : `I'll leave this with you for now. If a conversation about ${jobTitle || 'recruiting'} at ${companyName} would be useful later, you're welcome to reach out.`;
     body = `[Confirm the earlier message was sent before using this follow-up.]\n\n${greeting} ${firstName},\n\n${next}\n\nBest,\n${myName}`;
   }
-  let linkedinNote = `${greeting} ${firstName}, ${jobTitle ? `I came across the ${jobTitle} role at ${companyName}.` : `I am interested in ${companyName}'s hiring priorities.`} ${question} — ${myName}`;
-  if (linkedinNote.length > 295) linkedinNote = linkedinNote.slice(0, 292) + '...';
+  let linkedinNote = `${greeting} ${firstName}, ${jobTitle ? `I saw the ${jobTitle} opening at ${companyName}.` : `I'd like to connect with you at ${companyName}.`} Open to connecting?`;
+  if (linkedinNote.length > 300) linkedinNote = `${greeting} ${firstName.slice(0, 40)}, I'd like to connect with you at ${companyName.slice(0, 100)}. Open to connecting?`;
   return { subject, body, linkedinNote };
 }
 
@@ -11503,9 +11528,14 @@ async function renderAccountDetail(accountId) {
               : ''}
           </select></label>
           </div>
+          <details class="person-section"><summary>Make it sound like you</summary>
+            <label class="people-field">Your relevant experience or offer<textarea id="outreach-background" rows="2" maxlength="1000" placeholder="For example: I recruit finance leaders across Ontario.">${escapeHtml(readWarmStudioBackground())}</textarea></label>
+            <label class="people-field">How you know them (optional)<input id="outreach-relationship" maxlength="500" placeholder="Add only a real connection or conversation."></label>
+            <label class="people-field">Question to end with (optional)<input id="outreach-ask" maxlength="300" placeholder="One easy question, in your own words."></label>
+          </details>
           <div class="button-row">
             <button id="generate-outreach-button" class="primary-button" data-action="generate-outreach" data-id="${detail.account.id}" type="button">Generate tailored note</button>
-            <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Generate 3 angles</button>
+            <button id="generate-outreach-bundle-button" class="ghost-button" data-action="generate-outreach-bundle" data-id="${detail.account.id}" type="button">Try other angles</button>
           </div>
         </div>
         <div id="outreach-prompt-body" class="empty-state empty-state--compact">${detail.account.outreachDraft ? escapeHtml(detail.account.outreachDraft) : 'Pick a contact and message angle. The draft will use verified hiring signals, the selected role, and known relationship context without inventing company pain points.'}</div>
@@ -11663,7 +11693,7 @@ async function renderContactsView() {
       api,
       setTitle: setViewTitle,
       defaultOutreachGoal: () => isJobSeekerPersona() ? 'job_search_intro' : 'recruiting_intro',
-      generateDraft: ({ person, job, goal, background }) => generateWarmStudioCopy({ job, selectedContact: person, goal: goal.startsWith('job_search') ? 'job_search' : 'recruiting', selectedStep: goal.endsWith('follow_up') ? 2 : 1, selectedTone: 'direct', background }).referralDm,
+      generateDraft: ({ person, job, goal, background, relationship, ask }) => generateWarmStudioCopy({ job, selectedContact: person, goal: goal.startsWith('job_search') ? 'job_search' : 'recruiting', selectedStep: goal.endsWith('follow_up') ? 2 : 1, selectedTone: 'direct', background, relationship, ask }).referralDm,
       onQuery: (query) => { appState.contactQuery = query; },
       exportOptions: () => renderExportOptions('contacts', 'People options'),
       onUpdated: (person) => {
@@ -14380,7 +14410,7 @@ function syncOutreachComposerState() {
   const selectedContact = contactSelect?.selectedOptions?.[0]?.dataset?.name || contactSelect?.selectedOptions?.[0]?.value || '';
   button.textContent = selectedContact ? `${meta.buttonLabel} for ${selectedContact}` : meta.buttonLabel;
   if (bundleButton) {
-    bundleButton.textContent = selectedContact ? `Generate 3 angles for ${selectedContact}` : 'Generate 3 angles';
+    bundleButton.textContent = selectedContact ? `Try other angles for ${selectedContact}` : 'Try other angles';
   }
 }
 
@@ -14805,9 +14835,11 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
     const result = await api(`/api/accounts/${accountId}/generate-outreach`, {
       method: 'POST',
       body: JSON.stringify({
-        bookingLink: 'https://tinyurl.com/ysdep7cn',
         contactName,
         contactTitle,
+        background: document.getElementById('outreach-background')?.value || '',
+        relationship: document.getElementById('outreach-relationship')?.value || '',
+        ask: document.getElementById('outreach-ask')?.value || '',
         template: document.getElementById('outreach-template-select')?.value || 'cold',
         jobId: document.getElementById('outreach-job-select')?.value || '',
         includeVariants,
@@ -14825,7 +14857,7 @@ async function generateSmartOutreach(accountId, buttonEl, options = {}) {
       scrollIntoViewRespectingMotion(card, { behavior: 'smooth', block: 'center' });
     }
     window.bdLocalApi.setAlert(includeVariants
-      ? `${outreach.templateLabel} plus ${outreach.variants?.length || 0} alternate angles generated.`
+      ? outreach.variants?.length ? `${outreach.templateLabel} plus ${outreach.variants.length} alternate angles generated.` : 'Draft ready. Your question is kept as written.'
       : `${outreach.templateLabel} generated. Review the email, LinkedIn note, follow-up, and call opener in the outreach card.`, appAlert, { tone: 'success' });
   } catch (err) {
     showToast('Failed to generate outreach: ' + (err.message || err), 'error');

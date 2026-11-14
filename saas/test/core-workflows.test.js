@@ -645,7 +645,7 @@ test('outreach drafts use verified role context and return real alternate angles
       includeVariants: true,
     });
     assert.match(draft.message_body, /Senior Data Engineer/);
-    assert.match(draft.message_body, /VP Talent/);
+    assert.doesNotMatch(draft.message_body, /Given your role|I help teams|market map/);
     assert.doesNotMatch(draft.message_body, /recent growth|10 minutes next week|compare notes/i);
     assert.equal(draft.variants.length, 2);
     assert.deepEqual(draft.variants.map((item) => item.template_key), ['hiring_manager', 'executive']);
@@ -695,11 +695,12 @@ test('sales outreach keeps multi-role first touches concise and non-repetitive',
       template: 'talent_partner',
       jobId: jobs.items[0].id,
     });
-    assert.match(draft.linkedin_message, /and 2 other open roles/);
+    assert.doesNotMatch(draft.linkedin_message, /and 2 other open roles/);
     assert.equal((draft.linkedin_message.match(/Senior Controls Engineer/g) || []).length, 1);
     assert.doesNotMatch(draft.linkedin_message, /Toronto.*Toronto|visible openings/i);
     assert.ok(draft.linkedin_message.length <= 260, draft.linkedin_message);
-    assert.match(draft.message_body, /Given your role as Director of Talent/);
+    assert.equal(draft.contact_title, 'Director of Talent');
+    assert.doesNotMatch(draft.message_body, /Given your role as/);
     assert.doesNotMatch(draft.message_body, /Your role as .* made you/i);
   } finally {
     globalThis.fetch = originalFetch;
@@ -717,8 +718,31 @@ test('outreach drafts expose limited context instead of inventing a hiring probl
   assert.ok(draft.grounding.score < 50);
   assert.ok(draft.grounding.warnings.some((item) => /No verified opening/.test(item)));
   assert.ok(draft.grounding.warnings.some((item) => /contact title is missing/i.test(item)));
-  assert.match(draft.message_body, /do not have a verified open role/i);
+  assert.match(draft.message_body, /ask about recruiting at Quiet Company/i);
+  assert.doesNotMatch(draft.message_body, /opening|is hiring|currently hiring/i);
   assert.doesNotMatch(draft.message_body, /pipeline is thin|delivery risk|recent growth/i);
+});
+
+test('outreach preserves the supplied personal brief, rejects invalid context and never substitutes another role', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-outreach-personal-brief';
+  addTenant(store, tenantId);
+  const account = await store.addAccount(tenantId, { displayName: 'Example Co' });
+  const brief = { contactName: 'Jamie Chen', contactTitle: 'Talent Lead', background: 'I recruit finance leaders across Ontario.', relationship: 'We met at the Toronto meetup.', ask: 'Are there any searches where a specialist agency could help?' };
+  for (const template of ['cold', 'talent_partner', 'job_intro', 'job_networking', 'job_referral']) {
+    const draft = await store.createOutreachDraft(tenantId, account.id, { ...brief, template, includeVariants: true });
+    assert.ok(draft.message_body.includes(brief.background));
+    assert.ok(draft.message_body.includes(brief.relationship));
+    assert.ok(draft.message_body.includes(brief.ask));
+    assert.ok(draft.linkedin_message.includes(brief.ask));
+    assert.equal((draft.message_body.match(/\?/g) || []).length, 1);
+    assert.doesNotMatch(draft.message_body, /Given your|market map|caught my attention|I help teams/);
+    assert.equal(new Set([draft.message_body, ...draft.variants.map(item => item.message_body)]).size, draft.variants.length + 1);
+    assert.equal(typeof draft.timings.generatedMs, 'number');
+  }
+  for (const payload of [{ background: 'x'.repeat(1001) }, { relationship: {} }, { ask: 'x'.repeat(301) }, { jobId: 'another-workspace-role' }]) {
+    await assert.rejects(store.createOutreachDraft(tenantId, account.id, payload), { status: 400 });
+  }
 });
 
 test('logging outreach creates a durable follow-up task', async () => {

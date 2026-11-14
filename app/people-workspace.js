@@ -80,7 +80,7 @@
         panel.style.setProperty('--person-nav-height', `${flow ? 0 : height}px`);
       });
     });
-    const draftContext = () => ({ jobId: root.querySelector('#person-draft-role')?.value || '', goal: root.querySelector('#person-draft-goal')?.value || defaultOutreachGoal(), background: root.querySelector('#person-draft-background')?.value || '' });
+    const draftContext = () => ({ jobId: root.querySelector('#person-draft-role')?.value || '', goal: root.querySelector('#person-draft-goal')?.value || defaultOutreachGoal(), background: root.querySelector('#person-draft-background')?.value || '', relationship: root.querySelector('#person-draft-relationship')?.value || '', ask: root.querySelector('#person-draft-ask')?.value || '' });
     const hasFollowUpDraft = () => [...(root.querySelector('[data-people-form="follow-up"]')?.elements || [])].some(input => input.name && input.value.trim());
     const updateDirty = () => { state.dirty = hasFollowUpDraft() || Boolean(root.querySelector('#person-draft') && (root.querySelector('#person-draft').value !== savedDraftText || JSON.stringify(draftContext()) !== savedDraftContext)) || [...(root.querySelector('.person-edit-form')?.elements || [])].some(input => input.name && input.value !== savedFormValues[input.name]); };
     const hasDialogDraft = () => {
@@ -352,7 +352,7 @@
             <div class="person-save-row"><button class="primary-button" type="submit">Save changes</button><span class="people-feedback" data-person-feedback role="status">${escape(state.notice)}</span></div>
           </form>
           <section class="person-section person-outreach" id="person-outreach" hidden aria-labelledby="person-outreach-heading"><h4 id="person-outreach-heading">Prepare outreach</h4><p class="people-provenance">Uses saved role and contact details, with no paid AI service. Verify the opening before sending. Saving and copying do not send anything.</p>
-            <div data-draft-context>${field('draft-role', 'Role to discuss', '<select id="person-draft-role" disabled><option value="">Loading saved openings…</option></select>')}<p class="people-feedback" data-role-feedback role="status"></p>${field('draft-goal', 'Outreach goal', `<select id="person-draft-goal">${options(outreachGoals, defaultOutreachGoal())}</select>`)}<details><summary>Add your context</summary><label class="people-field">Your relevant experience or offer<textarea id="person-draft-background" rows="3" maxlength="1000" placeholder="Add a specific, truthful detail about how you can help."></textarea></label></details><p class="people-provenance">Changing these choices does not replace your message. Generate a draft when ready. Follow-up wording is only for messages you already sent.</p></div>
+            <div data-draft-context>${field('draft-role', 'Role to discuss', '<select id="person-draft-role" disabled><option value="">Loading saved openings…</option></select>')}<p class="people-feedback" data-role-feedback role="status"></p>${field('draft-goal', 'Outreach goal', `<select id="person-draft-goal">${options(outreachGoals, defaultOutreachGoal())}</select>`)}<details><summary>Add your context</summary><p class="people-provenance">One specific sentence about your specialty or experience makes a stronger message than a generic pitch. Use your own words; leave out confidential candidate details.</p><label class="people-field">Your relevant experience or offer<textarea id="person-draft-background" rows="3" maxlength="1000" placeholder="For example: I recruit finance leaders across Ontario."></textarea></label><label class="people-field">How you know them (optional)<input id="person-draft-relationship" maxlength="500" placeholder="For example: We met at the Toronto recruiting meetup."></label><label class="people-field">Question to end with (optional)<input id="person-draft-ask" maxlength="300" placeholder="For example: Are you open to a specialist agency on this role?"></label></details><p class="people-provenance">Changing these choices does not replace your message. Generate a draft when ready. Follow-up wording is only for messages you already sent.</p></div>
             <button type="button" class="primary-button" data-people="generate-draft" disabled>Generate draft</button><label class="people-field" for="person-draft"><span>Message</span><textarea id="person-draft" rows="8" maxlength="12000" placeholder="Choose a role and generate a draft, or write your own message."></textarea></label><div class="person-links">${button('save-draft', 'Save draft', 'disabled')}${button('copy-draft', 'Copy message')}${button('mark-contacted', 'Mark as contacted')}</div><p class="people-feedback" data-draft-feedback role="status" tabindex="-1"></p></section>
           <details class="person-section" id="person-activity"><summary>Follow-ups and activity</summary><form data-people-form="follow-up"><label class="people-field">Next step<input name="summary" required maxlength="240" placeholder="Follow up on our conversation"></label><label class="people-field">Due date<input name="dueDate" type="date" required></label><button class="secondary-button" type="submit">Add follow-up</button><p role="status" data-task-feedback></p></form><div data-person-work role="status">Loading linked work…</div></details>
           <footer class="person-review-footer">${index >= 0 ? 'J / K to move within this page when not typing' : 'Opened directly · Not in the current results'}</footer>
@@ -412,6 +412,8 @@
       role.disabled = !state.roles.length;
       root.querySelector('#person-draft-goal').value = outreachGoals[body.goal] ? body.goal : defaultOutreachGoal();
       root.querySelector('#person-draft-background').value = body.background || '';
+      root.querySelector('#person-draft-relationship').value = body.relationship || '';
+      root.querySelector('#person-draft-ask').value = body.ask || '';
       root.querySelector('[data-people="generate-draft"]').disabled = !state.roles.some(job => job.id === role.value);
     }
     function draftItem(text) {
@@ -425,9 +427,9 @@
       if (!job || state.busy) return;
       const startedAt = performance.now();
       try {
-        root.querySelector('#person-draft').value = generateDraft({ person: state.person, job: { ...job, companyName: state.person.companyName }, goal: context.goal, background: context.background });
+        root.querySelector('#person-draft').value = generateDraft({ person: state.person, job: { ...job, companyName: state.person.companyName }, ...context });
         updateDirty();
-        message('Draft ready. Review the facts and wording, then save or copy. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
+        message(`Draft ready. ${context.background.trim() ? 'Review the facts and wording, then save or copy.' : 'Add a sentence about your specialty or relevant experience under Add your context to make it more personal.'} Nothing was sent.`, false, root.querySelector('[data-draft-feedback]'));
         root.querySelector('#person-draft').focus();
       } catch { message('Could not generate this draft. Your saved copy is unchanged; you can write your message below.', true, root.querySelector('[data-draft-feedback]')); }
       finally { window.dispatchEvent(new CustomEvent('bd:people-timing', { detail: { path: 'app/people-workspace.js::generatePersonDraft', elapsedMs: Math.round(performance.now() - startedAt) } })); }
@@ -674,7 +676,7 @@
         try {
           const item = draftItem(text);
           savedDraft = await window.bdSavedWork.save('draft', `person-${state.person.id}`, item);
-          savedDraftText = text; savedDraftContext = JSON.stringify({ jobId: item.body.jobId, goal: item.body.goal, background: item.body.background }); updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
+          savedDraftText = text; savedDraftContext = JSON.stringify({ jobId: item.body.jobId, goal: item.body.goal, background: item.body.background, relationship: item.body.relationship || '', ask: item.body.ask || '' }); updateDirty(); message(state.dirty ? 'Unsaved changes' : 'Saved.'); message('Saved to your account. Nothing was sent.', false, root.querySelector('[data-draft-feedback]'));
         } catch (error) {
           message(error.message, true, root.querySelector('[data-draft-feedback]'));
           if (error.status === 409) window.bdSavedWork.resolveConflict(`person-${state.person.id}`, draftItem(textarea.value), latest => { savedDraft = latest; textarea.value = savedDraftText = latest.body.text; restoreDraftContext(latest.body); savedDraftContext = JSON.stringify(draftContext()); updateDirty(); message('Latest saved copy loaded.', false, root.querySelector('[data-draft-feedback]')); });

@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { createSavedWorkStore, validateSavedWork } from '../src/saved-work.js';
 
 const draft = { title: 'Message to Jamie', body: { text: 'A specific, reviewed message.', contactId: 'person-1' }, version: 0 };
+
+test('personal outreach context is bounded, survives saving and stays private to its owner', async () => {
+  const store = createSavedWorkStore({ enabled: () => false });
+  const body = { ...draft.body, background: 'I recruit finance leaders.', relationship: 'We met in Toronto.', ask: 'Is this search open to external recruiters?' };
+  await store.put('t', 'owner', 'draft', 'personal', { ...draft, body });
+  assert.deepEqual((await store.get('t', 'owner', 'draft', 'personal')).body.ask, body.ask);
+  assert.equal((await store.get('t', 'owner', 'draft', 'personal')).body.relationship, body.relationship);
+  assert.equal(await store.get('t', 'other', 'draft', 'personal'), null);
+  assert.equal(await store.get('other', 'owner', 'draft', 'personal'), null);
+  for (const invalid of [{ ask: 'x'.repeat(301) }, { relationship: 'x'.repeat(501) }, { ask: [] }]) {
+    assert.throws(() => validateSavedWork('draft', { ...draft, body: { ...body, ...invalid } }), { status: 400 });
+  }
+});
 test('role searches are bounded, private, and separate from legacy People views', async () => {
   const store = createSavedWorkStore({ enabled: () => false });
   const input = { title: 'Canada roles', version: 0, body: { viewType: 'jobs', geography: 'canada', minRelevance: '45', sortBy: 'relevance', page: 8, tenantId: 'other' } };

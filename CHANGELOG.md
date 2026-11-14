@@ -4,6 +4,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Make outreach shorter and more personal across People, Warm Studio, accounts and batch drafts. Use the selected role, a recipient-appropriate question and the sender's own context; remove canned sales paragraphs and unsupported claims about the sender's services.
+- Save optional relationship context and a preferred question with private People drafts, preserve manual edits until regeneration is confirmed, and avoid presenting identical account drafts as different angles.
+
 - Preserve unfinished new follow-ups across searches, pagination, status changes and task completion; keep drafts separate for each person within the current tab.
 - Add recoverable follow-up load errors and bounded loading, retain failed-save input, and prevent duplicate pending submissions or late saves from replacing a newer screen.
 - Confirm before discarding unsaved due-date edits and protect pending edits when reloading or closing the tab.
