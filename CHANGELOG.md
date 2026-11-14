@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Messages about finished work are no longer shown in red. Adding a company, saving an ATS config or completing an import now shows a green confirmation, and an import that skipped rows or had warnings shows an amber note; red is kept for failures.
 - Workday roles open in several places are no longer dropped. Workday lists them as "3 Locations", which names no country, so a workspace focused on Canada left them out: 178 of TD's Canadian roles, 75 of Sun Life's and 72 of CIBC's, for example. BD Engine now reads each such role's own page once for its locations and country, and shows them ("Dieppe, New Brunswick, Canada; Moncton, New Brunswick").
 - BD Engine now imports roles from Phenom career sites, the system behind the job sites of many large Canadian employers, including RBC (about 790 roles), BMO (about 1,040 across Canada and the US), OpenText, Bell and Air Canada. Adding the company by its domain is enough: discovery finds the career site and its roles link to the company's own job pages. Postings titled "Do not apply" are left out.
 - Trial workspaces get up to three emails, sent to the owner's verified address: a welcome with three steps to a first call list, a reminder to add companies if the workspace still has none after three days, and a note three days before the trial ends. Each email says why it was sent and links to Settings → Plan and billing, where "Send me trial emails" turns them off.

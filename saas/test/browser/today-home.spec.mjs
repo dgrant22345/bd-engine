@@ -76,13 +76,21 @@ test('dashboard opens on who to call today, in the People order, with one action
     const alert = document.getElementById('app-alert');
     window.bdLocalApi.setAlert('Checking your companies for open roles 40%: Reading boards', alert, { tone: 'progress', progress: 40 });
     const progress = [alert.classList.contains('app-alert--progress'), alert.style.getPropertyValue('--alert-progress'), getComputedStyle(alert).color];
+    window.bdLocalApi.setAlert('Added Clio to target accounts.', alert, { tone: 'success' });
+    const success = [alert.className, getComputedStyle(alert).backgroundColor];
+    window.bdLocalApi.setAlert('Imported 3 target accounts. Skipped 1.', alert, { tone: 'warning' });
+    const warning = alert.className;
     window.bdLocalApi.setAlert('Import failed.', alert);
-    const error = [alert.classList.contains('app-alert--progress'), alert.style.getPropertyValue('--alert-progress')];
+    const error = [alert.classList.contains('app-alert--progress'), alert.style.getPropertyValue('--alert-progress'), alert.className, getComputedStyle(alert).backgroundColor];
     window.bdLocalApi.setAlert('', alert);
-    return { progress, error };
+    return { progress, success, warning, error };
   });
   expect(tones.progress.slice(0, 2)).toEqual([true, '40%']);
-  expect(tones.error).toEqual([false, '']);
+  // Finished work is not styled as a failure, and an error clears the tone.
+  expect(tones.success[0]).toBe('app-alert app-alert--success');
+  expect(tones.warning).toBe('app-alert app-alert--warning');
+  expect(tones.error.slice(0, 3)).toEqual([false, '', 'app-alert']);
+  expect(tones.success[1]).not.toBe(tones.error[3]);
   expect(await frame.evaluate(() => renderDashboardToday({ items: [] }, {}))).toBe('');
   expect(await frame.evaluate(() => renderDashboardToday(null, {}))).toBe('');
   expect(errors).toEqual([]);
