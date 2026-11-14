@@ -18,6 +18,7 @@ const PROVIDERS = [
   { atsType: 'recruitee', boardId: 'recruitee-fixture', apiUrl: 'https://recruitee-fixture.recruitee.com/api/offers/' },
   { atsType: 'personio', boardId: 'personio-fixture', careersUrl: 'https://personio-fixture.jobs.personio.de/' },
   { atsType: 'rippling', boardId: 'rippling-fixture', resolvedBoardUrl: 'https://ats.rippling.com/rippling-fixture/jobs' },
+  { atsType: 'phenom', boardId: 'careers.phenom-fixture.example/ca/en', resolvedBoardUrl: 'https://careers.phenom-fixture.example/ca/en/search-results' },
   { atsType: 'custom_static', boardId: 'static-fixture', apiUrl: 'https://fixtures.example/careers' },
 ];
 
@@ -39,7 +40,7 @@ function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
 }
 
-function fixtureFetch(url) {
+function fixtureFetch(url, init = {}) {
   const value = String(url);
   const postedAt = '2026-07-15T12:00:00Z';
   if (value.includes('boards-api.greenhouse.io')) return json({ jobs: [{ id: 'gh-1', title: 'Greenhouse Sales Lead', location: { name: 'Toronto, ON' }, absolute_url: 'https://job.example/gh-1', first_published: postedAt }] });
@@ -62,6 +63,16 @@ function fixtureFetch(url) {
   if (value.includes('ats.rippling.com')) {
     const nextData = { props: { pageProps: { dehydratedState: { queries: [{ state: { data: { items: [{ id: 'rippling-1', name: 'Rippling Sales Lead', url: 'https://job.example/rippling-1', locations: [{ name: 'Toronto, ON' }], department: { name: 'Sales' }, createdAt: postedAt }] } } }] } } } };
     return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`, { status: 200, headers: { 'content-type': 'text/html' } });
+  }
+  if (value === 'https://careers.phenom-fixture.example/ca/en/search-results') {
+    const settings = { refNum: 'PHFIXTURE', locale: 'en_ca', country: 'ca', pageId: 'page1', siteType: 'external', widgetApiEndpoint: 'https://careers.phenom-fixture.example/widgets' };
+    return new Response(`<script>phApp.ddo = ${JSON.stringify({ siteConfig: { data: settings } })};</script>`, { status: 200, headers: { 'content-type': 'text/html' } });
+  }
+  if (value === 'https://careers.phenom-fixture.example/widgets') {
+    // Each country locale lists only its own roles; this site has none in the US.
+    const canadian = JSON.parse(init.body || '{}').country === 'ca';
+    const jobs = canadian ? [{ jobId: 'phenom-1', title: 'Phenom Sales Lead', location: 'Toronto, Ontario, Canada', category: 'Sales', type: 'Full time', postedDate: '2026-07-15T00:00:00.000+0000' }] : [];
+    return json({ refineSearch: { status: 200, hits: jobs.length, totalHits: jobs.length, data: { jobs } } });
   }
   if (value.includes('fixtures.example')) {
     const jobPosting = { '@context': 'https://schema.org', '@type': 'JobPosting', title: 'Careers Page Sales Lead', url: 'https://job.example/static-1', datePosted: postedAt, jobLocation: { address: { addressLocality: 'Toronto', addressRegion: 'ON', addressCountry: 'Canada' } } };

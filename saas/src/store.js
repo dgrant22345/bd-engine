@@ -16,6 +16,7 @@ import { ATS_COVERAGE_REASONS, fetchPaginatedAtsJobs, readAtsReportedTotal } fro
 import { compareContacts, normalizeContactQuery, resolveContactCompany } from './contact-queries.js';
 import { validateJobFeedback, persistJobFeedback, loadWorkspaceFeedback } from './job-feedback.js';
 import { rankDailyAccounts } from './daily-priorities.js';
+import { getPhenomBoardId, getPhenomJobUrl, getPhenomSearchUrl, readPhenomBoard, readPhenomLocation, readPhenomLocale, readPhenomSite } from './phenom.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -7011,12 +7012,13 @@ const ATS_FETCHERS = new Map([
   ['recruitee', fetchRecruiteeJobs],
   ['personio', fetchPersonioJobs],
   ['rippling', fetchRipplingJobs],
+  ['phenom', fetchPhenomJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
 const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'];
 
-const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'phenom']);
+const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors']);
 const BOARD_COVERAGE_META = {
   partial: {
     label: 'Incomplete refresh',
@@ -7077,6 +7079,7 @@ function normalizeAtsType(value) {
   if (normalized.includes('recruitee')) return 'recruitee';
   if (normalized.includes('personio')) return 'personio';
   if (normalized.includes('rippling')) return 'rippling';
+  if (normalized.includes('phenom')) return 'phenom';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -7165,6 +7168,8 @@ function getDiscoveryCandidateScore(config = {}, accountItem = null, context = {
 function getConfigBoardId(config = {}) {
   const direct = config.boardId || config.board_id || config.slug || config.boardSlug || '';
   if (direct) return String(direct).trim();
+  // Phenom sites live on company domains, so only the declared type says so.
+  if (normalizeAtsType(config.atsType || config.ats) === 'phenom') return getPhenomBoardId(getPhenomSearchUrl(config));
   for (const sourceUrl of getConfigUrlCandidates(config)) {
     const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
     if (greenhouse) return decodeURIComponent(greenhouse[1]);
@@ -7680,6 +7685,22 @@ async function fetchJobviteJobs(config, boardId, deadlineAt = Infinity) {
   return { jobs, complete: jobs.length > 0 };
 }
 
+// Phenom career sites: see phenom.js. A board larger than one page that still
+// misses roles after two reads is reported incomplete, so unseen roles stay.
+async function fetchPhenomJobs(config, boardId) {
+  const searchUrl = getPhenomSearchUrl(config, boardId);
+  if (!searchUrl) throw new Error('Phenom: invalid board URL; existing jobs preserved');
+  const deadlineAt = performance.now() + ATS_BOARD_TIME_BUDGET_MS;
+  const { jobs, complete } = await readPhenomBoard(searchUrl, {
+    getText: (url) => fetchText(url, 15000, deadlineAt),
+    postJson: (url, body) => fetchJson(url, 20000, { method: 'POST', headers: { 'content-type': 'application/json' }, body }, deadlineAt),
+  });
+  // Some sites publish internal test postings titled "Do not apply"; they are
+  // not open roles, so they are left out before import.
+  const open = jobs.filter((job) => !/\bdo not apply\b/i.test(String(job?.title || '')));
+  return { jobs: open.map((job) => ({ ...job, phenomSearchUrl: searchUrl })), complete };
+}
+
 async function fetchWorkdayJobs(config) {
   const descriptor = getWorkdayDescriptor(config);
   if (!descriptor) throw new Error('Workday: invalid board URL; existing jobs preserved');
@@ -8186,6 +8207,10 @@ function scoreRenderedCareerCandidate(page, requestedUrl) {
 
 async function inspectCareerPage(config, page, requestedUrl, method, deadlineAt) {
   const finalUrl = page?.finalUrl || requestedUrl;
+  // A Phenom site is the company's own job search. The ATS links on it are
+  // apply links (RBC's and BMO's go to Workday), so it is checked first.
+  const phenom = await probePhenomCareerPage(page?.content || '', finalUrl, deadlineAt);
+  if (phenom) return { ...phenom, method };
   const atsLinks = [];
   if (detectAtsTypeFromUrl(finalUrl)) atsLinks.push(finalUrl);
   for (const atsUrl of extractAtsLinks(page?.content || '', finalUrl)) {
@@ -8207,6 +8232,28 @@ async function inspectCareerPage(config, page, requestedUrl, method, deadlineAt)
     jobCount: staticJobs.length,
     method: method === 'rendered_careers_page' ? method : 'static_careers_page',
   };
+}
+
+// A Phenom career site found while reading a company's careers pages: confirm
+// its search page answers with roles before resolving the board.
+async function probePhenomCareerPage(content, pageUrl, deadlineAt) {
+  const site = readPhenomSite(content, pageUrl);
+  if (!site) return null;
+  try {
+    const searchSite = readPhenomSite(await fetchText(site.searchUrl, 8000, deadlineAt), site.searchUrl) || site;
+    const result = await readPhenomLocale(searchSite, searchSite.locale, searchSite.country,
+      (url, body) => fetchJson(url, 8000, { method: 'POST', headers: { 'content-type': 'application/json' }, body }, deadlineAt), { pageSize: 1, firstPageOnly: true });
+    if (!result?.total) return null;
+    return {
+      atsType: 'phenom',
+      boardId: getPhenomBoardId(searchSite.searchUrl),
+      apiUrl: searchSite.endpoint,
+      resolvedBoardUrl: searchSite.searchUrl,
+      jobCount: result.total,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchRenderedCareerPage(url, deadlineAt = Infinity) {
@@ -9213,6 +9260,36 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       importedAt: retrievedAt,
       active: true,
       isNew: daysSince(postedAt) <= 7,
+      isGta: isGtaLocation(location),
+    };
+  }
+  if (atsType === 'phenom') {
+    const title = cleanHtmlText(raw.title || '');
+    const jobId = String(raw.jobId || raw.reqId || '').trim();
+    if (!title || !jobId) return null;
+    const location = readPhenomLocation(raw);
+    const postedAt = toIsoTimestamp(raw.postedDate);
+    const jobUrl = getPhenomJobUrl(raw, raw.phenomSearchUrl || getPhenomSearchUrl(config));
+    return {
+      tenantId: config.tenantId,
+      accountId,
+      configId: config.id,
+      title,
+      companyName,
+      location,
+      department: raw.category || raw.department || '',
+      employmentType: raw.type || '',
+      atsType,
+      source: 'Phenom',
+      jobId,
+      naturalKey: makeJobNaturalKey(config, atsType, jobId, location),
+      jobUrl,
+      url: jobUrl,
+      postedAt,
+      retrievedAt,
+      importedAt: retrievedAt,
+      active: true,
+      isNew: postedAt ? daysSince(postedAt) <= 7 : false,
       isGta: isGtaLocation(location),
     };
   }
