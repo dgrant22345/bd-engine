@@ -47,6 +47,18 @@ test('dashboard opens on who to call today, in the People order, with one action
   expect(quiet).not.toContain('today-board__count');
   expect(quiet).toContain('no open role on record');
   expect(quiet).toContain('>Reply<');
+  // With a saved focus, the roles in it lead; a company hiring only outside it
+  // is not counted as a call worth making.
+  const focused = await frame.evaluate(() => renderDashboardToday({ items: [
+    { id: 'p1', fullName: 'Nia North', companyName: 'Northwind', priorityScore: 40, outreachStatus: 'not_started', listContext: { linked: true, openRoles: 276, newRoles7d: 12, focusRoles: 4, newFocusRoles7d: 1, lastOutreachAt: '' } },
+    { id: 'p2', fullName: 'Quinn Quill', companyName: 'Quill', priorityScore: 90, outreachStatus: 'not_started', listContext: { linked: true, openRoles: 2, newRoles7d: 2, focusRoles: 0, newFocusRoles7d: 0, lastOutreachAt: '' } },
+  ] }, { summary: { focusSet: true, focusJobCount: 38, focusAccountCount: 12, activeJobCount: 1204, hiringAccountCount: 80 } }));
+  expect(focused).toContain('One call worth making today');
+  expect(focused).toContain('4 roles in your focus at Northwind, 1 new this week (276 open in all).');
+  expect(focused).toContain('2 open roles at Quill, none in your focus.');
+  expect(focused).toMatch(/38 roles in your focus \([^)]+\) at 12 companies, of 1,204 open roles in your workspace\./);
+  expect(focused).toContain('href="#/admin/search-focus"');
+  expect(focused.match(/today-card--hiring/g)).toHaveLength(1);
   expect(await frame.evaluate(() => renderDashboardToday({ items: [] }, {}))).toBe('');
   expect(await frame.evaluate(() => renderDashboardToday(null, {}))).toBe('');
   expect(errors).toEqual([]);

@@ -98,6 +98,11 @@ test('"worth contacting first" puts people at companies with an active role ahea
   ];
   const isHiring = person => person.accountId === 'hiring';
   assert.deepEqual(people.slice().sort((x, y) => compareContacts(x, y, 'call', isHiring)).map(person => person.fullName), ['Casey', 'Eden', 'Blake', 'Drew', 'Avery']);
+  // A tier puts a company with a role in the saved focus (2) ahead of one
+  // with other open roles (1), whatever the relationship priority.
+  const tier = person => ({ hiring: 1, focus: 2 }[person.accountId] || 0);
+  const tiered = [...people, { id: 'f', fullName: 'Finn', accountId: 'focus', priorityScore: 10 }];
+  assert.deepEqual(tiered.sort((x, y) => compareContacts(x, y, 'call', tier)).map(person => person.fullName), ['Finn', 'Casey', 'Eden', 'Blake', 'Drew', 'Avery']);
   // Without hiring information it falls back to relationship priority.
   assert.deepEqual(people.slice().sort((x, y) => compareContacts(x, y, 'call')).map(person => person.fullName), ['Drew', 'Avery', 'Casey', 'Eden', 'Blake']);
 
@@ -105,6 +110,13 @@ test('"worth contacting first" puts people at companies with an active role ahea
   const built = buildContactQuerySql('tenant-a', { sortBy: 'call' });
   assert.match(built.order, /^\(EXISTS \(SELECT 1 FROM jobs j WHERE j\.tenant_id = contacts\.tenant_id AND j\.account_id = contacts\.account_id AND j\.active\)\) DESC, priority_score DESC, /);
   assert.deepEqual(built.params, ['tenant-a', 25, 0]);
+  // With a saved focus, companies with a role in it come first; the count query
+  // keeps only its own parameters.
+  const focused = buildContactQuerySql('tenant-a', { sortBy: 'call' }, { focusMinimumRelevance: 45 });
+  assert.match(focused.order, /^\(EXISTS \(SELECT 1 FROM jobs j .* AND j\.active AND COALESCE\(j\.raw->>'matchesSearchFocus', 'true'\) <> 'false' AND .* >= \$2\)\) DESC, \(EXISTS \(SELECT 1 FROM jobs j WHERE .* AND j\.active\)\) DESC, priority_score DESC, /);
+  assert.deepEqual(focused.params, ['tenant-a', 45, 25, 0]);
+  assert.deepEqual(focused.countParams, ['tenant-a']);
+  assert.doesNotMatch(buildContactQuerySql('tenant-a', { sortBy: 'name' }, { focusMinimumRelevance: 45 }).order, /matchesSearchFocus/);
 });
 
 test('the People list carries hiring and outreach context without altering stored people', async () => {

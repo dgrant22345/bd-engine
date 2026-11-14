@@ -3,7 +3,8 @@ import { compactCompanyKey } from './company-matching.js';
 export const CONTACT_STAGES = ['not_started', 'researching', 'ready_to_contact', 'contacted', 'replied', 'opportunity'];
 
 // 'call' puts people at companies with an active role first, then orders by
-// relationship priority. It is the People screen's default.
+// relationship priority. It is the People screen's default. With a search
+// focus saved, companies with a role in that focus come first of all.
 export const CONTACT_SORTS = ['name', 'name_desc', 'company', 'recent', 'priority', 'call'];
 
 export function normalizeContactQuery(query = {}) {
@@ -17,17 +18,30 @@ export function normalizeContactQuery(query = {}) {
   };
 }
 
+// isHiring may answer true/false or a tier: 2 = a role in the saved focus,
+// 1 = some other open role, 0 = none.
+const hiringTier = value => value === true ? 1 : Number(value) || 0;
+
 export function compareContacts(a, b, sortBy = 'priority', isHiring = () => false) {
   const name = () => String(a.fullName || '').toLowerCase().localeCompare(String(b.fullName || '').toLowerCase()) || String(a.id).localeCompare(String(b.id));
   if (sortBy === 'name') return name();
   if (sortBy === 'name_desc') return -name();
   if (sortBy === 'company') return String(a.companyName || '').toLowerCase().localeCompare(String(b.companyName || '').toLowerCase()) || name();
   if (sortBy === 'recent') return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')) || name();
-  if (sortBy === 'call') return Number(Boolean(isHiring(b))) - Number(Boolean(isHiring(a))) || Number(b.priorityScore || 0) - Number(a.priorityScore || 0) || name();
+  if (sortBy === 'call') return hiringTier(isHiring(b)) - hiringTier(isHiring(a)) || Number(b.priorityScore || 0) - Number(a.priorityScore || 0) || name();
   return Number(b.priorityScore || 0) - Number(a.priorityScore || 0) || name();
 }
 
-export function buildContactQuerySql(tenantId, input = {}) {
+// A role in the saved search focus, as the Jobs screen's "relevant" filter
+// reads it from the stored job.
+export function focusMatchSql(alias, minimumParam) {
+  const relevance = `CASE WHEN COALESCE(${alias}.raw->>'relevanceScore', '') ~ '^\\d+(\\.\\d+)?$' THEN (${alias}.raw->>'relevanceScore')::numeric ELSE -1 END`;
+  return `COALESCE(${alias}.raw->>'matchesSearchFocus', 'true') <> 'false' AND ${relevance} >= ${minimumParam}`;
+}
+
+// focusMinimumRelevance: the saved focus's minimum score, or null when no
+// focus is saved (the 'call' order then ignores focus).
+export function buildContactQuerySql(tenantId, input = {}, { focusMinimumRelevance = null } = {}) {
   const query = normalizeContactQuery(input);
   const params = [tenantId];
   const where = ['tenant_id = $1'];
@@ -40,9 +54,14 @@ export function buildContactQuerySql(tenantId, input = {}) {
   if (query.minScore) where.push(`priority_score >= ${bind(query.minScore)}`);
   if (query.outreachStatus) where.push(`LOWER(COALESCE(raw->>'outreachStatus', 'not_started')) = ${bind(query.outreachStatus)}`);
   const name = "LOWER(COALESCE(full_name, '')) ASC, id ASC";
-  const orders = { name, name_desc: "LOWER(COALESCE(full_name, '')) DESC, id DESC", company: `LOWER(COALESCE(company_name, '')) ASC, ${name}`, recent: `updated_at DESC, ${name}`, priority: `priority_score DESC, ${name}`,
-    call: `(EXISTS (SELECT 1 FROM jobs j WHERE j.tenant_id = contacts.tenant_id AND j.account_id = contacts.account_id AND j.active)) DESC, priority_score DESC, ${name}` };
   const countParams = [...params];
+  // Bound after the count parameters: the count query does not order.
+  const hiring = 'SELECT 1 FROM jobs j WHERE j.tenant_id = contacts.tenant_id AND j.account_id = contacts.account_id AND j.active';
+  const focusFirst = query.sortBy === 'call' && focusMinimumRelevance !== null && Number.isFinite(Number(focusMinimumRelevance))
+    ? `(EXISTS (${hiring} AND ${focusMatchSql('j', bind(Number(focusMinimumRelevance)))})) DESC, `
+    : '';
+  const orders = { name, name_desc: "LOWER(COALESCE(full_name, '')) DESC, id DESC", company: `LOWER(COALESCE(company_name, '')) ASC, ${name}`, recent: `updated_at DESC, ${name}`, priority: `priority_score DESC, ${name}`,
+    call: `${focusFirst}(EXISTS (${hiring})) DESC, priority_score DESC, ${name}` };
   const limit = bind(query.pageSize);
   const offset = bind((query.page - 1) * query.pageSize);
   return { ...query, params, countParams, where: where.join(' AND '), order: orders[query.sortBy], limit, offset };

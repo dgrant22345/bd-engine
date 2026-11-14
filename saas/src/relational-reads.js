@@ -1,7 +1,7 @@
 import { dbQuery, isDbReady } from './db.js';
 import { decorateAccountsWithConfigs } from './account-resolution.js';
 import { buildTenantJobQueries } from './job-queries.js';
-import { buildContactQuerySql } from './contact-queries.js';
+import { buildContactQuerySql, focusMatchSql } from './contact-queries.js';
 
 function rawOrRow(row) {
   return row?.raw && typeof row.raw === 'object' ? row.raw : row;
@@ -192,10 +192,10 @@ export async function findTenantAccountsRelational(tenantId, query = {}) {
   };
 }
 
-export async function findTenantContactsRelational(tenantId, query = {}) {
+export async function findTenantContactsRelational(tenantId, query = {}, options = {}) {
   if (!isDbReady()) return null;
   const startedAt = performance.now();
-  const built = buildContactQuerySql(tenantId, query);
+  const built = buildContactQuerySql(tenantId, query, options);
   const [rowsResult, countResult] = await Promise.all([
     dbQuery(
       `SELECT raw FROM contacts
@@ -218,15 +218,22 @@ export async function findTenantContactsRelational(tenantId, query = {}) {
 
 // Hiring and outreach context for one page of people: active roles at each
 // person's company and the date of the last outreach recorded for the person.
-export async function getPeopleContextRelational(tenantId, { accountIds = [], contactIds = [], since = '' } = {}) {
+// With focusMinimumRelevance (a saved search focus), also the roles in that
+// focus and how many of them are new.
+export async function getPeopleContextRelational(tenantId, { accountIds = [], contactIds = [], since = '', focusMinimumRelevance = null } = {}) {
   if (!isDbReady()) return null;
   const startedAt = performance.now();
+  const withFocus = focusMinimumRelevance !== null && Number.isFinite(Number(focusMinimumRelevance));
+  const isNew = "COALESCE(raw->>'newSince', NULLIF(first_seen_at, ''), created_at) >= $3";
+  const inFocus = withFocus ? focusMatchSql('jobs', '$4') : '';
   const [roles, outreach] = await Promise.all([
     accountIds.length ? dbQuery(
       `SELECT account_id, COUNT(*)::int AS open_roles,
-         COUNT(*) FILTER (WHERE COALESCE(raw->>'newSince', NULLIF(first_seen_at, ''), created_at) >= $3)::int AS new_roles
+         COUNT(*) FILTER (WHERE ${isNew})::int AS new_roles${withFocus ? `,
+         COUNT(*) FILTER (WHERE ${inFocus})::int AS focus_roles,
+         COUNT(*) FILTER (WHERE ${inFocus} AND ${isNew})::int AS new_focus_roles` : ''}
        FROM jobs WHERE tenant_id = $1 AND active AND account_id = ANY($2::text[]) GROUP BY account_id`,
-      [tenantId, accountIds, since]
+      withFocus ? [tenantId, accountIds, since, Number(focusMinimumRelevance)] : [tenantId, accountIds, since]
     ) : { rows: [] },
     contactIds.length ? dbQuery(
       `SELECT contact_id, MAX(occurred_at) AS last_outreach_at
@@ -237,7 +244,10 @@ export async function getPeopleContextRelational(tenantId, { accountIds = [], co
   const elapsedMs = Math.round(performance.now() - startedAt);
   if (elapsedMs > 250) console.warn(`Slow people context query: saas/src/relational-reads.js getPeopleContextRelational ${elapsedMs}ms`);
   return {
-    roles: new Map((roles?.rows || []).map(row => [row.account_id, { openRoles: Number(row.open_roles), newRoles7d: Number(row.new_roles) }])),
+    roles: new Map((roles?.rows || []).map(row => [row.account_id, {
+      openRoles: Number(row.open_roles), newRoles7d: Number(row.new_roles),
+      ...(withFocus ? { focusRoles: Number(row.focus_roles), newFocusRoles7d: Number(row.new_focus_roles) } : {}),
+    }])),
     lastOutreach: new Map((outreach?.rows || []).map(row => [row.contact_id, row.last_outreach_at || ''])),
   };
 }
