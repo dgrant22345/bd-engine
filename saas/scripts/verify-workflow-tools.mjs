@@ -62,6 +62,13 @@ try {
   assert.equal(withBaseline.total, 5);
   const baselineContext = await getPeopleContextRelational(id, { accountIds: [`${id}-baseline-account`], since: seen(7) });
   assert.deepEqual(baselineContext.roles.get(`${id}-baseline-account`), { openRoles: 3, newRoles7d: 1 });
+  // A saved search focus adds the roles in it, read as the Jobs screen reads them.
+  const focusRoles = [['j', { newSince: seen(1), relevanceScore: 80, matchesSearchFocus: true }], ['k', { newSince: '', relevanceScore: 60, matchesSearchFocus: true }], ['l', { newSince: seen(1), relevanceScore: 90, matchesSearchFocus: false }], ['m', { newSince: seen(1), relevanceScore: 20 }]];
+  for (const [suffix, raw] of focusRoles) {
+    await dbQuery("INSERT INTO jobs (id,tenant_id,account_id,title,company_name,active,created_at,first_seen_at,raw) VALUES ($1,$2,$3,$4,'Focus Co',true,$5,$5,$6)", [`${id}-focus-${suffix}`, id, `${id}-focus-account`, `Focus role ${suffix}`, seen(1), JSON.stringify(raw)]);
+  }
+  const focusContext = await getPeopleContextRelational(id, { accountIds: [`${id}-focus-account`], since: seen(7), focusMinimumRelevance: 45 });
+  assert.deepEqual(focusContext.roles.get(`${id}-focus-account`), { openRoles: 4, newRoles7d: 3, focusRoles: 2, newFocusRoles7d: 1 });
   let digestSent = 0;
   const digestOptions = { now: digestNow, getRecipient: async () => ({ eligible: true }), getTasks: tenant => getNewRoleDigest(tenant, { now: digestNow }), send: async () => { digestSent++; return { sent: true }; } };
   await Promise.all([digests.deliver(id, userId, digestOptions), digests.deliver(id, userId, digestOptions)]);

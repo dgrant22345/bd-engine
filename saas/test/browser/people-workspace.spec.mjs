@@ -539,3 +539,26 @@ test('People opens ranked by who is worth contacting, with the evidence on each 
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test('with a saved focus, People leads with the roles in it', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.locator('[data-demo-start]').first().click();
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('#app')).toBeVisible();
+  // The demo keeps the built-in focus, so add the counts a saved focus returns.
+  await page.route('**/api/contacts?*', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.items = body.items.map((person, index) => ({ ...person, listContext: person.listContext && { ...person.listContext, focusRoles: index === 0 ? 1 : 0, newFocusRoles7d: index === 0 ? 1 : 0 } }));
+    await route.fulfill({ response, json: body });
+  });
+  const frame = page.frames().find(item => item.url().includes('/app/'));
+  await frame.evaluate(() => { window.location.hash = '#/contacts'; });
+  const rows = app.locator('[data-person-row]');
+  await expect(rows.first().locator('td .people-hiring')).toHaveText('1 of 2 open roles in your focus · 1 new this week');
+  await expect(rows.first().locator('td .people-hiring')).toHaveAttribute('data-hiring', 'new');
+  await expect(app.locator('.people-list-caption')).toContainText('Companies with roles in your focus first, then other open roles, then relationship priority');
+  await expect(app.locator('td .people-hiring[data-hiring="outside"]').first()).toHaveText(/^\d+ open roles?, none in your focus$/);
+  expect(errors).toEqual([]);
+});

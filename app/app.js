@@ -10587,32 +10587,65 @@ const TODAY_NEXT_STEP = {
   opportunity: 'Advance',
 };
 
+// The saved focus's target titles for a short label: "Recruiter, Talent
+// Acquisition and 6 more".
+function describeFocusRoles() {
+  const personaKey = isJobSeekerPersona() ? 'jobseeker' : 'bd';
+  const terms = String(appState.bootstrap?.settings?.searchFocusByPersona?.[personaKey]?.targetRoles || '')
+    .split(/[,;\n]+/).map(term => term.trim()).filter(Boolean);
+  if (!terms.length) return '';
+  return terms.length > 2 ? `${terms.slice(0, 2).join(', ')} and ${terms.length - 2} more` : terms.join(' and ');
+}
+
 function renderDashboardToday(people, dashboard = {}) {
   const items = Array.isArray(people?.items) ? people.items.slice(0, 3) : [];
   if (!items.length) return '';
-  const hiring = items.filter(person => Number(person.listContext?.openRoles || 0) > 0);
-  const count = hiring.length;
+  // With a saved search focus, a call is worth making where the company has a
+  // role in that focus; otherwise where it has any open role.
+  const summaryData = dashboard.summary || {};
+  const focusSet = Boolean(summaryData.focusSet) || items.some(person => person.listContext?.focusRoles != null);
+  const isHiring = person => Number((focusSet ? person.listContext?.focusRoles : person.listContext?.openRoles) || 0) > 0;
+  const count = items.filter(isHiring).length;
   const shortDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  const activeRoles = Number(getDashboardActiveJobCount(dashboard.summary) || 0);
-  const hiringCompanies = Number(dashboard.summary?.hiringAccountCount || 0);
+  const activeRoles = Number(getDashboardActiveJobCount(summaryData) || 0);
+  const hiringCompanies = Number(summaryData.hiringAccountCount || 0);
+  const focusJobs = Number(summaryData.focusJobCount || 0);
+  const focusCompanies = Number(summaryData.focusAccountCount || 0);
+  const focusLabel = focusSet ? describeFocusRoles() : '';
   const heading = count
     ? `${count === 1 ? 'One call' : `${count} calls`} worth making today`
     : 'Your highest-priority people';
-  const summary = count
-    ? `${pluralize(activeRoles, 'open role')} across ${pluralize(hiringCompanies, 'hiring company', 'hiring companies')} in your workspace.`
-    : 'None of the people at the top of your list work at a company with an open role on record.';
+  let summary;
+  if (focusSet && summaryData.focusJobCount != null) {
+    summary = `${pluralize(focusJobs, 'role')} in your focus${focusLabel ? ` (${focusLabel})` : ''} at ${pluralize(focusCompanies, 'company', 'companies')}, of ${pluralize(activeRoles, 'open role')} in your workspace.`;
+    if (!count) summary = `None of the people at the top of your list work at a company with a role in your focus. ${summary}`;
+  } else {
+    summary = count
+      ? `${pluralize(activeRoles, 'open role')} across ${pluralize(hiringCompanies, 'hiring company', 'hiring companies')} in your workspace.`
+      : 'None of the people at the top of your list work at a company with an open role on record.';
+  }
   const cards = items.map((person) => {
     const context = person.listContext || {};
     const openRoles = Number(context.openRoles || 0);
     const newRoles = Number(context.newRoles7d || 0);
-    const why = openRoles
-      ? `${pluralize(openRoles, 'open role')} at ${escapeHtml(person.companyName || 'their company')}${newRoles ? `, ${formatNumber(newRoles)} new this week` : ''}.`
-      : `${escapeHtml(person.companyName || 'Company not recorded')}: no open role on record.`;
+    const company = escapeHtml(person.companyName || 'their company');
+    let why;
+    if (!openRoles) {
+      why = `${escapeHtml(person.companyName || 'Company not recorded')}: no open role on record.`;
+    } else if (focusSet && context.focusRoles != null) {
+      const focusRoles = Number(context.focusRoles || 0);
+      const newFocusRoles = Number(context.newFocusRoles7d || 0);
+      why = focusRoles
+        ? `${pluralize(focusRoles, 'role')} in your focus at ${company}${newFocusRoles ? `, ${formatNumber(newFocusRoles)} new this week` : ''}${focusRoles < openRoles ? ` (${formatNumber(openRoles)} open in all)` : ''}.`
+        : `${pluralize(openRoles, 'open role')} at ${company}, none in your focus.`;
+    } else {
+      why = `${pluralize(openRoles, 'open role')} at ${company}${newRoles ? `, ${formatNumber(newRoles)} new this week` : ''}.`;
+    }
     const last = shortDate(context.lastOutreachAt);
     const score = Math.max(0, Math.min(100, Math.round(Number(person.priorityScore) || 0)));
     const step = TODAY_NEXT_STEP[person.outreachStatus] || TODAY_NEXT_STEP.not_started;
-    return `<article class="today-card${openRoles ? ' today-card--hiring' : ''}">
+    return `<article class="today-card${isHiring(person) ? ' today-card--hiring' : ''}">
       <div class="today-card__head">
         <div class="today-card__who">
           <h3>${escapeHtml(person.fullName || 'Unnamed person')}</h3>
@@ -10633,7 +10666,7 @@ function renderDashboardToday(people, dashboard = {}) {
       <div class="today-board__copy">
         <p class="eyebrow">${escapeHtml(today)}</p>
         <h2 id="today-board-heading">${escapeHtml(heading)}</h2>
-        <p class="today-board__summary">${escapeHtml(summary)} <a href="#/contacts">See everyone, ranked</a></p>
+        <p class="today-board__summary">${escapeHtml(summary)} <a href="#/contacts">See everyone, ranked</a>${focusSet ? ` · <a href="#/admin/search-focus">Change your focus</a>` : ''}</p>
       </div>
     </div>
     <div class="today-board__cards">${cards}</div>
