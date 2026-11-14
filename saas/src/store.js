@@ -780,6 +780,10 @@ const settings = {
   },
 };
 
+// The focus every workspace starts with. A workspace whose focus still equals
+// it has not chosen one, so role counts are not narrowed to it.
+const BUILT_IN_SEARCH_FOCUS = JSON.parse(JSON.stringify(settings.searchFocusByPersona));
+
 const tenantProfiles = new Map([
   [seedTenant.id, { workspace, settings, tenant: { ...seedTenant } }],
 ]);
@@ -2452,6 +2456,17 @@ export function createStore() {
       timings.priorityMs = Math.round(performance.now() - priorityStartedAt);
       const persona = this.getPersona(tenantId);
       const activeJobs = tenantJobs.filter((item) => item.active !== false);
+      // Roles in the saved search focus, and the companies with at least one.
+      const focus = getSavedSearchFocus(tenantId);
+      const focusAccounts = new Set();
+      let focusJobCount = 0;
+      if (focus) {
+        for (const item of activeJobs) {
+          if (!jobMatchesSearchFocus(item, focus)) continue;
+          focusJobCount += 1;
+          if (item.accountId) focusAccounts.add(item.accountId);
+        }
+      }
       const jobsPostedLast24h = activeJobs.filter((item) => daysSince(item.postedAt) <= 1);
       const jobsImportedLast24h = activeJobs.filter((item) => daysSince(item.importedAt || item.retrievedAt) <= 1);
       const resolvedConfigs = tenantConfigs.filter(isResolvedBoardConfig);
@@ -2466,6 +2481,9 @@ export function createStore() {
           accountCount: tenantAccounts.length,
           hiringAccountCount: tenantAccounts.filter((item) => item.jobCount > 0).length,
           activeJobCount: activeJobs.length,
+          focusSet: Boolean(focus),
+          focusJobCount: focus ? focusJobCount : null,
+          focusAccountCount: focus ? focusAccounts.size : null,
           readyBoardCount: tenantConfigs.filter(isImportReadyConfig).length,
           incompleteBoardCount: tenantConfigs.filter((item) => item.active !== false && ['failed', 'partial'].includes(item.lastImportStatus)).length,
           lastRefreshedAt: tenantConfigs.map((item) => item.lastImportedAt || '').sort().at(-1) || '',
@@ -2819,7 +2837,8 @@ export function createStore() {
       if (relationalContactSqlEnabledForTenant(tenantId)) {
         try {
           if (await hasRelationalParity(tenantId, true)) {
-            const result = await findTenantContactsRelational(tenantId, query);
+            const focus = query.sortBy === 'call' ? getSavedSearchFocus(tenantId) : null;
+            const result = await findTenantContactsRelational(tenantId, query, { focusMinimumRelevance: focus ? focus.minimumRelevanceScore : null });
             if (result) {
               if (!confirmedRelationalContactSqlTenants.has(tenantId)) {
                 confirmedRelationalContactSqlTenants.add(tenantId);
@@ -2840,27 +2859,39 @@ export function createStore() {
       const minScore = Number(query.minScore || 0);
       if (minScore > 0) items = items.filter((item) => Number(item.priorityScore || 0) >= minScore);
       if (query.outreachStatus) items = items.filter((item) => normalizeKey(item.outreachStatus) === normalizeKey(query.outreachStatus));
-      const hiringAccounts = query.sortBy === 'call'
-        ? new Set(jobsForTenant(tenantId).filter(job => job.active && job.accountId).map(job => job.accountId))
-        : null;
-      items.sort((a, b) => compareContacts(a, b, query.sortBy, person => hiringAccounts?.has(person.accountId)));
+      // Hiring tier per company: 2 with a role in the saved focus, 1 with any
+      // other open role.
+      let hiringTiers = null;
+      if (query.sortBy === 'call') {
+        const focus = getSavedSearchFocus(tenantId);
+        hiringTiers = new Map();
+        for (const job of jobsForTenant(tenantId)) {
+          if (!job.active || !job.accountId) continue;
+          const tier = focus && jobMatchesSearchFocus(job, focus) ? 2 : 1;
+          if (tier > (hiringTiers.get(job.accountId) || 0)) hiringTiers.set(job.accountId, tier);
+        }
+      }
+      items.sort((a, b) => compareContacts(a, b, query.sortBy, person => hiringTiers?.get(person.accountId) || 0));
       return paginate(items, query);
     },
 
     // Context for one page of the People list: active roles at each person's
     // company (and how many were first seen in the past week) and the date of
-    // the last outreach recorded for the person. Returned separately so stored
-    // person records are never altered.
+    // the last outreach recorded for the person. With a saved search focus,
+    // also the roles in that focus (focusRoles, newFocusRoles7d); without one
+    // those fields are absent. Returned separately so stored person records
+    // are never altered.
     async getPeopleContext(tenantId, people = [], { now = new Date() } = {}) {
       assertTenant(tenantId);
       const startedAt = performance.now();
       const accountIds = [...new Set(people.map(person => person.accountId).filter(Boolean))];
       const contactIds = people.map(person => person.id).filter(Boolean);
       const since = new Date(now.getTime() - 7 * 86400000).toISOString();
+      const focus = getSavedSearchFocus(tenantId);
       let context = null;
       if (relationalContactSqlEnabledForTenant(tenantId)) {
         try {
-          if (await hasRelationalParity(tenantId, true)) context = await getPeopleContextRelational(tenantId, { accountIds, contactIds, since });
+          if (await hasRelationalParity(tenantId, true)) context = await getPeopleContextRelational(tenantId, { accountIds, contactIds, since, focusMinimumRelevance: focus ? focus.minimumRelevanceScore : null });
         } catch (error) {
           console.error('Relational people context failed; using memory:', safeErrorSummary(error));
         }
@@ -2871,9 +2902,14 @@ export function createStore() {
         context = { roles: new Map(), lastOutreach: new Map() };
         for (const job of jobsForTenant(tenantId)) {
           if (!job.active || !wantedAccounts.has(job.accountId)) continue;
-          const entry = context.roles.get(job.accountId) || { openRoles: 0, newRoles7d: 0 };
+          const entry = context.roles.get(job.accountId) || { openRoles: 0, newRoles7d: 0, focusRoles: 0, newFocusRoles7d: 0 };
+          const isNew = getJobNewSince(job) >= since;
           entry.openRoles += 1;
-          if (getJobNewSince(job) >= since) entry.newRoles7d += 1;
+          if (isNew) entry.newRoles7d += 1;
+          if (focus && jobMatchesSearchFocus(job, focus)) {
+            entry.focusRoles += 1;
+            if (isNew) entry.newFocusRoles7d += 1;
+          }
           context.roles.set(job.accountId, entry);
         }
         for (const activity of activitiesForTenant(tenantId)) {
@@ -2883,12 +2919,16 @@ export function createStore() {
       }
       const elapsedMs = Math.round(performance.now() - startedAt);
       if (elapsedMs > 250) console.warn(`Slow people context: saas/src/store.js getPeopleContext ${elapsedMs}ms`);
-      return Object.fromEntries(people.map(person => [person.id, {
-        linked: Boolean(person.accountId),
-        openRoles: context.roles.get(person.accountId)?.openRoles || 0,
-        newRoles7d: context.roles.get(person.accountId)?.newRoles7d || 0,
-        lastOutreachAt: context.lastOutreach.get(person.id) || '',
-      }]));
+      return Object.fromEntries(people.map(person => {
+        const roles = context.roles.get(person.accountId);
+        return [person.id, {
+          linked: Boolean(person.accountId),
+          openRoles: roles?.openRoles || 0,
+          newRoles7d: roles?.newRoles7d || 0,
+          lastOutreachAt: context.lastOutreach.get(person.id) || '',
+          ...(focus ? { focusRoles: roles?.focusRoles || 0, newFocusRoles7d: roles?.newFocusRoles7d || 0 } : {}),
+        }];
+      }));
     },
 
     async patchContact(tenantId, contactId, patch) {
@@ -9304,6 +9344,28 @@ function getSearchFocus(settingsValue = {}, personaValue = '') {
   return sanitizeSearchFocus(byPersona[persona] || {});
 }
 
+function isSearchFocusConfigured(focus) {
+  return Boolean(focus && (parseFocusTerms(focus.targetRoles).length
+    || parseFocusTerms(focus.excludedRoles).length
+    || parseFocusTerms(focus.targetIndustries).length
+    || focus.workStyle !== 'any'));
+}
+
+// The search focus the workspace chose, or null while it has the built-in
+// starting focus or none.
+function getSavedSearchFocus(tenantId) {
+  const profile = getTenantProfile(tenantId);
+  const persona = normalizePersona(profile?.persona || profile?.settings?.persona);
+  const focus = getSearchFocus(profile?.settings, persona);
+  if (!isSearchFocusConfigured(focus)) return null;
+  const builtIn = sanitizeSearchFocus(BUILT_IN_SEARCH_FOCUS[persona] || {});
+  return Object.keys(focus).every((key) => focus[key] === builtIn[key]) ? null : focus;
+}
+
+function jobMatchesSearchFocus(jobItem, focus) {
+  return jobItem.matchesSearchFocus !== false && Number(jobItem.relevanceScore ?? -1) >= focus.minimumRelevanceScore;
+}
+
 function parseFocusTerms(value) {
   const source = Array.isArray(value) ? value : String(value || '').split(/[,;\n]+/);
   const seen = new Set();
@@ -9518,12 +9580,9 @@ function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
   item.jobsLast90Days = recent90;
   item.newRoleCount7d = recent7;
   const focus = focusValue ? sanitizeSearchFocus(focusValue) : null;
-  const hasFocus = Boolean(focus && (parseFocusTerms(focus.targetRoles).length
-    || parseFocusTerms(focus.excludedRoles).length
-    || parseFocusTerms(focus.targetIndustries).length
-    || focus.workStyle !== 'any'));
+  const hasFocus = isSearchFocusConfigured(focus);
   const relevantJobs = hasFocus
-    ? accountJobs.filter((jobItem) => jobItem.matchesSearchFocus !== false && Number(jobItem.relevanceScore ?? -1) >= focus.minimumRelevanceScore)
+    ? accountJobs.filter((jobItem) => jobMatchesSearchFocus(jobItem, focus))
     : accountJobs;
   item.relevantRoleCount = hasFocus ? relevantJobs.length : null;
   item.strongFitRoleCount = hasFocus ? accountJobs.filter((jobItem) => jobItem.relevanceBand === 'strong').length : null;

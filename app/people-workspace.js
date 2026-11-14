@@ -14,15 +14,26 @@
   const initials = name => String(name || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?';
   const shortDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
   // What the workspace knows about hiring at the person's company right now.
+  // With a saved search focus (focusRoles is present), the roles in that focus
+  // lead, and "new" counts only new roles in the focus.
   function hiringSummary(person) {
     const context = person.listContext;
     if (!context) return { state: 'unknown', text: '' };
     if (!context.linked) return { state: 'unlinked', text: person.companyName ? 'Company not linked to a watched account' : '' };
     if (!context.openRoles) return { state: 'none', text: 'No open roles on record' };
     const roles = `${context.openRoles.toLocaleString()} open role${context.openRoles === 1 ? '' : 's'}`;
-    return context.newRoles7d
-      ? { state: 'new', text: `${roles} · ${context.newRoles7d.toLocaleString()} new this week` }
-      : { state: 'open', text: roles };
+    let lead = roles;
+    let fresh = context.newRoles7d;
+    if (context.focusRoles != null) {
+      if (!context.focusRoles) return { state: 'outside', text: `${roles}, none in your focus` };
+      lead = context.focusRoles === context.openRoles
+        ? `${roles}, ${context.openRoles === 1 ? '' : 'all '}in your focus`
+        : `${context.focusRoles.toLocaleString()} of ${roles} in your focus`;
+      fresh = context.newFocusRoles7d;
+    }
+    return fresh
+      ? { state: 'new', text: `${lead} · ${fresh.toLocaleString()} new this week` }
+      : { state: 'open', text: lead };
   }
   const hiringLine = person => { const hiring = hiringSummary(person); return hiring.text ? `<div class="people-hiring" data-hiring="${hiring.state}">${escape(hiring.text)}</div>` : ''; };
   function priorityMeter(person) {
@@ -221,7 +232,7 @@
               <label><span class="visually-hidden">Sort people</span><select name="sortBy" aria-label="Sort people">${options({ call: 'Worth contacting first', priority: 'Relationship priority', name: 'Name A–Z', name_desc: 'Name Z–A', company: 'Company A–Z', recent: 'Recently updated' }, query.sortBy)}</select></label>
               ${filtered ? button('clear', 'Clear filters') : ''}
             </form>
-            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'call' ? ' · Companies with open roles first, then relationship priority' : ''}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
+            <div class="people-list-caption"><span>${filtered ? `Filtered results${query.minScore ? ' · Minimum relationship priority ' + escape(query.minScore) : ''}` : 'All people'}${query.sortBy === 'call' ? (result.items.some(person => person.listContext?.focusRoles != null) ? ' · Companies with roles in your focus first, then other open roles, then relationship priority' : ' · Companies with open roles first, then relationship priority') : ''}${query.sortBy === 'priority' ? ' · Employer/title signals, not candidate fit' : ''}</span><span>${button('save-view', 'Save view')}${button('views', 'My views')}</span></div>
             <div class="people-feedback" data-people-feedback role="status"></div>
             <div class="people-selection" data-people-selection hidden></div>
             ${result.items.length ? table() : `<div class="people-empty"><h3>${filtered ? 'No people match these filters' : 'Your people workspace starts here'}</h3><p>${filtered ? 'Try another name, role or company, or clear the filters to see your saved people.' : 'Add someone you want to review, or import your LinkedIn connections. CSV imports include connection details—not complete candidate profiles.'}</p>${filtered ? button('clear', 'Clear filters') : `${button('add', 'Add your first person')}<button class="secondary-button" type="button" data-action="open-network-import-modal">Import LinkedIn CSV</button>${exportWaitNote()}`}</div>`}

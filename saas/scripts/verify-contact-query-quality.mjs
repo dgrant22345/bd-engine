@@ -22,12 +22,18 @@ const rows = [...people, { ...people[0], tenantId: 'another-tenant', id: 'foreig
 
 // Roles for the "worth contacting first" order: acct-1 and acct-3 have an
 // active role; acct-2 has only a closed one; acct-4's role belongs to another workspace.
+// With a saved focus (minimum score 45), only acct-3's role is in it: acct-1's
+// are outside the focus or below the score, acct-2's is closed.
 const jobs = [
-  { tenant_id: tenant, account_id: 'acct-1', active: true }, { tenant_id: tenant, account_id: 'acct-1', active: true },
-  { tenant_id: tenant, account_id: 'acct-3', active: true }, { tenant_id: tenant, account_id: 'acct-2', active: false },
-  { tenant_id: 'another-tenant', account_id: 'acct-4', active: true },
+  { tenant_id: tenant, account_id: 'acct-1', active: true, raw: { relevanceScore: 60, matchesSearchFocus: false } },
+  { tenant_id: tenant, account_id: 'acct-1', active: true, raw: { relevanceScore: 30, matchesSearchFocus: true } },
+  { tenant_id: tenant, account_id: 'acct-3', active: true, raw: { relevanceScore: 80, matchesSearchFocus: true } },
+  { tenant_id: tenant, account_id: 'acct-2', active: false, raw: { relevanceScore: 90, matchesSearchFocus: true } },
+  { tenant_id: 'another-tenant', account_id: 'acct-4', active: true, raw: { relevanceScore: 90, matchesSearchFocus: true } },
 ];
 const hiringAccounts = new Set(jobs.filter(job => job.tenant_id === tenant && job.active).map(job => job.account_id));
+const focusAccounts = new Set(jobs.filter(job => job.tenant_id === tenant && job.active && job.raw.matchesSearchFocus !== false && job.raw.relevanceScore >= 45).map(job => job.account_id));
+const hiringTier = (person, focus) => (focus != null && focusAccounts.has(person.accountId) ? 2 : hiringAccounts.has(person.accountId) ? 1 : 0);
 
 function statements(built, fixture = false) {
   const make = (sql, values) => {
@@ -37,7 +43,7 @@ function statements(built, fixture = false) {
     return { text: `WITH contacts AS (SELECT * FROM jsonb_to_recordset($${params.length - 1}::jsonb)
       AS x(id text, tenant_id text, account_id text, full_name text, company_name text, title text,
       email text, notes text, priority_score integer, updated_at timestamptz, raw jsonb)),
-      jobs AS (SELECT * FROM jsonb_to_recordset($${params.length}::jsonb) AS j(tenant_id text, account_id text, active boolean)) ${sql}`, params };
+      jobs AS (SELECT * FROM jsonb_to_recordset($${params.length}::jsonb) AS j(tenant_id text, account_id text, active boolean, raw jsonb)) ${sql}`, params };
   };
   return {
     count: make(`SELECT COUNT(*)::int AS total FROM contacts WHERE ${built.where}`, built.countParams),
@@ -52,13 +58,14 @@ for (const outreachStatus of ['not_started', 'researching', 'replied', 'contacte
 for (const q of ["O'Neil_100%", '_', '%', '\\', 'Montréal', 'Talent Partner', 'Company 2', 'no match']) queries.push({ q, sortBy: 'name' });
 queries.push({ minScore: 45, sortBy: 'priority', pageSize: 5, page: 2 }, { id: 'ct-07' }, { id: 'foreign' });
 queries.push({ sortBy: 'call', outreachStatus: 'researching', pageSize: 10 }, { sortBy: 'call', q: 'Talent Partner', pageSize: 7, page: 2 });
+queries.push({ sortBy: 'call', pageSize: 20, focus: 45 }, { sortBy: 'call', pageSize: 20, page: 2, focus: 45 }, { sortBy: 'call', outreachStatus: 'replied', pageSize: 6, focus: 45 });
 const tests = queries.map(query => {
-  const built = buildContactQuerySql(tenant, query);
+  const built = buildContactQuerySql(tenant, query, { focusMinimumRelevance: query.focus ?? null });
   const expected = people.filter(p => (!built.id || p.id === built.id)
     && (!built.minScore || p.priorityScore >= built.minScore)
     && (!built.outreachStatus || p.outreachStatus === built.outreachStatus)
     && (!built.q || ['fullName', 'companyName', 'title', 'email', 'notes'].some(key => p[key].toLowerCase().includes(built.q.toLowerCase()))))
-    .sort((a, b) => compareContacts(a, b, built.sortBy, person => hiringAccounts.has(person.accountId)));
+    .sort((a, b) => compareContacts(a, b, built.sortBy, person => hiringTier(person, query.focus)));
   return { query, ...statements(built, true), total: expected.length, ids: expected.slice((built.page - 1) * built.pageSize, built.page * built.pageSize).map(p => p.id) };
 });
 const live = process.argv.includes('--owner-readonly') ? ['name', 'company', 'recent', 'priority', 'call'].map(sortBy => ({
