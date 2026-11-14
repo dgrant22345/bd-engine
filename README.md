@@ -80,7 +80,7 @@ Re-importing LinkedIn data updates matching contacts and does not intentionally 
 
 ## Job Sources
 
-Automatic public imports currently cover Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, and Rippling. Some career sites require browser rendering, block automated requests, or use enterprise systems without a public feed. Those sources are reported for review rather than presented as successfully connected.
+Automatic public imports currently cover Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, and Phenom career sites (for example jobs.rbc.com, jobs.bmo.com and jobs.bell.ca). Some career sites require browser rendering, block automated requests, or use enterprise systems without a public feed. Those sources are reported for review rather than presented as successfully connected.
 
 Provider behavior is implemented behind normalized adapters with timeouts, bounded retries, per-board failure isolation, job lifecycle handling, and regression tests. See [docs/provider-adapter-guide.md](docs/provider-adapter-guide.md).
 

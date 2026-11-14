@@ -21,6 +21,7 @@ const LIVE_BOARDS = [
   { atsType: 'recruitee', companyName: 'Emergent Software', boardId: 'emergentsoftware', resolvedBoardUrl: 'https://emergentsoftware.recruitee.com/' },
   { atsType: 'personio', companyName: 'Personio', boardId: 'personio', resolvedBoardUrl: 'https://personio.jobs.personio.de/' },
   { atsType: 'rippling', companyName: 'Pace', boardId: 'pace', resolvedBoardUrl: 'https://ats.rippling.com/pace/jobs' },
+  { atsType: 'phenom', companyName: 'Bell', boardId: 'jobs.bell.ca/ca/en', resolvedBoardUrl: 'https://jobs.bell.ca/ca/en/search-results' },
   {
     atsType: 'custom_static',
     companyName: 'Lightspeed Commerce',
