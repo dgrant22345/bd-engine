@@ -12,6 +12,12 @@ test('saved recovery code resets a password once and revokes the signed-in sessi
   await page.locator('#signup-workspace').fill('Recovery Test');
   await page.locator('#signup-legal-consent').check();
   await page.locator('#signup-form button[type="submit"]').click();
+  // Account notices wait until first-run setup is done.
+  const app = page.frameLocator('iframe.cloud-app-frame');
+  await expect(app.locator('#setup-profile-form')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('.cloud-account-status')).toBeHidden();
+  await app.getByRole('button', { name: 'Start with people' }).click();
+  await expect(page.locator('.cloud-account-status')).toBeVisible({ timeout: 15000 });
   const trial = page.getByRole('region', { name: 'Free trial limits and upgrade options' });
   await expect(trial.locator('details')).not.toHaveAttribute('open', '');
   await trial.locator('summary').press('Enter');

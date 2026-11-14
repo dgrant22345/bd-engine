@@ -2513,6 +2513,9 @@
         const syncWorkspaceHash = () => {
           const hash = workspaceFrame.contentWindow?.location.hash;
           if (hash?.startsWith('#/')) history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+          // First-run setup has one job; the trial and recovery prompts wait
+          // until it is finished.
+          root.querySelector('.cloud-account-status')?.toggleAttribute('hidden', /^#\/setup(?:[/?]|$)/.test(hash || ''));
         };
         workspaceFrame.contentWindow?.addEventListener('hashchange', syncWorkspaceHash);
         syncWorkspaceHash();

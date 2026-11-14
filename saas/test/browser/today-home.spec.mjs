@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-/* global renderDashboardToday */
+/* global renderDashboardToday, appState */
 
 test('dashboard opens on who to call today, in the People order, with one action each', async ({ page }) => {
   const errors = [];
@@ -59,6 +59,30 @@ test('dashboard opens on who to call today, in the People order, with one action
   expect(focused).toMatch(/38 roles in your focus \([^)]+\) at 12 companies, of 1,204 open roles in your workspace\./);
   expect(focused).toContain('href="#/admin/search-focus"');
   expect(focused.match(/today-card--hiring/g)).toHaveLength(1);
+  // During the first refresh after setup, an empty count means "not checked yet".
+  const checking = await frame.evaluate(() => {
+    appState.setupSignalJobId = 'job-first-refresh';
+    try {
+      return renderDashboardToday({ items: [
+        { id: 'p1', fullName: 'Chloe Tremblay', companyName: 'Clio', priorityScore: 90, outreachStatus: 'not_started', listContext: { linked: true, openRoles: 0, newRoles7d: 0, lastOutreachAt: '' } },
+      ] }, { summary: { activeJobCount: 0, hiringAccountCount: 0 } });
+    } finally { appState.setupSignalJobId = ''; }
+  });
+  expect(checking).toContain('Checking your companies for open roles');
+  expect(checking).toContain('Checking Clio for open roles.');
+  expect(checking).not.toContain('no open role on record');
+  // Progress lines are neutral, with a bar; errors keep the alert styling.
+  const tones = await frame.evaluate(() => {
+    const alert = document.getElementById('app-alert');
+    window.bdLocalApi.setAlert('Checking your companies for open roles 40%: Reading boards', alert, { tone: 'progress', progress: 40 });
+    const progress = [alert.classList.contains('app-alert--progress'), alert.style.getPropertyValue('--alert-progress'), getComputedStyle(alert).color];
+    window.bdLocalApi.setAlert('Import failed.', alert);
+    const error = [alert.classList.contains('app-alert--progress'), alert.style.getPropertyValue('--alert-progress')];
+    window.bdLocalApi.setAlert('', alert);
+    return { progress, error };
+  });
+  expect(tones.progress.slice(0, 2)).toEqual([true, '40%']);
+  expect(tones.error).toEqual([false, '']);
   expect(await frame.evaluate(() => renderDashboardToday({ items: [] }, {}))).toBe('');
   expect(await frame.evaluate(() => renderDashboardToday(null, {}))).toBe('');
   expect(errors).toEqual([]);

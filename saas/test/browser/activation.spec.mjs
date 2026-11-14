@@ -135,7 +135,7 @@ test('ATS audit becomes a prefilled, imported watchlist after signup', async ({ 
   const summary = app.locator('.setup-summary-grid');
   await expect(summary.locator('div', { hasText: 'Accounts added' })).toContainText('2');
   await expect(summary.locator('div', { hasText: 'Saved for later' })).toContainText('0');
-  await expect(summary.locator('div', { hasText: 'Monitoring queued' })).toContainText('1');
+  await expect(summary.locator('div', { hasText: 'Checking for roles' })).toContainText('2');
   const consumedIntent = await readOnboardingIntentStorage(page);
   expect(consumedIntent.anonymousLocal).toBeNull();
   expect(consumedIntent.anonymousSession).toBeNull();
