@@ -1249,6 +1249,39 @@ a:hover { text-decoration: underline; }
   color: var(--text-primary);
 }
 
+/* Workspace switcher in the account menu. */
+.cloud-menu-label {
+  display: block;
+  padding: 8px 16px 2px;
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.cloud-menu-item--workspace {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cloud-menu-item--workspace > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cloud-menu-item--workspace[aria-checked="true"] {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.cloud-menu-item--workspace[aria-checked="true"] > span:first-child::before {
+  content: "\2713\00a0";
+  color: #0f6b65;
+}
+.cloud-menu-role {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 12px;
+}
+
 .cloud-verification-status {
   margin-top: 5px;
   color: var(--amber) !important;

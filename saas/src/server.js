@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { createStore, getRelationalPrimaryTenantIds, registerRelationalPrimaryTenant } from './store.js';
 import { createSavedWorkStore } from './saved-work.js';
 import { extractSession, createSession, destroySession, forgetUserSessions, isRecentAuthentication, markSessionStepUp, setSessionCookie, clearSessionCookie, loadSessionsFromDb, createPasswordResetSecret, hashPasswordResetToken, verifyPassword } from './auth.js';
-import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
+import { createUser, authenticateUser, setUserPassword, markUserEmailVerified, findUserByEmail, findUserById, findTenantsForUser, findTenantById, findTenantBySlug, findTenantByStripeCustomerId, findTenantByReferralCode, findTenantsReferredBy, listTenants, listMemberships, getMembership, addMember, addMemberPersisted, listTenantMembers, setMemberRole, removeMember, forgetClosedAccount, safeUser, createTenant, ensureTenantForUser, persistUserWorkspace, updateTenant, updateTenantPersisted, loadFromDb as loadUsersFromDb, normalizeReferralCode } from './users.js';
 import { getPlan, getPlanByStripePriceId, getTrialDaysRemaining, getUsageSummary, getEntitlementDecision, PLANS, handleWebhookEvent, createCheckoutSession, createBillingPortalSession, cancelSubscriptionForAccountClosure, createReferralCredit, isStripeConfigured, getStripeConfigStatus, getBillingErrorResponse, isTrialExpired, createBillingGraceDeadline, getBillingAccessStatus } from './billing.js';
 import { initDb, closeDb, isDbEnabled, isDbReady, dbCheckRelationalContentParity, dbCheckRelationalCountParity, dbLoadRelationalPrimaryTenantIds, dbPruneExpiredOperationalData, dbRecordAnalyticsVisit, dbRecordProductEvent, dbRecordAuditLog, dbGetAnalyticsSummary, dbQuery, dbGetImportUsageCount, dbClaimStripeWebhook, dbCompleteStripeWebhook, dbFailStripeWebhook, dbConsumeRateLimit, dbRecordAccountClosure, dbCloseUserAccount, dbPersistSignupWithLegalConsent, dbSavePasswordResetToken, dbFindPasswordResetToken, dbMarkPasswordResetTokenUsed, dbSaveEmailVerificationToken, dbFindEmailVerificationToken, dbMarkEmailVerificationTokenUsed, dbCreateSupportTicket, dbListSupportTickets, dbGetSupportTicket, dbAddSupportTicketMessage, dbUpdateSupportTicket } from './db.js';
-import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail, sendRoleDigestEmail, sendTrialEmail } from './email.js';
+import { isEmailConfigured, sendPasswordResetEmail, sendEmailVerificationEmail, sendSupportOperatorEmail, sendSupportCustomerReplyEmail, sendFollowupReminderEmail, sendRoleDigestEmail, sendTrialEmail, sendInvitationEmail } from './email.js';
 import { getReadinessDecision, shouldLogReadinessFailure } from './readiness.js';
 import { buildMutationAuditEntry } from './request-audit.js';
 import { validateSupportTicketInput, validateSupportReplyInput, validateSupportAdminUpdate, publicSupportTicket, SUPPORT_STATUSES } from './support.js';
@@ -36,6 +36,7 @@ import { validateContactInput } from './contact-queries.js';
 import { getGrowthOutcomes } from './growth-outcomes.js';
 import { createReminderStore, getNewRoleDigest, REMINDER_ID, ROLE_DIGEST_ID } from './followup-reminders.js';
 import { buildTrialEmail, createTrialEmailStore } from './trial-emails.js';
+import { buildInvitationEmail, canChangeRole, canInvite, canManageTeam, canRemoveMember, canRevokeInvitation, createInvitationStore, invitationStatus, isValidInviteEmail, normalizeInviteEmail, publicInvitation, seatSummary } from './team.js';
 import { compareSnapshots, createHiringTrackerStore, renderHiringTrackerPage, trackerWeek } from './hiring-tracker.js';
 import { spawn } from 'node:child_process';
 import { buildTaskCalendar } from './task-calendar.js';
@@ -52,6 +53,7 @@ const savedWork = createSavedWorkStore();
 const reminders = createReminderStore();
 const roleDigests = createReminderStore({ id: ROLE_DIGEST_ID, title: 'Weekly role digest', viewType: 'jobs', cadence: 'weekly' });
 const trialEmails = createTrialEmailStore();
+const invitations = createInvitationStore();
 const hiringTracker = createHiringTrackerStore({ query: (...args) => dbQuery(...args), enabled: isDbEnabled });
 const MIN_PASSWORD_LENGTH = 10;
 const COMMERCIAL_LEGAL_VERSION = '2026-08-21';
@@ -804,12 +806,20 @@ function isInternalOwner(user) {
   return internalOwnerEmails.has(String(user?.email || '').trim().toLowerCase());
 }
 
+// The operator's entitlements apply to workspaces they own (or that have no
+// owner on record), never to a workspace someone else owns that they joined as
+// a teammate: that workspace keeps its own plan and the role they were given.
+function hasOperatorEntitlement(tenant, user) {
+  if (!tenant?.id || !isInternalOwner(user)) return false;
+  return !listTenantMembers(tenant.id).some((member) => member.role === 'owner' && member.userId !== user.id);
+}
+
 function getEffectivePlanId(tenant, user) {
-  return isInternalOwner(user) ? ownerPlanId : (tenant?.plan || 'trial');
+  return hasOperatorEntitlement(tenant, user) ? ownerPlanId : (tenant?.plan || 'trial');
 }
 
 function ensureInternalOwnerEntitlement(tenant, user, { persist = true } = {}) {
-  if (!tenant || !isInternalOwner(user)) return tenant;
+  if (!tenant || !hasOperatorEntitlement(tenant, user)) return tenant;
   if (tenant.plan === ownerPlanId && tenant.status === 'active') return tenant;
   const updated = updateTenant(tenant.id, {
     plan: ownerPlanId,
@@ -821,7 +831,7 @@ function ensureInternalOwnerEntitlement(tenant, user, { persist = true } = {}) {
 
 function getEffectiveTenant(tenant, user) {
   if (!tenant) return tenant;
-  if (!isInternalOwner(user)) return tenant;
+  if (!hasOperatorEntitlement(tenant, user)) return tenant;
   return {
     ...tenant,
     plan: ownerPlanId,
@@ -855,12 +865,15 @@ function getPublicPlanPayload(plan) {
 }
 
 function getEffectiveMembershipRole(membership, user) {
-  return isInternalOwner(user) ? 'owner' : (membership?.role || 'member');
+  if (!membership?.tenantId) return isInternalOwner(user) ? 'owner' : (membership?.role || 'member');
+  return hasOperatorEntitlement({ id: membership.tenantId }, user) ? 'owner' : (membership.role || 'member');
 }
 
 function withEffectiveTenantRoles(tenants, user) {
   if (!isInternalOwner(user)) return tenants;
-  return (tenants || []).map((tenant) => ({ ...getEffectiveTenant(tenant, user), role: 'owner' }));
+  return (tenants || []).map((tenant) => (hasOperatorEntitlement(tenant, user)
+    ? { ...getEffectiveTenant(tenant, user), role: 'owner' }
+    : tenant));
 }
 
 function getRequestOrigin() {
@@ -923,7 +936,7 @@ function isBillingExemptPath(pathname) {
 
 function isTenantBillingBlocked(tenant, user = null) {
   if (!tenant) return false;
-  if (isInternalOwner(user)) return false;
+  if (hasOperatorEntitlement(tenant, user)) return false;
   if (tenant.plan === 'trial') return isTrialExpired(tenant);
   const status = String(tenant.status || '').toLowerCase();
   if (status === 'past_due') return getBillingAccessStatus(tenant).accessBlocked;
@@ -1177,6 +1190,13 @@ self.addEventListener('activate', (event) => {
       return sendJson(res, 429, { error: 'Too many analytics requests.' });
     }
     return handleAnalyticsVisit(req, res);
+  }
+
+  if (pathname === '/api/invitations/preview' && req.method === 'POST') {
+    if (await rateLimitExceeded(`invite-preview:${clientIp(req)}`, INVITE_PREVIEW_MAX, 15 * 60 * 1000)) {
+      return sendJson(res, 429, { error: 'Too many attempts. Please wait and try again.' });
+    }
+    return handleInvitationPreview(req, res);
   }
 
   // ── All /api/ routes below require authentication ─────────────────────────
@@ -1434,11 +1454,27 @@ self.addEventListener('activate', (event) => {
     return sendDemoReadOnly(res);
   }
 
+  // Joining and switching act on the user's own memberships, so they work
+  // whatever the current workspace's role or billing state.
+  if (pathname === '/api/invitations/accept' && req.method === 'POST') {
+    return handleInvitationAccept(req, res, { user, sessionData });
+  }
+
+  if (pathname === '/api/session/workspace' && req.method === 'POST') {
+    return handleWorkspaceSwitch(req, res, { user, sessionData, tenantId });
+  }
+
   if (!canMutateWorkspace(session.membership.role, req.method)) {
     return sendJson(res, 403, {
       error: 'This workspace role is read-only. Ask a workspace owner to make this change.',
       code: 'workspace_read_only',
     });
+  }
+
+  if (pathname === '/api/team' || pathname.startsWith('/api/team/')) {
+    // The public demo has no team to show or manage.
+    if (isReadOnlyDemoSession(sessionData, tenant)) return sendDemoReadOnly(res);
+    return handleTeamRequest(req, res, { pathname, tenant, user, sessionData, actorRole: session.membership.role });
   }
 
   if (isTenantBillingBlocked(tenant, user) && !isBillingExemptPath(pathname)) {
@@ -2797,6 +2833,7 @@ const entitlementLabels = {
   contacts: 'contacts',
   jobBoards: 'active job boards',
   csvImports: 'CSV imports',
+  users: 'users',
   enrichment: 'company enrichment',
   outreach_drafts: 'outreach drafts',
 };
@@ -2805,6 +2842,7 @@ async function getTenantUsage(tenantId) {
   const usage = await store.getUsageCounts(tenantId);
   return {
     ...usage,
+    users: listTenantMembers(tenantId).length,
     csvImports: await dbGetImportUsageCount(tenantId),
   };
 }
@@ -2972,7 +3010,7 @@ async function handleStartDemo(req, res) {
 }
 
 async function handleSignup(req, res) {
-  const { email, password, name, workspaceName, persona, referralCode, acquisition, legalAcceptance } = await readJson(req);
+  const { email, password, name, workspaceName, persona, referralCode, acquisition, legalAcceptance, invitationToken } = await readJson(req);
 
   if (!email || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
@@ -2985,6 +3023,9 @@ async function handleSignup(req, res) {
     && legalAcceptance.privacyVersion === COMMERCIAL_LEGAL_VERSION;
   if (!acceptedCurrentLegalTerms) {
     return sendJson(res, 400, { error: 'Review and accept the current Terms and Privacy notice before creating an account.' });
+  }
+  if (invitationToken) {
+    return handleInvitedSignup(req, res, { email, password, name, acquisition, legalAcceptance, invitationToken });
   }
 
   // Create user
@@ -3185,6 +3226,334 @@ async function handleMe(req, res) {
     emailVerificationAvailable: isEmailConfigured(),
     canManageSupport: canManageSupport(user),
   });
+}
+
+// ── Team workspaces ─────────────────────────────────────────────────────────
+
+const TEAM_INVITES_PER_DAY = 20;
+const INVITE_PREVIEW_MAX = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TEAM_ROLE_ORDER = { owner: 0, admin: 1, member: 2, viewer: 3 };
+
+function getTenantOwnerUser(tenantId) {
+  const owner = listTenantMembers(tenantId).find((member) => member.role === 'owner');
+  return owner ? findUserById(owner.userId) : null;
+}
+
+// The plan's users limit, as the workspace owner's plan sets it.
+function getTeamSeatLimit(tenant) {
+  const plan = getPlan(getEffectivePlanId(tenant, getTenantOwnerUser(tenant.id)));
+  return Number(plan?.limits?.users ?? 1);
+}
+
+async function getTeamSeats(tenant) {
+  return seatSummary({
+    members: listTenantMembers(tenant.id).length,
+    pending: (await invitations.listPending(tenant.id)).length,
+    limit: getTeamSeatLimit(tenant),
+  });
+}
+
+function hasFreeSeat(tenant) {
+  const limit = getTeamSeatLimit(tenant);
+  return limit < 0 || listTenantMembers(tenant.id).length < limit;
+}
+
+function teamMemberPayload(membership, currentUserId) {
+  const member = findUserById(membership.userId);
+  return {
+    userId: membership.userId,
+    name: member?.name || '',
+    email: member?.email || '',
+    role: membership.role,
+    joinedAt: membership.createdAt || '',
+    you: membership.userId === currentUserId,
+  };
+}
+
+function invitationClosedResponse(res, status) {
+  const messages = {
+    expired: 'This invitation has expired. Ask the person who invited you for a new one.',
+    accepted: 'This invitation has already been used. Sign in to open the workspace.',
+    revoked: 'This invitation was withdrawn. Ask the person who invited you for a new one.',
+  };
+  return sendJson(res, 410, { error: messages[status] || 'This invitation link is not valid.', code: `invitation_${status}` });
+}
+
+async function moveSessionToWorkspace(res, sessionData, user, tenantId) {
+  const { cookie } = await createSession(user.id, tenantId);
+  setSessionCookie(res, cookie);
+  if (sessionData?.id) await destroySession(sessionData.id).catch(() => {});
+}
+
+async function handleInvitationPreview(req, res) {
+  const { token } = await readJson(req);
+  res.setHeader('Cache-Control', 'no-store');
+  if (typeof token !== 'string' || token.length < 20 || token.length > 200) return sendJson(res, 200, { status: 'invalid' });
+  const invitation = await invitations.findByToken(token);
+  const status = invitationStatus(invitation);
+  const tenant = invitation ? findTenantById(invitation.tenantId) : null;
+  if (status !== 'pending' || !tenant) return sendJson(res, 200, { status: tenant ? status : 'invalid' });
+  const inviter = findUserById(invitation.invitedByUserId);
+  return sendJson(res, 200, {
+    status,
+    workspaceName: tenant.name,
+    inviterName: inviter?.name || '',
+    role: invitation.role,
+    email: invitation.email,
+    expiresAt: invitation.expiresAt,
+    accountExists: Boolean(findUserByEmail(invitation.email)),
+  });
+}
+
+async function handleInvitationAccept(req, res, { user, sessionData }) {
+  const { token } = await readJson(req);
+  if (typeof token !== 'string' || token.length > 200) return invitationClosedResponse(res, 'invalid');
+  const invitation = await invitations.findByToken(token);
+  const status = invitationStatus(invitation);
+  const tenant = invitation ? findTenantById(invitation.tenantId) : null;
+  if (status !== 'pending' || !tenant) return invitationClosedResponse(res, tenant ? status : 'invalid');
+  if (normalizeInviteEmail(user.email) !== invitation.email) {
+    return sendJson(res, 403, {
+      error: `This invitation was sent to ${invitation.email}. Sign in with that address to accept it.`,
+      code: 'invitation_email_mismatch',
+    });
+  }
+  const existing = getMembership(tenant.id, user.id);
+  if (!existing && !hasFreeSeat(tenant)) {
+    return sendJson(res, 402, { error: 'This workspace has no free seats. Ask its owner to upgrade or free a seat.', code: 'team_seats_full' });
+  }
+  if (!(await invitations.consume(invitation.id, user.id))) return invitationClosedResponse(res, 'accepted');
+  try {
+    if (!existing) await addMemberPersisted(tenant.id, user.id, invitation.role);
+  } catch (error) {
+    await invitations.restore(invitation.id).catch(() => {});
+    reportServerError(503, req, error);
+    return sendJson(res, 503, { error: 'You could not be added to the workspace just now. Please try again.', requestId: req.requestId });
+  }
+  // The invitation was emailed to this address, so opening it proves the mailbox.
+  if (!user.emailVerifiedAt) await markUserEmailVerified(user.id).catch(() => {});
+  store.ensureTenant(tenant, user);
+  await moveSessionToWorkspace(res, sessionData, user, tenant.id);
+  return sendJson(res, 200, {
+    joined: true,
+    tenant: { id: tenant.id, name: tenant.name },
+    role: getMembership(tenant.id, user.id)?.role || invitation.role,
+  });
+}
+
+async function handleInvitedSignup(req, res, { email, password, name, acquisition, legalAcceptance, invitationToken }) {
+  const invitation = typeof invitationToken === 'string' && invitationToken.length <= 200
+    ? await invitations.findByToken(invitationToken)
+    : null;
+  const status = invitationStatus(invitation);
+  const tenant = invitation ? findTenantById(invitation.tenantId) : null;
+  if (status !== 'pending' || !tenant) return invitationClosedResponse(res, tenant ? status : 'invalid');
+  if (normalizeInviteEmail(email) !== invitation.email) {
+    return sendJson(res, 400, {
+      error: `This invitation is for ${invitation.email}. Create your account with that address.`,
+      code: 'invitation_email_mismatch',
+    });
+  }
+  if (!hasFreeSeat(tenant)) {
+    return sendJson(res, 402, { error: 'This workspace has no free seats. Ask its owner to upgrade or free a seat.', code: 'team_seats_full' });
+  }
+  const userResult = createUser({ email: invitation.email, name, password }, { persist: false });
+  if (userResult.error) {
+    return sendJson(res, 409, { error: 'An account with this email already exists. Sign in to accept the invitation.', code: 'account_exists' });
+  }
+  const user = userResult.user;
+  // The invitation was emailed to this address, so opening it proves the mailbox.
+  user.emailVerifiedAt = new Date().toISOString();
+  const membership = addMember(tenant.id, user.id, invitation.role, { persist: false });
+  try {
+    await dbPersistSignupWithLegalConsent({
+      user,
+      tenant,
+      membership,
+      termsVersion: legalAcceptance.termsVersion,
+      privacyVersion: legalAcceptance.privacyVersion,
+      joinExistingTenant: true,
+      withinTransaction: async (tx) => {
+        if (!(await invitations.consume(invitation.id, user.id, tx))) {
+          throw Object.assign(new Error('The invitation is no longer pending.'), { code: 'invitation_used' });
+        }
+      },
+    });
+  } catch (error) {
+    forgetClosedAccount(user.id, []);
+    if (error?.code === 'invitation_used') return invitationClosedResponse(res, 'accepted');
+    reportServerError(503, req, error);
+    return sendJson(res, 503, {
+      error: 'Your account could not be created because acceptance records are temporarily unavailable. Please try again.',
+      code: 'signup_persistence_unavailable',
+      requestId: req.requestId,
+    });
+  }
+  store.ensureTenant(tenant, user);
+  const { cookie } = await createSession(user.id, tenant.id);
+  setSessionCookie(res, cookie);
+  const persona = store.getPersona(tenant.id);
+  await recordProductMilestone({
+    eventType: 'signup_completed', tenantId: tenant.id, userId: user.id,
+    eventKey: user.id,
+    dimensions: {
+      ...buildAcquisitionDimensions(acquisition, { persona, forceLastNonDirectSource: 'referral' }),
+      planId: getEffectivePlanId(tenant, user),
+      termsVersion: legalAcceptance.termsVersion,
+      privacyVersion: legalAcceptance.privacyVersion,
+    },
+  });
+  return sendJson(res, 201, {
+    user: safeUser(user),
+    tenant: getEffectiveTenant(tenant, user),
+    tenants: withEffectiveTenantRoles(findTenantsForUser(user.id), user),
+    plan: getPublicPlanPayload(getPlan(getEffectivePlanId(tenant, user))),
+    trialDaysRemaining: getTrialDaysRemaining(tenant),
+    persona,
+    membership: { role: membership.role },
+    canManageWorkspace: false,
+    emailVerificationAvailable: isEmailConfigured(),
+    verificationEmailSent: false,
+    invitationAccepted: true,
+    canManageSupport: canManageSupport(user),
+  });
+}
+
+async function handleWorkspaceSwitch(req, res, { user, sessionData, tenantId }) {
+  const { tenantId: requested } = await readJson(req);
+  const target = typeof requested === 'string' ? findTenantById(requested) : null;
+  const membership = target ? getMembership(target.id, user.id) : null;
+  if (!membership) return sendJson(res, 404, { error: 'Workspace not found.' });
+  if (target.id !== tenantId) {
+    store.ensureTenant(target, user);
+    await moveSessionToWorkspace(res, sessionData, user, target.id);
+  }
+  return sendJson(res, 200, {
+    tenant: getEffectiveTenant(target, user),
+    role: getEffectiveMembershipRole(membership, user),
+  });
+}
+
+async function handleTeamRequest(req, res, { pathname, tenant, user, sessionData, actorRole }) {
+  const actor = { userId: user.id, role: actorRole };
+
+  if (pathname === '/api/team' && req.method === 'GET') {
+    const manage = canManageTeam(actorRole);
+    const members = listTenantMembers(tenant.id)
+      .map((membership) => teamMemberPayload(membership, user.id))
+      .sort((a, b) => (TEAM_ROLE_ORDER[a.role] ?? 9) - (TEAM_ROLE_ORDER[b.role] ?? 9) || a.joinedAt.localeCompare(b.joinedAt));
+    return sendJson(res, 200, {
+      members,
+      invitations: manage ? (await invitations.listPending(tenant.id)).map(publicInvitation) : [],
+      seats: await getTeamSeats(tenant),
+      role: actorRole,
+      canManage: manage,
+      canInviteAdmins: canInvite(actorRole, 'admin'),
+    });
+  }
+
+  if (pathname === '/api/team/invitations' && req.method === 'POST') {
+    const body = await readJson(req);
+    const email = normalizeInviteEmail(body.email);
+    const role = body.role === undefined ? 'member' : String(body.role);
+    if (!canManageTeam(actorRole)) return sendJson(res, 403, { error: 'Only the workspace owner or an admin can invite teammates.' });
+    if (!canInvite(actorRole, role)) return sendJson(res, 403, { error: 'Only the workspace owner can invite admins.' });
+    if (!isValidInviteEmail(email)) return sendJson(res, 400, { error: 'Enter a valid email address.' });
+    if (isTenantBillingBlocked(tenant, user)) return sendBillingRequired(res, tenant);
+    const devLinks = shouldExposeDevResetToken();
+    if (!user.emailVerifiedAt && !devLinks) {
+      return sendJson(res, 403, { error: 'Verify your email before inviting teammates.', code: 'email_verification_required' });
+    }
+    if (!isEmailConfigured() && !devLinks) {
+      return sendJson(res, 503, { error: 'Invitation email is temporarily unavailable. Please try again later.' });
+    }
+    const existingUser = findUserByEmail(email);
+    if (existingUser && getMembership(tenant.id, existingUser.id)) {
+      return sendJson(res, 409, { error: 'That person is already in this workspace.' });
+    }
+    const pending = await invitations.listPending(tenant.id);
+    const seats = seatSummary({
+      members: listTenantMembers(tenant.id).length,
+      pending: pending.filter((item) => item.email !== email).length,
+      limit: getTeamSeatLimit(tenant),
+    });
+    if (seats.available !== null && seats.available < 1) {
+      const planName = getPlan(getEffectivePlanId(tenant, getTenantOwnerUser(tenant.id)))?.displayName || 'current';
+      return sendJson(res, 402, {
+        error: `Your ${planName} plan includes up to ${seats.limit} users, counting pending invitations. Withdraw an invitation, remove someone, or upgrade to invite more.`,
+        code: 'team_seats_full',
+        upgradeRequired: true,
+        seats,
+      });
+    }
+    if (await rateLimitExceeded(`team-invite:${tenant.id}`, TEAM_INVITES_PER_DAY, DAY_MS)) {
+      return sendJson(res, 429, { error: 'Too many invitations were sent from this workspace today. Please try again tomorrow.' });
+    }
+    const { invitation, token } = await invitations.create({ tenantId: tenant.id, email, role, invitedByUserId: user.id });
+    const acceptUrl = `${getRequestOrigin(req)}/?invite=${encodeURIComponent(token)}`;
+    let emailSent = false;
+    if (isEmailConfigured()) {
+      try {
+        const message = buildInvitationEmail({ workspaceName: tenant.name, inviterName: user.name || user.email, role, acceptUrl, expiresAt: invitation.expiresAt });
+        emailSent = Boolean((await sendInvitationEmail({ to: email, ...message, idempotencyKey: invitation.id }))?.sent);
+      } catch (error) {
+        console.error('Invitation email failed:', safeErrorSummary(error));
+      }
+      if (!emailSent) {
+        await invitations.revoke(tenant.id, invitation.id).catch(() => {});
+        return sendJson(res, 502, { error: 'The invitation email could not be sent. Please try again.' });
+      }
+    }
+    return sendJson(res, 201, {
+      invitation: publicInvitation(invitation),
+      emailSent,
+      seats: await getTeamSeats(tenant),
+      // Local development only: there is no email, so the link is shown.
+      ...(!emailSent && devLinks ? { acceptUrl } : {}),
+    });
+  }
+
+  const invitationMatch = pathname.match(/^\/api\/team\/invitations\/([^/]+)$/);
+  if (invitationMatch && req.method === 'DELETE') {
+    const invitation = await invitations.get(tenant.id, decodeURIComponent(invitationMatch[1]));
+    if (!invitation || invitationStatus(invitation) !== 'pending') return sendJson(res, 404, { error: 'Invitation not found.' });
+    if (!canRevokeInvitation(actorRole, invitation)) return sendJson(res, 403, { error: 'Only the workspace owner can withdraw an admin invitation.' });
+    if (!(await invitations.revoke(tenant.id, invitation.id))) return sendJson(res, 404, { error: 'Invitation not found.' });
+    return sendJson(res, 200, { revoked: true, seats: await getTeamSeats(tenant) });
+  }
+
+  const memberMatch = pathname.match(/^\/api\/team\/members\/([^/]+)$/);
+  if (memberMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
+    const targetId = decodeURIComponent(memberMatch[1]);
+    const target = getMembership(tenant.id, targetId);
+    if (!target) return sendJson(res, 404, { error: 'Member not found.' });
+
+    if (req.method === 'PATCH') {
+      const { role } = await readJson(req);
+      if (!canChangeRole(actor, target, role)) {
+        return sendJson(res, 403, { error: 'Only the workspace owner can change roles, and the owner’s role cannot change.' });
+      }
+      const updated = await setMemberRole(tenant.id, targetId, role);
+      if (!updated) return sendJson(res, 409, { error: 'That member changed. Reload and try again.' });
+      return sendJson(res, 200, { member: teamMemberPayload(updated, user.id) });
+    }
+
+    if (!canRemoveMember(actor, target)) {
+      return sendJson(res, 403, { error: target.role === 'owner' ? 'The workspace owner cannot be removed.' : 'You cannot remove this member.' });
+    }
+    if (!(await removeMember(tenant.id, targetId))) return sendJson(res, 409, { error: 'That member changed. Reload and try again.' });
+    if (targetId !== user.id) return sendJson(res, 200, { removed: true, seats: await getTeamSeats(tenant) });
+    // Leaving: carry on in another workspace the user belongs to (or a new one).
+    const next = ensureTenantForUser(user);
+    if (next.error || !next.tenant) return sendJson(res, 200, { left: true });
+    store.ensureTenant(next.tenant, user);
+    await persistUserWorkspace(user, next.tenant);
+    await moveSessionToWorkspace(res, sessionData, user, next.tenant.id);
+    return sendJson(res, 200, { left: true, tenant: { id: next.tenant.id, name: next.tenant.name } });
+  }
+
+  return sendJson(res, 404, { error: 'Not found.' });
 }
 
 async function handleCreateTenant(req, res, user) {

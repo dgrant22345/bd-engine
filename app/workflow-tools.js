@@ -88,6 +88,133 @@ window.bdWorkflowTools = (() => {
       };
     } catch (error) { if (body.isConnected) body.textContent = error.message || 'Email settings could not be loaded.'; }
   }
+  // Team: the people who share this workspace, invitations and roles.
+  const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
+  function renderTeam() {
+    if (context?.getBootstrap()?.session?.readOnly) return '<p class="small muted">Invite teammates from your own workspace after you start a trial.</p>';
+    return `<div class="team-panel" data-team><div data-team-body class="small">Loading your team…</div></div>`;
+  }
+  function seatsText(seats) {
+    const pending = seats.pending ? ` · ${seats.pending} invitation${seats.pending === 1 ? '' : 's'} pending` : '';
+    if (seats.limit === 'unlimited') return `${seats.members} ${seats.members === 1 ? 'person' : 'people'} in this workspace${pending}`;
+    return `${seats.members} of ${seats.limit} ${seats.limit === 1 ? 'seat' : 'seats'} used${pending}`;
+  }
+  function canRemove(data, member) {
+    if (member.role === 'owner') return false;
+    if (member.you) return true;
+    return data.role === 'owner' || (data.role === 'admin' && member.role === 'member');
+  }
+  function expiresText(iso) {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? '' : `Expires ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  }
+  async function loadTeam(root = document) {
+    const body = root.querySelector('[data-team] [data-team-body]');
+    if (!body) return;
+    const draw = (data, message = '', link = null) => {
+      if (!body.isConnected) return;
+      const full = data.seats.available !== null && data.seats.available < 1;
+      const writable = context.canMutate();
+      const oneSeat = data.seats.limit === 1;
+      body.innerHTML = `
+        <p class="team-seats"><strong>${esc(seatsText(data.seats))}</strong>${oneSeat ? '<span class="muted"> · Recruiter Pro and the free trial include up to 3 users.</span>' : ''}</p>
+        <ul class="team-list" aria-label="People in this workspace">
+          ${data.members.map((member) => {
+            const name = member.name || member.email;
+            const role = data.role === 'owner' && member.role !== 'owner' && !member.you && writable
+              ? `<select data-team-role="${esc(member.userId)}" aria-label="Role for ${esc(name)}">${['member', 'admin'].map((value) => `<option value="${value}"${member.role === value ? ' selected' : ''}>${ROLE_LABELS[value]}</option>`).join('')}</select>`
+              : `<span class="team-role-badge team-role-badge--${esc(member.role)}">${esc(ROLE_LABELS[member.role] || member.role)}</span>`;
+            const action = canRemove(data, member) && writable
+              ? `<button type="button" class="ghost-button team-remove" data-team-remove="${esc(member.userId)}" data-team-name="${esc(name)}" data-team-self="${member.you ? '1' : ''}">${member.you ? 'Leave workspace' : 'Remove'}</button>`
+              : '';
+            return `<li class="team-row">
+              <span class="team-avatar" aria-hidden="true">${esc(name.charAt(0).toUpperCase())}</span>
+              <span class="team-person"><strong>${esc(name)}${member.you ? ' <span class="muted">(you)</span>' : ''}</strong><span class="muted">${esc(member.email)}</span></span>
+              <span class="team-role">${role}</span>
+              <span class="team-actions">${action}</span>
+            </li>`;
+          }).join('')}
+        </ul>
+        ${data.canManage ? `
+          ${data.invitations.length ? `<h4 class="team-subhead">Pending invitations</h4>
+          <ul class="team-list" aria-label="Pending invitations">
+            ${data.invitations.map((item) => `<li class="team-row team-row--pending">
+              <span class="team-avatar team-avatar--pending" aria-hidden="true">@</span>
+              <span class="team-person"><strong>${esc(item.email)}</strong><span class="muted">${esc(ROLE_LABELS[item.role] || item.role)} · ${esc(expiresText(item.expiresAt))}</span></span>
+              <span class="team-role"></span>
+              <span class="team-actions">${writable && (data.role === 'owner' || item.role === 'member') ? `<button type="button" class="ghost-button" data-team-withdraw="${esc(item.id)}">Withdraw</button>` : ''}</span>
+            </li>`).join('')}
+          </ul>` : ''}
+          <form class="team-invite" data-team-invite novalidate>
+            <label class="team-field"><span>Invite by email</span><input type="email" name="email" required autocomplete="off" maxlength="254" placeholder="teammate@company.com"${full || !writable ? ' disabled' : ''}></label>
+            <label class="team-field"><span>Role</span><select name="role"${full || !writable ? ' disabled' : ''}><option value="member">Member</option>${data.canInviteAdmins ? '<option value="admin">Admin</option>' : ''}</select></label>
+            <button class="primary-button" type="submit"${full || !writable ? ' disabled' : ''}>Send invitation</button>
+          </form>
+          ${full ? '<p class="small muted">Every seat is in use. Withdraw an invitation or remove someone to invite another person.</p>' : ''}
+          <p class="small muted">Everyone shares the workspace's companies, people, open roles and outreach. Admins can also invite and remove members and manage billing. Only the owner can change roles or delete the workspace.</p>
+        ` : '<p class="small muted">The workspace owner and admins invite people and manage the team.</p>'}
+        <div class="team-status" role="status" data-team-status>${message ? esc(message) : ''}${link ? `<div class="team-link"><input readonly value="${esc(link)}" aria-label="Invitation link"><button type="button" class="secondary-button" data-team-copy>Copy link</button></div>` : ''}</div>`;
+      wire(data);
+    };
+    const refresh = async (message = '', link = null) => draw(await context.api('/api/team', { skipCache: true }), message, link);
+    const fail = (error) => {
+      const status = body.querySelector('[data-team-status]');
+      if (status) status.textContent = error.message || 'That did not work. Please try again.';
+    };
+    const wire = (data) => {
+      const form = body.querySelector('[data-team-invite]');
+      form?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const email = String(fields.get('email') || '').trim();
+        const status = body.querySelector('[data-team-status]');
+        if (!form.elements.email.checkValidity() || !email) { status.textContent = 'Enter a valid email address.'; form.elements.email.focus(); return; }
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        status.textContent = 'Sending the invitation…';
+        try {
+          const sent = await context.api('/api/team/invitations', { method: 'POST', body: JSON.stringify({ email, role: fields.get('role') || 'member' }) });
+          await refresh(sent.emailSent
+            ? `Invitation sent to ${sent.invitation.email}. The link works once and expires in 7 days.`
+            : `Email is not set up here, so no email was sent. Share this link with ${sent.invitation.email}:`, sent.acceptUrl || null);
+        } catch (error) { button.disabled = false; fail(error); }
+      });
+      body.querySelector('[data-team-copy]')?.addEventListener('click', async (event) => {
+        const input = body.querySelector('.team-link input');
+        try { await navigator.clipboard.writeText(input.value); event.target.textContent = 'Copied'; } catch { input.select(); }
+      });
+      body.querySelectorAll('[data-team-role]').forEach((select) => select.addEventListener('change', async () => {
+        select.disabled = true;
+        try {
+          const saved = await context.api(`/api/team/members/${encodeURIComponent(select.dataset.teamRole)}`, { method: 'PATCH', body: JSON.stringify({ role: select.value }) });
+          await refresh(`${saved.member.name || saved.member.email} is now ${saved.member.role === 'admin' ? 'an admin' : 'a member'}.`);
+        } catch (error) { await refresh().catch(() => {}); fail(error); }
+      }));
+      body.querySelectorAll('[data-team-withdraw]').forEach((button) => button.addEventListener('click', async () => {
+        button.disabled = true;
+        try { await context.api(`/api/team/invitations/${encodeURIComponent(button.dataset.teamWithdraw)}`, { method: 'DELETE' }); await refresh('Invitation withdrawn. Its link no longer works.'); }
+        catch (error) { button.disabled = false; fail(error); }
+      }));
+      // Two steps: the first click asks, the second removes.
+      body.querySelectorAll('[data-team-remove]').forEach((button) => button.addEventListener('click', async () => {
+        const self = button.dataset.teamSelf === '1';
+        if (button.dataset.confirming !== '1') {
+          button.dataset.confirming = '1';
+          button.classList.add('team-remove--confirm');
+          button.textContent = self ? 'Confirm: leave' : `Confirm: remove ${button.dataset.teamName}`;
+          setTimeout(() => { if (button.isConnected && button.dataset.confirming === '1') { button.dataset.confirming = ''; button.classList.remove('team-remove--confirm'); button.textContent = self ? 'Leave workspace' : 'Remove'; } }, 6000);
+          return;
+        }
+        button.disabled = true;
+        try {
+          const result = await context.api(`/api/team/members/${encodeURIComponent(button.dataset.teamRemove)}`, { method: 'DELETE' });
+          if (result.left) { window.top.location.replace('/'); return; }
+          await refresh(`${button.dataset.teamName} was removed from this workspace.`);
+        } catch (error) { button.disabled = false; fail(error); }
+      }));
+    };
+    try { await refresh(); } catch (error) { if (body.isConnected) body.textContent = error.message || 'Your team could not be loaded.'; }
+  }
   async function openReminders(container, config = REMINDER_SETTINGS) {
     container.textContent = config.loading;
     try {
@@ -159,5 +286,5 @@ window.bdWorkflowTools = (() => {
     tools.scrollIntoView({ block: 'center' });
     void openReminders(tools.querySelector('[data-digest-settings]'), DIGEST_SETTINGS);
   }
-  return { init, renderFeedback, renderFollowups, renderRoleDigest, openRoleDigestFromLink, renderTrialEmails, loadTrialEmails };
+  return { init, renderFeedback, renderFollowups, renderRoleDigest, openRoleDigestFromLink, renderTrialEmails, loadTrialEmails, renderTeam, loadTeam };
 })();

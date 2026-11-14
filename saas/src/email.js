@@ -154,6 +154,11 @@ export async function sendTrialEmail({ to, subject, text, html, idempotencyKey }
   return sendEmail({ recipient: to, subject, text, html, kind: 'trial email', idempotencyKey });
 }
 
+export async function sendInvitationEmail({ to, subject, text, html, idempotencyKey }) {
+  if (!isEmailConfigured()) return { sent: false, reason: 'email_not_configured' };
+  return sendEmail({ recipient: to, subject, text, html, kind: 'workspace invitation', idempotencyKey });
+}
+
 async function sendEmail({ recipient, recipients, subject, text, html, kind, idempotencyKey }) {
   const to = normalizeRecipients(recipients || recipient);
   const response = await fetch('https://api.resend.com/emails', {

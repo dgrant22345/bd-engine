@@ -24,7 +24,7 @@ export function buildAccountClosurePlan(userId, tenants = [], memberships = []) 
         tenantId: tenant.id,
         tenantName: tenant.name,
         code: 'last_owner_with_collaborators',
-        message: `Transfer ownership of ${tenant.name} before closing your account.`,
+        message: `Remove the other people from ${tenant.name} in Settings > Team before closing your account.`,
       });
     } else if (others.length > 0 || membership.role !== 'owner') {
       leaveTenants.push({ id: tenant.id, name: tenant.name, role: membership.role });

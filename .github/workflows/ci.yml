@@ -175,6 +175,7 @@ jobs:
           node scripts/verify-workflow-tools.mjs
           node scripts/verify-trial-emails.mjs
           node scripts/verify-hiring-tracker.mjs
+          node scripts/verify-team-workspaces.mjs
 
       - name: Verify one-time account recovery transactions
         env:
