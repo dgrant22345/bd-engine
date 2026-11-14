@@ -234,8 +234,9 @@ test('customer-visible external links allow only HTTP and HTTPS protocols', asyn
 
 test('customer-visible task errors are escaped before HTML insertion', async () => {
   const app = await readFile(appPath, 'utf8');
-  assert.match(app, /Failed to load tasks: \$\{escapeHtml\(error\.message \|\| String\(error\)\)\}/);
-  assert.doesNotMatch(app, /Failed to load tasks: \$\{error\.message\}/);
+  const tasksView = app.slice(app.indexOf('async function renderTasksView()'), app.indexOf('\nfunction renderTaskSection'));
+  assert.match(tasksView, /\$\{escapeHtml\(error\.message \|\| String\(error\)\)\}/);
+  assert.doesNotMatch(tasksView, /\$\{error\.message\}/);
 });
 
 test('LinkedIn CSV import explains the product boundary before upload', async () => {
