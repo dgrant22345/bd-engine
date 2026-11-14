@@ -97,3 +97,14 @@ test('adding a network company to the watchlist starts tracking it instead of sk
   assert.equal(company.tracked, true);
   assert.equal(company.domain, 'wealthsimple.com');
 });
+
+test('the CSV preview shows the domain of a company already in the workspace', async () => {
+  const store = createStore();
+  const tenantId = 'tenant-preview-domain';
+  store.ensureTenant({ id: tenantId, name: 'Preview' }, { id: `${tenantId}-owner` });
+  await store.importAccountsList(tenantId, ['company,domain', 'Lightspeedhq,lightspeedhq.com'].join('\n'));
+  const preview = await store.importLinkedInCSV(tenantId, ['First Name,Last Name,URL,Email Address,Company,Position,Connected On', 'Grace,Kim,,,Lightspeed Commerce,Engineering Manager,14 Jul 2024'].join('\n'), { dryRun: true, preview: true });
+  const [company] = preview.companies;
+  assert.equal(company.alreadyTracked, true);
+  assert.equal(company.domain, 'lightspeedhq.com');
+});

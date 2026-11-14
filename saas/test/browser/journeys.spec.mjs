@@ -704,6 +704,8 @@ test('import journey: setup preview selects tracked targets and preserves networ
   // Advance to the optional contacts step: workspace → skip watchlist → contacts.
   const profile = app.locator('#setup-profile-form');
   await expect(profile).toBeVisible({ timeout: 15000 });
+  // Setup has one job: the trial and recovery prompts wait until it is done.
+  await expect(page.locator('.cloud-account-status')).toBeHidden();
   await fillProfileForm(profile);
   await profile.getByRole('button', { name: 'Continue guided setup' }).click();
   await app.locator('[data-action="setup-skip-targets"]').click({ timeout: 10000 });
@@ -716,13 +718,14 @@ test('import journey: setup preview selects tracked targets and preserves networ
     'Nina,Net,Network Only LLC,Developer,nina@gmail.com,03 Jan 2026',
   ].join('\n');
   await fileInput.setInputFiles({ name: 'connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
-  await expect(app.locator('body')).toContainText(/connections\.csv|3 connection|preview/i, { timeout: 15000 });
-
-  await app.locator('[data-action="setup-preview-csv"]').click();
+  // Choosing the file previews it; the upload and actions sit above the how-to, which folds away.
   const selection = app.locator('#setup-target-selection');
   await expect(selection).toBeVisible({ timeout: 15000 });
   await expect(selection).toContainText('Journey Robotics');
   await expect(selection).toContainText('Network Only LLC');
+  await expect(app.locator('details.onboarding-guide')).not.toHaveAttribute('open', '');
+  const [actionsBox, guideBox] = await Promise.all([app.locator('[data-action="setup-complete"]').boundingBox(), app.locator('details.onboarding-guide').boundingBox()]);
+  expect(actionsBox.y).toBeLessThan(guideBox.y);
 
   const trackedTarget = selection.locator('.setup-target-checkbox[value="journey robotics"]');
   const networkOnly = selection.locator('.setup-target-checkbox[value="network only llc"]');
