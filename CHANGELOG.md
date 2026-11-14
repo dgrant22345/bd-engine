@@ -4,6 +4,7 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Campaign graphics now use the new look, and there are new ones for the free launch: a "who to call today" graphic in two sizes, Product Hunt gallery images, a square logo and a LinkedIn Page cover. The launch kit has a free launch section with three new company Page posts and the rules for each free channel; the downloadable kit ZIP includes everything.
 - The public site now has the same look as the workspace: the home page, sign-in and sign-up, the trust and status pages, the free ATS audit, the walkthrough, the guides and the not-found page are near-black with lime actions and Space Grotesk headings. The BD mark in the site header is now the lime tile, and the browser toolbar colour matches the page.
 - The bar across the top of the signed-in app now matches the new look: near-black, with the lime BD mark, the plan badge and the account button in the same lime-on-dark style as the workspace. It had kept the older navy and teal because an earlier stylesheet loaded after the new rules.
 - The dashboard now opens on who to call today: a large count and the three people at the top of your People list (people at companies with an open role first, then relationship priority), each with their role, why now, their last outreach and one next step that opens them in People. If none of them work at a hiring company, it says so instead of counting calls. It can be hidden from Dashboard options.

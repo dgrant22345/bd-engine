@@ -1,12 +1,12 @@
 # BD Engine advertising launch kit
 
-Prepared October 10, 2026; updated October 11 for company-Page promotion. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
+Prepared October 10, 2026; updated October 11 for company-Page promotion, and November 13 for the free launch and the Bold dark look. These are ready-to-use assets and drafts; they have not been posted or purchased. Start with free promotion to independent recruiters and small recruiting agencies. A separate job-seeker set is included. Run the audiences separately so each post has one useful offer and one destination.
 
 LinkedIn publishing identity: **BD Engine's company Page only**. Do not publish, reshare, comment, send promotional messages, or invite contacts through the owner's personal LinkedIn profile. The Page URL and publishing connection still need to be supplied before any post can be sent. The copy below uses the company's voice.
 
 ## Start here
 
-Publish recruiter post 1 below as BD Engine's LinkedIn company Page, with `audit-social.png`. Before submitting, check that the composer displays the Page name and logo. On day 3, publish the walkthrough as a native video from the same Page with recruiter post 2. Use the exact tagged link in each post. Reply as the Page to people who respond, and ask what would make the workflow useful in their own recruiting business. Review the acquisition report after a week; the first goal is people trying their own target list and creating an active workspace.
+Start with the **Free launch, November 2026** section below: refresh the company Page, then publish posts A, B and C from the Page with their graphics. Before submitting, check that the composer displays the Page name and logo. The October posts further down remain available for later weeks; leave the walkthrough video out until it is re-recorded in the new look. Use the exact tagged link in each post, and reply as the Page to people who respond.
 
 The Page's public profile can link to the free audit or recruiter walkthrough. Keep the owner's personal profile, contacts, and direct messages out of this campaign. Organic Page links use `utm_source=linkedin_page` so their results stay distinct from earlier LinkedIn traffic.
 
@@ -18,20 +18,79 @@ All-in-one ZIP: https://bd-engine-production.up.railway.app/media/campaign/bd-en
 
 | Asset | Size | Download |
 | --- | --- | --- |
+| Who to call today graphic | 1200 × 630 | https://bd-engine-production.up.railway.app/media/campaign/today-social.png |
+| Who to call today square | 1080 × 1080 | https://bd-engine-production.up.railway.app/media/campaign/today-square.png |
 | Free audit graphic | 1200 × 630 | https://bd-engine-production.up.railway.app/media/campaign/audit-social.png |
 | Recruiter graphic | 1200 × 630 | https://bd-engine-production.up.railway.app/media/campaign/recruiter-social.png |
 | Recruiter square | 1080 × 1080 | https://bd-engine-production.up.railway.app/media/campaign/recruiter-square.png |
 | Job-seeker graphic | 1200 × 630 | https://bd-engine-production.up.railway.app/media/campaign/jobseeker-social.png |
 | Job-seeker square | 1080 × 1080 | https://bd-engine-production.up.railway.app/media/campaign/jobseeker-square.png |
+| Product Hunt and directory gallery | 1270 × 760 each | gallery-today.png, gallery-recruiter.png, gallery-audit.png in the same folder |
+| Square logo (Page, Discord, directories) | 400 × 400 | https://bd-engine-production.up.railway.app/media/campaign/logo-400.png |
+| LinkedIn Page cover | 1128 × 191 | https://bd-engine-production.up.railway.app/media/campaign/linkedin-cover.png |
 | Captioned 30-second walkthrough | MP4 | https://bd-engine-production.up.railway.app/media/recruiter-walkthrough.mp4 |
 
-The graphics show the current interface with clearly labelled sample data. The walkthrough shows the same sample workflow from the earlier interface. It has no audio; captions and a transcript are available at https://bd-engine-production.up.railway.app/recruiter-walkthrough.
+The graphics use the Bold dark look (November 2026) and show clearly labelled sample data; rebuild them with `scripts/build-campaign-assets.mjs` (below). The walkthrough was recorded on the earlier light interface; leave it out of new posts until it is re-recorded. It has no audio; captions and a transcript are available at https://bd-engine-production.up.railway.app/recruiter-walkthrough.
 
 When uploading a graphic, add accessible alt text:
 
+- Who to call today: “Who to call today. BD Engine sample workspace showing three people ranked by priority, each with one next step.”
 - Audit: “Check your target list. Free ATS host recognition audit with sample URLs. No signup required.”
 - Recruiter: “Know who to call next. BD Engine sample recruiter workflow combining hiring context, imported contacts, and follow-ups.”
 - Job seeker: “Give your job search a plan. BD Engine sample job-search workflow combining public roles, imported contacts, and next actions.”
+
+## Free launch, November 2026
+
+A $0 launch across the LinkedIn company Page, Discord, Hacker News, Product Hunt, Reddit, Indie Hackers and free directories, from November 16 to December 1. All links use `utm_campaign=free_launch_nov26`. LinkedIn posts go out as the company Page only, in the company's voice. Hacker News, Product Hunt, Reddit, Indie Hackers and Discord need the owner's own accounts and are written in the first person as the maker; they are not LinkedIn posts and are not posted from the personal LinkedIn profile.
+
+Before posting, refresh the Page: logo `logo-400.png`, cover `linkedin-cover.png`, tagline "Know which companies to call today: hiring signals, your own contacts and follow-ups for independent recruiters.", and a website button linked to `/?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=free_launch_nov26&utm_content=page_button`.
+
+### A. Who to call today (Nov 16) — attach today-social.png
+
+Which three people on your list are worth a call today?
+
+BD Engine now opens on that answer. It checks which of your target companies have open roles, ranks the people you already know there, and gives each one next step: draft an intro, follow up, or reply.
+
+The demo uses sample data and needs no signup:
+https://bd-engine-production.up.railway.app/?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=free_launch_nov26&utm_content=today_01
+
+Built for independent recruiters and small agencies. 14-day free trial, then $10 USD a month.
+
+What would make you trust a ranked call list?
+
+### B. Free ATS audit (Nov 19) — attach audit-social.png
+
+Which career sites are on your recruiter target list?
+
+BD Engine's free ATS coverage audit takes up to 50 public career-site URLs, shows which ATS hosts it recognizes, and exports the result as a CSV.
+
+No signup required. It checks URL patterns; it does not fetch the sites or confirm open jobs.
+
+https://bd-engine-production.up.railway.app/ats-checker?utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=free_launch_nov26&utm_content=audit_02
+
+What would you want to see next in a target-list workflow?
+
+### C. Weekly role digest (Nov 23) — attach recruiter-square.png
+
+New roles at your target companies, in one email a week.
+
+BD Engine's weekly digest lists roles first seen in the past seven days at the companies in your workspace. It is off until you turn it on from Hiring activity, where you also choose the hour it arrives on Monday.
+
+Try it during a 14-day free trial; no card needed to start:
+https://bd-engine-production.up.railway.app/?signup=1&persona=bd&plan=trial&utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=free_launch_nov26&utm_content=digest_03
+
+How do you keep track of new openings today?
+
+### Other free channels
+
+| Channel | Rule to follow | Link |
+| --- | --- | --- |
+| Hacker News (Show HN) | The demo and audit work without signup, which Show HN requires; never ask for upvotes or comments | Plain link, no tags |
+| Product Hunt | Maker profile must be an individual; asking for upvotes is not allowed; schedule for December 1, after US Thanksgiving week | Plain link |
+| Reddit | r/SideProject main feed; r/SaaS only in its Saturday feedback thread; no product links in r/recruiting | `utm_source=reddit&utm_medium=community` |
+| Indie Hackers | Product page and one launch post | `utm_source=indiehackers&utm_medium=community` |
+| Discord | Own BD Engine server for feedback; in other servers, only channels named for showcases | `utm_source=discord&utm_medium=community` |
+| Directories | SaaSHub, Startup Stash, Launching Next, Uneed, BetaList, Peerlist Launchpad, MicroLaunch, Fazier; free option only | `utm_source=directory&utm_medium=directory` |
 
 ## Recruiter posts: copy and paste
 
