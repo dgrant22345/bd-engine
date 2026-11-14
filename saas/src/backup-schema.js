@@ -20,6 +20,7 @@ export const BACKUP_TABLES = Object.freeze([
   { name: 'background_jobs', orderBy: 'tenant_id, updated_at, id', conflict: ['id'] },
   { name: 'account_closures', orderBy: 'requested_at, id', conflict: ['id'] },
   { name: 'stripe_webhook_events', orderBy: 'created_at, event_id', conflict: ['event_id'] },
+  { name: 'hiring_tracker_snapshots', orderBy: 'week', conflict: ['week'] },
   { name: 'schema_migrations', orderBy: 'id', conflict: ['id'] },
   { name: 'analytics_events', orderBy: 'id', conflict: ['id'], serial: 'id', analytics: true },
   { name: 'sessions', orderBy: 'id', conflict: ['id'], volatile: true },
