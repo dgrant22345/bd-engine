@@ -60,7 +60,7 @@ export function buildTrialEmail(kind, { name = '', createdAt, appUrl, companiesU
     subject = 'BD Engine needs a few companies to watch';
     paragraphs = [
       'Your workspace has no companies yet, so BD Engine has no job boards to read.',
-      'Paste five company domains or careers pages and BD Engine will look for their open roles within a few minutes. Starter lists for fintech, cybersecurity, AI and health tech are there if you want a quick start.',
+      'Paste five company domains or careers pages on the Companies page. BD Engine checks their job boards in its daily refresh, and you can run a refresh straight away from Settings.',
     ];
     link = { href: companiesUrl, label: 'Add companies' };
   } else if (kind === 'trial_ending') {
