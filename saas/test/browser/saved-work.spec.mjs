@@ -100,7 +100,7 @@ test('recent outreach remains visible under newer notes, warns on another introd
   await expect(page.locator('#person-draft')).toHaveValue('');
   await page.getByLabel('Outreach goal', { exact: true }).selectOption('recruiting_follow_up');
   await page.getByRole('button', { name: 'Generate draft', exact: true }).click();
-  await expect(page.locator('#person-draft')).toHaveValue(/Following up on my message about the Talent Manager/);
+  await expect(page.locator('#person-draft')).toHaveValue(/Following up on the Talent Manager role at Example Co/);
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('[data-draft-feedback]')).toContainText('Saved to your account');
   expect((await (await page.request.get(`/api/activity?contactId=${person.id}&type=outreach`)).json()).total).toBe(1);
