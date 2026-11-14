@@ -1,7 +1,7 @@
 // Run against an isolated, in-memory preview server, never a customer workspace.
 // BD_CAMPAIGN_PREVIEW_URL=http://127.0.0.1:8795 node scripts/build-campaign-assets.mjs
 //
-// Writes the campaign graphics in the Bold dark look (November 2026):
+// Writes the campaign graphics in the Refined teal look (November 2026):
 // - social (1200 × 630) and square (1080 × 1080) cards for LinkedIn and link previews
 // - Product Hunt gallery images (1270 × 760)
 // - a square logo (400 × 400) for the LinkedIn Page, Discord server and directories
@@ -19,16 +19,14 @@ const outputDir = fileURLToPath(new URL('../public/media/campaign/', import.meta
 await mkdir(outputDir, { recursive: true });
 const asset = async (path) => (await readFile(new URL(path, import.meta.url))).toString('base64');
 const mark = await asset('../public/brand-mark.svg');
-const display = await asset('../public/fonts/space-grotesk-latin-wght-normal.woff2');
 const text = await asset('../public/fonts/inter-latin-wght-normal.woff2');
 
-const palette = { bg: '#0b0f14', surface: '#141b24', line: '#222b36', ink: '#f2f5f7', soft: '#c3ccd5', muted: '#9aa7b4', accent: '#c6f432', onAccent: '#0b0f14' };
+// The workspace's light palette: every text pairing meets 4.5:1.
+const palette = { bg: '#f3f6f7', surface: '#ffffff', line: '#d5dce2', ink: '#18232f', soft: '#34424f', muted: '#526272', accent: '#0f6b65', accentDeep: '#0b5550', accentSoft: '#e7f3f1', onAccent: '#ffffff' };
 const baseCss = `
-  @font-face { font-family: 'Space Grotesk'; font-weight: 300 700; src: url(data:font/woff2;base64,${display}) format('woff2'); }
   @font-face { font-family: 'Inter'; font-weight: 100 900; src: url(data:font/woff2;base64,${text}) format('woff2'); }
   * { box-sizing: border-box; }
   body { margin: 0; background: ${palette.bg}; color: ${palette.ink}; font-family: Inter, Arial, sans-serif; }
-  h1, .brand, .display { font-family: 'Space Grotesk', Inter, Arial, sans-serif; }
 `;
 
 const browser = await chromium.launch();
@@ -98,19 +96,19 @@ try {
     const gallery = shape === 'gallery';
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>${baseCss}
       .card { width: ${width}px; height: ${height}px; padding: ${gallery ? '52px 60px' : '43px 48px'}; position: relative; overflow: hidden;
-        background: radial-gradient(ellipse at 88% 18%, #c6f43222 0, transparent 46%), ${palette.bg}; }
-      .brand { display: flex; gap: 12px; align-items: center; font-size: 27px; font-weight: 700; letter-spacing: -.3px; }
+        background: ${palette.bg}; border-top: 8px solid ${palette.accent}; }
+      .brand { display: flex; gap: 12px; align-items: center; font-size: 27px; font-weight: 700; letter-spacing: -.5px; }
       .brand img { width: 42px; height: 42px; }
       .grid { display: grid; grid-template-columns: 1fr ${gallery ? 560 : 480}px; gap: 34px; align-items: center; margin-top: ${gallery ? 54 : 34}px; }
-      .eyebrow { color: ${palette.accent}; font-size: 18px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin: 0 0 16px; }
-      h1 { font-size: ${gallery ? 74 : 66}px; line-height: 1.02; letter-spacing: -2px; margin: 0 0 20px; font-weight: 700; }
+      .eyebrow { color: ${palette.accentDeep}; font-size: 18px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin: 0 0 16px; }
+      h1 { font-size: ${gallery ? 74 : 66}px; line-height: 1.04; letter-spacing: -2.5px; margin: 0 0 20px; font-weight: 750; }
       .description { font-size: 24px; line-height: 1.45; color: ${palette.soft}; margin: 0 0 26px; }
-      .cta { display: inline-block; background: ${palette.accent}; color: ${palette.onAccent}; padding: 15px 24px; border-radius: 999px; font-size: 22px; font-weight: 700; }
-      .proof { border: 1px solid ${palette.line}; padding: 12px; background: ${palette.surface}; border-radius: 18px; box-shadow: 0 24px 60px #0009; }
-      .proof img { display: block; width: 100%; height: ${gallery ? 420 : 342}px; object-fit: contain; object-position: top; border-radius: 10px; }
+      .cta { display: inline-block; background: ${palette.accent}; color: ${palette.onAccent}; padding: 15px 24px; border-radius: 8px; font-size: 22px; font-weight: 700; }
+      .proof { border: 1px solid ${palette.line}; padding: 12px; background: ${palette.surface}; border-radius: 12px; box-shadow: 0 18px 48px #18232f1f; }
+      .proof img { display: block; width: 100%; height: ${gallery ? 420 : 342}px; object-fit: contain; object-position: top; border-radius: 8px; }
       .proof p { margin: 10px 2px 2px; color: ${palette.muted}; font-size: 15px; line-height: 1.4; }
       footer { position: absolute; left: ${gallery ? 60 : 48}px; right: ${gallery ? 60 : 48}px; bottom: 28px; border-top: 1px solid ${palette.line}; padding-top: 16px; display: flex; justify-content: space-between; align-items: center; color: ${palette.muted}; font-size: 19px; }
-      footer strong { color: ${palette.ink}; font-size: 21px; font-family: 'Space Grotesk', Inter, sans-serif; }
+      footer strong { color: ${palette.ink}; font-size: 21px; letter-spacing: -.3px; }
       ${wide ? `.grid { display: block; margin-top: 26px; } h1 { font-size: ${gallery ? 70 : 58}px; margin-bottom: 10px; } .description { margin-bottom: 18px; font-size: 22px; max-width: 760px; }
         .cta { position: absolute; right: ${gallery ? 60 : 48}px; top: ${gallery ? 50 : 40}px; font-size: 19px; padding: 12px 20px; }
         .proof { margin-top: 6px; } .proof img { height: ${square ? 560 : gallery ? 330 : 236}px; object-position: center top; }` : ''}
@@ -143,19 +141,19 @@ try {
     }
   }
 
-  // Square logo: the lime BD tile on the dark ground.
+  // Square logo: the flat teal BD tile, as in the workspace sidebar.
   await render(`<!doctype html><html><head><style>${baseCss} body { display: grid; place-items: center; width: 400px; height: 400px; }
     .tile { width: 400px; height: 400px; background: ${palette.accent}; display: grid; place-items: center; }
-    .tile span { font-family: 'Space Grotesk', Inter, sans-serif; font-weight: 700; font-size: 168px; letter-spacing: -8px; color: ${palette.onAccent}; }
+    .tile span { font-weight: 800; font-size: 168px; letter-spacing: -8px; color: ${palette.onAccent}; }
   </style></head><body><div class="tile"><span>BD</span></div></body></html>`, 400, 400, 'logo-400.png');
   written += 1;
 
-  // LinkedIn Page cover: brand line on the left, a lime rule on the right.
+  // LinkedIn Page cover: one line in ink with the key words in teal.
   await render(`<!doctype html><html><head><style>${baseCss}
     /* LinkedIn places the Page logo over the lower left of the cover, so the text sits on the right. */
     .cover { width: 1128px; height: 191px; padding: 0 56px; display: flex; align-items: center; justify-content: flex-end; text-align: right;
-      background: radial-gradient(ellipse 420px 160px at 18% 50%, #c6f4321f 0, transparent 70%), ${palette.bg}; }
-    .line { font-family: 'Space Grotesk', Inter, sans-serif; font-size: 38px; font-weight: 700; letter-spacing: -1px; margin: 0; }
+      background: ${palette.bg}; border-bottom: 6px solid ${palette.accent}; }
+    .line { font-size: 38px; font-weight: 750; letter-spacing: -1.2px; margin: 0; }
     .line em { font-style: normal; color: ${palette.accent}; }
     .sub { color: ${palette.soft}; font-size: 18px; margin: 8px 0 0; }
   </style></head><body><div class="cover"><div><p class="line">Know who to call <em>today.</em></p><p class="sub">Hiring signals, your own contacts and clear follow-ups for independent recruiters.</p></div></div></body></html>`, 1128, 191, 'linkedin-cover.png');

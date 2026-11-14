@@ -41,40 +41,38 @@ test('workspace copy stays plain: no decorative emoji and no combat metaphors', 
   assert.match(html, /<strong>Daily plan<\/strong>/);
 });
 
-test('Bold dark look: lime accent on a near-black ground, self-hosted display type', async () => {
+test('Refined teal look: light by default, white sidebar, flat teal accent, self-hosted Inter', async () => {
   const [visual, workspace, html] = await Promise.all([asset('visual.css'), asset('workspace.css'), asset('index.html')]);
-  const bold = visual.slice(visual.indexOf('/* ── Bold dark'));
-  assert.match(bold, /\[data-theme="dark"\] \{[^}]*--bg: #0b0f14;[^}]*--accent: #c6f432;[^}]*--on-accent: #0b0f14;/);
-  assert.match(workspace, /@font-face \{ font-family: 'Space Grotesk';[^}]*url\('\/fonts\/space-grotesk-latin-wght-normal\.woff2'\)/);
-  assert.match(workspace, /--font-display: "Space Grotesk"/);
-  assert.match(html, /<html lang="en" data-theme="dark"/);
-  assert.doesNotMatch(`${visual}\n${workspace}`, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
+  const teal = visual.slice(visual.indexOf('/* ── Refined teal'));
+  assert.ok(teal.length > 100, 'Refined teal block present, last in visual.css');
+  assert.match(teal, /:root:not\(\[data-theme="dark"\]\) \{[^}]*--bg: #f3f6f7;[^}]*--sidebar-bg: #fff;[^}]*--radius: 8px;/);
+  assert.match(workspace, /:root, \[data-theme="light"\] \{[^}]*--accent: #0f6b65;[^}]*--on-accent: #fff;/);
+  assert.match(workspace, /\[data-theme="dark"\] \{[^}]*--bg: #10191f;[^}]*--accent: #80d4c5;/);
+  assert.match(workspace, /@font-face \{ font-family: 'Inter';[^}]*url\('\/fonts\/inter-latin-wght-normal\.woff2'\)/);
+  assert.match(html, /<html lang="en" data-theme="light"/);
+  // The Bold dark look is gone everywhere in the workspace.
+  assert.doesNotMatch(`${visual}\n${workspace}`, /#c6f432|#0b0f14|Space Grotesk|fonts\.googleapis\.com|fonts\.gstatic\.com/i);
 });
 
-test('signed-in bar follows the Bold look from one place', async () => {
+test('signed-in bar follows the Refined teal look from one place', async () => {
   const site = name => readFile(new URL(`../public/${name}`, import.meta.url), 'utf8');
   const [brand, cloud] = await Promise.all([site('brand.css'), site('cloud.css')]);
-  // brand.css loads after cloud.css, so any .cloud-shell rule there would put
-  // the older navy and teal back over the Bold block.
+  // brand.css loads after cloud.css, so any .cloud-shell rule there would
+  // override the shell rules below.
   assert.doesNotMatch(brand, /\.cloud-shell/);
-  const bold = cloud.slice(cloud.indexOf("/* Signed-in chrome follows the workspace's Bold dark look"));
-  assert.match(bold, /\.cloud-shell \.cloud-topbar \{ background: #0b0f14;/);
-  assert.match(bold, /\.cloud-shell \.brand-icon-xs svg rect \{ fill: #c6f432; \}/);
-  assert.match(bold, /\.cloud-shell \.cloud-avatar \{ background: #232f17; color: #d8fa6b;/);
+  const teal = cloud.slice(cloud.indexOf('/* Refined teal (November 2026)'));
+  assert.match(teal, /\.cloud-shell \.brand-icon-xs svg rect \{ fill: #0f6b65; \}/);
+  assert.match(teal, /\.cloud-shell \.cloud-avatar \{ background: #234449; color: #b8f4e9;/);
+  assert.doesNotMatch(cloud, /#c6f432|#d8fa6b|#232f17/i);
 });
 
-test('public pages settle on the Bold dark palette, last in brand.css', async () => {
+test('public pages keep the light navy-and-teal palette and a flat teal mark', async () => {
   const site = name => readFile(new URL(`../public/${name}`, import.meta.url), 'utf8');
   const [brand, mark, landing, ats, notFound, guides] = await Promise.all([
     site('brand.css'), site('brand-mark.svg'), site('index.html'), site('ats-checker.html'), site('404.html'), site('guides/index.html'),
   ]);
-  const start = brand.indexOf('/* ── Bold dark (November 2026)');
-  assert.ok(start > 0, 'Bold dark block present');
-  const bold = brand.slice(start);
-  // Nothing after the Bold block may reintroduce a light public palette.
-  assert.doesNotMatch(bold, /#(?:f3f6fa|f8fafc|ffffff|fff)\b/i);
-  assert.match(bold, /\.landing, \.auth-page, \.trust-page, \.public-premium \{[^}]*color-scheme: dark;[^}]*--bold-bg: #0b0f14;[^}]*--bold-accent: #c6f432;/);
-  assert.match(brand, /@font-face \{\s*font-family: 'Space Grotesk';[^}]*url\('\/fonts\/space-grotesk-latin-wght-normal\.woff2'\)/);
-  assert.match(mark, /fill="#c6f432"/);
-  for (const html of [landing, ats, notFound, guides]) assert.match(html, /<meta name="theme-color" content="#0b0f14">/);
+  assert.doesNotMatch(brand, /Bold dark|--bold-|#c6f432|Space Grotesk/i);
+  assert.match(brand, /\.public-premium \{ color-scheme: light;[^}]*--accent: #0f6b65;/);
+  assert.match(mark, /<rect width="48" height="48" rx="10" fill="#0f6b65"\/>/);
+  for (const html of [landing, ats, notFound, guides]) assert.match(html, /<meta name="theme-color" content="#f(?:8fafc|3f6fa)">/);
 });
