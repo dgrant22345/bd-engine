@@ -908,6 +908,16 @@ export async function initDb({ migrate = true, readOnly = false } = {}) {
       `);
     });
 
+    await runSchemaMigration('20261114_hiring_tracker', 'Weekly Canadian hiring tracker snapshots from public job sites', async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS hiring_tracker_snapshots (
+          week TEXT PRIMARY KEY,
+          taken_at TEXT NOT NULL,
+          body JSONB NOT NULL
+        );
+      `);
+    });
+
     dbReady = true;
     console.log('  DB: PostgreSQL connected and tables ready');
     return true;
