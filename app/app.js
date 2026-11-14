@@ -5276,6 +5276,11 @@ async function watchBackgroundJob(jobId, options = {}) {
   while (true) {
     const job = await api(`/api/background-jobs/${jobId}`, { skipCache: true });
     updateBackgroundProgressPanel(job, label);
+    options.onProgress?.(job);
+    // A finished job's progress line would otherwise stay up until the next render.
+    if (['completed', 'failed', 'cancelled'].includes(job.status) && appAlert?.classList.contains('app-alert--progress')) {
+      window.bdLocalApi.setAlert('', appAlert);
+    }
     try {
       const runtime = await loadRuntimeStatus(true);
       hydrateAdminRuntimePanels(runtime);
@@ -5315,7 +5320,7 @@ async function watchBackgroundJob(jobId, options = {}) {
       link.textContent = `View available roles (${available})`;
     }
     const pct = Number.isFinite(Number(job.progress)) ? ` ${Math.round(Number(job.progress))}%` : '';
-    window.bdLocalApi.setAlert(`${label}${pct}: ${job.progressMessage || humanize(job.status)}`, appAlert);
+    window.bdLocalApi.setAlert(`${label}${pct}: ${job.progressMessage || humanize(job.status)}`, appAlert, { tone: 'progress', progress: job.progress });
     await sleep(2000);
   }
 }
@@ -5715,11 +5720,18 @@ async function renderSetupWizard() {
     : current.label;
   const setupEyebrow = `${steps.length} quick steps`;
   const auditedSites = current.key === 'profile' ? getAuditedSetupSiteCount() : 0;
+  const refreshQueued = Boolean((appState.setupResult?.targetImport || appState.setupTargetImportResult)?.workflowQueued);
+  const recruiterIntro = {
+    profile: 'Start reviewing people immediately, or continue guided setup to configure optional company and hiring intelligence.',
+    launch: refreshQueued
+      ? 'BD Engine is checking your companies for open roles now. Open the dashboard; who to call fills in as roles are found.'
+      : 'Open the dashboard to see who to call. You can add companies and people at any time.',
+  }[current.key] || 'Add the companies to watch, then your LinkedIn connections if you like. BD Engine finds their open roles and ranks who to call.';
   const setupIntro = auditedSites
     ? `The ${auditedSites === 1 ? 'career site' : `${formatNumber(auditedSites)} career sites`} from your audit ${auditedSites === 1 ? 'is' : 'are'} waiting in the next step. Confirm the workspace name to review ${auditedSites === 1 ? 'it' : 'them'}.`
     : jobSeeker
       ? 'Start with companies you care about, then add contacts when you are ready to map warm paths.'
-      : 'Start reviewing people immediately, or continue guided setup to configure optional company and hiring intelligence.';
+      : recruiterIntro;
   setViewTitle(setupTitle);
   workspaceName.textContent = draft.workspaceName || appState.setupStatus?.workspace?.name || 'BD Engine';
   window.bdLocalApi.setAlert('', appAlert);
@@ -5742,7 +5754,7 @@ async function renderSetupWizard() {
             `).join('')}
           </ol>
         </div>
-        ${renderSetupValueGuide(appState.setupStatus?.readiness, jobSeeker, auditedSites)}
+        ${renderSetupValueGuide(appState.setupStatus?.readiness, jobSeeker, auditedSites, current.key)}
         ${renderSetupStepContent(current.key)}
       </div>
     </section>
@@ -5755,9 +5767,31 @@ async function renderSetupWizard() {
   }
 }
 
-function renderSetupValueGuide(readiness = {}, jobSeeker = false, auditedSites = 0) {
+// The recruiter's running tally: what the workspace holds so far, with copy
+// that matches the step (people first on the opening step, then companies).
+function renderRecruiterSetupTally(readiness = {}, stepKey = '') {
+  const metrics = readiness?.metrics || {};
+  // The watchlist is saved when setup finishes, so before then count the
+  // companies listed in the draft; after, the companies the import added.
+  const targetImport = appState.setupResult?.targetImport || appState.setupTargetImportResult;
+  const planned = appState.setupTargetsSkipped ? 0 : parseSetupTargetSites(appState.setupDraft.targetSites).targets.length;
+  const added = Number(targetImport?.count || 0) + (Array.isArray(targetImport?.skipped) ? targetImport.skipped.length : 0);
+  const companies = Math.max(Number(metrics.accountCount || 0), stepKey === 'launch' ? added : planned);
+  const showCompanies = stepKey === 'import' || stepKey === 'launch';
+  const people = Number(metrics.contactCount || 0);
+  const importing = stepKey === 'launch' && Boolean(appState.setupResult?.importQueued);
+  const copy = {
+    profile: ['A workspace for your recruiting network', 'Import connections or add one person. Review source details, keep notes, and prepare outreach. Company tracking can be configured later.'],
+    targets: ['Companies first', 'BD Engine checks the companies you add for open roles. People you import next are linked to them.'],
+    import: ['People link to your companies', 'Connections at the companies you added are linked to them, so each person shows the open roles where they work.'],
+    launch: ['Your workspace so far', importing ? 'Your connections are still importing; the count updates when the import finishes.' : 'Add companies and people at any time from Companies and People.'],
+  }[stepKey] || ['Your workspace so far', ''];
+  return `<div class="setup-value-guide"><div><strong>${escapeHtml(copy[0])}</strong>${copy[1] ? `<p class="muted small">${escapeHtml(copy[1])}</p>` : ''}</div><div class="setup-people-count">${!showCompanies ? '' : `<strong>${formatNumber(companies)}</strong><span> ${companies === 1 ? 'company' : 'companies'} · </span>`}${importing ? '<strong>Importing</strong><span> people</span>' : `<strong>${formatNumber(people)}</strong><span> ${people === 1 ? 'person' : 'people'} saved</span>`}</div></div>`;
+}
+
+function renderSetupValueGuide(readiness = {}, jobSeeker = false, auditedSites = 0, stepKey = '') {
   if (!jobSeeker && auditedSites) return `<div class="setup-value-guide"><div><strong>A watchlist from your audit</strong><p class="muted small">BD Engine will add these companies and look for current roles on the job boards it can read. You can import connections or add people at any time.</p></div><div class="setup-people-count"><strong>${formatNumber(auditedSites)}</strong><span> career site${auditedSites === 1 ? '' : 's'} ready</span></div></div>`;
-  if (!jobSeeker) return `<div class="setup-value-guide"><div><strong>A workspace for your recruiting network</strong><p class="muted small">Import connections or add one person. Review source details, keep notes, and prepare outreach. Company tracking can be configured later.</p></div><div class="setup-people-count"><strong>${formatNumber(readiness?.metrics?.contactCount || 0)}</strong><span> people saved</span></div></div>`;
+  if (!jobSeeker) return renderRecruiterSetupTally(readiness, stepKey);
   const metrics = readiness?.metrics || {};
   const visibleChecks = [
     { label: jobSeeker ? 'Target companies' : 'Target accounts', value: Number(metrics.accountCount || 0), target: 5, suffix: '' },
@@ -5911,31 +5945,11 @@ function renderSetupStepContent(stepKey) {
           <p class="muted">${importCopyHtml}</p>
         </div>
 
-        <div class="data-use-notice" role="note">
-          <strong>Your LinkedIn account stays separate.</strong>
-          <span>BD Engine does not log into LinkedIn or automate LinkedIn activity. It only reads the Connections.csv file you choose so it can match existing contacts to companies in your workspace. Review LinkedIn's terms and your organization's policies before uploading exported data.</span>
-        </div>
-        
-        <div class="onboarding-guide onboarding-guide--setup">
-          <p class="onboarding-guide__title">How to get your Connections.csv:</p>
-          <ol class="onboarding-guide__list">
-            <li>Use LinkedIn on a desktop browser and open <strong>Me</strong>, then <strong>Settings & Privacy</strong>.</li>
-            <li>Click <strong>Data privacy</strong>, then <strong>Get a copy of your data</strong>.</li>
-            <li>Choose the data archive option that includes <strong>Connections</strong>, then click <strong>Request archive</strong>.</li>
-            <li>When LinkedIn emails the download link, unzip the archive and upload <code>Connections.csv</code> here.</li>
-          </ol>
-          <div class="onboarding-guide__note">
-            <span class="toast-icon">&#8505;</span>
-            <span>LinkedIn sends the archive link to your primary email. <a href="https://www.linkedin.com/help/linkedin/answer/a566336/export-connections-from-linkedin" target="_blank" rel="noopener">Open LinkedIn's export guide</a>.</span>
-          </div>
-        </div>
-
-        ${renderSetupSamplePanel(jobSeeker)}
         <input id="setup-csv-file" class="hidden" type="file" accept="${IMPORT_FILE_ACCEPT}" />
         <div id="setup-drop-zone" class="setup-drop-zone" tabindex="0" role="button" aria-label="Upload LinkedIn Connections CSV">
           <strong>${hasCsv ? escapeHtml(appState.setupCsvFileName || 'Connections.csv') : 'Drop Connections.csv here'}</strong>
-          <span>${hasCsv ? 'Ready to preview or import.' : 'or choose the file from your computer'}</span>
-          <button class="secondary-button" type="button" data-action="setup-browse-csv">Choose CSV</button>
+          <span>${!hasCsv ? 'or choose the file from your computer' : appState.setupPreview ? 'Previewed below. Choose another file to replace it.' : 'Ready to preview.'}</span>
+          <button class="secondary-button" type="button" data-action="setup-browse-csv">${hasCsv ? 'Choose another file' : 'Choose CSV'}</button>
         </div>
         ${renderSetupPreview()}
         ${appState.setupBusy ? renderSetupProgress('Starting setup', appState.setupProgressMessage || 'Saving your setup and preparing the import...') : ''}
@@ -5946,6 +5960,26 @@ function renderSetupStepContent(stepKey) {
             ? `<button class="primary-button" type="button" data-action="setup-complete" ${appState.setupBusy || !appState.setupPreview ? 'disabled' : ''}>${appState.setupBusy ? 'Importing...' : appState.setupPreview ? 'Import and finish setup' : 'Preview before importing'}</button>`
             : `<button class="primary-button" type="button" data-action="setup-skip-import" ${appState.setupBusy ? 'disabled' : ''}>Finish setup</button>`}
         </div>
+        <div class="data-use-notice" role="note">
+          <strong>Your LinkedIn account stays separate.</strong>
+          <span>BD Engine does not log into LinkedIn or automate LinkedIn activity. It only reads the Connections.csv file you choose so it can match existing contacts to companies in your workspace. Review LinkedIn's terms and your organization's policies before uploading exported data.</span>
+        </div>
+
+        <details class="onboarding-guide onboarding-guide--setup" ${hasCsv ? '' : 'open'}>
+          <summary class="onboarding-guide__title">How to get your Connections.csv</summary>
+          <ol class="onboarding-guide__list">
+            <li>Use LinkedIn on a desktop browser and open <strong>Me</strong>, then <strong>Settings & Privacy</strong>.</li>
+            <li>Click <strong>Data privacy</strong>, then <strong>Get a copy of your data</strong>.</li>
+            <li>Choose the data archive option that includes <strong>Connections</strong>, then click <strong>Request archive</strong>.</li>
+            <li>When LinkedIn emails the download link, unzip the archive and upload <code>Connections.csv</code> here.</li>
+          </ol>
+          <div class="onboarding-guide__note">
+            <span class="toast-icon">&#8505;</span>
+            <span>LinkedIn sends the archive link to your primary email. <a href="https://www.linkedin.com/help/linkedin/answer/a566336/export-connections-from-linkedin" target="_blank" rel="noopener">Open LinkedIn's export guide</a>.</span>
+          </div>
+        </details>
+
+        ${renderSetupSamplePanel(jobSeeker)}
       </div>
     `;
   }
@@ -5969,7 +6003,7 @@ function renderSetupStepContent(stepKey) {
       { label: jobSeeker ? 'Companies added' : 'Accounts added', value: targetImport?.count || 0 },
       { label: 'Already present', value: Array.isArray(targetImport?.skipped) ? targetImport.skipped.length : 0 },
       { label: 'Saved for later', value: pendingTargetCount },
-      { label: 'Monitoring queued', value: targetImport?.workflowQueued ? 1 : 0 },
+      { label: 'Checking for roles', value: targetImport?.workflowQueued ? Number(targetImport?.count || 0) + (Array.isArray(targetImport?.skipped) ? targetImport.skipped.length : 0) : 0 },
     ] : [
       { label: 'Imported', value: stats.imported || 0 },
       { label: 'Updated', value: stats.updated || 0 },
@@ -6064,7 +6098,7 @@ function renderSetupTargetSelection(preview) {
       + (disabled ? ' disabled' : '')
       + ' aria-label="Track ' + escapeAttr(company.companyName) + '"></td>'
       + '<td><strong>' + escapeHtml(company.companyName) + '</strong><div class="small muted">'
-      + escapeHtml(company.domain || 'Domain not found') + '</div></td>'
+      + escapeHtml(company.domain || '') + '</div></td>'
       + '<td>' + formatNumber(company.contactCount || 0) + '</td>'
       + '<td><span class="status-pill">' + escapeHtml(status) + '</span><div class="small muted">'
       + escapeHtml(company.rankReason || '') + '</div></td>'
@@ -6202,8 +6236,8 @@ async function handleSetupCsvFile(file) {
   appState.setupPreview = null;
   appState.setupTrackedCompanies = [];
 
-  await renderSetupWizard();
-  showToast(`Loaded ${file.name} (${formatFileSize(file.size || 0)}).`, 'success');
+  // Preview straight away: nothing is saved until "Import and finish setup".
+  await previewSetupCsv();
 }
 // Chooses how to tell the server which companies to track without putting
 // thousands of names in the URL (long URLs are rejected before they reach the
@@ -6344,16 +6378,17 @@ async function queueSetupSignalRefresh(targetImport) {
 }
 
 function watchSetupSignalRefresh(jobId) {
-  void watchBackgroundJob(jobId, { label: 'First hiring-signal refresh', refreshRoute: false }).then(async (job) => {
+  void watchBackgroundJob(jobId, { label: 'Checking your companies for open roles', refreshRoute: false }).then(async (job) => {
     appState.setupSignalJobId = '';
     invalidateAppData();
     if (job?.status === 'completed') {
       showToast('Your first hiring-signal refresh is ready.', 'success', 7000);
       if (getRouteRoot() === 'dashboard') await renderDashboardView();
     }
-  }).catch((error) => {
+  }).catch(async (error) => {
     appState.setupSignalJobId = '';
     showToast(`The first signal refresh needs attention: ${error.message || error}`, 'warning', 8000);
+    if (getRouteRoot() === 'dashboard') await renderDashboardView();
   });
 }
 
@@ -10616,11 +10651,16 @@ function renderDashboardToday(people, dashboard = {}) {
   const focusJobs = Number(summaryData.focusJobCount || 0);
   const focusCompanies = Number(summaryData.focusAccountCount || 0);
   const focusLabel = focusSet ? describeFocusRoles() : '';
+  // While the first refresh after setup is still reading job boards, an empty
+  // count means "not checked yet", not "no open roles".
+  const checking = Boolean(appState.setupSignalJobId) && !count;
   const heading = count
     ? `${count === 1 ? 'One call' : `${count} calls`} worth making today`
-    : 'Your highest-priority people';
+    : checking ? 'Checking your companies for open roles' : 'Your highest-priority people';
   let summary;
-  if (focusSet && summaryData.focusJobCount != null) {
+  if (checking) {
+    summary = 'BD Engine is reading your companies\' job boards; the bar above shows how far along it is. Who to call appears here when it finishes. Until then, these are your highest-priority people.';
+  } else if (focusSet && summaryData.focusJobCount != null) {
     summary = `${pluralize(focusJobs, 'role')} in your focus${focusLabel ? ` (${focusLabel})` : ''} at ${pluralize(focusCompanies, 'company', 'companies')}, of ${pluralize(activeRoles, 'open role')} in your workspace.`;
     if (!count) summary = `None of the people at the top of your list work at a company with a role in your focus. ${summary}`;
   } else {
@@ -10634,7 +10674,9 @@ function renderDashboardToday(people, dashboard = {}) {
     const newRoles = Number(context.newRoles7d || 0);
     const company = escapeHtml(person.companyName || 'their company');
     let why;
-    if (!openRoles) {
+    if (!openRoles && checking && person.companyName) {
+      why = `Checking ${company} for open roles.`;
+    } else if (!openRoles) {
       why = `${escapeHtml(person.companyName || 'Company not recorded')}: no open role on record.`;
     } else if (focusSet && context.focusRoles != null) {
       const focusRoles = Number(context.focusRoles || 0);

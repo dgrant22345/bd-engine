@@ -3435,7 +3435,7 @@ a:hover { text-decoration: underline; }
 .cloud-trial-details > summary { cursor: pointer; min-height: 30px; align-content: center; }
 .cloud-trial-details > p { margin: 6px 0; line-height: 1.5; }
 .cloud-trial-details > summary:focus-visible { outline: 2px solid #0f6b65; outline-offset: 2px; }
-.cloud-account-status:empty { display: none; }
+.cloud-account-status:empty, .cloud-account-status[hidden] { display: none; }
 .cloud-shell .cloud-plan-badge { background: #25403e; color: #b6eee2; border-color: #50776d; }
 .cloud-shell .cloud-user-menu button:focus-visible { outline: 2px solid #80d4c5; outline-offset: 2px; }
 .landing { --landing-accent: #0f6b65; --landing-accent-hover: #0b5550; --landing-surface-soft: #e7f3f1; }

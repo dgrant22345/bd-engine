@@ -7510,7 +7510,7 @@ function rankLinkedInCompanyCandidates(companyMap, existingAccountsMap, availabl
     return {
       key,
       companyName: company.displayName,
-      domain: company.domain || '',
+      domain: company.domain || existingAccount?.domain || '',
       contactCount: company.contacts.length,
       seniorContactCount,
       talentContactCount,
