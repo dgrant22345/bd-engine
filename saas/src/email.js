@@ -126,7 +126,7 @@ export async function sendFollowupReminderEmail({ to, tasks, total, date, appUrl
     kind: 'follow-up reminder', idempotencyKey });
 }
 
-// Weekly digest of roles first seen in the past seven days, grouped by
+// Weekly digest of roles that are new in the past seven days, grouped by
 // company. Sent only to people who turned it on; every message says why it
 // was sent and links to the setting that turns it off.
 export function buildRoleDigestEmail({ companies, total, companyCount, appUrl, settingsUrl }) {
@@ -137,8 +137,8 @@ export function buildRoleDigestEmail({ companies, total, companyCount, appUrl, s
   const footer = 'You are receiving this because you turned on the weekly role digest in BD Engine.';
   return {
     subject: `BD Engine: ${roles} at ${where} this week`,
-    text: [`Roles first seen in the past seven days at companies in your workspace: ${roles} at ${where}.`, '', ...lines, '', more, `Review them: ${appUrl}`, '', footer, `Turn it off: ${settingsUrl}`].filter((line, index, all) => line || all[index - 1]).join('\n'),
-    html: `<p>Roles first seen in the past seven days at companies in your workspace: <strong>${escapeHtml(roles)}</strong> at ${escapeHtml(where)}.</p><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>${more ? `<p>${escapeHtml(more)}</p>` : ''}<p><a href="${escapeAttr(appUrl)}">Review these roles</a></p><p style="color:#5b6770;font-size:13px">${escapeHtml(footer)} <a href="${escapeAttr(settingsUrl)}">Turn it off</a>.</p>`,
+    text: [`New roles in the past seven days at companies in your workspace: ${roles} at ${where}.`, '', ...lines, '', more, `Review them: ${appUrl}`, '', footer, `Turn it off: ${settingsUrl}`].filter((line, index, all) => line || all[index - 1]).join('\n'),
+    html: `<p>New roles in the past seven days at companies in your workspace: <strong>${escapeHtml(roles)}</strong> at ${escapeHtml(where)}.</p><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>${more ? `<p>${escapeHtml(more)}</p>` : ''}<p><a href="${escapeAttr(appUrl)}">Review these roles</a></p><p style="color:#5b6770;font-size:13px">${escapeHtml(footer)} <a href="${escapeAttr(settingsUrl)}">Turn it off</a>.</p>`,
   };
 }
 

@@ -28,9 +28,12 @@ const REQUIRED_JOB_FIELDS = [
   'source',
   'jobId',
   'naturalKey',
-  'postedAt',
   'retrievedAt',
 ];
+
+// A posting date is required only when the source publishes one; otherwise the
+// role must carry firstSeenAt so it can be dated honestly.
+const SOURCES_WITHOUT_POSTING_DATES = new Set(['jobvite']);
 
 function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
@@ -101,6 +104,10 @@ export async function runAtsBenchmark({ logger = console } = {}) {
         ? REQUIRED_JOB_FIELDS.filter((field) => !String(job[field] || '').trim())
         : ['normalized job'];
       if (job?.active !== true) missing.push('active state');
+      if (job && !String(job.postedAt || '').trim()) {
+        if (!SOURCES_WITHOUT_POSTING_DATES.has(provider.atsType)) missing.push('postedAt');
+        else if (!String(job.firstSeenAt || '').trim()) missing.push('firstSeenAt');
+      }
       return {
         provider: provider.atsType,
         jobs: jobs.length,

@@ -2872,7 +2872,7 @@ export function createStore() {
           if (!job.active || !wantedAccounts.has(job.accountId)) continue;
           const entry = context.roles.get(job.accountId) || { openRoles: 0, newRoles7d: 0 };
           entry.openRoles += 1;
-          if (String(job.firstSeenAt || job.createdAt || '') >= since) entry.newRoles7d += 1;
+          if (getJobNewSince(job) >= since) entry.newRoles7d += 1;
           context.roles.set(job.accountId, entry);
         }
         for (const activity of activitiesForTenant(tenantId)) {
@@ -4674,6 +4674,9 @@ export function createStore() {
         let configKept = 0;
         let configInvalidRows = 0;
         const seenJobIds = new Set();
+        // A board's first successful import is a baseline: roles already on it
+        // count as new only when their own posting date is recent.
+        const baselineImport = !config.lastImportedAt;
 
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
@@ -4682,6 +4685,8 @@ export function createStore() {
           normalizedJob.url = normalizedJob.jobUrl;
           const naturalKey = getJobNaturalKey(normalizedJob);
           const providerIdentity = getProviderJobIdentity(normalizedJob);
+          const postedMs = /30\+/.test(normalizedJob.postingAgeText || '') ? NaN : Date.parse(normalizedJob.postedAt || '');
+          const postedSince = Number.isFinite(postedMs) ? new Date(postedMs).toISOString() : '';
           const existingJob = existingByNaturalKey.get(naturalKey)
             || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null);
           // Presence on a board is independent of the user's import geography.
@@ -4707,10 +4712,12 @@ export function createStore() {
               createdAt: existingJob.createdAt || normalizedJob.createdAt,
               naturalKey,
               firstSeenAt: existingJob.firstSeenAt || existingJob.createdAt || normalizedJob.createdAt,
+              newSince: postedSince || (existingJob.newSince ?? (existingJob.firstSeenAt || existingJob.createdAt || '')),
               lastSeenAt: now(),
               importRunId,
               updatedAt: now(),
             });
+            existingJob.isNew = postedSince ? isWithinNewWindow(postedMs) : isRecentlyNew(existingJob);
             changedJobs.push(existingJob);
             existingByNaturalKey.set(naturalKey, existingJob);
             if (providerIdentity) existingByProviderIdentity.set(providerIdentity, existingJob);
@@ -4732,11 +4739,13 @@ export function createStore() {
               tenantId,
               naturalKey,
               firstSeenAt: now(),
+              newSince: postedSince || (baselineImport || normalizedJob.postingAgeText ? '' : now()),
               lastSeenAt: now(),
               importRunId,
               createdAt: now(),
               updatedAt: now(),
             });
+            newJob.isNew = postedSince ? isWithinNewWindow(postedMs) : isRecentlyNew(newJob);
             changedJobs.push(newJob);
             tenantJobs.unshift(newJob);
             jobs.push(newJob);
@@ -6916,6 +6925,29 @@ function daysSince(value) {
   return Math.floor((Date.now() - new Date(value).getTime()) / 86400000);
 }
 
+function toIsoTimestamp(value) {
+  if (!value) return '';
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : '';
+}
+
+// When a role counts as new: its posting date when the source gives one,
+// otherwise when BD Engine first saw it after the board's first import ('' =
+// not new). Records written before newSince existed fall back to first seen.
+function getJobNewSince(item = {}) {
+  if (item.newSince !== undefined && item.newSince !== null) return String(item.newSince);
+  return String(item.firstSeenAt || item.createdAt || '');
+}
+
+function isWithinNewWindow(timeMs) {
+  return Math.floor((Date.now() - timeMs) / 86400000) <= 7;
+}
+
+function isRecentlyNew(item) {
+  const since = getJobNewSince(item);
+  return Boolean(since) && daysSince(since) <= 7;
+}
+
 const ATS_FETCHERS = new Map([
   ['greenhouse', fetchGreenhouseJobs],
   ['lever', fetchLeverJobs],
@@ -7505,12 +7537,26 @@ function getWorkdayDescriptor(config = {}) {
   }
   if (!site) return null;
   const baseUrl = `${parsed.protocol}//${parsed.hostname}`;
+  // The public board is /<site> (or /<locale>/<site>); the cxs path is the JSON API.
+  const publicSegments = cxsIndex >= 0 ? [site] : segments.slice(0, Math.max(1, segments.indexOf(site) + 1));
   return {
     tenant,
     site,
     apiUrl: `${baseUrl}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`,
-    resolvedBoardUrl: `${baseUrl}/${segments.slice(0, Math.max(1, segments.indexOf(site) + 1)).join('/')}`,
+    resolvedBoardUrl: `${baseUrl}/${publicSegments.join('/')}`,
   };
+}
+
+// Workday's externalPath ("/job/Toronto-ON/Analyst_R123") is relative to the
+// career site, not the host: <host>/<site>/job/... opens the role, while
+// <host>/job/... returns 404.
+function resolveWorkdayJobUrl(externalPath, config = {}, descriptor = null) {
+  const path = String(externalPath || '').trim();
+  if (!path || /^https?:\/\//i.test(path)) return path;
+  const configured = String(config.resolvedBoardUrl || '');
+  const boardUrl = /\.myworkdayjobs\.com\/(?!wday\/)/i.test(configured) ? configured : descriptor?.resolvedBoardUrl;
+  if (!boardUrl) return path;
+  return `${boardUrl.replace(/[?#].*$/, '').replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
 async function fetchGreenhouseJobs(config, boardId) {
@@ -7759,6 +7805,9 @@ async function fetchWithPublicRedirects(url, init = {}) {
     }
     const location = response.headers.get('location');
     if (!location) return { response, finalUrl: response.url || currentUrl };
+    // Workday sends every request to a maintenance page during its scheduled
+    // windows; say so instead of reporting a broken board.
+    if (/maintenance/i.test(location)) throw new Error('ATS is in scheduled maintenance; existing jobs preserved and the next refresh retries.');
     if (!['GET', 'HEAD'].includes(method)) throw new Error('ATS write requests cannot follow redirects.');
     if (redirects === 5) throw new Error('ATS request exceeded the redirect limit.');
     currentUrl = await validatePublicUrl(new URL(location, currentUrl).toString());
@@ -8775,11 +8824,12 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.internal_job_id || title, raw.location?.name || ''),
       jobUrl: raw.absolute_url || raw.url || '',
       url: raw.absolute_url || raw.url || '',
-      postedAt: raw.first_published || raw.updated_at || raw.created_at || retrievedAt,
+      // updated_at moves whenever a posting is edited; it is not a posting date.
+      postedAt: raw.first_published || raw.created_at || '',
       retrievedAt,
       importedAt: retrievedAt,
       active: true,
-      isNew: daysSince(raw.first_published || raw.updated_at || retrievedAt) <= 7,
+      isNew: daysSince(raw.first_published || raw.created_at) <= 7,
       isGta: isGtaLocation(raw.location?.name || ''),
     };
   }
@@ -8788,7 +8838,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     if (!title) return null;
     const locations = [...new Set([raw.categories?.location || raw.location, ...(raw.categories?.allLocations || [])].filter((value) => typeof value === 'string' && value.trim()))];
     const location = locations.join(' | ');
-    const postedAt = raw.createdAt ? new Date(Number(raw.createdAt)).toISOString() : (raw.updatedAt || retrievedAt);
+    const postedAt = raw.createdAt ? new Date(Number(raw.createdAt)).toISOString() : '';
     return {
       tenantId: config.tenantId,
       accountId,
@@ -8836,19 +8886,23 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.jobId || title, location),
       jobUrl: raw.jobUrl || raw.applyUrl || raw.externalLink || '',
       url: raw.jobUrl || raw.applyUrl || raw.externalLink || '',
-      postedAt: raw.publishedAt || raw.updatedAt || retrievedAt,
+      postedAt: raw.publishedAt || '',
       retrievedAt,
       importedAt: retrievedAt,
       active: true,
-      isNew: daysSince(raw.publishedAt || retrievedAt) <= 7,
+      isNew: daysSince(raw.publishedAt) <= 7,
       isGta: isGtaLocation(location),
     };
   }
   if (atsType === 'smartrecruiters') {
     const title = raw.name || raw.title || '';
     if (!title) return null;
-    const location = [raw.location?.city, raw.location?.region, raw.location?.country].filter(Boolean).join(', ') || raw.location || '';
-    const postedAt = raw.releasedDate || raw.createdOn || raw.updatedOn || retrievedAt;
+    // fullLocation names the country ("Montreal, QC, Canada"); country alone is an
+    // ISO code ("ca") that reads as California.
+    const location = (typeof raw.location?.fullLocation === 'string' && raw.location.fullLocation.trim())
+      || [raw.location?.city, raw.location?.region, raw.location?.country].filter(Boolean).join(', ') || (typeof raw.location === 'string' ? raw.location : '');
+    const postedAt = raw.releasedDate || raw.createdOn || raw.updatedOn || '';
+    const jobUrl = getSmartRecruitersJobUrl(raw, config);
     return {
       tenantId: config.tenantId,
       accountId,
@@ -8862,8 +8916,8 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       source: 'SmartRecruiters',
       jobId: String(raw.id || raw.ref || title),
       naturalKey: makeJobNaturalKey(config, atsType, raw.id || raw.ref || title, location),
-      jobUrl: raw.ref || raw.applyUrl || raw.jobAd?.publicUrl || '',
-      url: raw.ref || raw.applyUrl || raw.jobAd?.publicUrl || '',
+      jobUrl,
+      url: jobUrl,
       postedAt,
       retrievedAt,
       importedAt: retrievedAt,
@@ -8876,7 +8930,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = raw.location || raw.locationName || raw.jobLocation || raw.city || '';
-    const postedAt = raw.postedDate || raw.postedAt || raw.createdDate || retrievedAt;
+    const postedAt = raw.postedDate || raw.postedAt || raw.createdDate || '';
     return {
       tenantId: config.tenantId,
       accountId,
@@ -8908,9 +8962,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const postedAt = normalizeWorkdayPostedAt(raw.postedOnDate || raw.startDate || raw.postedOn, retrievedAt);
     const descriptor = getWorkdayDescriptor(config);
     const externalPath = raw.externalPath || raw.jobPostingUrl || raw.url || '';
-    const jobUrl = externalPath && descriptor?.resolvedBoardUrl
-      ? new URL(externalPath, descriptor.resolvedBoardUrl).toString()
-      : externalPath;
+    const jobUrl = resolveWorkdayJobUrl(externalPath, config, descriptor);
     return {
       tenantId: config.tenantId,
       accountId,
@@ -8939,7 +8991,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.jobTitle || raw.jobOpeningName || raw.name || '';
     if (!title) return null;
     const location = [raw.location?.city, raw.location?.state || raw.location?.province, raw.location?.country].filter(Boolean).join(', ') || (typeof raw.location === 'string' ? raw.location : '');
-    const postedAt = raw.postedDate || raw.createdDate || raw.datePosted || retrievedAt;
+    const postedAt = raw.postedDate || raw.createdDate || raw.datePosted || '';
     const jobId = raw.id || raw.jobId || raw.requisitionId || title;
     const bambooApiUrl = getBambooCareersApiUrl(config, getConfigBoardId(config));
     const jobUrl = raw.url || raw.jobUrl || raw.applyUrl
@@ -8976,7 +9028,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       raw.state || firstLocation?.region,
       raw.country || firstLocation?.country,
     ].filter(Boolean).join(', ') || (raw.telecommuting ? 'Remote' : '');
-    const postedAt = raw.published_on || raw.created_at || retrievedAt;
+    const postedAt = raw.published_on || raw.created_at || '';
     const jobId = raw.shortcode || raw.id || raw.code || title;
     const jobUrl = raw.url || raw.shortlink || raw.application_url || '';
     return {
@@ -9006,7 +9058,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = readRecruiteeLocation(raw);
-    const postedAt = raw.published_at || raw.created_at || raw.updated_at || retrievedAt;
+    const postedAt = raw.published_at || raw.created_at || '';
     const jobId = raw.id || raw.slug || title;
     const jobUrl = raw.careers_url || raw.careers_apply_url || raw.url || raw.apply_url || '';
     return {
@@ -9036,7 +9088,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.name || raw.title || '';
     if (!title) return null;
     const location = raw.office || raw.location || '';
-    const postedAt = raw.createdAt || raw.created_at || retrievedAt;
+    const postedAt = raw.createdAt || raw.created_at || '';
     const jobId = raw.id || title;
     const jobUrl = `${getPersonioCareerOrigin(config, getConfigBoardId(config))}/job/${encodeURIComponent(jobId)}`;
     const employmentType = [raw.employmentType, raw.schedule].filter(Boolean).join(', ');
@@ -9067,7 +9119,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = raw.location || firstString((Array.isArray(raw.locations) ? raw.locations : []).map((item) => item?.name)) || '';
-    const postedAt = raw.createdAt || raw.updatedAt || retrievedAt;
+    const postedAt = raw.createdAt || '';
     const jobId = raw.id || raw.jobUrl || raw.url || title;
     const jobUrl = raw.jobUrl || raw.url || '';
     return {
@@ -9097,7 +9149,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = raw.location || '';
-    const postedAt = raw.postedAt || retrievedAt;
+    const postedAt = raw.postedAt || '';
     const jobUrl = raw.url || raw.jobUrl || raw.applyUrl || '';
     return {
       tenantId: config.tenantId,
@@ -9123,6 +9175,17 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
     };
   }
   return null;
+}
+
+// The postings list gives `ref` as an API address
+// (api.smartrecruiters.com/v1/companies/<id>/postings/<posting>), which opens
+// JSON. The public page is jobs.smartrecruiters.com/<company>/<posting>.
+function getSmartRecruitersJobUrl(raw = {}, config = {}) {
+  const direct = [raw.postingUrl, raw.jobAd?.publicUrl, raw.applyUrl, raw.ref]
+    .find((value) => typeof value === 'string' && /^https?:\/\//i.test(value) && !/\/\/api\.smartrecruiters\.com\//i.test(value));
+  if (direct) return direct;
+  const company = raw.company?.identifier || String(raw.ref || '').match(/\/companies\/([^/?#]+)/i)?.[1] || getConfigBoardId(config);
+  return company && raw.id ? `https://jobs.smartrecruiters.com/${encodeURIComponent(company)}/${encodeURIComponent(raw.id)}` : '';
 }
 
 function firstString(values = []) {
@@ -9404,14 +9467,25 @@ function rescoreTenantJobs(tenantId, focusValue) {
 
 function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
   const accountJobs = tenantJobs.filter((jobItem) => jobItem.accountId === item.id && jobItem.active !== false);
-  const recent30 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 30);
-  const recent90 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 90);
-  const recent7 = accountJobs.filter((jobItem) => daysSince(jobItem.postedAt || jobItem.importedAt) <= 7);
+  // A role without a source posting date dates from when BD Engine first saw
+  // it; importedAt moves on every refresh and would make every role look fresh.
+  // One date parse per role (this runs for every changed company on a refresh).
+  const nowMs = Date.now();
+  let recent7 = 0; let recent30 = 0; let recent90 = 0; let latestMs = -Infinity;
+  for (const jobItem of accountJobs) {
+    const time = Date.parse(jobItem.postedAt || jobItem.firstSeenAt || jobItem.createdAt || jobItem.importedAt || '');
+    if (!Number.isFinite(time)) continue;
+    const age = Math.floor((nowMs - time) / 86400000);
+    if (age <= 90) recent90 += 1;
+    if (age <= 30) recent30 += 1;
+    if (age <= 7) recent7 += 1;
+    if (time > latestMs) latestMs = time;
+  }
   item.jobCount = accountJobs.length;
   item.openRoleCount = accountJobs.length;
-  item.jobsLast30Days = recent30.length;
-  item.jobsLast90Days = recent90.length;
-  item.newRoleCount7d = recent7.length;
+  item.jobsLast30Days = recent30;
+  item.jobsLast90Days = recent90;
+  item.newRoleCount7d = recent7;
   const focus = focusValue ? sanitizeSearchFocus(focusValue) : null;
   const hasFocus = Boolean(focus && (parseFocusTerms(focus.targetRoles).length
     || parseFocusTerms(focus.excludedRoles).length
@@ -9422,11 +9496,11 @@ function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
     : accountJobs;
   item.relevantRoleCount = hasFocus ? relevantJobs.length : null;
   item.strongFitRoleCount = hasFocus ? accountJobs.filter((jobItem) => jobItem.relevanceBand === 'strong').length : null;
-  item.lastJobPostedAt = accountJobs[0]?.postedAt || accountJobs[0]?.importedAt || '';
+  item.lastJobPostedAt = Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : '';
   item.hiringStatus = accountJobs.length
     ? (hasFocus && !relevantJobs.length ? 'Hiring outside focus' : 'Active hiring')
     : 'No active roles found';
-  item.hiringVelocity = Math.min(100, Math.round((recent30.length * 8) + (recent7.length * 10)));
+  item.hiringVelocity = Math.min(100, Math.round((recent30 * 8) + (recent7 * 10)));
   item.targetScore = Math.min(100, Math.round(
     (Number(item.connectionCount || 0) * 8) +
     (Number(item.seniorContactCount || 0) * 12) +

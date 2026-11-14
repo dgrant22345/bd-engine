@@ -4,6 +4,7 @@ import { initDb, closeDb, dbQuery, dbSaveUser, dbSaveTenant, dbSaveMembership, d
 import { syncTenantRelationalChanges } from '../src/relational-writes.js';
 import { persistJobFeedback, loadWorkspaceFeedback } from '../src/job-feedback.js';
 import { createReminderStore, getNewRoleDigest, ROLE_DIGEST_ID } from '../src/followup-reminders.js';
+import { getPeopleContextRelational } from '../src/relational-reads.js';
 import { GROWTH_SQL, summarizeGrowthRows } from '../src/growth-outcomes.js';
 
 const target = new URL(process.env.DATABASE_URL || 'postgres://missing');
@@ -50,6 +51,17 @@ try {
   const digest = await getNewRoleDigest(id, { now: digestNow });
   assert.deepEqual(digest, { items: [{ companyName: 'Northstar', newRoles: 3, titles: ['Controls Engineer', 'PLC Programmer', 'Automation Lead'] }, { companyName: 'Luma', newRoles: 1, titles: ['Recruiter'] }], total: 4, summary: { companyCount: 2 } });
   assert.equal((await getNewRoleDigest('foreign-workspace', { now: digestNow })).total, 0);
+  // newSince (in raw) decides newness when present: a role already on a board at
+  // its first import is not new, nor is an old posting first seen this week.
+  const newSinceRoles = [['g', 'Baseline role', '', 1], ['h', 'Old posting', seen(40), 1], ['i', 'Fresh posting', seen(2), 1]];
+  for (const [suffix, title, newSince, days] of newSinceRoles) {
+    await dbQuery("INSERT INTO jobs (id,tenant_id,account_id,title,company_name,active,created_at,first_seen_at,raw) VALUES ($1,$2,$3,$4,'Baseline Co',true,$5,$5,$6)", [`${id}-digest-${suffix}`, id, `${id}-baseline-account`, title, seen(days), JSON.stringify({ newSince })]);
+  }
+  const withBaseline = await getNewRoleDigest(id, { now: digestNow });
+  assert.deepEqual(withBaseline.items.find(item => item.companyName === 'Baseline Co'), { companyName: 'Baseline Co', newRoles: 1, titles: ['Fresh posting'] });
+  assert.equal(withBaseline.total, 5);
+  const baselineContext = await getPeopleContextRelational(id, { accountIds: [`${id}-baseline-account`], since: seen(7) });
+  assert.deepEqual(baselineContext.roles.get(`${id}-baseline-account`), { openRoles: 3, newRoles7d: 1 });
   let digestSent = 0;
   const digestOptions = { now: digestNow, getRecipient: async () => ({ eligible: true }), getTasks: tenant => getNewRoleDigest(tenant, { now: digestNow }), send: async () => { digestSent++; return { sent: true }; } };
   await Promise.all([digests.deliver(id, userId, digestOptions), digests.deliver(id, userId, digestOptions)]);

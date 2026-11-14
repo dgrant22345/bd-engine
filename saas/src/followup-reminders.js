@@ -113,15 +113,17 @@ export function createReminderStore({ query = dbQuery, transaction = dbTransacti
   };
 }
 
-// Roles first seen in the past seven days, grouped by company, for the
-// weekly digest. One bounded query per subscribed workspace per week.
+// Roles that are new in the past seven days, grouped by company, for the
+// weekly digest: newSince is the source posting date, or first sight after the
+// board's first import (see getJobNewSince in store.js). One bounded query per
+// subscribed workspace per week.
 export async function getNewRoleDigest(tenantId, { now = new Date(), query = dbQuery } = {}) {
   const startedAt = performance.now();
   const since = new Date(now.getTime() - 7 * 86400000).toISOString();
   const result = await query(`SELECT company_name, count(*)::int AS new_roles,
-      (array_agg(title ORDER BY coalesce(nullif(first_seen_at,''),created_at) DESC, id))[1:3] AS titles,
+      (array_agg(title ORDER BY coalesce(raw->>'newSince',nullif(first_seen_at,''),created_at) DESC, id))[1:3] AS titles,
       count(*) OVER()::int AS company_count, (sum(count(*)) OVER())::int AS total_roles
-    FROM jobs WHERE tenant_id=$1 AND active AND company_name<>'' AND coalesce(nullif(first_seen_at,''),created_at)>=$2
+    FROM jobs WHERE tenant_id=$1 AND active AND company_name<>'' AND coalesce(raw->>'newSince',nullif(first_seen_at,''),created_at)>=$2
     GROUP BY company_name ORDER BY new_roles DESC, company_name LIMIT 8`, [tenantId, since]);
   const elapsed = Math.round(performance.now() - startedAt);
   if (elapsed > 250) console.warn(`Slow role digest: saas/src/followup-reminders.js getNewRoleDigest ${elapsed}ms`);

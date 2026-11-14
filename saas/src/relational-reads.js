@@ -224,7 +224,7 @@ export async function getPeopleContextRelational(tenantId, { accountIds = [], co
   const [roles, outreach] = await Promise.all([
     accountIds.length ? dbQuery(
       `SELECT account_id, COUNT(*)::int AS open_roles,
-         COUNT(*) FILTER (WHERE COALESCE(NULLIF(first_seen_at, ''), created_at) >= $3)::int AS new_roles
+         COUNT(*) FILTER (WHERE COALESCE(raw->>'newSince', NULLIF(first_seen_at, ''), created_at) >= $3)::int AS new_roles
        FROM jobs WHERE tenant_id = $1 AND active AND account_id = ANY($2::text[]) GROUP BY account_id`,
       [tenantId, accountIds, since]
     ) : { rows: [] },

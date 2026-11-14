@@ -38,7 +38,7 @@ window.bdWorkflowTools = (() => {
     loading: 'Loading digest settings…',
     unverified: 'Verify your account email before turning on the weekly digest.',
     unconfigured: 'Email delivery is not set up for this workspace yet.',
-    intro: 'One email a week, from Monday at or after your chosen local hour, listing roles first seen in the past seven days at companies in this workspace. It goes to your verified account email. No email is sent in a week with no new roles, and you can turn it off here at any time.',
+    intro: 'One email a week, from Monday at or after your chosen local hour, listing roles that are new in the past seven days at companies in this workspace. It goes to your verified account email. No email is sent in a week with no new roles, and you can turn it off here at any time.',
     optIn: 'Email me a weekly digest of new roles',
     save: 'Save digest settings',
     enabled: 'Weekly digest is on. The first one covers next week.',
@@ -47,7 +47,7 @@ window.bdWorkflowTools = (() => {
   function renderRoleDigest() {
     if (!context?.getBootstrap()?.capabilities?.roleDigest || context.getBootstrap()?.session?.readOnly) return '';
     return `<details class="form-card workspace-disclosure" data-role-digest-tools><summary><span class="workspace-disclosure__icon" aria-hidden="true">▤</span><span><strong>Weekly email digest</strong><small>New roles at your companies, once a week</small></span></summary><div class="followup-tools-body">
-      <p class="small">Get one email a week listing roles first seen at companies in this workspace. It is off unless you turn it on.</p>
+      <p class="small">Get one email a week listing new roles at companies in this workspace. It is off unless you turn it on.</p>
       <button type="button" class="ghost-button" data-digest-open>Digest settings</button>
       <div data-digest-settings></div></div></details>`;
   }

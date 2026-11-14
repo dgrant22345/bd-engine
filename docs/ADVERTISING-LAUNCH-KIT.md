@@ -74,7 +74,7 @@ What would you want to see next in a target-list workflow?
 
 New roles at your target companies, in one email a week.
 
-BD Engine's weekly digest lists roles first seen in the past seven days at the companies in your workspace. It is off until you turn it on from Hiring activity, where you also choose the hour it arrives on Monday.
+BD Engine's weekly digest lists roles that are new in the past seven days at the companies in your workspace. It is off until you turn it on from Hiring activity, where you also choose the hour it arrives on Monday.
 
 Try it during a 14-day free trial; no card needed to start:
 https://bd-engine-production.up.railway.app/?signup=1&persona=bd&plan=trial&utm_source=linkedin_page&utm_medium=organic_social&utm_campaign=free_launch_nov26&utm_content=digest_03
