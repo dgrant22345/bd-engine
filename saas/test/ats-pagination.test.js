@@ -114,12 +114,13 @@ test('a failed later page retains successful sibling pages without claiming comp
   const offsets = [];
   const result = await paginate({ concurrency: 2, readPage: async (offset) => {
     offsets.push(offset);
-    if (offset === 20) throw new Error('HTTP 404');
+    if (offset === 20) throw Object.assign(new Error('HTTP 429'), { retryAfterMs: 3 * 3600000 });
     return { total: 100, jobs: rows(offset, 20) };
   } });
   assert.deepEqual(offsets, [0, 20, 40], 'no more requests after the failed batch');
   assert.equal(result.jobs.length, 40);
   assert.equal(result.pagination.failedPages, 1);
+  assert.equal(result.pagination.retryAfterMs, 3 * 3600000, 'retain a later page cooldown for the next source retry');
   assert.equal(result.complete, false);
   assert.ok(result.pagination.reasons.includes('page_failed'));
 });

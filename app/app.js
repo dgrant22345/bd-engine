@@ -11814,6 +11814,7 @@ async function renderJobsView() {
   };
 
   appRoot.innerHTML = `
+    ${!focusConfigured ? `<section class="empty-state empty-state--compact" aria-label="Set up role ranking"><h3>Choose the roles you want to monitor</h3><p>${formatNumber(result.summary?.activeTotal ?? result.total)} active roles are available. Add your target titles to build a ranked shortlist and make outreach more relevant.</p><a class="primary-button" href="#/admin/search-focus">Set up role ranking</a></section>` : ''}
     <section class="table-card jobs-board">
       <div class="panel-header jobs-board__head">
         <div><h3>${jobSeeker ? 'Role shortlist' : 'Imported jobs'}</h3><div class="compact-page-intro jobs-board__summary"><strong>${pluralize(result.total, 'result')}</strong><p>${focusConfigured ? 'Source-backed openings, ranked against your saved role, industry and work-style focus.' : 'Source-backed openings. Rank them by fit with a saved <a class="inline-action-link" href="#/admin/search-focus">search focus</a>.'} Fit describes the role, not a candidate.</p></div></div>
@@ -12223,6 +12224,7 @@ async function renderAdminView() {
 
     <section class="admin-grid">
       ${renderCollapsibleStart('search-focus', searchFocusCopy.title, searchFocusCopy.subtitle)}
+        <p class="small muted">Start with the job titles you recruit for. Add exclusions, industries and work style if useful, then save to rank the jobs already imported. Your choices also guide company priority.</p>
         <form id="settings-form" class="settings-grid">
           ${renderField(searchFocusCopy.roleLabel, `<textarea name="targetRoles" rows="3" placeholder="${escapeAttr(searchFocusCopy.rolePlaceholder)}">${escapeHtml(searchFocus.targetRoles || '')}</textarea>`, 'Separate titles with commas. Exact phrases rank highest; closely related title variants can also match.')}
           ${renderField('Roles to exclude', `<textarea name="excludedRoles" rows="3" placeholder="Intern, commission only, retail sales">${escapeHtml(searchFocus.excludedRoles || '')}</textarea>`, 'Roles containing these phrases score at the bottom and stay out of the focused shortlist.')}
@@ -13219,7 +13221,7 @@ function renderIngestionHealthPanel(runtime) {
   const scheduleMeta = schedule.disabledReason === 'read_only_demo'
     ? 'Automatic refresh is off in the read-only demo'
     : (schedule.enabled
-      ? 'Runs daily when no refresh is already running'
+      ? (schedule.sourceRetries?.count ? `${formatNumber(schedule.sourceRetries.count)} incomplete or failed sources waiting for retry; healthy sources refresh daily` : 'Healthy sources refresh daily; incomplete and failed sources retry separately')
       : 'Automatic refresh starts after setup');
   const activeLabel = activeImport
     ? (progress?.current ? `${formatNumber(progress.current)} / ${formatNumber(progress.total)}` : (progress ? `${progress.pct}%` : humanize(activeImport.status)))
@@ -13228,6 +13230,7 @@ function renderIngestionHealthPanel(runtime) {
     ? `${getJobPhaseLabel(activeImport)} / ${getRuntimeJobDuration(activeImport)} elapsed`
     : 'No live import is currently active';
   const lastDuration = lastImport && lastImport.status === 'completed' ? getRuntimeJobDuration(lastImport) : '';
+  const lastHasGaps = lastImport?.completionState === 'completed_with_gaps' || Number(lastStats.partialBoards || 0) > 0 || Number(lastStats.errors || 0) > 0;
   const lastMeta = lastImport
     ? `${lastDuration || 'Completed'} / ${formatNumber(newJobs)} new / ${formatNumber(closedJobs)} closed`
     : 'No completed imports found';
@@ -13241,9 +13244,9 @@ function renderIngestionHealthPanel(runtime) {
       <div class="ingestion-health__head">
         <div>
           <p class="eyebrow">Ingestion health</p>
-          <strong>${activeImport ? 'Live import in progress' : lastFailed ? 'Latest refresh needs attention' : lastImport ? 'Last import completed' : 'No completed import yet'}</strong>
+          <strong>${activeImport ? 'Live import in progress' : lastFailed ? 'Latest refresh needs attention' : lastHasGaps ? 'Refresh finished with coverage gaps' : lastImport ? 'Last import completed' : 'No completed import yet'}</strong>
         </div>
-        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill(lastFailed ? 'Needs attention' : lastImport ? 'Completed' : 'Not run yet', lastFailed ? 'warning' : 'neutral')}
+        ${activeImport ? renderStatusPill(activeImport.status || 'running', activeImport.status === 'running' ? 'warm' : 'neutral') : renderStatusPill(lastFailed ? 'Needs attention' : lastHasGaps ? 'Coverage gaps' : lastImport ? 'Completed' : 'Not run yet', lastFailed || lastHasGaps ? 'warning' : 'neutral')}
       </div>
       <div class="ingestion-health__grid">
         <div class="ingestion-health__metric">
@@ -13252,7 +13255,7 @@ function renderIngestionHealthPanel(runtime) {
           <span class="small muted">${escapeHtml(activeMeta)}</span>
         </div>
         <div class="ingestion-health__metric">
-          <span class="small muted">Last successful refresh</span>
+          <span class="small muted">Last finished refresh</span>
           <strong>${escapeHtml(lastImport ? formatDateTime(lastImport.finishedAt || lastImport.updatedAt) : 'Not run yet')}</strong>
           <span class="small muted">${escapeHtml(lastMeta)}</span>
         </div>

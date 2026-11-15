@@ -1,4 +1,5 @@
-import { dbQuery, isDbReady } from './db.js';
+import { dbQuery, dbTransaction, isDbReady } from './db.js';
+import { applyJobIdentityResolutions, mergeImportedJob } from './job-identity.js';
 
 const DISABLED = process.env.BD_RELATIONAL_MIRROR === 'false';
 const UPSERT_CONCURRENCY = Math.max(1, Math.min(32, Number(process.env.BD_RELATIONAL_UPSERT_CONCURRENCY) || 16));
@@ -129,12 +130,15 @@ function advanceCursor(tenantId, section, items = []) {
 
 async function upsertRows(tenantId, section, items, upsert) {
   const changed = changedItems(tenantId, section, items);
+  const identities = [];
   for (let offset = 0; offset < changed.length; offset += UPSERT_CONCURRENCY) {
     const batch = changed.slice(offset, offset + UPSERT_CONCURRENCY);
-    await Promise.all(batch.map((item) => upsert({ ...item, tenantId: item.tenantId || tenantId })));
+    const results = await Promise.all(batch.map((item) => upsert({ ...item, tenantId: item.tenantId || tenantId })));
+    if (section === 'jobs') identities.push(...results.filter(Boolean));
   }
+  if (identities.length) applyJobIdentityResolutions(items, identities);
   advanceCursor(tenantId, section, items);
-  return { changed: changed.length, total: items.length };
+  return { changed: changed.length, total: items.length, ...(identities.length ? { identities } : {}) };
 }
 
 async function reconcileRows(tenantId, section, items) {
@@ -162,6 +166,7 @@ export async function syncTenantRelationalChanges(tenantId, data = {}) {
   const startedAt = performance.now();
   const writers = { accounts: upsertAccount, contacts: upsertContact, jobs: upsertJob, configs: upsertConfig, activities: upsertActivity, tasks: upsertTask };
   const result = {};
+  const identities = [];
   for (const [section, items] of Object.entries(data)) {
     if (!writers[section] || !Array.isArray(items)) throw new Error('Invalid incremental source rows');
     if (items.some(item => !item.id || (item.tenantId && item.tenantId !== tenantId))) throw new Error('Source rows must belong to this workspace');
@@ -171,13 +176,14 @@ export async function syncTenantRelationalChanges(tenantId, data = {}) {
     const items = data[section];
     if (!items) continue;
     for (let offset = 0; offset < items.length; offset += UPSERT_CONCURRENCY) {
-      await Promise.all(items.slice(offset, offset + UPSERT_CONCURRENCY).map(item => writers[section]({ ...item, tenantId })));
+      const written = await Promise.all(items.slice(offset, offset + UPSERT_CONCURRENCY).map(item => writers[section]({ ...item, tenantId })));
+      if (section === 'jobs') identities.push(...written.filter(Boolean));
     }
     result[section] = items.length;
   }
   const elapsedMs = Math.round(performance.now() - startedAt);
   if (elapsedMs > 250) console.warn(`Slow source publish: saas/src/relational-writes.js syncTenantRelationalChanges ${elapsedMs}ms`);
-  return { ...result, elapsedMs };
+  return { ...result, elapsedMs, jobIdentities: identities };
 }
 
 export async function syncTenantRelationalMirror(tenantId, data = {}, { reconcile = false } = {}) {
@@ -276,11 +282,11 @@ async function upsertContact(item) {
   );
 }
 
-async function upsertJob(item) {
+async function writeJob(item, query = dbQuery) {
   const naturalKey = jobNaturalKey(item);
   const firstSeenAt = text(item.firstSeenAt || item.first_seen_at || item.createdAt);
   const lastSeenAt = text(item.lastSeenAt || item.last_seen_at || item.retrievedAt || item.importedAt || item.updatedAt || item.createdAt);
-  await dbQuery(
+  const result = await query(
     `INSERT INTO jobs (id, tenant_id, account_id, title, company_name, location, source, ats_type, source_url, job_url, posted_at, active, natural_key, first_seen_at, last_seen_at, closed_at, import_run_id, raw, created_at, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT (id) DO UPDATE SET
@@ -300,7 +306,8 @@ async function upsertJob(item) {
        closed_at = EXCLUDED.closed_at,
        import_run_id = EXCLUDED.import_run_id,
        raw = CASE WHEN jobs.raw ? 'relevanceFeedback' THEN jsonb_set(EXCLUDED.raw, '{relevanceFeedback}', jobs.raw->'relevanceFeedback', true) ELSE EXCLUDED.raw END,
-       updated_at = EXCLUDED.updated_at`,
+       updated_at = EXCLUDED.updated_at
+     WHERE jobs.tenant_id = EXCLUDED.tenant_id`,
     [
       item.id, item.tenantId, nullableText(item.accountId), text(item.title), text(item.companyName), text(item.location),
       text(item.source), text(item.atsType || item.ats), text(item.sourceUrl), text(item.jobUrl || item.url),
@@ -308,6 +315,46 @@ async function upsertJob(item) {
       text(item.importRunId || item.import_run_id), JSON.stringify(item), text(item.createdAt), text(item.updatedAt || item.createdAt),
     ]
   );
+  if (result?.rowCount === 0) throw new Error('Job identity belongs to a different workspace.');
+}
+
+async function upsertJob(item) {
+  try {
+    await writeJob(item);
+  } catch (error) {
+    if (error.code !== '23505' || error.constraint !== 'jobs_tenant_natural_key_uidx') throw error;
+    const startedAt = performance.now();
+    const resolution = await dbTransaction(async query => {
+      const key = jobNaturalKey(item);
+      const { rows } = await query(`SELECT id, tenant_id, natural_key, raw, created_at, first_seen_at
+        FROM jobs WHERE tenant_id = $1 AND (natural_key = $2 OR id = $3) ORDER BY id FOR UPDATE`, [item.tenantId, key, item.id]);
+      let canonical = rows.find(row => row.natural_key === key);
+      if (!canonical) throw error;
+      if (canonical.raw?.supersededBy) {
+        const target = await query('SELECT id, tenant_id, natural_key, raw, created_at, first_seen_at FROM jobs WHERE tenant_id = $1 AND id = $2 FOR UPDATE', [item.tenantId, canonical.raw.supersededBy]);
+        if (!target.rows[0]) throw error;
+        canonical = target.rows[0];
+      }
+      const original = rows.find(row => row.id === item.id && row.id !== canonical.id);
+      const job = mergeImportedJob({ ...canonical.raw, id: canonical.id, tenantId: canonical.tenant_id,
+        createdAt: canonical.created_at, firstSeenAt: canonical.first_seen_at }, item, original?.raw);
+      job.naturalKey = canonical.natural_key;
+      let retiredJob = null;
+      if (original) {
+        // Retain the previous record and all its workflow state for history.
+        // Only the canonical identity remains active; no rows are deleted.
+        retiredJob = { ...original.raw, id: original.id, tenantId: item.tenantId,
+          naturalKey: original.natural_key, active: false, closedAt: item.updatedAt,
+          supersededBy: canonical.id, updatedAt: item.updatedAt };
+        await query(`UPDATE jobs SET active = false, closed_at = $3, raw = $4, updated_at = $3
+          WHERE tenant_id = $1 AND id = $2`, [item.tenantId, original.id, item.updatedAt, JSON.stringify(retiredJob)]);
+      }
+      await writeJob(job, query);
+      return { incomingId: item.id, job, retiredJob };
+    });
+    console.log(`Job identity reconciled: saas/src/relational-writes.js upsertJob ${Math.round(performance.now() - startedAt)}ms`);
+    return resolution;
+  }
 }
 
 async function upsertConfig(item) {

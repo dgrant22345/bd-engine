@@ -14,9 +14,12 @@ export function summarizeOperationalJobs(jobs = [], { nowMs = Date.now(), staleA
     return Number.isFinite(at) && at >= recentCutoff;
   });
   const ingestion = recent.filter((job) => ['live-job-import', 'ats-discovery', 'revenue-pipeline', 'launch-workflow'].includes(job.type));
-  const successfulIngestion = ingestion.filter((job) => job.status === 'completed').length;
+  const hasGaps = job => job.completionState === 'completed_with_gaps'
+    || Number(job.result?.stats?.errors || 0) > 0 || Number(job.result?.stats?.partialBoards || 0) > 0;
+  const partialIngestion = ingestion.filter(job => job.status === 'completed' && hasGaps(job)).length;
+  const successfulIngestion = ingestion.filter((job) => job.status === 'completed' && !hasGaps(job)).length;
   const failedIngestion = ingestion.filter((job) => job.status === 'failed').length;
-  const decidedIngestion = successfulIngestion + failedIngestion;
+  const decidedIngestion = successfulIngestion + partialIngestion + failedIngestion;
   const ingestionSuccessRate24h = decidedIngestion
     ? Math.round((successfulIngestion / decidedIngestion) * 1000) / 10
     : null;
@@ -32,6 +35,7 @@ export function summarizeOperationalJobs(jobs = [], { nowMs = Date.now(), staleA
     recentFailedJobs: recent.filter((job) => job.status === 'failed').length,
     ingestionRuns24h: ingestion.length,
     ingestionFailedRuns24h: failedIngestion,
+    ingestionPartialRuns24h: partialIngestion,
     ingestionSuccessRate24h,
     healthy: invalidActiveTimestamps === 0
       && oldestActiveAgeMs <= staleAfterMs

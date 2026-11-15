@@ -2189,6 +2189,23 @@ export async function dbLoadRecentBackgroundJobs(tenantId, limit = 20) {
   }
 }
 
+// Durable operational history across process restarts. Deliberately project
+// status fields only: recovery snapshots can contain an entire uploaded CSV.
+export async function dbLoadOperationalBackgroundJobs({ tenantId = null } = {}) {
+  if (!dbReady) return [];
+  const startedAt = performance.now();
+  const cutoff = new Date(Date.now() - 24 * 3600000).toISOString();
+  const result = await pool.query(`SELECT id, type, status, queued_at AS "queuedAt", started_at AS "startedAt",
+    finished_at AS "finishedAt", updated_at AS "updatedAt",
+    snapshot->>'completionState' AS "completionState",
+    jsonb_build_object('stats', snapshot->'result'->'stats') AS result
+    FROM background_jobs WHERE (status IN ('queued', 'running') OR updated_at >= $1)
+      AND ($2::text IS NULL OR tenant_id = $2)`, [cutoff, tenantId]);
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (elapsedMs > 250) console.warn(`Slow durable job health: saas/src/db.js dbLoadOperationalBackgroundJobs ${elapsedMs}ms`);
+  return result.rows;
+}
+
 export async function dbLoadRecoverableBackgroundJobs(limit = 50, { throwOnError = false } = {}) {
   if (!dbReady) return [];
   try {

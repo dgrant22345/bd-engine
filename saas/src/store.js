@@ -18,6 +18,10 @@ import { validateJobFeedback, persistJobFeedback, loadWorkspaceFeedback } from '
 import { rankDailyAccounts } from './daily-priorities.js';
 import { resolveWorkdayLocations } from './workday-locations.js';
 import { getPhenomBoardId, getPhenomJobUrl, getPhenomSearchUrl, readPhenomBoard, readPhenomLocation, readPhenomLocale, readPhenomSite } from './phenom.js';
+import { applyJobIdentityResolutions } from './job-identity.js';
+import { applyAccountPriority } from './account-priority.js';
+import { clearSourceRetry, importHasCoverageGaps, markSourceRetry, sourceNeedsRetry, summarizeSourceRetries } from './source-retries.js';
+import { dbLoadOperationalBackgroundJobs } from './db.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -1170,6 +1174,10 @@ function getNextScheduledRefreshAt(settings = {}, nowMs = Date.now()) {
   const intervalMs = 24 * 60 * 60 * 1000;
   const retryDelayMs = 60 * 60 * 1000;
   const successAt = Date.parse(settings.lastPipelineRun || '');
+  const sourceRetryAt = Date.parse(settings.sourceRetries?.nextAttemptAt || '');
+  if (settings.sourceRetries?.count && Number.isFinite(sourceRetryAt)) {
+    return new Date(Math.max(nowMs, Math.min(sourceRetryAt, Number.isFinite(successAt) ? successAt + intervalMs : sourceRetryAt))).toISOString();
+  }
   if (Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
     return new Date(successAt + intervalMs).toISOString();
   }
@@ -1204,6 +1212,13 @@ export function getScheduledPipelineDecision({
 } = {}) {
   if (!settings.setupComplete) return { due: false, reason: 'setup_incomplete' };
   if (hasActiveJob) return { due: false, reason: 'already_running' };
+  const retryAt = Date.parse(settings.sourceRetries?.nextAttemptAt || '');
+  if (settings.sourceRetries?.count && Number.isFinite(retryAt) && retryAt <= nowMs) {
+    const attemptAt = Date.parse(settings.lastPipelineAttemptAt || '');
+    if (Number.isFinite(attemptAt) && attemptAt > nowMs - retryDelayMs) return { due: false, reason: 'recent_attempt' };
+    const fullAt = Date.parse(settings.lastPipelineRun || '');
+    return { due: true, reason: Number.isFinite(fullAt) && fullAt > nowMs - intervalMs ? 'sources_due' : 'overdue' };
+  }
   const successAt = new Date(settings.lastPipelineRun || 0).getTime();
   if (Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
     return { due: false, reason: 'fresh' };
@@ -1301,6 +1316,7 @@ async function writeTenantSnapshot(tenantId, { requireMirror = false } = {}) {
 
   if (relationalWritesPrimaryForTenant(tenantId)) {
     const syncResult = await syncTenantRelationalMirror(tenantId, data, { reconcile: true });
+    applyJobIdentityResolutions(jobs, syncResult?.jobs?.identities);
     if (syncResult?.skipped) throw new Error('Relational primary write was skipped.');
     const settingsResult = await dbSaveTenantData(tenantId, { settings: data.settings }, { throwOnError: true });
     if (!settingsResult?.saved) throw new Error(`Workspace settings save failed: ${settingsResult?.reason || 'unknown error'}`);
@@ -1309,6 +1325,8 @@ async function writeTenantSnapshot(tenantId, { requireMirror = false } = {}) {
     if (!result?.saved) throw new Error(`Workspace save failed: ${result?.reason || 'unknown error'}`);
     try {
       const mirror = await syncTenantRelationalMirror(tenantId, data);
+      applyJobIdentityResolutions(jobs, mirror?.jobs?.identities);
+      if (mirror?.jobs?.identities?.length) await dbSaveTenantData(tenantId, { jobs: data.jobs }, { throwOnError: true });
       if (requireMirror && mirror?.skipped && (relationalReadsEnabledForTenant(tenantId) || relationalJobSqlEnabledForTenant(tenantId))) {
         throw new Error('Relational score save was skipped.');
       }
@@ -1718,6 +1736,8 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
         importRun: result.importRun,
         warnings: result.warnings || [],
       };
+      job.completionState = importHasCoverageGaps(result.stats) ? 'completed_with_gaps' : 'completed';
+      if (job.completionState === 'completed_with_gaps') job.progressMessage = `Refresh finished with gaps: ${result.stats?.partialBoards || 0} incomplete sources and ${result.stats?.errors || 0} source errors. Affected sources will retry automatically.`;
     }
   } catch (err) {
     job.status = 'failed';
@@ -1728,9 +1748,11 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
       const profile = getTenantProfile(tenantId);
       if (profile) {
         profile.settings.lastPipelineAttemptAt = job.startedAt || job.queuedAt;
-        profile.settings.lastPipelineStatus = job.status;
+        profile.settings.lastPipelineStatus = job.completionState || job.status;
         profile.settings.lastPipelineError = job.status === 'failed' ? job.errorMessage || '' : '';
-        if (job.status === 'completed') profile.settings.lastPipelineRun = job.finishedAt;
+        if (job.status === 'completed' && !job.result?.stats?.retryOnly) profile.settings.lastPipelineRun = job.finishedAt;
+        const targetIds = new Set(accountsForTenant(tenantId).filter(isTrackedTarget).map(item => item.id));
+        profile.settings.sourceRetries = summarizeSourceRetries(configsForTenant(tenantId).filter(config => !config.accountId || targetIds.has(config.accountId)));
         persistTenant(tenantId);
       }
     }
@@ -2315,7 +2337,10 @@ export function createStore() {
 
     async getRuntimeStatus(tenantId) {
       assertTenant(tenantId);
-      const persistedJobs = await dbLoadRecentBackgroundJobs(tenantId, 20);
+      const [persistedJobs, durableHistory] = await Promise.all([
+        dbLoadRecentBackgroundJobs(tenantId, 20),
+        dbLoadOperationalBackgroundJobs({ tenantId }),
+      ]);
       const jobsById = new Map();
       for (const job of persistedJobs) jobsById.set(job.id, job);
       for (const job of backgroundJobs.values()) {
@@ -2331,7 +2356,9 @@ export function createStore() {
       const settings = profile?.settings || {};
       const isReadOnlyDemo = profile?.tenant?.slug === 'bd-engine-demo';
       const automaticRefreshEnabled = Boolean(settings.setupComplete && !isReadOnlyDemo);
-      const operational = summarizeOperationalJobs(tenantJobs, {
+      const operationalJobs = new Map(durableHistory.map(job => [job.id, job]));
+      for (const job of tenantJobs) operationalJobs.set(job.id, job);
+      const operational = summarizeOperationalJobs([...operationalJobs.values()], {
         staleAfterMs: readPositiveInteger(process.env.BD_BACKGROUND_JOB_STALE_MS, 15 * 60 * 1000),
       });
       return {
@@ -2346,6 +2373,7 @@ export function createStore() {
         recentJobs: recentJobs.map(publicBackgroundJob),
         operational,
         refreshSchedule: {
+          sourceRetries: settings.sourceRetries || { count: 0, nextAttemptAt: '' },
           enabled: automaticRefreshEnabled,
           disabledReason: isReadOnlyDemo ? 'read_only_demo' : (settings.setupComplete ? '' : 'setup_incomplete'),
           lastAttemptAt: settings.lastPipelineAttemptAt || '',
@@ -3038,7 +3066,7 @@ export function createStore() {
       };
 
       let rawItems = jobsForTenant(tenantId);
-      if (query.pipelineOnly === true || query.pipelineOnly === 'true') rawItems = rawItems.filter((item) => item.pipelineStage);
+      if (query.pipelineOnly === true || query.pipelineOnly === 'true') rawItems = rawItems.filter((item) => item.pipelineStage && !item.supersededBy);
       if (query.ids !== undefined) {
         const ids = new Set(String(query.ids).split(',').filter(Boolean));
         rawItems = rawItems.filter((item) => ids.has(item.id));
@@ -3117,7 +3145,7 @@ export function createStore() {
       const result = paginate(items, query);
       result.summary = {
         activeTotal: jobsForTenant(tenantId).filter((item) => item.active !== false).length,
-        pipelineTotal: jobsForTenant(tenantId).filter((item) => item.pipelineStage).length,
+        pipelineTotal: jobsForTenant(tenantId).filter((item) => item.pipelineStage && !item.supersededBy).length,
       };
       const queryElapsedMs = Math.round(performance.now() - queryStartedAt);
       if (queryElapsedMs > 250) {
@@ -4079,14 +4107,7 @@ export function createStore() {
       let scoresRefreshed = 0;
       const scoringStartedAt = performance.now();
       for (const item of tenantAccounts) {
-        item.targetScore = Math.min(100, Math.round(
-          (Number(item.connectionCount || 0) * 8) +
-          (Number(item.seniorContactCount || 0) * 12) +
-          (Number(item.talentContactCount || 0) * 16) +
-          (Number(item.jobCount || 0) * 10)
-        ));
-        item.dailyScore = item.targetScore;
-        item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);
+        applyAccountPriority(item);
         item.recommendedAction = item.recommendedAction || 'Review hiring signal and map the best contact.';
         item.updatedAt = now();
         scoresRefreshed++;
@@ -4617,7 +4638,12 @@ export function createStore() {
 
       const activeConfigs = limitedImportConfigs.length;
       const unsupportedCount = activeTenantConfigs.length - importReadyConfigs.length;
-      const needsResolutionConfigs = tenantConfigs.length - importReadyConfigs.length;
+      const needsResolutionConfigs = tenantConfigs.filter(config => {
+        const owner = accountForConfig(config, importAccountsById, importAccountsByName);
+        return (!owner || isTrackedTarget(owner)) && !isImportReadyConfig(config);
+      }).length;
+      if (options.retryOnly) limitedImportConfigs = importReadyConfigs.filter(config => sourceNeedsRetry(config)
+        && (!config.nextImportRetryAt || Date.parse(config.nextImportRetryAt) <= Date.now())).slice(0, jobBoardLimit === -1 ? undefined : jobBoardLimit);
       const supportedCandidates = limitedImportConfigs
         .map((config) => ({ config, atsType: getConfigAtsType(config), boardId: getConfigBoardId(config) }))
         .filter(({ config, atsType, boardId }) => isImportReadyConfig(config) && ATS_FETCHERS.has(atsType) && boardId);
@@ -4666,6 +4692,13 @@ export function createStore() {
       let partialBoards = 0;
       let invalidRows = 0;
       const touchedAccountIds = new Set();
+      // Recalibrate tracked targets even when their source fails this refresh.
+      // Network-only companies remain outside the refresh and write surface.
+      for (const item of tenantAccounts.filter(isTrackedTarget)) {
+        applyAccountPriority(item);
+        item.updatedAt = now();
+        touchedAccountIds.add(item.id);
+      }
 
       const cleanupStartedAt = performance.now();
       const invalidListings = quarantineStaticBrowseJobs(tenantJobs, supportedConfigs.map(({ config }) => config));
@@ -4702,6 +4735,9 @@ export function createStore() {
           });
           config.lastImportStatus = 'failed';
           config.lastImportError = message;
+          markSourceRetry(config, settled.reason);
+          const failedAccount = accountsById.get(config.accountId);
+          if (failedAccount) { failedAccount.hiringCoverage = 'failed'; applyAccountPriority(failedAccount); touchedAccountIds.add(failedAccount.id); }
           if (permanentlyMissing) {
             config.active = false;
             config.discoveryStatus = 'needs_review';
@@ -4712,6 +4748,7 @@ export function createStore() {
             warnings.push(`${config.companyName} returned ${message.match(/HTTP\s+\d+/i)?.[0] || 'a permanent not-found response'} and was moved back to ATS review.`);
           }
           config.updatedAt = now();
+          if (isDbEnabled()) await syncTenantRelationalChanges(tenantId, { configs: [config], accounts: failedAccount ? [failedAccount] : [] });
           return;
         }
 
@@ -4838,14 +4875,33 @@ export function createStore() {
         }
 
         config.lastImportStatus = !complete ? 'partial' : configKept > 0 ? 'success' : 'empty';
+        if (complete) clearSourceRetry(config); else markSourceRetry(config, { retryAfterMs: settled.value.pagination?.retryAfterMs });
         config.lastImportCoverage = { fetched: fetchedJobs.length, kept: configKept, complete, invalidRows: configInvalidRows, reportedTotal: settled.value.reportedTotal ?? null };
         if (settled.value.pagination) config.lastImportCoverage.pagination = settled.value.pagination;
         config.lastImportedAt = now();
         config.lastImportError = '';
         config.updatedAt = now();
+        if (accountItem) {
+          accountItem.hiringCoverage = config.lastImportStatus;
+          if (complete) accountItem.lastHiringVerifiedAt = config.lastImportedAt;
+        }
         const changedAccounts = [...new Set(changedJobs.map(item => item.accountId).filter(Boolean))].map(id => accountsById.get(id)).filter(Boolean);
         for (const item of changedAccounts) refreshAccountHiringStats(item, tenantJobs, searchFocus);
-        if (isDbEnabled()) await syncTenantRelationalChanges(tenantId, { jobs: changedJobs, accounts: changedAccounts, configs: [config] });
+        if (isDbEnabled()) {
+          const published = await syncTenantRelationalChanges(tenantId, { jobs: changedJobs, accounts: changedAccounts, configs: [config] });
+          if (published.jobIdentities?.length) {
+            applyJobIdentityResolutions(tenantJobs, published.jobIdentities);
+            applyJobIdentityResolutions(jobs, published.jobIdentities);
+            applyJobIdentityResolutions(changedJobs, published.jobIdentities);
+            for (const resolution of published.jobIdentities) {
+              const canonical = tenantJobs.find(row => row.id === resolution.job.id);
+              existingByNaturalKey.set(getJobNaturalKey(canonical), canonical);
+              existingByProviderIdentity.set(getProviderJobIdentity(canonical), canonical);
+            }
+            for (const item of changedAccounts) refreshAccountHiringStats(item, tenantJobs, searchFocus);
+            await syncTenantRelationalChanges(tenantId, { accounts: changedAccounts });
+          }
+        }
         if (!relationalWritesPrimaryForTenant(tenantId)) persistTenant(tenantId);
         timings.upsertMs = (timings.upsertMs || 0) + Math.round(performance.now() - boardStartedAt);
         for (const item of changedJobs) { if (item.active === false) publishedRoleIds.delete(item.id); else publishedRoleIds.add(item.id); }
@@ -4898,6 +4954,7 @@ export function createStore() {
 
       const activeTrackedJobs = tenantJobs.filter((item) => item.active !== false).length;
       const stats = {
+        retryOnly: Boolean(options.retryOnly),
         activeConfigs,
         configRows: tenantConfigs.length,
         configs: supportedConfigs.length,
@@ -4979,7 +5036,22 @@ export function createStore() {
         },
       });
       getTenantArray(activitiesByTenant, tenantId).unshift(activities[0]);
+      profile.settings.sourceRetries = summarizeSourceRetries(tenantConfigs.filter(config => {
+        const owner = accountForConfig(config, importAccountsById, importAccountsByName);
+        return !owner || isTrackedTarget(owner);
+      }));
       persistTenant(tenantId);
+
+      // A refresh is only finished once its records and retry schedule are
+      // durable. Surface save failures to the background job, not just logs.
+      const durableStartedAt = performance.now();
+      if (isDbEnabled()) {
+        clearTimeout(pendingSaves.get(tenantId));
+        pendingSaves.delete(tenantId);
+        await saveTenantNow(tenantId, { requireMirror: true });
+      }
+      timings.durableSaveMs = Math.round(performance.now() - durableStartedAt);
+      timings.totalMs = Math.round(performance.now() - totalStartedAt);
 
       return {
         ok: true,
@@ -5537,10 +5609,19 @@ export function createStore() {
       }));
     },
 
-    getOperationalMetrics() {
+    async getOperationalMetrics() {
       const staleAfterMs = readPositiveInteger(process.env.BD_BACKGROUND_JOB_STALE_MS, 15 * 60 * 1000);
+      let persisted = [];
+      let historyAvailable = true;
+      try { persisted = await dbLoadOperationalBackgroundJobs(); }
+      catch (error) { historyAvailable = false; console.error('Durable job health unavailable:', safeErrorSummary(error)); }
+      const merged = new Map(persisted.map(job => [job.id, job]));
+      for (const job of backgroundJobs.values()) merged.set(job.id, job);
+      const summary = summarizeOperationalJobs([...merged.values()], { staleAfterMs });
       return {
-        ...summarizeOperationalJobs([...backgroundJobs.values()], { staleAfterMs }),
+        ...summary,
+        historyAvailable,
+        healthy: historyAvailable && summary.healthy,
         residentTenants: loadedTenants.size,
         pendingTenantSaves: pendingSaves.size,
       };
@@ -6071,13 +6152,8 @@ export function createStore() {
           existingAccount.contactCount = existingAccount.connectionCount;
           existingAccount.updatedAt = timestamp;
           
-          // Simple target score based on connections
-          existingAccount.targetScore = Math.min(100, Math.round(
-            (existingAccount.connectionCount * 8) +
-            (existingAccount.seniorContactCount * 15) +
-            (existingAccount.talentContactCount * 20)
-          ));
-          existingAccount.dailyScore = existingAccount.targetScore;
+          // Keep contact imports on the same bounded priority model as hiring.
+          applyAccountPriority(existingAccount);
         }
       }
 
@@ -6903,24 +6979,16 @@ function refreshAccountContactRollups(accountList, contactList, affectedAccountI
   for (const accountItem of accountList) {
     if (!affectedAccountIds.has(accountItem.id)) continue;
     const rollup = rollups.get(accountItem.id) || { connections: 0, senior: 0, talent: 0 };
-    const targetScore = Math.min(100, Math.round(
-      rollup.connections * 8
-      + rollup.senior * 15
-      + rollup.talent * 20
-    ));
     const changed = accountItem.connectionCount !== rollup.connections
       || accountItem.contactCount !== rollup.connections
       || accountItem.seniorContactCount !== rollup.senior
-      || accountItem.talentContactCount !== rollup.talent
-      || accountItem.targetScore !== targetScore
-      || accountItem.dailyScore !== targetScore;
+      || accountItem.talentContactCount !== rollup.talent;
     if (!changed) continue;
     accountItem.connectionCount = rollup.connections;
     accountItem.contactCount = rollup.connections;
     accountItem.seniorContactCount = rollup.senior;
     accountItem.talentContactCount = rollup.talent;
-    accountItem.targetScore = targetScore;
-    accountItem.dailyScore = targetScore;
+    applyAccountPriority(accountItem);
     accountItem.updatedAt = timestamp;
   }
 }
@@ -9691,14 +9759,7 @@ function refreshAccountHiringStats(item, tenantJobs, focusValue = null) {
     ? (hasFocus && !relevantJobs.length ? 'Hiring outside focus' : 'Active hiring')
     : 'No active roles found';
   item.hiringVelocity = Math.min(100, Math.round((recent30 * 8) + (recent7 * 10)));
-  item.targetScore = Math.min(100, Math.round(
-    (Number(item.connectionCount || 0) * 8) +
-    (Number(item.seniorContactCount || 0) * 12) +
-    (Number(item.talentContactCount || 0) * 16) +
-    (Number(hasFocus ? relevantJobs.length : item.jobCount || 0) * 10)
-  ));
-  item.dailyScore = item.targetScore;
-  item.alertPriorityScore = Math.max(item.alertPriorityScore || 0, item.targetScore);
+  applyAccountPriority(item);
   item.updatedAt = now();
 }
 

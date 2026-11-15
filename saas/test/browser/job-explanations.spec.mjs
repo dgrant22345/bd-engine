@@ -45,6 +45,8 @@ test('role explanations retain all saved reasons and distinguish focus exclusion
   expect(health.failed).toContain('Latest refresh needs attention');
   expect(health.completed).toContain('100 source listings fetched from 4 boards; 60 retained');
   expect(health.completed).toContain('1 boards reported incomplete coverage');
+  expect(health.completed).toContain('Refresh finished with coverage gaps');
+  expect(health.completed).toContain('Last finished refresh');
   expect(health.below).toContain('Below your saved');
   expect(health.meets).toContain('Other list filters still apply');
   expect(health.unscored).toContain('Set or refresh search focus');

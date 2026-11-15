@@ -23,7 +23,7 @@ export function buildTenantJobQueries(tenantId, query = {}) {
   const posted = `COALESCE(NULLIF(j.posted_at, ''), j.raw->>'importedAt', '')`;
   if (['relevant', 'not_relevant'].includes(query.feedback)) clauses.push(`j.raw->'relevanceFeedback'->>'vote' = ${param(query.feedback)}`);
   else if (query.feedback === 'unreviewed') clauses.push("coalesce(j.raw->'relevanceFeedback'->>'vote', '') = ''");
-  if (truthy(query.pipelineOnly)) clauses.push(`COALESCE(j.raw->>'pipelineStage', '') <> ''`);
+  if (truthy(query.pipelineOnly)) clauses.push(`COALESCE(j.raw->>'pipelineStage', '') <> '' AND COALESCE(j.raw->>'supersededBy', '') = ''`);
   if (query.ids !== undefined) clauses.push(`j.id = ANY(${param(String(query.ids).split(',').filter(Boolean))}::text[])`);
   if (String(query.q || '').trim()) {
     const search = param(`%${String(query.q).trim().replace(/[\\%_]/g, '\\$&')}%`);
@@ -57,7 +57,7 @@ export function buildTenantJobQueries(tenantId, query = {}) {
   const where = `WHERE ${clauses.join(' AND ')}`;
   const count = { text: `SELECT COUNT(*)::int AS total,
     (SELECT COUNT(*)::int FROM jobs WHERE tenant_id = $1 AND active IS NOT FALSE) AS active_total,
-    (SELECT COUNT(*)::int FROM jobs WHERE tenant_id = $1 AND COALESCE(raw->>'pipelineStage', '') <> '') AS pipeline_total
+    (SELECT COUNT(*)::int FROM jobs WHERE tenant_id = $1 AND COALESCE(raw->>'pipelineStage', '') <> '' AND COALESCE(raw->>'supersededBy', '') = '') AS pipeline_total
     ${source} ${where}`, params: [...params] };
   const order = query.sortBy === 'connections' ? `${connectionCount} DESC, ${relevance} DESC, ${posted} DESC, j.id ASC`
     : query.sortBy === 'relevance' ? `${relevance} DESC, ${posted} DESC, j.id ASC`

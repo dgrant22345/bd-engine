@@ -173,6 +173,7 @@ jobs:
           npm run verify:job-queries
           npm run verify:contact-queries
           node scripts/verify-workflow-tools.mjs
+          node scripts/verify-ingestion-integrity.mjs
           node scripts/verify-trial-emails.mjs
           node scripts/verify-hiring-tracker.mjs
           node scripts/verify-team-workspaces.mjs

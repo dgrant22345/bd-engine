@@ -710,7 +710,7 @@ function startPeriodicPipelineRunner(startupPromise) {
             retryDelayMs,
           });
           if (!claim.claimed) continue;
-          await store.startLiveJobImport(tenant.id, { plan: getPlan(tenant.plan), scheduled: true });
+          await store.startLiveJobImport(tenant.id, { plan: getPlan(tenant.plan), scheduled: true, retryOnly: claim.reason === 'sources_due', autoDiscover: claim.reason === 'sources_due' ? false : undefined });
           started += 1;
           console.log(`[Scheduler] Started overdue pipeline for ${tenant.id}.`);
         } catch (err) {
@@ -1605,7 +1605,7 @@ self.addEventListener('activate', (event) => {
   }
 
   if (pathname === '/api/status') {
-    return sendJson(res, 200, getHealthPayload(true));
+    return sendJson(res, 200, await getHealthPayload(true));
   }
 
   if (pathname === '/api/setup/status') {
@@ -3897,14 +3897,14 @@ function recordRequestMetric(req, res, elapsedMs) {
   }
 }
 
-function getHealthPayload(includeDetails = false) {
+async function getHealthPayload(includeDetails = false) {
   const release = RELEASE;
   const uptimeSeconds = Math.round((Date.now() - serverStartedAt.getTime()) / 1000);
   const averageDurationMs = serverStats.requestCount
     ? Math.round(serverStats.totalDurationMs / serverStats.requestCount)
     : 0;
   const stripeStatus = getStripeConfigStatus();
-  const operational = store.getOperationalMetrics();
+  const operational = await store.getOperationalMetrics();
   const errorRatePercent = serverStats.requestCount
     ? Math.round((serverStats.errorCount / serverStats.requestCount) * 10000) / 100
     : 0;

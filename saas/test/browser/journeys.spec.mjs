@@ -523,7 +523,7 @@ test('admin journey: import health and automatic refresh timing are visible', as
   await app.locator('[data-collapse-id="runtime-status"]').click();
   const health = app.locator('.ingestion-health');
   await expect(health).toBeVisible({ timeout: 15000 });
-  await expect(health).toContainText('Last successful refresh');
+  await expect(health).toContainText('Last finished refresh');
   await expect(health).toContainText('Next automatic refresh');
   await expect(health).toContainText(/Due now|[A-Z][a-z]{2} \d{1,2}/);
   await expect(app.locator('.coverage-health')).toContainText('Ready sources');

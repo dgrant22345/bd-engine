@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20261114-natural-outreach-01';
+const ASSET_VERSION = '20261114-data-trust-01';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
