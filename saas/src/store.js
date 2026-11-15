@@ -7507,10 +7507,10 @@ function classifyBoardCoverage(config = {}) {
   const supported = ATS_FETCHERS.has(atsType);
   const importReady = isImportReadyConfig(config);
 
+  if (reviewStatus === 'rejected') return 'rejected';
   if (config.sourceHold === 'identity_review') return 'needs_review';
   if (config.sourceHold === 'manual') return 'tracking_only';
   if (config.sourceHold === 'unavailable') return 'careers_page_only';
-  if (reviewStatus === 'rejected') return 'rejected';
   if (importStatus === 'failed') return 'failed';
   if (importStatus === 'partial') return 'partial';
   if (importReady) {

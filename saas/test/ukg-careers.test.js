@@ -106,4 +106,8 @@ test('actual importer upgrades Hays and PCS, leaves held and network sources unt
   await store.patchConfig(id, held.id, { careersUrl: 'https://new.example.test/careers', active: true });
   assert.equal((await store.getConfig(id, held.id)).sourceHold, '');
   assert.equal(held.apiUrl, ''); assert.equal(held.resolvedBoardUrl, 'https://new.example.test/careers');
+  await store.reviewConfig(id, configs[4].id, { action: 'reject' });
+  assert.equal((await store.getIngestionDiagnostics(id)).coverageCategories.rejected, 1);
+  await store.reviewConfig(id, configs[4].id, { action: 'promote' });
+  assert.equal((await store.getConfig(id, configs[4].id)).sourceHold, '', 'explicit approval can resume a held source');
 });
