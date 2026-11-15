@@ -1,4 +1,4 @@
-const ASSET_VERSION = '20261115-source-portals-01';
+const ASSET_VERSION = '20261115-source-recovery-02';
 const CACHE_NAME = `bd-engine-${ASSET_VERSION}`;
 const SHELL_FILES = [
   '/',
