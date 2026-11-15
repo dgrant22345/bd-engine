@@ -4716,6 +4716,11 @@ export function createStore() {
           sourceRow: { jobId: item.jobId } });
       }
       if (invalidListings.length) warnings.push(`${invalidListings.length} navigation or information pages were marked inactive; records and saved pipeline entries were preserved.`);
+      if (invalidListings.length && isDbEnabled()) {
+        const changedAccounts = [...new Set(invalidListings.map(item => item.accountId).filter(Boolean))].map(id => accountsById.get(id)).filter(Boolean);
+        for (const item of changedAccounts) refreshAccountHiringStats(item, tenantJobs, searchFocus);
+        await syncTenantRelationalChanges(tenantId, { jobs: invalidListings, accounts: changedAccounts });
+      }
       timings.invalidListingCleanupMs = Math.round(performance.now() - cleanupStartedAt);
 
       const fetchStartedAt = performance.now();
@@ -8822,7 +8827,8 @@ export function quarantineStaticBrowseJobs(tenantJobs, configs, timestamp = now(
 }
 
 export function isStaticJobInfoPath(path) {
-  return /\/(?:jobs|careers)\/(?:login|signin|sign-in|register|alumni|contacts?|employee-benefits|benefits|learning-and-development|employee-profiles|student-internship-program|connection)(?:\/|$)/i.test(path);
+  return /\/(?:jobs|careers)\/(?:login|signin|sign-in|register|employee-profiles)(?:\/|$)/i.test(path)
+    || /\/(?:jobs|careers)\/(?:alumni|contacts?|employee-benefits|benefits|learning-and-development|student-internship-program|connection)\/?$/i.test(path);
 }
 
 function isGenericCareersLink(title, url) {

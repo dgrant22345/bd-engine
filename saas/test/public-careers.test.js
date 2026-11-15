@@ -72,13 +72,13 @@ test('Jibe failed later pages and invalid identities cannot establish complete c
 });
 
 test('informational vacancies become inactive while IDs, saved workflow and history remain intact', () => {
-  const rows = ['/jobs/login', '/en-us/jobs/alumni', '/en-us/jobs/employee-benefits', '/en-us/jobs/employee-profiles/testimonials', '/jobs/benefits-manager-123', '/jobs/search-engineer-456'].map((path, i) => ({
+  const rows = ['/jobs/login', '/en-us/jobs/alumni', '/en-us/jobs/employee-benefits', '/en-us/jobs/employee-profiles/testimonials', '/jobs/benefits-manager-123', '/jobs/search-engineer-456', '/jobs/benefits/senior-benefits-manager-123'].map((path, i) => ({
     id: String(i), configId: 'source', jobUrl: `https://example.test${path}`, active: true, pipelineStage: 'saved', notes: 'Keep me', history: [{ action: 'saved' }],
   }));
   const changed = quarantineStaticBrowseJobs(rows, [{ id: 'source', atsType: 'custom_static' }], '2026-11-15T00:00:00Z');
-  assert.equal(changed.length, 4); assert.equal(rows.length, 6);
+  assert.equal(changed.length, 4); assert.equal(rows.length, 7);
   for (const row of changed) { assert.equal(row.pipelineStage, 'saved'); assert.equal(row.notes, 'Keep me'); assert.equal(row.history.length, 1); assert.equal(row.closureReason, 'invalid_information_page'); }
-  assert.equal(rows[4].active, true); assert.equal(rows[5].active, true);
+  assert.equal(rows[4].active, true); assert.equal(rows[5].active, true); assert.equal(rows[6].active, true);
 });
 
 async function workspace(id) {
