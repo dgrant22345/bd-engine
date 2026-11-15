@@ -4585,6 +4585,9 @@ export function createStore() {
         const migrated = !untrackedCorrectionAccounts.has(config.accountId) && applyCareerSourceCorrection(config);
         const repaired = repairKnownAtsIdentity(config, { approveDirect: true });
         if (migrated || repaired) directResolvedConfigs++;
+        if (migrated) warnings.push(config.sourceHold
+          ? `${config.companyName}: ${config.sourceHoldReason} Existing records were preserved.`
+          : `${config.companyName}: replaced the verified stale source with ${config.atsType}; previous source details were retained.`);
       }
       timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
       if (directResolvedConfigs) persistTenant(tenantId);

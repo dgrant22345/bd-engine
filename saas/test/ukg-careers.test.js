@@ -92,6 +92,7 @@ test('actual importer upgrades Hays and PCS, leaves held and network sources unt
   });
   const result = await store.importLiveJobs(id, { plan: { limits: { jobBoards: -1 } }, autoDiscover: false });
   assert.equal(result.stats.errors, 0, JSON.stringify(result.errors)); assert.equal(result.stats.partialBoards, 0); assert.equal(result.stats.configs, 2);
+  assert.ok(result.warnings.some(warning => /unrelated shopping content/.test(warning)));
   assert.equal((await store.getConfig(id, configs[0].id)).atsType, 'ukg_pro'); assert.equal((await store.getConfig(id, configs[1].id)).atsType, 'ukg_ready');
   assert.equal((await store.getConfig(id, untouched.id)).atsType, 'custom_static');
   const jobs = (await store.findJobs(id, {})).items; assert.equal(jobs.length, 2); assert.ok(jobs.every(x => !x.isNew));
