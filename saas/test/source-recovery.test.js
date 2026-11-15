@@ -106,3 +106,48 @@ test('manual background refreshes update the same status and retry schedule as a
   const failed=await wait((await store.startLiveJobImport(id,options)).jobId);
   assert.equal(failed.status,'failed');assert.equal((await store.getRuntimeStatus(id)).refreshSchedule.lastStatus,'failed');
 });
+
+async function workdayWorkspace(id) {
+  const store = createStore(); store.ensureTenant({ id, name: id }, { id: `${id}-owner` });
+  const account = await store.addAccount(id, { displayName: 'Example' });
+  const config = store.addConfig(id, { accountId: account.id, companyName: 'Example', atsType: 'workday', boardId: 'paced/First', resolvedBoardUrl: 'https://paced.wd1.myworkdayjobs.com/First', active: true, reviewStatus: 'approved', discoveryStatus: 'resolved' });
+  return { store, config };
+}
+function workdayPage(offset, total = 100) {
+  return { total, jobPostings: Array.from({ length: Math.min(20, total - offset) }, (_, i) => ({
+    title: `Engineer ${offset + i}`, externalPath: `/job/Toronto/Engineer_JR${offset + i}`, locationsText: 'Toronto, Ontario, Canada',
+  })) };
+}
+
+test('the actual Workday importer caps page requests at two per board and four across two boards', async t => {
+  const id = 'workday-actual-pacing'; const { store } = await workdayWorkspace(id);
+  const account = await store.addAccount(id, { displayName: 'Other' });
+  store.addConfig(id, { accountId: account.id, companyName: 'Other', atsType: 'workday', boardId: 'paced/Second', resolvedBoardUrl: 'https://paced.wd1.myworkdayjobs.com/Second', active: true, reviewStatus: 'approved', discoveryStatus: 'resolved' });
+  const active = new Map(); const maximum = new Map(); let totalActive = 0, totalMaximum = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const key = String(url); assert.match(key, /\/wday\/cxs\/paced\/(?:First|Second)\/jobs$/);
+    active.set(key, (active.get(key) || 0) + 1); maximum.set(key, Math.max(maximum.get(key) || 0, active.get(key)));
+    totalActive++; totalMaximum = Math.max(totalMaximum, totalActive);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active.set(key, active.get(key) - 1); totalActive--;
+    return Response.json(workdayPage(JSON.parse(init.body).offset));
+  });
+  const result = await store.importLiveJobs(id, options);
+  assert.equal(result.stats.errors, 0, JSON.stringify(result.errors)); assert.equal(result.stats.partialBoards, 0);
+  assert.equal(maximum.size, 2); assert.deepEqual([...maximum.values()], [2, 2]); assert.equal(totalMaximum, 4);
+});
+
+test('the actual Workday importer recovers an exhausted transient page and verifies complete coverage', async t => {
+  const id = 'workday-actual-recovery'; const { store, config } = await workdayWorkspace(id);
+  let pageAttempts = 0, headRequests = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const offset = JSON.parse(init.body).offset;
+    if (offset === 0) headRequests++;
+    if (offset === 20 && ++pageAttempts <= 3) return new Response('temporary failure', { status: 503 });
+    return Response.json(workdayPage(offset, 40));
+  });
+  const result = await store.importLiveJobs(id, options);
+  assert.equal(result.stats.errors, 0, JSON.stringify(result.errors)); assert.equal(result.stats.partialBoards, 0); assert.equal(result.stats.newJobs, 40);
+  const saved = await store.getConfig(id, config.id);
+  assert.equal(saved.lastImportCoverage.pagination.recoveredPages, 1); assert.equal(headRequests, 2); assert.equal(pageAttempts, 4);
+});
