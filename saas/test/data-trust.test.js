@@ -24,6 +24,8 @@ test('import identity reconciliation preserves the durable workflow and first ob
   const rows = [durable, incoming];
   applyJobIdentityResolutions(rows, [{ incomingId: 'temporary', job: merged }]);
   assert.equal(rows.length, 1); assert.equal(rows[0], durable); assert.equal(durable.title, 'Updated role');
+  const historical = mergeImportedJob({ ...durable, pipelineStage: '' }, incoming, { pipelineStage: 'saved', firstSeenAt: '2024-01-01' });
+  assert.equal(historical.pipelineStage, 'saved'); assert.equal(historical.firstSeenAt, '2024-01-01');
 });
 
 test('source retries back off, respect provider cooldown and clear on a complete refresh', () => {

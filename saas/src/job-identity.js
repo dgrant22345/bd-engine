@@ -5,9 +5,11 @@ export function mergeImportedJob(existing, incoming, previous = null) {
     createdAt: existing.createdAt || incoming.createdAt,
     firstSeenAt: existing.firstSeenAt || existing.createdAt || incoming.firstSeenAt };
   for (const key of ['pipelineStage', 'relevanceFeedback']) {
-    if (Object.hasOwn(existing, key)) merged[key] = existing[key];
+    if (previous && key === 'pipelineStage' && !existing[key] && previous[key]) merged[key] = previous[key];
+    else if (Object.hasOwn(existing, key)) merged[key] = existing[key];
     else if (previous && Object.hasOwn(previous, key)) merged[key] = previous[key];
   }
+  if (previous?.firstSeenAt && Date.parse(previous.firstSeenAt) < Date.parse(merged.firstSeenAt)) merged.firstSeenAt = previous.firstSeenAt;
   return merged;
 }
 
