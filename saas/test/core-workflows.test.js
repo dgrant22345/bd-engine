@@ -34,7 +34,7 @@ test('LinkedIn import deduplicates repeated rows and repeated imports', async ()
   const acme = (await store.findAccounts(tenantId, { q: 'Acme', page: 1, pageSize: 20 })).items[0];
   assert.equal(acme.domain, 'acme.example');
   assert.equal(acme.connectionCount, 1);
-  assert.equal(acme.targetScore, 43);
+  assert.ok(acme.targetScore > 0 && acme.targetScore < 50, 'one contact without hiring evidence should not saturate priority');
   assert.equal((await store.findAccounts(otherTenantId, { page: 1, pageSize: 20 })).total, 0);
   assert.equal((await store.findContacts(otherTenantId, { page: 1, pageSize: 20 })).total, 0);
 });

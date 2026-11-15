@@ -13,8 +13,7 @@ const US_CODE_RE = /(?:^|,\s*)(ca|ny|tx|wa|ma|fl|il|ga|co|az|va|pa|nc|oh|mi|nj|m
 const OTHER_COUNTRY_CODE_RE = /(?:^|,\s*)(nl|gb|uk|ie|de|fr|es|it|pl|se|no|dk|fi|ch|at|pt|be|au|nz|in|sg|jp|cn|hk)(?=\s*(?:,|\/|\||\)|$))/i;
 const NEWFOUNDLAND_CODE_RE = /\b(st\.? john'?s|corner brook|gander|newfoundland(?: and labrador)?),\s*nl\b/i;
 
-const GTA_CITY_RE = /\b(toronto|gta|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|kitchener|waterloo|hamilton)\b/i;
-const NON_GTA_CANADA_RE = /\b(vancouver|calgary|edmonton|montreal|winnipeg|halifax|quebec|bc|ab|qc)\b/i;
+const GTA_CITY_RE = /\b(toronto|gta|greater toronto area|mississauga|brampton|markham|vaughan|oakville|scarborough|north york|richmond hill|etobicoke|burlington|milton|pickering|ajax|whitby|oshawa|aurora|newmarket|georgina|caledon|halton hills|uxbridge|clarington|scugog|brock|king city)\b/i;
 
 const CANADA_SQL_STRONG_TERMS = [
   'canada', 'canadian', 'ontario', 'british columbia', 'alberta', 'quebec', 'québec',
@@ -123,11 +122,7 @@ export function jobMatchesGeography(item, accountItem, allow) {
 export function isGtaLocation(location) {
   const text = String(location || '').trim();
   if (!text) return false;
-  if (GTA_CITY_RE.test(text)) return true;
-  if (/\b(canada|ontario)\b/i.test(text) || /(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i.test(text)) {
-    return !NON_GTA_CANADA_RE.test(text);
-  }
-  return false;
+  return GTA_CITY_RE.test(text) && ![US_COUNTRY_RE, OTHER_REGION_RE, US_CODE_RE, OTHER_COUNTRY_CODE_RE, US_STATE_RE].some(pattern => pattern.test(text));
 }
 
 export function locationMatchesGeography(item = {}, geography = '') {
@@ -164,7 +159,7 @@ function regexSql(expression, regex) {
 
 export function buildJobGeographySql(geography, expression = 'j.location') {
   if (geography === 'gta') {
-    return `(${regexSql(expression, GTA_CITY_RE)} OR ((${regexSql(expression, /\b(canada|ontario)\b/i)} OR ${regexSql(expression, /(?:^|,\s*)(on|ontario)(?:\s+|,|$)/i)}) AND NOT ${regexSql(expression, NON_GTA_CANADA_RE)}))`;
+    return `(${regexSql(expression, GTA_CITY_RE)} AND NOT ${regexSql(expression, US_COUNTRY_RE)} AND NOT ${regexSql(expression, OTHER_REGION_RE)} AND NOT ${regexSql(expression, US_CODE_RE)} AND NOT ${regexSql(expression, OTHER_COUNTRY_CODE_RE)} AND NOT ${regexSql(expression, US_STATE_RE)})`;
   }
   if (!['canada', 'us', 'canada_us'].includes(geography)) return 'TRUE';
   const text = 'location_part';

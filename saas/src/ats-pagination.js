@@ -37,6 +37,7 @@ export async function fetchPaginatedAtsJobs({
   let duplicateRows = 0;
   let verificationRequests = 0;
   let failedPages = 0;
+  let retryAfterMs = 0;
   let lastPageLength = 0;
   let repeatedPage = false;
   const firstPage = await readPage(0, { deadlineAt });
@@ -87,7 +88,7 @@ export async function fetchPaginatedAtsJobs({
     const pages = await Promise.allSettled(offsets.map((offset) => readPage(offset, { deadlineAt })));
     pages.forEach((page, index) => {
       if (page.status === 'fulfilled') appendPage(page.value, offsets[index]);
-      else failedPages++;
+      else { failedPages++; retryAfterMs = Math.max(retryAfterMs, Number(page.reason?.retryAfterMs) || 0); }
     });
     nextPage += batchSize;
     if (failedPages) {
@@ -126,7 +127,7 @@ export async function fetchPaginatedAtsJobs({
     reportedTotal,
     complete: reasons.size === 0,
     pagination: {
-      pagesFetched, pageLimit: maxPages, verificationRequests, failedPages, uniqueJobs: seen.size, duplicateRows,
+      pagesFetched, pageLimit: maxPages, verificationRequests, failedPages, uniqueJobs: seen.size, duplicateRows, retryAfterMs,
       reasons: [...reasons], elapsedMs: Math.max(0, Math.round(clock() - startedAt)),
     },
   };
