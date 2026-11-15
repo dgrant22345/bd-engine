@@ -4,6 +4,10 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Import Hays' own recruitment roles from its public UKG Pro board and PCS Wireless roles from UKG Ready, with bounded pagination and count/head verification. Correct their exact stale source links and Zynga's old careers page using verified official links, preserving source history and role workflows.
+- Make blocked sources explicit: LinkedIn remains a manual careers reference, Easy Hiring's unrelated shopping domain requires identity review, and Maple Leaf's retired CATS board points to a currently unavailable replacement. Preserve existing records and stop repeatedly treating these known source problems as automatic fetch failures. Corrected careers URLs now replace stale derived fetch URLs when edited.
+- Clarify that role focus is a user preference: leave it blank to monitor all roles, or save preferred titles to rank matches. Existing choices remain unchanged.
+
 - Limit Workday results-page fetching to two requests per board, alongside the existing two-board limit. Recover an isolated transient page failure within the original deadline without overriding a provider cooldown. An incomplete or rate-limited response still preserves unseen jobs and schedules a source retry.
 
 - Read Xerox's public Avature board and AMD's iCIMS Jibe feed across all results pages, checking counts and the first page before allowing closures. Compatible careers pages can upgrade to these feeds while retaining existing role IDs and saved workflow.

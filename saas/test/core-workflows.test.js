@@ -168,10 +168,10 @@ test('BambooHR embed URLs resolve to the JSON careers list', async () => {
   const store = createStore();
   const tenantId = 'tenant-bamboo-import';
   addTenant(store, tenantId);
-  const account = await store.addAccount(tenantId, { displayName: 'PCS Wireless' });
+  const account = await store.addAccount(tenantId, { displayName: 'Embed Labs' });
   store.addConfig(tenantId, {
     accountId: account.id,
-    companyName: 'PCS Wireless',
+    companyName: 'Embed Labs',
     atsType: 'bamboohr',
     boardId: 'pcsglobal',
     apiUrl: 'https://pcsglobal.bamboohr.com/js/embed.js',

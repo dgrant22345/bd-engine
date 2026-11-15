@@ -24,6 +24,8 @@ import { clearSourceRetry, importHasCoverageGaps, markSourceRetry, sourceNeedsRe
 import { dbLoadOperationalBackgroundJobs } from './db.js';
 import { createAsyncLimit } from './async-limit.js';
 import { avatureBoardUrl, isJibeCareerPage, jibeJobsUrl, parseAvaturePage, parseJibePage, readAvatureBoard, readJibeBoard } from './public-careers.js';
+import { readUkgBoard, ukgBoard } from './ukg-careers.js';
+import { applyCareerSourceCorrection } from './career-source-corrections.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -2169,6 +2171,7 @@ export function createStore() {
         if (category === 'discovery_needed') detail = `Company domain: ${config.domain || config.canonicalDomain}`;
         if (category === 'missing_identity') detail = 'No usable company domain or careers URL is saved yet.';
         if (!isImportReadyConfig(config) && config.lastDiscoveryError) detail = config.lastDiscoveryError;
+        if (config.sourceHoldReason) detail = config.sourceHoldReason;
         return {
           config,
           accountItem,
@@ -3271,7 +3274,19 @@ export function createStore() {
       assertTenant(tenantId);
       const config = boardConfigs.find((item) => item.tenantId === tenantId && item.id === configId);
       if (!config) return null;
-      Object.assign(config, normalizeConfigPatch(pickPatch(patch, ['companyName', 'atsType', 'ats', 'boardId', 'domain', 'careersUrl', 'source', 'active', 'notes'])));
+      if (['atsType', 'domain', 'careersUrl'].some(key => Object.prototype.hasOwnProperty.call(patch, key) && String(patch[key] || '').trim() !== String(config[key] || '').trim())) {
+        config.sourceHold = ''; config.sourceHoldReason = '';
+        config.lastImportStatus = 'not run'; config.lastImportError = ''; clearSourceRetry(config);
+      }
+      const requested = pickPatch(patch, ['companyName', 'atsType', 'ats', 'boardId', 'domain', 'careersUrl', 'source', 'active', 'notes']);
+      if (Object.prototype.hasOwnProperty.call(requested, 'atsType')) requested.ats = requested.atsType;
+      if (Object.prototype.hasOwnProperty.call(requested, 'careersUrl') && requested.careersUrl !== config.careersUrl) {
+        // A corrected public URL supersedes derived URLs from the old source.
+        Object.assign(requested, { apiUrl: '', sourceUrl: requested.careersUrl, resolvedBoardUrl: requested.careersUrl,
+          boardUrl: requested.careersUrl, url: requested.careersUrl, board_id: '', slug: '', boardSlug: '' });
+        if (!requested.boardId || requested.boardId === config.boardId) requested.boardId = '';
+      }
+      Object.assign(config, normalizeConfigPatch(requested));
       if (config.companyName) config.normalizedCompanyName = normalizeKey(config.companyName);
       config.updatedAt = now();
       persistTenant(tenantId);
@@ -3285,6 +3300,10 @@ export function createStore() {
       if (!config) return null;
       const rejected = payload.action === 'reject';
       const timestamp = now();
+      if (!rejected && config.sourceHold) {
+        config.sourceHold = ''; config.sourceHoldReason = '';
+        config.lastImportStatus = 'not run'; config.lastImportError = ''; clearSourceRetry(config);
+      }
       config.reviewStatus = rejected ? 'rejected' : 'approved';
       config.active = !rejected;
       config.updatedAt = timestamp;
@@ -4291,7 +4310,7 @@ export function createStore() {
       const requestedLimit = requestedLimitOption > 0 ? Math.floor(requestedLimitOption) : defaultLimit;
       const cappedByPlan = jobBoardLimit === -1 ? requestedLimit : Math.min(requestedLimit, Math.max(1, jobBoardLimit));
       const limit = Math.min(cappedByPlan, DEFAULT_ATS_MAX_DISCOVERY_BATCH);
-      let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected');
+      let candidates = tenantConfigs.filter((item) => item.reviewStatus !== 'rejected' && !item.sourceHold && normalizeAtsType(item.atsType || item.ats) !== 'manual');
       // DATA-101: probe only tracked targets' boards. Configs that resolve to
       // an untracked (network) account are skipped; configs with no matching
       // account keep working (they were created deliberately).
@@ -4561,8 +4580,14 @@ export function createStore() {
 
       const identityRepairStartedAt = performance.now();
       let directResolvedConfigs = 0;
+      const untrackedCorrectionAccounts = new Set(tenantAccounts.filter(item => item.tracked === false).map(item => item.id));
       for (const config of tenantConfigs) {
-        if (repairKnownAtsIdentity(config, { approveDirect: true })) directResolvedConfigs++;
+        const migrated = !untrackedCorrectionAccounts.has(config.accountId) && applyCareerSourceCorrection(config);
+        const repaired = repairKnownAtsIdentity(config, { approveDirect: true });
+        if (migrated || repaired) directResolvedConfigs++;
+        if (migrated) warnings.push(config.sourceHold
+          ? `${config.companyName}: ${config.sourceHoldReason} Existing records were preserved.`
+          : `${config.companyName}: replaced the verified stale source with ${config.atsType}; previous source details were retained.`);
       }
       timings.identityRepairMs = Math.round(performance.now() - identityRepairStartedAt);
       if (directResolvedConfigs) persistTenant(tenantId);
@@ -4586,7 +4611,7 @@ export function createStore() {
       const autoDiscoveryLimit = readPositiveInteger(options.autoDiscoveryLimit, DEFAULT_IMPORT_DISCOVERY_LIMIT);
       const autoDiscoveryMinReady = readPositiveInteger(options.autoDiscoveryMinReady, DEFAULT_IMPORT_DISCOVERY_MIN_READY);
       const hasAutoDiscoveryCandidates = tenantConfigs.some((item) => {
-        if (normalizeKey(item.reviewStatus) === 'rejected') return false;
+        if (normalizeKey(item.reviewStatus) === 'rejected' || item.sourceHold || normalizeAtsType(item.atsType || item.ats) === 'manual') return false;
         const owner = accountForConfig(item, importAccountsById, importAccountsByName);
         if (owner && !isTrackedTarget(owner)) return false;
         return !isResolvedBoardConfig(item)
@@ -4764,7 +4789,7 @@ export function createStore() {
         }
 
         const fetchedJobs = settled.value.jobs;
-        const previousSourceJobs = settled.value.resolvedSource
+        const previousSourceJobs = settled.value.resolvedSource || config.sourceBaselinePending
           ? new Map(tenantJobs.filter(job => job.configId === config.id).map(job => [normalizePublicHttpUrl(job.jobUrl || job.url), job]).filter(([url]) => url)) : null;
         if (settled.value.resolvedSource) {
           const previous = config.atsType;
@@ -4783,7 +4808,7 @@ export function createStore() {
         const seenJobIds = new Set();
         // A board's first successful import is a baseline: roles already on it
         // count as new only when their own posting date is recent.
-        const baselineImport = !config.lastImportedAt || Boolean(settled.value.resolvedSource);
+        const baselineImport = !config.lastImportedAt || Boolean(settled.value.resolvedSource) || config.sourceBaselinePending;
 
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
@@ -4895,6 +4920,7 @@ export function createStore() {
         }
 
         config.lastImportStatus = !complete ? 'partial' : configKept > 0 ? 'success' : 'empty';
+        if (complete) config.sourceBaselinePending = false;
         if (complete) clearSourceRetry(config); else markSourceRetry(config, { retryAfterMs: settled.value.pagination?.retryAfterMs });
         config.lastImportCoverage = { fetched: fetchedJobs.length, kept: configKept, complete, invalidRows: configInvalidRows, reportedTotal: settled.value.reportedTotal ?? null };
         if (settled.value.pagination) config.lastImportCoverage.pagination = settled.value.pagination;
@@ -7113,12 +7139,14 @@ const ATS_FETCHERS = new Map([
   ['phenom', fetchPhenomJobs],
   ['avature', fetchAvatureJobs],
   ['jibe', fetchJibeJobs],
+  ['ukg_pro', fetchUkgJobs],
+  ['ukg_ready', fetchUkgJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
 const BLIND_PROBE_ATS_TYPES = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'];
 
-const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors']);
+const TRACKING_ONLY_ATS_TYPES = new Set(['icims', 'taleo', 'adp', 'successfactors', 'manual']);
 const BOARD_COVERAGE_META = {
   partial: {
     label: 'Incomplete refresh',
@@ -7182,6 +7210,8 @@ function normalizeAtsType(value) {
   if (normalized.includes('phenom')) return 'phenom';
   if (normalized.includes('avature')) return 'avature';
   if (normalized.includes('jibe')) return 'jibe';
+  if (normalized === 'ukgpro' || normalized === 'ultipro') return 'ukg_pro';
+  if (normalized === 'ukgready' || normalized === 'saashr') return 'ukg_ready';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -7201,6 +7231,7 @@ function detectAtsTypeFromUrl(value) {
   if (url.includes('jobs.personio.de')) return 'personio';
   if (url.includes('ats.rippling.com')) return 'rippling';
   if (avatureBoardUrl(value)) return 'avature';
+  if (ukgBoard(value)) return ukgBoard(value).type;
   return '';
 }
 
@@ -7219,6 +7250,7 @@ function getConfigAtsUrl(config = {}) {
 
 function getConfigAtsType(config = {}) {
   const explicit = normalizeAtsType(config.atsType || config.ats);
+  if (explicit === 'manual') return '';
   if (ATS_FETCHERS.has(explicit)) return explicit;
   return detectAtsTypeFromUrl(getConfigAtsUrl(config));
 }
@@ -7277,6 +7309,8 @@ function getConfigBoardId(config = {}) {
     try { return new URL(config.resolvedBoardUrl || config.careersUrl || config.sourceUrl || config.url).hostname; } catch { return ''; }
   }
   for (const sourceUrl of getConfigUrlCandidates(config)) {
+    const ukg = ukgBoard(sourceUrl);
+    if (ukg) return ukg.id;
     const avature = avatureBoardUrl(sourceUrl);
     if (avature) return avature.replace(/^https?:\/\//, '');
     const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
@@ -7461,7 +7495,7 @@ function isResolvedBoardConfig(config = {}) {
 }
 
 function isImportReadyConfig(config = {}) {
-  return config.active !== false && isResolvedBoardConfig(config);
+  return config.active !== false && !config.sourceHold && isResolvedBoardConfig(config);
 }
 
 function classifyBoardCoverage(config = {}) {
@@ -7474,6 +7508,9 @@ function classifyBoardCoverage(config = {}) {
   const importReady = isImportReadyConfig(config);
 
   if (reviewStatus === 'rejected') return 'rejected';
+  if (config.sourceHold === 'identity_review') return 'needs_review';
+  if (config.sourceHold === 'manual') return 'tracking_only';
+  if (config.sourceHold === 'unavailable') return 'careers_page_only';
   if (importStatus === 'failed') return 'failed';
   if (importStatus === 'partial') return 'partial';
   if (importReady) {
@@ -7998,6 +8035,14 @@ function getBambooCareersApiUrl(config = {}, boardId = '') {
     }
   }
   return `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
+}
+
+async function fetchUkgJobs(config) {
+  const url = getConfigUrlCandidates(config).find(value => ukgBoard(value));
+  return readUkgBoard(url, {
+    getJson: (url, { deadlineAt }) => fetchJson(url, 15000, {}, deadlineAt),
+    postJson: (url, body, { deadlineAt }) => fetchJson(url, 15000, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, deadlineAt),
+  });
 }
 
 async function fetchAvatureJobs(config) {
@@ -8811,7 +8856,7 @@ export function isStaticJobBrowsePath(path) {
 }
 
 export function quarantineStaticBrowseJobs(tenantJobs, configs, timestamp = now()) {
-  const eligible = new Map(configs.filter((config) => getConfigAtsType(config) === 'custom_static').map((config) => [config.id, config]));
+  const eligible = new Map(configs.filter((config) => getConfigAtsType(config) === 'custom_static' || config.previousCareerSource?.atsType === 'custom_static').map((config) => [config.id, config]));
   const changed = [];
   for (const item of tenantJobs) {
     if (item.active === false || !eligible.has(item.configId)) continue;
@@ -8828,7 +8873,7 @@ export function quarantineStaticBrowseJobs(tenantJobs, configs, timestamp = now(
 
 export function isStaticJobInfoPath(path) {
   return /\/(?:jobs|careers)\/(?:login|signin|sign-in|register|employee-profiles)(?:\/|$)/i.test(path)
-    || /\/(?:jobs|careers)\/(?:alumni|contacts?|employee-benefits|benefits|learning-and-development|student-internship-program|connection)\/?$/i.test(path);
+    || /\/(?:jobs|careers)\/(?:alumni|contacts?|employee-benefits|benefits|learning-and-development|student-internship-program|connection|careers|university|discipline|job-openings)\/?$/i.test(path);
 }
 
 function isGenericCareersLink(title, url) {
@@ -8913,6 +8958,14 @@ async function probeAtsUrl(config, atsUrl, deadlineAt) {
   };
   const boardId = getConfigBoardId(tempConfig);
   if (!boardId) return null;
+  if (atsType === 'ukg_pro' || atsType === 'ukg_ready') {
+    const result = await readUkgBoard(atsUrl, {
+      timeBudgetMs: Math.max(1, Math.floor(deadlineAt - performance.now())),
+      getJson: (url, budget) => fetchJson(url, 8000, {}, budget.deadlineAt),
+      postJson: (url, body, budget) => fetchJson(url, 8000, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, budget.deadlineAt),
+    });
+    return { atsType, boardId, apiUrl: '', resolvedBoardUrl: ukgBoard(atsUrl).url, jobCount: result.reportedTotal, method: 'careers_page_link' };
+  }
   if (atsType === 'avature') {
     if (/\/(?:Login|Register)(?:\/|$|\?)/i.test(atsUrl)) return null;
     const resolvedBoardUrl = avatureBoardUrl(atsUrl);
@@ -9483,7 +9536,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       isGta: isGtaLocation(location),
     };
   }
-  if (['custom_static', 'avature', 'jibe'].includes(atsType)) {
+  if (['custom_static', 'avature', 'jibe', 'ukg_pro', 'ukg_ready'].includes(atsType)) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = raw.location || '';
@@ -9499,7 +9552,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       department: raw.department || '',
       employmentType: raw.employmentType || '',
       atsType,
-      source: atsType === 'avature' ? 'Avature' : atsType === 'jibe' ? 'iCIMS Jibe' : 'Careers Page',
+      source: ({ avature: 'Avature', jibe: 'iCIMS Jibe', ukg_pro: 'UKG Pro', ukg_ready: 'UKG Ready' })[atsType] || 'Careers Page',
       jobId: String(raw.id || jobUrl || title),
       naturalKey: makeJobNaturalKey(config, atsType, raw.id || jobUrl || title, location),
       jobUrl,
