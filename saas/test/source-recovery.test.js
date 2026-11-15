@@ -79,6 +79,8 @@ test('a recently successful workspace retries a newer failed run after backoff',
   const settings={setupComplete:true,lastPipelineRun:'2026-11-15T00:00:00Z',lastPipelineStatus:'failed',lastPipelineAttemptAt:'2026-11-15T00:30:00Z'};
   assert.equal(getScheduledPipelineDecision({settings,nowMs}).reason,'recent_attempt');
   assert.equal(getScheduledPipelineDecision({settings,nowMs:nowMs+3600000}).due,true);
+  settings.sourceRetries={count:1,nextAttemptAt:'2026-11-15T00:00:00Z'};
+  assert.equal(getScheduledPipelineDecision({settings,nowMs:nowMs+3600000}).reason,'overdue','retry the failed run, including sources whose saves failed');
 });
 
 test('manual background refreshes update the same status and retry schedule as automatic ones',async t=>{

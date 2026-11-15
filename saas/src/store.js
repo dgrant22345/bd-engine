@@ -1219,7 +1219,7 @@ export function getScheduledPipelineDecision({
   if (!settings.setupComplete) return { due: false, reason: 'setup_incomplete' };
   if (hasActiveJob) return { due: false, reason: 'already_running' };
   const retryAt = Date.parse(settings.sourceRetries?.nextAttemptAt || '');
-  if (settings.sourceRetries?.count && Number.isFinite(retryAt) && retryAt <= nowMs) {
+  if (settings.lastPipelineStatus !== 'failed' && settings.sourceRetries?.count && Number.isFinite(retryAt) && retryAt <= nowMs) {
     const attemptAt = Date.parse(settings.lastPipelineAttemptAt || '');
     if (Number.isFinite(attemptAt) && attemptAt > nowMs - retryDelayMs) return { due: false, reason: 'recent_attempt' };
     const fullAt = Date.parse(settings.lastPipelineRun || '');
