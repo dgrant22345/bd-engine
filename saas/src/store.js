@@ -4759,7 +4759,7 @@ export function createStore() {
 
         const fetchedJobs = settled.value.jobs;
         const previousSourceJobs = settled.value.resolvedSource
-          ? new Map(tenantJobs.filter(job => job.configId === config.id).map(job => [normalizePublicHttpUrl(job.jobUrl || job.url), job])) : null;
+          ? new Map(tenantJobs.filter(job => job.configId === config.id).map(job => [normalizePublicHttpUrl(job.jobUrl || job.url), job]).filter(([url]) => url)) : null;
         if (settled.value.resolvedSource) {
           const previous = config.atsType;
           Object.assign(config, settled.value.resolvedSource);
