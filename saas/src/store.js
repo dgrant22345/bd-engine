@@ -22,6 +22,7 @@ import { applyJobIdentityResolutions } from './job-identity.js';
 import { applyAccountPriority } from './account-priority.js';
 import { clearSourceRetry, importHasCoverageGaps, markSourceRetry, sourceNeedsRetry, summarizeSourceRetries } from './source-retries.js';
 import { dbLoadOperationalBackgroundJobs } from './db.js';
+import { createAsyncLimit } from './async-limit.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -93,6 +94,7 @@ const CONFIG_ATS_URL_FIELDS = ['apiUrl', 'resolvedBoardUrl', 'sourceUrl', 'board
 const STATIC_CAREERS_MIN_JOB_LINKS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MIN_JOB_LINKS, 3);
 const STATIC_CAREERS_MAX_JOBS = readPositiveInteger(process.env.BD_STATIC_CAREERS_MAX_JOBS, 500);
 const ATS_PAGE_FETCH_CONCURRENCY = Math.min(10, readPositiveInteger(process.env.BD_ATS_PAGE_FETCH_CONCURRENCY, 6));
+const withWorkdayBoard = createAsyncLimit(2);
 const ATS_DISCOVERY_PROBE_CONCURRENCY = readPositiveInteger(process.env.BD_ATS_DISCOVERY_PROBE_CONCURRENCY, 4);
 const ATS_JSON_REQUEST_ATTEMPTS = readPositiveInteger(process.env.BD_ATS_JSON_REQUEST_ATTEMPTS, 3);
 const ATS_RENDER_SERVICE_URL = String(process.env.BD_ATS_RENDER_SERVICE_URL || '').trim();
@@ -1173,6 +1175,10 @@ function backgroundJobTimestamp(job = {}) {
 function getNextScheduledRefreshAt(settings = {}, nowMs = Date.now()) {
   const intervalMs = 24 * 60 * 60 * 1000;
   const retryDelayMs = 60 * 60 * 1000;
+  if (settings.lastPipelineStatus === 'failed') {
+    const attemptAt = Date.parse(settings.lastPipelineAttemptAt || '');
+    return new Date(Math.max(nowMs, Number.isFinite(attemptAt) ? attemptAt + retryDelayMs : nowMs)).toISOString();
+  }
   const successAt = Date.parse(settings.lastPipelineRun || '');
   const sourceRetryAt = Date.parse(settings.sourceRetries?.nextAttemptAt || '');
   if (settings.sourceRetries?.count && Number.isFinite(sourceRetryAt)) {
@@ -1220,7 +1226,7 @@ export function getScheduledPipelineDecision({
     return { due: true, reason: Number.isFinite(fullAt) && fullAt > nowMs - intervalMs ? 'sources_due' : 'overdue' };
   }
   const successAt = new Date(settings.lastPipelineRun || 0).getTime();
-  if (Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
+  if (settings.lastPipelineStatus !== 'failed' && Number.isFinite(successAt) && successAt > nowMs - intervalMs) {
     return { due: false, reason: 'fresh' };
   }
   const attemptAt = new Date(settings.lastPipelineAttemptAt || 0).getTime();
@@ -1698,7 +1704,6 @@ async function finishResumableBackgroundJob(job) {
 }
 
 async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
-  const scheduled = Boolean(job.recovery?.options?.scheduled);
   try {
     await beginResumableBackgroundJob(job, 'Fetching active ATS boards...');
     job.progress = 0;
@@ -1744,7 +1749,7 @@ async function runLiveJobImportBackgroundJob(storeApi, tenantId, job) {
     job.errorMessage = err.message || 'Live ATS job import failed.';
   } finally {
     await finishResumableBackgroundJob(job);
-    if (scheduled) {
+    {
       const profile = getTenantProfile(tenantId);
       if (profile) {
         profile.settings.lastPipelineAttemptAt = job.startedAt || job.queuedAt;
@@ -4753,6 +4758,14 @@ export function createStore() {
         }
 
         const fetchedJobs = settled.value.jobs;
+        const previousSourceJobs = settled.value.resolvedSource
+          ? new Map(tenantJobs.filter(job => job.configId === config.id).map(job => [normalizePublicHttpUrl(job.jobUrl || job.url), job])) : null;
+        if (settled.value.resolvedSource) {
+          const previous = config.atsType;
+          Object.assign(config, settled.value.resolvedSource);
+          atsType = config.atsType;
+          warnings.push(`${config.companyName}: followed the careers page's public ${atsType} board and replaced the ${previous} source.`);
+        }
         fetched += fetchedJobs.length;
         const accountItem = findAccountForConfig(config, accountsByNormalizedName, accountsById);
         if (accountItem?.id && config.accountId !== accountItem.id) {
@@ -4776,7 +4789,8 @@ export function createStore() {
           const postedMs = /30\+/.test(normalizedJob.postingAgeText || '') ? NaN : Date.parse(normalizedJob.postedAt || '');
           const postedSince = Number.isFinite(postedMs) ? new Date(postedMs).toISOString() : '';
           const existingJob = existingByNaturalKey.get(naturalKey)
-            || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null);
+            || (providerIdentity ? existingByProviderIdentity.get(providerIdentity) : null)
+            || previousSourceJobs?.get(normalizedJob.jobUrl);
           // Presence on a board is independent of the user's import geography.
           if (existingJob) seenJobIds.add(existingJob.id);
           if (!jobMatchesGeography(normalizedJob, accountItem, geographyFilter)) {
@@ -4912,7 +4926,7 @@ export function createStore() {
         const { config, atsType, boardId } = configInfo;
         try {
           let response;
-          try { response = await ATS_FETCHERS.get(atsType)(config, boardId); }
+          try { response = await (atsType === 'workday' ? withWorkdayBoard(() => ATS_FETCHERS.get(atsType)(config, boardId)) : ATS_FETCHERS.get(atsType)(config, boardId)); }
           catch (error) {
             fetchProgress.failed++;
             await applyBoard(configInfo, { status: 'rejected', reason: error });
@@ -7742,8 +7756,8 @@ async function fetchSmartRecruitersJobs(config, boardId) {
   const baseUrl = config.apiUrl || `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(boardId)}/postings`;
   return fetchPaginatedAtsJobs({
     providerName: 'SmartRecruiters', pageSize, maxPages: DEFAULT_ATS_MAX_PAGES,
-    concurrency: ATS_PAGE_FETCH_CONCURRENCY, timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
-    recheckFirstPage: true,
+    concurrency: Math.min(2, ATS_PAGE_FETCH_CONCURRENCY), timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
+    recheckFirstPage: true, recoverFailedPages: true,
     jobKey: (item) => item?.id || item?.ref,
     readPage: async (offset, { deadlineAt }) => {
       const payload = await fetchJson(setUrlSearchParams(baseUrl, { limit: pageSize, offset }), 15000, {}, deadlineAt);
@@ -7811,6 +7825,7 @@ async function fetchWorkdayJobs(config) {
   const locationsStartedAt = performance.now();
   const locations = await resolveWorkdayLocations(result.jobs, {
     apiUrl: url,
+    concurrency: 2,
     deadlineAt: deadlineAt - 5000,
     getJson: (detailUrl) => fetchJson(detailUrl, 10000, {}, deadlineAt),
   });
@@ -7972,9 +7987,36 @@ function getBambooCareersApiUrl(config = {}, boardId = '') {
 async function fetchStaticCareersJobs(config) {
   const url = config.apiUrl || config.sourceUrl || config.resolvedBoardUrl || config.careersUrl || config.boardUrl || config.url;
   if (!url) throw new Error('Careers page: URL missing; existing jobs preserved');
-  const content = await fetchText(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
-  const jobs = parseStaticCareersJobs(content, url);
-  return { jobs, complete: jobs.length > 0 && jobs.length < STATIC_CAREERS_MAX_JOBS };
+  const startedAt = performance.now();
+  const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
+  const sources = new Map();
+  for (const link of extractAtsLinks(page.content, page.finalUrl)) {
+    const atsType = detectAtsTypeFromUrl(link);
+    if (!ATS_FETCHERS.has(atsType) || atsType === 'custom_static') continue;
+    const candidate = { ...config, boardId: '', board_id: '', slug: '', boardSlug: '',
+      apiUrl: '', sourceUrl: link, boardUrl: link, resolvedBoardUrl: link, url: link, atsType, ats: atsType };
+    const boardId = getConfigBoardId(candidate);
+    if (boardId) sources.set(`${atsType}|${boardId}`, { ...candidate, boardId });
+  }
+  // The company's own page must identify one board. Multiple providers or
+  // boards remain a review question; do not choose one from a list of links.
+  if (sources.size === 1) {
+    const target = [...sources.values()][0];
+    const fetchBoard = () => ATS_FETCHERS.get(target.atsType)(target, target.boardId);
+    const result = await (target.atsType === 'workday' ? withWorkdayBoard(fetchBoard) : fetchBoard());
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs > 5000) console.warn(`Slow careers handoff: saas/src/store.js fetchStaticCareersJobs ${elapsedMs}ms`);
+    return { ...result, resolvedSource: { atsType: target.atsType, ats: target.atsType,
+      boardId: target.boardId, apiUrl: '', sourceUrl: target.sourceUrl, boardUrl: target.boardUrl,
+      resolvedBoardUrl: target.resolvedBoardUrl, discoveryStatus: 'resolved', lastSourceMigrationAt: now() } };
+  }
+  const jobs = parseStaticCareersJobs(page.content, page.finalUrl);
+  const hasMore = /<[^>]+\brel=["']next["']/i.test(page.content)
+    || /<(?:a|button)\b[^>]*(?:aria-label=["'][^"']*(?:next|load more)[^"']*["']|href=["'][^"']*(?:[?&](?:page|start|offset)=\d+|\/page\/\d+))[^>]*>/i.test(page.content)
+    || /<(?:a|button)\b[^>]*>\s*(?:load more (?:jobs|positions|results)|next (?:page|jobs|results))/i.test(page.content);
+  const reasons = [...(hasMore ? ['pagination_not_followed'] : []), ...(sources.size > 1 ? ['multiple_boards'] : [])];
+  return { jobs, complete: jobs.length > 0 && jobs.length < STATIC_CAREERS_MAX_JOBS && reasons.length === 0,
+    ...(reasons.length ? { pagination: { reasons } } : {}) };
 }
 
 async function fetchWithPublicRedirects(url, init = {}) {
