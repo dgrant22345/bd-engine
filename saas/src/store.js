@@ -23,6 +23,7 @@ import { applyAccountPriority } from './account-priority.js';
 import { clearSourceRetry, importHasCoverageGaps, markSourceRetry, sourceNeedsRetry, summarizeSourceRetries } from './source-retries.js';
 import { dbLoadOperationalBackgroundJobs } from './db.js';
 import { createAsyncLimit } from './async-limit.js';
+import { avatureBoardUrl, isJibeCareerPage, jibeJobsUrl, parseAvaturePage, parseJibePage, readAvatureBoard, readJibeBoard } from './public-careers.js';
 
 const now = () => new Date().toISOString();
 const ACCOUNT_OUTREACH_STATUS_ORDER = Object.freeze([
@@ -4711,10 +4712,10 @@ export function createStore() {
       for (const item of invalidListings) {
         if (item.accountId) touchedAccountIds.add(item.accountId);
         importItems.push({ entityType: 'job', entityId: item.id, naturalKey: getJobNaturalKey(item),
-          status: 'closed', message: 'Collection page incorrectly imported as a vacancy; record retained',
+          status: 'closed', message: 'Navigation or information page incorrectly imported as a vacancy; record retained',
           sourceRow: { jobId: item.jobId } });
       }
-      if (invalidListings.length) warnings.push(`${invalidListings.length} collection-page listings were marked inactive; records and saved pipeline entries were preserved.`);
+      if (invalidListings.length) warnings.push(`${invalidListings.length} navigation or information pages were marked inactive; records and saved pipeline entries were preserved.`);
       timings.invalidListingCleanupMs = Math.round(performance.now() - cleanupStartedAt);
 
       const fetchStartedAt = performance.now();
@@ -4777,7 +4778,7 @@ export function createStore() {
         const seenJobIds = new Set();
         // A board's first successful import is a baseline: roles already on it
         // count as new only when their own posting date is recent.
-        const baselineImport = !config.lastImportedAt;
+        const baselineImport = !config.lastImportedAt || Boolean(settled.value.resolvedSource);
 
         for (const fetchedJob of fetchedJobs) {
           const normalizedJob = normalizeFetchedAtsJob(fetchedJob, config, accountItem, atsType);
@@ -7105,6 +7106,8 @@ const ATS_FETCHERS = new Map([
   ['personio', fetchPersonioJobs],
   ['rippling', fetchRipplingJobs],
   ['phenom', fetchPhenomJobs],
+  ['avature', fetchAvatureJobs],
+  ['jibe', fetchJibeJobs],
   ['custom_static', fetchStaticCareersJobs],
 ]);
 
@@ -7172,6 +7175,8 @@ function normalizeAtsType(value) {
   if (normalized.includes('personio')) return 'personio';
   if (normalized.includes('rippling')) return 'rippling';
   if (normalized.includes('phenom')) return 'phenom';
+  if (normalized.includes('avature')) return 'avature';
+  if (normalized.includes('jibe')) return 'jibe';
   if (normalized.includes('customstatic') || normalized.includes('staticcareers')) return 'custom_static';
   return normalized;
 }
@@ -7190,6 +7195,7 @@ function detectAtsTypeFromUrl(value) {
   if (url.includes('recruitee.com')) return 'recruitee';
   if (url.includes('jobs.personio.de')) return 'personio';
   if (url.includes('ats.rippling.com')) return 'rippling';
+  if (avatureBoardUrl(value)) return 'avature';
   return '';
 }
 
@@ -7262,7 +7268,12 @@ function getConfigBoardId(config = {}) {
   if (direct) return String(direct).trim();
   // Phenom sites live on company domains, so only the declared type says so.
   if (normalizeAtsType(config.atsType || config.ats) === 'phenom') return getPhenomBoardId(getPhenomSearchUrl(config));
+  if (normalizeAtsType(config.atsType || config.ats) === 'jibe') {
+    try { return new URL(config.resolvedBoardUrl || config.careersUrl || config.sourceUrl || config.url).hostname; } catch { return ''; }
+  }
   for (const sourceUrl of getConfigUrlCandidates(config)) {
+    const avature = avatureBoardUrl(sourceUrl);
+    if (avature) return avature.replace(/^https?:\/\//, '');
     const greenhouse = String(sourceUrl).match(/boards(?:-api)?\.greenhouse\.io\/(?:v1\/)?boards\/([^/?#]+)/i);
     if (greenhouse) return decodeURIComponent(greenhouse[1]);
     const greenhouseBoard = String(sourceUrl).match(/boards\.greenhouse\.io\/([^/?#]+)/i);
@@ -7984,17 +7995,35 @@ function getBambooCareersApiUrl(config = {}, boardId = '') {
   return `https://${encodeURIComponent(boardId)}.bamboohr.com/careers/list`;
 }
 
+async function fetchAvatureJobs(config) {
+  const url = getConfigUrlCandidates(config).find(value => avatureBoardUrl(value));
+  return readAvatureBoard(url, { getText: (url, { deadlineAt }) => fetchText(url, 15000, deadlineAt) });
+}
+
+async function fetchJibeJobs(config) {
+  const url = config.resolvedBoardUrl || config.careersUrl || config.sourceUrl || config.boardUrl || config.url;
+  return readJibeBoard(url, { getJson: (url, { deadlineAt }) => fetchJson(url, 15000, {}, deadlineAt) });
+}
+
 async function fetchStaticCareersJobs(config) {
   const url = config.apiUrl || config.sourceUrl || config.resolvedBoardUrl || config.careersUrl || config.boardUrl || config.url;
   if (!url) throw new Error('Careers page: URL missing; existing jobs preserved');
   const startedAt = performance.now();
   const page = await fetchTextPage(url, DEFAULT_ATS_CAREERS_SCRAPE_TIMEOUT_MS);
+  if (isJibeCareerPage(page.content)) {
+    const result = await fetchJibeJobs({ resolvedBoardUrl: page.finalUrl });
+    return { ...result, resolvedSource: { atsType: 'jibe', ats: 'jibe', boardId: new URL(page.finalUrl).hostname,
+      apiUrl: '', sourceUrl: page.finalUrl, boardUrl: page.finalUrl, resolvedBoardUrl: page.finalUrl,
+      discoveryStatus: 'resolved', lastSourceMigrationAt: now() } };
+  }
   const sources = new Map();
   for (const link of extractAtsLinks(page.content, page.finalUrl)) {
     const atsType = detectAtsTypeFromUrl(link);
     if (!ATS_FETCHERS.has(atsType) || atsType === 'custom_static') continue;
+    if (atsType === 'avature' && /\/(?:Login|Register)(?:\/|$|\?)/i.test(link)) continue;
+    const boardUrl = atsType === 'avature' ? avatureBoardUrl(link) : link;
     const candidate = { ...config, boardId: '', board_id: '', slug: '', boardSlug: '',
-      apiUrl: '', sourceUrl: link, boardUrl: link, resolvedBoardUrl: link, url: link, atsType, ats: atsType };
+      apiUrl: '', sourceUrl: boardUrl, boardUrl, resolvedBoardUrl: boardUrl, url: boardUrl, atsType, ats: atsType };
     const boardId = getConfigBoardId(candidate);
     if (boardId) sources.set(`${atsType}|${boardId}`, { ...candidate, boardId });
   }
@@ -8344,6 +8373,10 @@ async function inspectCareerPage(config, page, requestedUrl, method, deadlineAt)
   // apply links (RBC's and BMO's go to Workday), so it is checked first.
   const phenom = await probePhenomCareerPage(page?.content || '', finalUrl, deadlineAt);
   if (phenom) return { ...phenom, method };
+  if (isJibeCareerPage(page?.content || '')) {
+    const result = parseJibePage(await fetchJson(jibeJobsUrl(finalUrl), 8000, {}, deadlineAt), finalUrl);
+    return { atsType: 'jibe', boardId: new URL(finalUrl).hostname, apiUrl: '', resolvedBoardUrl: finalUrl, jobCount: result.total, method };
+  }
   const atsLinks = [];
   if (detectAtsTypeFromUrl(finalUrl)) atsLinks.push(finalUrl);
   for (const atsUrl of extractAtsLinks(page?.content || '', finalUrl)) {
@@ -8532,7 +8565,7 @@ function extractAtsLinks(content, baseUrl = '') {
     }
   };
   for (const match of text.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)) add(match[0]);
-  for (const match of text.matchAll(/(?:^|[\s"'(])\/\/(?:[^\s"'<>]*\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|jobvite\.com|myworkdayjobs\.com|bamboohr\.com|workable\.com|recruitee\.com|personio\.de|rippling\.com)[^\s"'<>]*/gi)) {
+  for (const match of text.matchAll(/(?:^|[\s"'(])\/\/(?:[^\s"'<>]*\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|jobvite\.com|myworkdayjobs\.com|bamboohr\.com|workable\.com|recruitee\.com|personio\.de|rippling\.com|avature\.net)[^\s"'<>]*/gi)) {
     add(`https:${match[0].trim().replace(/^["'(]/, '')}`);
   }
   for (const match of text.matchAll(/\b(?:href|src|data-url)=["']([^"']+)["']/gi)) add(match[1]);
@@ -8757,7 +8790,7 @@ function normalizePublicHttpUrl(value) {
 function looksLikeStaticJobUrl(url) {
   const parsed = new URL(url);
   const path = parsed.pathname.toLowerCase();
-  if (isStaticJobBrowsePath(path)) return false;
+  if (isStaticJobBrowsePath(path) || isStaticJobInfoPath(path)) return false;
   if (/\/careers\/job\//.test(path)) return true;
   if (/\/jobs\/[^/]+/.test(path) && !/\/jobs\/?(search|alerts?|categories?)?\/?$/.test(path)) return true;
   if (/\/careers\/[^/]+\/[a-f0-9-]{16,}/.test(path)) return true;
@@ -8776,15 +8809,20 @@ export function quarantineStaticBrowseJobs(tenantJobs, configs, timestamp = now(
   const eligible = new Map(configs.filter((config) => getConfigAtsType(config) === 'custom_static').map((config) => [config.id, config]));
   const changed = [];
   for (const item of tenantJobs) {
-    if (item.active === false || item.pipelineStage || !eligible.has(item.configId)) continue;
+    if (item.active === false || !eligible.has(item.configId)) continue;
     let path;
     try { path = new URL(item.jobUrl || item.url).pathname.toLowerCase(); } catch { continue; }
-    if (!isStaticJobBrowsePath(path)) continue;
+    const infoPage = isStaticJobInfoPath(path);
+    if (!infoPage && (item.pipelineStage || !isStaticJobBrowsePath(path))) continue;
     Object.assign(item, { active: false, isNew: false, closedAt: timestamp, updatedAt: timestamp,
-      closureReason: 'invalid_collection_page' });
+      closureReason: infoPage ? 'invalid_information_page' : 'invalid_collection_page' });
     changed.push(item);
   }
   return changed;
+}
+
+export function isStaticJobInfoPath(path) {
+  return /\/(?:jobs|careers)\/(?:login|signin|sign-in|register|alumni|contacts?|employee-benefits|benefits|learning-and-development|employee-profiles|student-internship-program|connection)(?:\/|$)/i.test(path);
 }
 
 function isGenericCareersLink(title, url) {
@@ -8809,11 +8847,16 @@ function isGenericCareersLink(title, url) {
     'job alerts',
     'us en',
     'ca en',
+    'learn more',
+    'returning user login',
+    'sign in',
+    'login',
+    'log in',
   ].includes(normalizedTitle)) return true;
   try {
     const parsed = new URL(url);
     const path = parsed.pathname.toLowerCase();
-    if (isStaticJobBrowsePath(path)) return true;
+    if (isStaticJobBrowsePath(path) || isStaticJobInfoPath(path)) return true;
     if (/\/careers\/openings\/?$/.test(path) || /\/careers\/?$/.test(path) || /\/jobs\/?$/.test(path)) return true;
   } catch {
     return true;
@@ -8854,6 +8897,7 @@ async function probeAtsUrl(config, atsUrl, deadlineAt) {
   if (!ATS_FETCHERS.has(atsType)) return null;
   const tempConfig = {
     ...config,
+    boardId: '', board_id: '', slug: '', boardSlug: '', apiUrl: '', url: '',
     atsType,
     ats: atsType,
     sourceUrl: atsUrl,
@@ -8863,6 +8907,13 @@ async function probeAtsUrl(config, atsUrl, deadlineAt) {
   };
   const boardId = getConfigBoardId(tempConfig);
   if (!boardId) return null;
+  if (atsType === 'avature') {
+    if (/\/(?:Login|Register)(?:\/|$|\?)/i.test(atsUrl)) return null;
+    const resolvedBoardUrl = avatureBoardUrl(atsUrl);
+    const result = parseAvaturePage(await fetchText(resolvedBoardUrl, 8000, deadlineAt), resolvedBoardUrl);
+    if (result.total === null) return null;
+    return { atsType, boardId, apiUrl: '', resolvedBoardUrl, jobCount: result.total, method: 'careers_page_link' };
+  }
   if (['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'jobvite', 'recruitee', 'personio', 'rippling'].includes(atsType)) {
     const probed = await probeAtsBoard(atsType, boardId, deadlineAt);
     if (probed) {
@@ -9426,7 +9477,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       isGta: isGtaLocation(location),
     };
   }
-  if (atsType === 'custom_static') {
+  if (['custom_static', 'avature', 'jibe'].includes(atsType)) {
     const title = raw.title || raw.name || '';
     if (!title) return null;
     const location = raw.location || '';
@@ -9442,7 +9493,7 @@ function normalizeFetchedAtsJob(raw, config, accountItem, atsType) {
       department: raw.department || '',
       employmentType: raw.employmentType || '',
       atsType,
-      source: 'Careers Page',
+      source: atsType === 'avature' ? 'Avature' : atsType === 'jibe' ? 'iCIMS Jibe' : 'Careers Page',
       jobId: String(raw.id || jobUrl || title),
       naturalKey: makeJobNaturalKey(config, atsType, raw.id || jobUrl || title, location),
       jobUrl,

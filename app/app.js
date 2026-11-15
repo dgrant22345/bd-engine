@@ -5595,12 +5595,13 @@ function getCompanyLabelFromTargetUrl(url, index = 0) {
   const pathParts = url.pathname.split('/').map((part) => part.trim()).filter(Boolean);
   const providerHosts = [
     'greenhouse.io', 'lever.co', 'ashbyhq.com', 'workable.com', 'smartrecruiters.com',
-    'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com',
+    'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com', 'avature.net',
   ];
   const providerHost = providerHosts.find((host) => hostname === host || hostname.endsWith(`.${host}`));
   let candidate = '';
   if (hostname.includes('greenhouse.io')) candidate = url.searchParams.get('for') || pathParts[0] || '';
   else if (hostname.endsWith('.bamboohr.com')) candidate = hostname.split('.')[0];
+  else if (hostname.endsWith('.avature.net')) candidate = hostname.split('.')[0];
   else if (hostname === 'jobs.jobvite.com' || hostname.endsWith('.jobvite.com')) candidate = pathParts[0] || hostname.split('.')[0];
   else if (hostname.endsWith('.recruitee.com')) candidate = hostname.split('.')[0];
   else if (hostname.endsWith('.jobs.personio.com')) candidate = hostname.split('.')[0];
@@ -5651,7 +5652,7 @@ function parseSetupTargetSites(text) {
       const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
       const isHostedBoard = [
         'greenhouse.io', 'lever.co', 'ashbyhq.com', 'workable.com', 'smartrecruiters.com',
-        'myworkdayjobs.com', 'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com',
+        'myworkdayjobs.com', 'bamboohr.com', 'jobvite.com', 'recruitee.com', 'personio.com', 'rippling.com', 'avature.net',
       ]
         .some((host) => hostname === host || hostname.endsWith(`.${host}`));
       targets.push({
@@ -12343,12 +12344,12 @@ async function renderAdminView() {
         ${renderCollapsibleStart('ats-config-form', `${appState.configEditingId ? 'Edit job board source' : 'Add job board source'}`, 'Paste a supported public job-board URL for live imports, or record an enterprise careers URL for manual tracking.')}
           ${appState.configEditingId ? '<div style="text-align:right;margin-bottom:8px"><button class="ghost-button" data-action="new-config">Clear form</button></div>' : ''}
           <div class="source-support-note" role="note">
-            <strong>Automatic job imports:</strong> Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, and compatible careers pages.
-            <span>Enterprise systems such as iCIMS, Taleo, ADP, SuccessFactors, and Phenom can be tracked, but their public pages do not always expose a reliable job feed.</span>
+            <strong>Automatic job imports:</strong> Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, Phenom, Avature, iCIMS Jibe, and compatible careers pages.
+            <span>Other iCIMS sites, Taleo, ADP, and SuccessFactors can be tracked when their public pages do not expose a supported job feed.</span>
           </div>
           <form id="config-form" class="detail-form">
             ${renderField('Company', '<input name="companyName" required>')}
-            ${renderField('Job-board system', '<select name="atsType"><option value="">Detect from URL</option><optgroup label="Automatic import supported"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="ashby">Ashby</option><option value="smartrecruiters">SmartRecruiters</option><option value="workday">Workday</option><option value="bamboohr">BambooHR</option><option value="workable">Workable</option><option value="jobvite">Jobvite</option><option value="recruitee">Recruitee</option><option value="personio">Personio</option><option value="rippling">Rippling</option><option value="phenom">Phenom career site</option><option value="custom_static">Compatible careers page</option></optgroup><optgroup label="Tracking only"><option value="icims">iCIMS - tracking only</option><option value="taleo">Taleo - tracking only</option><option value="adp">ADP - tracking only</option><option value="successfactors">SuccessFactors - tracking only</option></optgroup></select>')}
+            ${renderField('Job-board system', '<select name="atsType"><option value="">Detect from URL</option><optgroup label="Automatic import supported"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="ashby">Ashby</option><option value="smartrecruiters">SmartRecruiters</option><option value="workday">Workday</option><option value="bamboohr">BambooHR</option><option value="workable">Workable</option><option value="jobvite">Jobvite</option><option value="recruitee">Recruitee</option><option value="personio">Personio</option><option value="rippling">Rippling</option><option value="phenom">Phenom career site</option><option value="avature">Avature public board</option><option value="jibe">iCIMS Jibe career site</option><option value="custom_static">Compatible careers page</option></optgroup><optgroup label="Tracking only"><option value="icims">iCIMS - tracking only</option><option value="taleo">Taleo - tracking only</option><option value="adp">ADP - tracking only</option><option value="successfactors">SuccessFactors - tracking only</option></optgroup></select>')}
             ${renderField('Board account or slug', '<input name="boardId" placeholder="Usually detected from the careers URL">')}
             ${renderField('Domain', '<input name="domain">')}
             ${renderField('Careers URL', '<input name="careersUrl" placeholder="https://jobs.lever.co/company">')}

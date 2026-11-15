@@ -4,6 +4,9 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Read Xerox's public Avature board and AMD's iCIMS Jibe feed across all results pages, checking counts and the first page before allowing closures. Compatible careers pages can upgrade to these feeds while retaining existing role IDs and saved workflow.
+- Exclude login, alumni, benefits and other informational careers links from vacancies. Previously imported informational records become inactive with an explanation; their IDs, history and saved pipeline entries remain available. Upgrading a source establishes a baseline instead of presenting every undated role as newly posted.
+
 - Make outreach shorter and more personal across People, Warm Studio, accounts and batch drafts. Use the selected role, a recipient-appropriate question and the sender's own context; remove canned sales paragraphs and unsupported claims about the sender's services.
 - Save optional relationship context and a preferred question with private People drafts, preserve manual edits until regeneration is confirmed, and avoid presenting identical account drafts as different angles.
 
