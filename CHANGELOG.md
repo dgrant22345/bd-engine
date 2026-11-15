@@ -4,6 +4,8 @@ All notable customer-facing changes are recorded here. The project is currently 
 
 ## Unreleased
 
+- Limit Workday results-page fetching to two requests per board, alongside the existing two-board limit. Recover an isolated transient page failure within the original deadline without overriding a provider cooldown. An incomplete or rate-limited response still preserves unseen jobs and schedules a source retry.
+
 - Read Xerox's public Avature board and AMD's iCIMS Jibe feed across all results pages, checking counts and the first page before allowing closures. Compatible careers pages can upgrade to these feeds while retaining existing role IDs and saved workflow.
 - Exclude login, alumni, benefits and other informational careers links from vacancies. Previously imported informational records become inactive with an explanation; their IDs, history and saved pipeline entries remain available. Upgrading a source establishes a baseline instead of presenting every undated role as newly posted.
 

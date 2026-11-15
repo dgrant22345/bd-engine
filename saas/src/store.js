@@ -7832,8 +7832,8 @@ async function fetchWorkdayJobs(config) {
 
   const result = await fetchPaginatedAtsJobs({
     providerName: 'Workday', pageSize, maxPages: DEFAULT_WORKDAY_MAX_PAGES,
-    concurrency: ATS_PAGE_FETCH_CONCURRENCY, timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
-    recheckFirstPage: true,
+    concurrency: Math.min(2, ATS_PAGE_FETCH_CONCURRENCY), timeBudgetMs: ATS_BOARD_TIME_BUDGET_MS,
+    recheckFirstPage: true, recoverFailedPages: true,
     readPage, jobKey: (item) => item?.externalPath || item?.id || item?.jobPostingId,
   });
   // "3 Locations" names no country; read those roles' own pages for the places.
