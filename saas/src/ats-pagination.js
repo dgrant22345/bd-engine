@@ -19,11 +19,13 @@ export const ATS_COVERAGE_REASONS = Object.freeze({
   inconsistent_page: 'The source returned an inconsistent results page.',
   page_failed: 'A later results page could not be loaded. Jobs already fetched were retained; unseen jobs were preserved.',
   verification_failed: 'The final source check failed. Fetched jobs were retained; unseen jobs were preserved.',
+  pagination_not_followed: 'The careers page links to more results. This page alone cannot establish complete coverage.',
+  multiple_boards: 'The careers page links to multiple job boards. Review the source before relying on complete coverage.',
 });
 
 export async function fetchPaginatedAtsJobs({
   providerName, pageSize, maxPages, concurrency, readPage, jobKey,
-  timeBudgetMs = 120000, clock = () => performance.now(), recheckFirstPage = false,
+  timeBudgetMs = 120000, clock = () => performance.now(), recheckFirstPage = false, recoverFailedPages = false,
 }) {
   for (const value of [pageSize, maxPages, concurrency, timeBudgetMs]) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid ATS pagination budget');
@@ -38,6 +40,8 @@ export async function fetchPaginatedAtsJobs({
   let verificationRequests = 0;
   let failedPages = 0;
   let retryAfterMs = 0;
+  let pageRetries = 0;
+  let recoveredPages = 0;
   let lastPageLength = 0;
   let repeatedPage = false;
   const firstPage = await readPage(0, { deadlineAt });
@@ -86,6 +90,20 @@ export async function fetchPaginatedAtsJobs({
     const batchSize = reportedTotal === null ? 1 : Math.min(concurrency, pageLimit - nextPage);
     const offsets = Array.from({ length: batchSize }, (_, index) => (nextPage + index) * pageSize);
     const pages = await Promise.allSettled(offsets.map((offset) => readPage(offset, { deadlineAt })));
+    if (recoverFailedPages) {
+      // Recover isolated transient pages sequentially, without widening either
+      // the board deadline or a provider-requested cooldown.
+      for (let index = 0; index < pages.length; index++) {
+        const page = pages[index];
+        if (page.status !== 'rejected') continue;
+        const error = page.reason;
+        const retryable = error?.retryable === true || error?.name === 'AbortError' || error?.cause?.code === 'ECONNRESET';
+        if (!retryable || Number(error?.retryAfterMs) > 0 || clock() >= deadlineAt) continue;
+        pageRetries++;
+        try { pages[index] = { status: 'fulfilled', value: await readPage(offsets[index], { deadlineAt }) }; recoveredPages++; }
+        catch (reason) { pages[index] = { status: 'rejected', reason }; }
+      }
+    }
     pages.forEach((page, index) => {
       if (page.status === 'fulfilled') appendPage(page.value, offsets[index]);
       else { failedPages++; retryAfterMs = Math.max(retryAfterMs, Number(page.reason?.retryAfterMs) || 0); }
@@ -127,7 +145,7 @@ export async function fetchPaginatedAtsJobs({
     reportedTotal,
     complete: reasons.size === 0,
     pagination: {
-      pagesFetched, pageLimit: maxPages, verificationRequests, failedPages, uniqueJobs: seen.size, duplicateRows, retryAfterMs,
+      pagesFetched, pageLimit: maxPages, verificationRequests, failedPages, uniqueJobs: seen.size, duplicateRows, retryAfterMs, pageRetries, recoveredPages,
       reasons: [...reasons], elapsedMs: Math.max(0, Math.round(clock() - startedAt)),
     },
   };
