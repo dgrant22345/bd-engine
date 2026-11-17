@@ -91,6 +91,17 @@
           <p id="result-message"></p>
           <dl id="coverage-summary" class="coverage-summary"></dl>
           <p id="audit-note" class="audit-note" hidden></p>
+          <div id="audit-toolbar" class="audit-toolbar" hidden>
+            <label for="audit-filter">Filter results</label>
+            <select id="audit-filter" aria-controls="audit-table-wrap">
+              <option value="all" data-label="All results">All results</option>
+              <option value="recognized" data-label="Recognized">Recognized</option>
+              <option value="review" data-label="Needs discovery">Needs discovery</option>
+              <option value="invalid" data-label="Invalid">Invalid</option>
+            </select>
+            <span id="audit-filter-count" class="audit-filter-count"></span>
+            <button id="audit-filter-export" class="audit-filter-export" type="button" hidden>Download filtered CSV</button>
+          </div>
           <div id="audit-table-wrap" class="audit-table-wrap" hidden>
             <table>
               <caption class="sr-only">ATS host recognition results</caption>
@@ -113,7 +124,7 @@
         <h2 id="coverage-title">A defined denominator</h2>
         <p>The reported percentage is recognized ATS hosts divided by valid public URLs in this audit. Invalid entries are shown but excluded from the rate.</p>
         <h3>Recognized public providers</h3>
-        <p>Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, and Taleo.</p>
+        <p>Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, Taleo, Avature, UKG Pro, and UKG Ready.</p>
         <ul>
           <li>A recognized host is a compatibility signal, not a coverage guarantee or confirmation of role count and freshness.</li>
           <li>Employers can change, hide, or customize public career pages.</li>
