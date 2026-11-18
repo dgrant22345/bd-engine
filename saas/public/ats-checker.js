@@ -1,3 +1,5 @@
+import { ukgBoard } from './ukg-board.js';
+
 const PROVIDERS = [
   ['Greenhouse', ['greenhouse.io']],
   ['Lever', ['lever.co']],
@@ -16,7 +18,9 @@ const PROVIDERS = [
   ['Teamtailor', ['teamtailor.com']],
   ['iCIMS', ['icims.com']],
   ['Taleo', ['taleo.net']],
+  ['Avature', ['avature.net']],
 ];
+const UKG_LABELS = { ukg_pro: 'UKG Pro', ukg_ready: 'UKG Ready' };
 
 export const ONBOARDING_INTENT_STORAGE_KEY = 'bd_onboarding_intent';
 const ACQUISITION_STORAGE_KEY = 'bd_acquisition';
@@ -92,18 +96,17 @@ export function classifyCareerUrl(value) {
   }
 
   const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
-  for (const [provider, domains] of PROVIDERS) {
-    if (domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`))) {
-      return {
-        status: 'recognized',
-        provider,
-        hostname,
-        submittedUrl: raw,
-        title: `${provider} provider detected`,
-        tone: 'success',
-      };
-    }
-  }
+  const hostProvider = PROVIDERS.find(([, domains]) =>
+    domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`)))?.[0];
+  const provider = hostProvider || UKG_LABELS[ukgBoard(parsed)?.type];
+  if (provider) return {
+    status: 'recognized',
+    provider,
+    hostname,
+    submittedUrl: raw,
+    title: `${provider} provider detected`,
+    tone: 'success',
+  };
 
   return {
     status: 'review',
@@ -202,16 +205,21 @@ function resultLabel(result) {
   return 'Invalid';
 }
 
-function renderAuditRows(audit) {
+function renderAuditTable(audit) {
+  const toolbar = document.getElementById('audit-toolbar');
+  const filter = document.getElementById('audit-filter');
+  const count = document.getElementById('audit-filter-count');
+  const filteredExport = document.getElementById('audit-filter-export');
   const tableWrap = document.getElementById('audit-table-wrap');
   const rows = document.getElementById('audit-rows');
-  if (!tableWrap || !rows) return;
-  rows.replaceChildren();
+  toolbar.hidden = audit.totalCount === 0;
   tableWrap.hidden = audit.totalCount === 0;
 
+  const fragment = document.createDocumentFragment();
   for (const result of audit.results) {
     const row = document.createElement('tr');
     row.setAttribute('role', 'row');
+    row.dataset.status = result.status;
     const urlCell = document.createElement('td');
     urlCell.setAttribute('role', 'cell');
     urlCell.dataset.label = 'Career URL';
@@ -239,16 +247,44 @@ function renderAuditRows(audit) {
     providerCell.dataset.label = 'Provider';
     providerCell.textContent = result.provider || (result.status === 'review' ? 'Unknown host' : 'Not applicable');
     row.append(urlCell, statusCell, providerCell);
-    rows.append(row);
+    fragment.append(row);
   }
+  rows.replaceChildren(fragment);
+
+  const counts = {
+    all: audit.totalCount,
+    recognized: audit.recognizedCount,
+    review: audit.reviewCount,
+    invalid: audit.invalidCount,
+  };
+  filter.value = 'all';
+  for (const option of filter.options) {
+    const total = counts[option.value];
+    option.textContent = `${option.dataset.label} (${total})`;
+    option.disabled = option.value !== 'all' && total === 0;
+  }
+  count.textContent = countLabel(audit.totalCount, 'result');
+  filteredExport.hidden = true;
+  filter.onchange = () => {
+    const selection = filter.value;
+    for (const row of rows.children) {
+      row.hidden = selection !== 'all' && row.dataset.status !== selection;
+    }
+    count.textContent = selection === 'all'
+      ? countLabel(audit.totalCount, 'result')
+      : `Showing ${counts[selection]} of ${audit.totalCount} results`;
+    filteredExport.hidden = selection === 'all';
+  };
+  filteredExport.onclick = () => downloadCoverageCsv(audit, filter.value);
 }
 
-function downloadCoverageCsv(audit) {
-  const blob = new Blob([buildCoverageCsv(audit)], { type: 'text/csv;charset=utf-8' });
+function downloadCoverageCsv(audit, filter = 'all') {
+  const results = filter === 'all' ? audit.results : audit.results.filter((result) => result.status === filter);
+  const blob = new Blob([buildCoverageCsv({ results })], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'bd-engine-ats-coverage-audit.csv';
+  link.download = `bd-engine-ats-coverage-audit${filter === 'all' ? '' : `-${filter}`}.csv`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -308,19 +344,23 @@ function renderResult(audit) {
   if (audit.truncatedCount) notes.push(`${countLabel(audit.truncatedCount, 'entry', 'entries')} beyond the 50-URL limit not audited`);
   note.textContent = notes.length ? `${notes.join('. ')}.` : '';
   note.hidden = notes.length === 0;
-  renderAuditRows(audit);
+  renderAuditTable(audit);
   actions.replaceChildren();
+
+  if (audit.totalCount) {
+    const exportButton = document.createElement('button');
+    exportButton.type = 'button';
+    exportButton.className = 'export-action';
+    exportButton.textContent = 'Download full CSV';
+    exportButton.addEventListener('click', () => downloadCoverageCsv(audit));
+    actions.append(exportButton);
+  }
 
   if (hasValidUrls) {
     // Keep the URL list out of the query string so a 50-site audit cannot create
     // an oversized navigation URL. The destination overlays persona/plan from
     // the link onto this same-origin, versioned handoff payload.
     persistAuditOnboardingIntent(audit);
-    const exportButton = document.createElement('button');
-    exportButton.type = 'button';
-    exportButton.className = 'export-action';
-    exportButton.textContent = 'Download CSV';
-    exportButton.addEventListener('click', () => downloadCoverageCsv(audit));
     const staffingLink = document.createElement('a');
     staffingLink.href = buildWorkflowSignupHref('bd');
     staffingLink.className = 'primary-workflow';
@@ -330,7 +370,7 @@ function renderResult(audit) {
     jobSearchLink.href = buildWorkflowSignupHref('jobseeker');
     jobSearchLink.textContent = 'Find relevant roles';
     jobSearchLink.addEventListener('click', () => persistAuditOnboardingIntent(audit, 'jobseeker'));
-    actions.append(exportButton, staffingLink, jobSearchLink);
+    actions.append(staffingLink, jobSearchLink);
   }
 
   requestAnimationFrame(() => container.focus({ preventScroll: true }));

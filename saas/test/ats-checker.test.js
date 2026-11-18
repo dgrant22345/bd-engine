@@ -29,6 +29,9 @@ test('ATS checker recognizes every provider advertised on the public page', () =
     ['https://example.teamtailor.com', 'Teamtailor'],
     ['https://careers-example.icims.com/jobs', 'iCIMS'],
     ['https://example.taleo.net/careersection', 'Taleo'],
+    ['https://example.avature.net/en_US/careers', 'Avature'],
+    ['recruiting.ultipro.com/EXAMP/JobBoard/bebb31cb-327e-46b6-80a7-e0033ffa4653', 'UKG Pro'],
+    ['https://secure7.saashr.com/ta/6219063.careers?lang=en-US', 'UKG Ready'],
   ];
 
   for (const [url, provider] of examples) {
@@ -41,6 +44,16 @@ test('ATS checker is cautious with ordinary careers pages', () => {
   const result = classifyCareerUrl('example.com/careers');
   assert.equal(result.status, 'review');
   assert.equal(result.hostname, 'example.com');
+});
+
+test('ATS checker recognizes UKG public boards without counting unrelated UKG pages', () => {
+  for (const url of [
+    'https://recruiting.ultipro.com/EXAMP/JobBoard/missing-id',
+    'https://secure7.saashr.com/ta/admin',
+    'https://secure7.saashr.com.example.com/ta/6219063.careers',
+  ]) {
+    assert.equal(classifyCareerUrl(url).status, 'review', url);
+  }
 });
 
 test('ATS checker rejects invalid and private destinations', () => {

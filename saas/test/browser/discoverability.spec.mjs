@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function collectAnalyticsEvents(page) {
   await page.addInitScript(() => {
@@ -295,7 +296,7 @@ test('ATS checker audits a target list with an explicit denominator', async ({ p
   await expect(page.locator('td[data-label="Provider"]', { hasText: 'Greenhouse' })).toBeVisible();
   await expect(page.getByRole('cell', { name: 'Unknown host' })).toBeVisible();
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download CSV' }).click();
+  await page.getByRole('button', { name: 'Download full CSV' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('bd-engine-ats-coverage-audit.csv');
   await expect(page.getByText(/compatibility signal, not a coverage guarantee/i)).toBeVisible();
@@ -344,6 +345,54 @@ test('ATS audit hands the audited list and workflow intent into signup', async (
     planIntent: 'trial',
   });
   expect(signupIntent.careerUrls).toHaveLength(2);
+});
+
+test('ATS audit filters and exports review rows while retaining the full audit and signup list', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/ats-checker');
+  const knownUrl = 'https://secure7.saashr.com/ta/6219063.careers';
+  const reviewUrl = 'https://example.com/careers';
+  const invalidUrl = 'http://localhost:8787';
+  const input = page.getByLabel('Career-site or job-board URLs');
+  const submit = page.getByRole('button', { name: 'Audit coverage' });
+  await input.fill([knownUrl, reviewUrl, invalidUrl].join('\n'));
+  await submit.click();
+
+  const heading = page.getByRole('heading', { name: '1 of 2 valid public URLs match a recognized ATS host' });
+  await expect(heading).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'UKG Ready' })).toBeVisible();
+  const filter = page.getByLabel('Filter results');
+  const filteredExport = page.getByRole('button', { name: 'Download filtered CSV' });
+  await expect(filteredExport).toBeHidden();
+  await filter.selectOption('review');
+  await expect(page.getByText('Showing 1 of 3 results')).toBeVisible();
+  await expect(page.locator('#audit-rows tr:visible')).toHaveCount(1);
+  await expect(page.locator('#audit-rows tr:visible')).toContainText(reviewUrl);
+  await expect(heading).toBeVisible();
+
+  const filteredDownload = page.waitForEvent('download');
+  await filteredExport.click();
+  const filtered = await filteredDownload;
+  expect(filtered.suggestedFilename()).toBe('bd-engine-ats-coverage-audit-review.csv');
+  const filteredCsv = await readFile(await filtered.path(), 'utf8');
+  expect(filteredCsv).toContain(reviewUrl);
+  expect(filteredCsv).not.toContain(knownUrl);
+  expect(filteredCsv).not.toContain(invalidUrl);
+
+  const fullDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download full CSV' }).click();
+  const fullCsv = await readFile(await (await fullDownload).path(), 'utf8');
+  for (const url of [knownUrl, reviewUrl, invalidUrl]) expect(fullCsv).toContain(url);
+  const handoffUrls = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bd_onboarding_intent')).careerUrls);
+  expect(handoffUrls).toEqual([knownUrl, reviewUrl]);
+
+  await input.fill(invalidUrl);
+  await submit.click();
+  await expect(filter).toHaveValue('all');
+  await expect(filteredExport).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'No valid public URLs to audit' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download full CSV' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Monitor these companies' })).toHaveCount(0);
 });
 
 test('pricing selection persists the intended paid plan through signup', async ({ page }) => {
