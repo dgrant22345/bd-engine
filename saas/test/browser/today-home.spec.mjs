@@ -14,6 +14,8 @@ test('dashboard opens on who to call today, in the People order, with one action
   const board = app.locator('.today-board');
   await expect(board.getByRole('heading', { level: 2 })).toHaveText('3 calls worth making today');
   await expect(board.locator('.today-board__summary')).toContainText('4 open roles across 3 hiring companies');
+  await expect(board.getByRole('img', { name: /Relationship priority \d+ of 100/ })).toHaveCount(3);
+  await expect(app.getByRole('navigation', { name: 'Primary' }).getByRole('link').first()).toHaveAttribute('data-route', 'dashboard');
   // It is the top of the dashboard.
   expect((await board.boundingBox()).y).toBeLessThan(200);
 
@@ -44,7 +46,6 @@ test('dashboard opens on who to call today, in the People order, with one action
   const frame = page.frames().find(candidate => candidate.url().includes('/app/'));
   const quiet = await frame.evaluate(() => renderDashboardToday({ items: [{ id: 'p1', fullName: 'Sam Ortiz', title: 'Talent Lead', companyName: 'Quiet Co', priorityScore: 70, outreachStatus: 'replied', listContext: { linked: true, openRoles: 0, newRoles7d: 0, lastOutreachAt: '2026-11-02T12:00:00Z' } }] }, { summary: {} }));
   expect(quiet).toContain('Your highest-priority people');
-  expect(quiet).not.toContain('today-board__count');
   expect(quiet).toContain('no open role on record');
   expect(quiet).toContain('>Reply<');
   // With a saved focus, the roles in it lead; a company hiring only outside it

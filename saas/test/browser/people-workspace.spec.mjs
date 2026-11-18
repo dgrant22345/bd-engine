@@ -536,6 +536,10 @@ test('People opens ranked by who is worth contacting, with the evidence on each 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(first.locator('.people-company-compact')).toHaveText('Northstar Robotics · 2 open roles · 2 new this week');
   await expect(first.locator('.people-priority')).toBeHidden();
+  const peopleOptions = app.locator('.people-toolbar-actions .list-view-options');
+  await peopleOptions.locator('summary').click();
+  await expect(peopleOptions).toHaveAttribute('open', '');
+  await peopleOptions.locator('summary').click();
   expect(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   expect(errors).toEqual([]);
 });

@@ -53,9 +53,8 @@ body { -webkit-font-smoothing: antialiased; }
   padding: 16px 12px;
   gap: 18px;
 }
-.brand-card { padding: 12px 10px 22px; border-bottom: 1px solid var(--sidebar-line); }
+.brand-card { padding: 10px 10px 17px; border-bottom: 1px solid var(--sidebar-line); }
 .brand-card h1 { color: var(--sidebar-text); font-size: 20px; letter-spacing: -.04em; }
-.brand-card .eyebrow { color: var(--sidebar-muted); font-size: 9px; letter-spacing: .12em; }
 .brand-mark {
   width: 42px; height: 42px; border-radius: 12px;
   background: linear-gradient(145deg, #36b7a6, #117c76);
@@ -267,4 +266,66 @@ details.onboarding-guide[open] > summary.onboarding-guide__title { margin-bottom
   .team-row { grid-template-columns: 32px minmax(0, 1fr); }
   .team-role, .team-actions { grid-column: 2; }
   .team-invite { grid-template-columns: 1fr; }
+}
+
+/* Shared workspace surfaces in both theme modes. */
+.sidebar .nav { gap: 4px; }
+.sidebar .nav-group-label { padding-block: 12px 5px; }
+.sidebar .nav a { min-height: 43px; }
+#workspace-navigation .nav a[aria-current="page"] { box-shadow: inset 3px 0 var(--accent); }
+#workspace-navigation .nav a[aria-current="page"] .nav-icon { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.main .topbar .view-heading h2 { font-size: clamp(21px, 2.1vw, 28px); letter-spacing: -.045em; }
+.main .topbar .search-shell { border-color: var(--line-strong); }
+.main .topbar .search-shell:focus-within { border-color: var(--accent); }
+
+#app :is(.people-workspace, .jobs-board, .tasks-view, .workspace-health, .today-card) {
+  border-radius: 12px;
+}
+
+.people-toolbar,
+.jobs-board__summary strong,
+.tasks-tabs,
+.task-search-form,
+#app > .compact-page-intro {
+  background: var(--surface-muted);
+}
+.people-toolbar {
+  border-radius: 12px 12px 0 0;
+  padding-block: 14px;
+}
+.people-count strong {
+  color: var(--accent);
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.045em;
+}
+.people-toolbar-actions > button, .people-toolbar-actions > details > summary { min-height: 39px; }
+.people-workspace .people-list-caption { border-top: 1px solid var(--line); }
+:is(.people-table, .jobs-table--board) th { background: color-mix(in srgb, var(--surface-muted) 91%, var(--accent)); }
+.jobs-board__head h3, .tasks-header h3 { font-size: 19px; letter-spacing: -.025em; }
+.jobs-board__summary strong {
+  align-self: start;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.jobs-board .jobs-filter-bar { border-color: color-mix(in srgb, var(--line) 84%, var(--accent)); }
+#app > .compact-page-intro { padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; }
+.tasks-tabs {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.workspace-health--attention > div:first-child { border-left-color: var(--warning); }
+
+@media (max-width: 640px) {
+  .people-workspace .people-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .people-toolbar-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .people-toolbar-actions .list-view-options summary { justify-content: center; width: 100%; min-width: 0; }
+}
+
+@media print {
+  .today-board__lead { --today-text: #152538; --today-muted: #526272; --today-accent: #0f6b65; background: #fff; }
+  .today-board__actions .secondary-button { background: #fff; }
 }
