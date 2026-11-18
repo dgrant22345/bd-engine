@@ -74,7 +74,8 @@
 .landing .hero-cta .btn-ghost:hover { background: #243e53; border-color: #8fabbb; }
 .landing .hero-content :where(a, button):focus-visible { outline: 2px solid var(--hero-accent); outline-offset: 3px; }
 .landing .hero-note { color: var(--hero-muted); font-size: 12px; line-height: 1.7; }
-.landing .hero-walkthrough-link { display: inline-block; margin-block-end: 8px; color: var(--hero-accent); font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
+.hero-preview-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-block-start: 8px; }
+.landing .hero-preview-link { display: inline-flex; align-items: center; min-height: 32px; padding: 0; border: 0; background: none; color: var(--hero-accent); font-family: inherit; font-size: 13px; font-weight: 650; cursor: pointer; text-decoration: underline; text-underline-offset: 4px; }
 .landing .product-preview { width: 100%; border: 1px solid #587584; border-radius: 20px; box-shadow: 0 24px 60px #07131c65, 0 0 0 8px #e7fff01b; }
 .landing .product-preview-header { background: #182f44; color: #eef7ff; min-height: 60px; padding-inline: 24px; }
 .landing .product-preview-header .preview-status { background: #234449; color: #b8f4e9; border: 1px solid #39615f; font-size: 10px; border-radius: 20px; }
@@ -186,6 +187,11 @@
 .public-premium .guide-cta { border-color: #c4e8de; border-radius: 14px; background: #e8f5f2; }
 .public-premium .button-link { background: #0f6b65; border-color: #0f6b65; border-radius: 9px; }
 .public-premium .button-link:hover { background: #0b5550; }
+.worksheet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.worksheet-share { min-height: 44px; padding: 0; border: 0; background: none; color: #0b5550; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+.worksheet-share:focus-visible { outline: 2px solid #0f6b65; outline-offset: 3px; }
+.guide-cta .worksheet-share-status { margin: 8px 0 0; }
+.guide-cta .worksheet-share-status:empty { margin: 0; }
 .public-premium a:focus-visible { outline: 2px solid #0f6b65; outline-offset: 3px; }
 .public-premium :is(.checker-panel, .guide-card, .guide-section, .guide-callout) { background: #fff; border-color: #dce5ed; border-radius: 14px; box-shadow: 0 6px 24px #122c4407; }
 .public-premium :is(.checker-panel textarea, .checker-panel input) { background: #f6f8fb; border-color: #a8bbc9; color: #152538; border-radius: 9px; }

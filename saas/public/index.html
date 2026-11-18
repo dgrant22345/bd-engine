@@ -771,6 +771,7 @@
               : 'landing';
       }
       if (state.invitation) state.view = 'invite';
+      if (state.view === 'signup') trackAcquisitionEvent('signup_started').catch(() => {});
       // The landing page is already on screen and wired when the server
       // pre-rendered it; repainting would discard a visitor's open tab or FAQ.
       const landingAlreadyLive = serverRenderedLanding && state.view === 'landing' && !state.accountClosedMessage;
@@ -1170,14 +1171,14 @@
       };
       const pricingOffer = isJobSeekerLanding ? {
         name: 'Job Seeker',
-        priceMarkup: '<span class="price-amount">$5</span><span class="price-period">USD / month after trial</span>',
+        monthlyPrice: '$5',
         fit: 'For an active search that needs a focused company list, relevant public roles, and warm-contact paths in one place.',
         features: ['200 target companies', '1,000 network contacts', '50 ATS job boards', '3-Step Warm Referral Studio', 'Morning Radar Digest', '50 CSV imports'],
         syncNote: 'Saved companies, notes, contacts, and action plans follow your signed-in account.',
         trial: 'The free trial includes 25 companies, 100 contacts, 50 ATS boards, and 3 CSV imports.',
       } : {
         name: 'Recruiter Pro',
-        priceMarkup: '<span class="price-amount">$10</span><span class="price-period">USD / month after trial</span>',
+        monthlyPrice: '$10',
         fit: 'For an independent recruiter or agency founder using live hiring signals to prioritize measurable outreach.',
         features: ['Up to 3 users in a shared workspace', '1,000 accounts', '10,000 contacts', 'Unlimited ATS job boards', '3-Step Outreach Sequence Studio', 'Executive Morning Radar & Digest', 'Placement Pipeline ROI Tracker', 'Workspace sync across your devices', 'CSV export'],
         syncNote: 'Workspace notes, sequences, custom fields, activity, and automation rules follow your signed-in account.',
@@ -1214,14 +1215,17 @@
                   <h1 class="hero-title" id="landing-title">${escapeHtml(landingCopy.title).replace(escapeHtml(landingCopy.titleAccent), `<em>${escapeHtml(landingCopy.titleAccent)}</em>`)}</h1>
                   <p class="hero-subtitle">${landingCopy.subtitle}</p>
                   <div class="hero-cta">
+                    <button class="btn btn-primary btn-lg" id="hero-signup" data-plan-intent="${isJobSeekerLanding ? '' : 'sales'}">${isJobSeekerLanding ? landingCopy.primaryCta : 'Start Recruiter Pro trial'}</button>
                     ${isJobSeekerLanding
-                      ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
-                         <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
-                      : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
-                         <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
+                      ? '<a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>'
+                      : '<a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_audit">Run free ATS audit</a>'}
                   </div>
-                  ${isJobSeekerLanding ? '' : '<p><a class="hero-walkthrough-link" href="/recruiter-walkthrough">Watch the 30-second recruiter walkthrough →</a></p>'}
-                  <p class="hero-note">Try it free for 14 days. No credit card required.</p>
+                  <p class="hero-note">${isJobSeekerLanding ? 'Try it free for 14 days. No credit card required.' : `14 days free. No card required. ${pricingOffer.monthlyPrice} USD/month if you subscribe.`}</p>
+                  ${isJobSeekerLanding ? '' : `
+                    <div class="hero-preview-links">
+                      <button type="button" class="hero-preview-link" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>
+                      <a class="hero-preview-link" href="/recruiter-walkthrough">Watch the 30-second recruiter walkthrough</a>
+                    </div>`}
                 </div>
                 <div class="product-preview" aria-label="Sample ranked daily action">
                   <div class="product-preview-header">
@@ -1354,7 +1358,7 @@
                   <div class="pricing-summary">
                     <h3>${escapeHtml(pricingOffer.name)}</h3>
                     <div class="pricing-trial-price"><span class="price-amount">$0</span><span class="price-period">for 14 days</span></div>
-                    <div class="pricing-price">${pricingOffer.priceMarkup}</div>
+                    <div class="pricing-price"><span class="price-amount">${pricingOffer.monthlyPrice}</span><span class="price-period">USD / month after trial</span></div>
                     <p class="pricing-fit">${escapeHtml(pricingOffer.fit)}</p>
                     ${isJobSeekerLanding
                       ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
@@ -1427,7 +1431,7 @@
       // Wire events
       root.querySelector('#nav-login')?.addEventListener('click', () => { state.view = 'login'; render(); });
       root.querySelector('#nav-signup')?.addEventListener('click', () => openSignup());
-      root.querySelector('#hero-signup')?.addEventListener('click', () => openSignup());
+      root.querySelector('#hero-signup')?.addEventListener('click', event => openSignup(state.signupPersona, event.currentTarget.dataset.planIntent));
       root.querySelectorAll('[data-jobseeker-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('jobseeker', btn.dataset.planIntent || '')));
       root.querySelectorAll('[data-demo-start]').forEach(btn => btn.addEventListener('click', doStartDemo));
       root.querySelectorAll('[data-signup]').forEach(btn => btn.addEventListener('click', () => openSignup('bd', btn.dataset.planIntent || '')));
