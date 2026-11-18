@@ -279,6 +279,30 @@ test('coverage-denominator campaign routes to the ATS audit and preserves attrib
   await expect(page.getByRole('heading', { name: 'Audit ATS coverage for a target list' })).toBeVisible();
 });
 
+test('ATS checker keeps audit input local while its browser code loads', async ({ page }) => {
+  const { promise: allowCheckerRequest, resolve: releaseChecker } = Promise.withResolvers();
+  await page.route('**/ats-checker.js*', async route => {
+    await allowCheckerRequest;
+    await route.continue();
+  });
+  await page.goto('/ats-checker', { waitUntil: 'commit' });
+  const auditButton = page.getByRole('button', { name: 'Audit coverage', exact: true });
+  const sampleButton = page.getByRole('button', { name: 'Try sample list', exact: true });
+  const input = page.getByLabel('Career-site or job-board URLs');
+  try {
+    await input.fill('https://boards.greenhouse.io/example');
+    await expect(auditButton).toBeDisabled();
+    await expect(sampleButton).toBeDisabled();
+    expect(await input.evaluate(element => [...new FormData(element.form).keys()])).toEqual([]);
+  } finally {
+    releaseChecker();
+  }
+  await expect(sampleButton).toBeEnabled();
+  await auditButton.click();
+  await expect(page.getByRole('heading', { name: 'Greenhouse provider detected', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/ats-checker$/);
+});
+
 test('ATS checker audits a target list with an explicit denominator', async ({ page }) => {
   const trackedEvents = await collectAnalyticsEvents(page);
   await page.goto('/ats-checker');
