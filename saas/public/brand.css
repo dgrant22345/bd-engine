@@ -133,6 +133,8 @@
 .coverage-providers { font-size: 13px; margin: 16px 0 20px; }
 .coverage-providers summary { width: fit-content; padding-block: 5px; cursor: pointer; font-weight: 650; }
 .landing .coverage-providers .coverage-caveat { margin: 10px 0 0; }
+.coverage-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 20px; }
+.landing .coverage-worksheet-link { color: #a1eadb; font-size: 14px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
 .coverage-sample { padding: clamp(18px, 3vw, 32px); background: #102032; border: 1px solid #56737d; border-radius: 16px; }
 .landing .coverage-sample-label { color: #a1eadb; font-size: 12px; font-weight: 700; }
 .landing .coverage-sample-rate { color: #c1d4e1; line-height: 1.25; }
