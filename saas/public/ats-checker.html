@@ -80,12 +80,13 @@
             <label for="career-urls">Career-site or job-board URLs</label>
             <span>Up to 50 URLs</span>
           </div>
-          <textarea id="career-urls" name="careerUrls" rows="6" spellcheck="false" placeholder="https://boards.greenhouse.io/example&#10;https://jobs.lever.co/example&#10;https://example.com/careers" required aria-describedby="url-help"></textarea>
+          <textarea id="career-urls" rows="6" spellcheck="false" placeholder="https://boards.greenhouse.io/example&#10;https://jobs.lever.co/example&#10;https://example.com/careers" required aria-describedby="url-help"></textarea>
           <p id="url-help" class="field-help">Enter one public URL per line. Duplicate lines are removed. Use career pages that anyone can open.</p>
           <div class="checker-actions">
-            <button type="submit">Audit coverage</button>
-            <button class="sample-button" id="example-audit" type="button">Try sample list</button>
+            <button type="submit" disabled>Audit coverage</button>
+            <button class="sample-button" id="example-audit" type="button" disabled>Try sample list</button>
           </div>
+          <noscript><p class="field-help">Enable JavaScript to run the audit in your browser.</p></noscript>
         </form>
 
         <div id="checker-result" class="checker-result" role="region" aria-labelledby="result-title" aria-live="polite" tabindex="-1" hidden>

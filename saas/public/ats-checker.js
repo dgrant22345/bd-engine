@@ -512,6 +512,7 @@ function trackCheckerEvent(eventType = 'pageview', acquisition = {}) {
 if (typeof document !== 'undefined') {
   const acquisition = persistCheckerAcquisition();
   const checkerForm = document.getElementById('ats-checker-form');
+  const sampleButton = document.getElementById('example-audit');
   let sampleSubmissionPending = false;
   checkerForm?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -520,7 +521,7 @@ if (typeof document !== 'undefined') {
     trackCheckerEvent(sampleSubmissionPending ? 'ats_sample_used' : 'ats_audit_completed', acquisition);
     sampleSubmissionPending = false;
   });
-  document.getElementById('example-audit')?.addEventListener('click', () => {
+  sampleButton?.addEventListener('click', () => {
     const input = document.getElementById('career-urls');
     if (!input || !checkerForm) return;
     input.value = [
@@ -531,5 +532,7 @@ if (typeof document !== 'undefined') {
     sampleSubmissionPending = true;
     checkerForm.requestSubmit();
   });
+  checkerForm?.querySelector('button[type="submit"]')?.removeAttribute('disabled');
+  sampleButton?.removeAttribute('disabled');
   trackCheckerEvent('pageview', acquisition);
 }

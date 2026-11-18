@@ -942,6 +942,11 @@ footer {
   min-height: 44px;
 }
 
+.checker-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .coverage-notes {
   padding: clamp(18px, 2.5vw, 28px);
   border: 1px solid var(--border);
