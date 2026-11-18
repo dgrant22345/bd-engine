@@ -463,9 +463,12 @@ test('job-seeker route shows only its relevant paid offer and preserves plan int
 });
 
 test('recruiter landing keeps the trial, demo, ATS utility, and worksheet discoverable', async ({ page }) => {
+  const trackedEvents = await collectAnalyticsEvents(page);
   await page.goto('/');
 
-  await expect(page.locator('.hero-cta').getByRole('link', { name: 'Run free ATS audit', exact: true })).toHaveAttribute('href', /utm_content=recruiter_hero_primary/);
+  const hero = page.locator('.public-hero');
+  await expect(hero.getByRole('link', { name: 'Run free ATS audit', exact: true })).toHaveAttribute('href', /utm_content=recruiter_hero_audit/);
+  await expect(hero.getByText(/\$10 USD\/month if you subscribe/)).toBeVisible();
   await expect(page.locator('#pricing [data-signup]')).toHaveText('Start 14-day trial');
   await expect(page.getByRole('button', { name: 'Explore live demo' })).toBeVisible();
   const audit = page.getByRole('link', { name: 'Free ATS audit', exact: true });
@@ -477,6 +480,40 @@ test('recruiter landing keeps the trial, demo, ATS utility, and worksheet discov
   await page.getByRole('link', { name: 'Get the free target-account worksheet' }).click();
   await expect(page).toHaveURL(/\/guides\/staffing-target-account-list#template$/);
   await expect(page.getByRole('link', { name: 'Download the CSV template' })).toBeVisible();
+
+  await page.goBack();
+  await hero.getByRole('button', { name: 'Start Recruiter Pro trial' }).click();
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.getByText('Recruiter Pro selected.')).toBeVisible();
+  await expect(page.locator('#signup-persona')).toHaveValue('bd');
+  await expect.poll(() => trackedEvents).toContain('signup_started');
+});
+
+test('worksheet shares a public referral link and carries campaign attribution into the trial', async ({ page }) => {
+  const trackedEvents = await collectAnalyticsEvents(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async text => { window.worksheetShareLink = text; } },
+    });
+  });
+  const worksheetPath = '/guides/staffing-target-account-list';
+  const shareCampaign = 'utm_source=worksheet_share&utm_medium=referral&utm_campaign=target_accounts_guide';
+  await page.goto(worksheetPath + '?' + shareCampaign + '&email=sample%40example.invalid#template');
+
+  await page.getByRole('button', { name: 'Copy share link' }).click();
+  await expect(page.getByRole('status')).toHaveText('Worksheet link copied.');
+  expect(await page.evaluate(() => window.worksheetShareLink)).toBe(
+    'https://bd-engine-production.up.railway.app' + worksheetPath + '?' + shareCampaign + '#template',
+  );
+
+  await page.getByRole('link', { name: 'Start Recruiter Pro trial' }).click();
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.getByText('Recruiter Pro selected.')).toBeVisible();
+  const signupQuery = new URL(page.url()).searchParams;
+  expect(signupQuery.get('utm_source')).toBe('worksheet_share');
+  expect(signupQuery.has('email')).toBe(false);
+  await expect.poll(() => trackedEvents).toContain('signup_started');
 });
 
 test('Terms review returns to the pricing decision instead of opening signup', async ({ page }) => {

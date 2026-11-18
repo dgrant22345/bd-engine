@@ -54,6 +54,7 @@
   </script>
   <link rel="stylesheet" href="/brand.css">
   <script type="module" src="/campaign-links.js"></script>
+  <script type="module" src="/worksheet-share.js"></script>
 </head>
 <body class="public-premium">
   <a class="skip-link" href="#article-main">Skip to guide</a>
@@ -88,7 +89,11 @@
             <h2 id="template">Free target account list template</h2>
             <p>Open the CSV in Excel or Google Sheets and replace the two sample rows with your target companies. Record each employer’s public careers URL and the roles that fit your desk.</p>
             <p>Copy the Careers URL column into the <a href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=target_accounts_guide&amp;utm_content=template" data-campaign-link>free ATS audit</a> in batches of up to 50. Record each result, the date you checked the board, and the next action in your worksheet.</p>
-            <a class="button-link" href="/templates/staffing-target-account-list.csv" download>Download the CSV template</a>
+            <div class="worksheet-actions">
+              <a class="button-link" href="/templates/staffing-target-account-list.csv" download>Download the CSV template</a>
+              <button class="worksheet-share" type="button" id="copy-worksheet-link" hidden>Copy share link</button>
+            </div>
+            <p class="worksheet-share-status" id="worksheet-share-status" role="status"></p>
           </section>
 
           <section aria-labelledby="fit-and-timing">
@@ -151,6 +156,12 @@
             <h2 id="accounts-cta">Check which targets publish readable job boards</h2>
             <p>Paste up to 50 career-site URLs into the free BD Engine audit. It runs in your browser without signup and shows which URLs match a recognized ATS host. Visit the employer’s own site to check open roles.</p>
             <a class="button-link" href="/ats-checker?utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=target_accounts_guide&amp;utm_content=article_cta" data-campaign-link>Run the free ATS audit</a>
+          </section>
+
+          <section aria-labelledby="accounts-trial">
+            <h2 id="accounts-trial">Keep working your target list in BD Engine</h2>
+            <p>Add your target companies to your workspace, review openings from compatible public job boards, and record your next follow-up. The trial is free for 14 days and requires no card.</p>
+            <a href="/?signup=1&amp;persona=bd&amp;plan=sales&amp;utm_source=organic_search&amp;utm_medium=guide&amp;utm_campaign=target_accounts_guide&amp;utm_content=trial_cta" data-campaign-link>Start Recruiter Pro trial</a>
           </section>
         </div>
 
