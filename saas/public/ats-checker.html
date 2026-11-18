@@ -60,10 +60,12 @@
   </header>
 
   <main id="checker-main">
-    <section class="checker-intro" aria-labelledby="checker-title">
-      <p class="eyebrow">Free public utility</p>
-      <h1 id="checker-title">Audit ATS coverage for a target list</h1>
-      <p class="lede">Paste one or many public career-site URLs to see the recognized-host rate for your list. The check runs in your browser and does not fetch the submitted site.</p>
+    <section class="checker-intro public-hero" aria-labelledby="checker-title">
+      <div>
+        <p class="eyebrow">Free ATS audit</p>
+        <h1 id="checker-title">Audit ATS coverage for a target list</h1>
+        <p class="lede">See which career-site URLs BD Engine recognizes and which ones need discovery. Your links stay in your browser.</p>
+      </div>
       <ul class="utility-promises" aria-label="Audit details">
         <li>No signup</li>
         <li>No site requests</li>
@@ -74,15 +76,16 @@
     <div class="checker-layout">
       <section class="checker-panel" aria-label="ATS coverage audit">
         <form id="ats-checker-form" novalidate>
-          <label for="career-urls">Career-site or job-board URLs</label>
-          <div class="input-row">
-            <textarea id="career-urls" name="careerUrls" rows="7" spellcheck="false" placeholder="https://boards.greenhouse.io/example&#10;https://jobs.lever.co/example&#10;https://example.com/careers" required aria-describedby="url-help"></textarea>
-            <div class="checker-actions">
-              <button type="submit">Audit coverage</button>
-              <button class="sample-button" id="example-audit" type="button">Try sample list</button>
-            </div>
+          <div class="checker-form-heading">
+            <label for="career-urls">Career-site or job-board URLs</label>
+            <span>Up to 50 URLs</span>
           </div>
-          <p id="url-help" class="field-help">Enter one public URL per line, up to 50. Duplicate lines are removed. Do not enter login links or private systems.</p>
+          <textarea id="career-urls" name="careerUrls" rows="6" spellcheck="false" placeholder="https://boards.greenhouse.io/example&#10;https://jobs.lever.co/example&#10;https://example.com/careers" required aria-describedby="url-help"></textarea>
+          <p id="url-help" class="field-help">Enter one public URL per line. Duplicate lines are removed. Use career pages that anyone can open.</p>
+          <div class="checker-actions">
+            <button type="submit">Audit coverage</button>
+            <button class="sample-button" id="example-audit" type="button">Try sample list</button>
+          </div>
         </form>
 
         <div id="checker-result" class="checker-result" role="region" aria-labelledby="result-title" aria-live="polite" tabindex="-1" hidden>
@@ -121,15 +124,17 @@
 
       <aside class="coverage-notes" aria-labelledby="coverage-title">
         <p class="eyebrow">What the rate means</p>
-        <h2 id="coverage-title">A defined denominator</h2>
-        <p>The reported percentage is recognized ATS hosts divided by valid public URLs in this audit. Invalid entries are shown but excluded from the rate.</p>
-        <h3>Recognized public providers</h3>
-        <p>Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, Taleo, Avature, UKG Pro, and UKG Ready.</p>
+        <h2 id="coverage-title">How to read the audit</h2>
+        <p>The percentage is the share of valid public URLs that match a recognized ATS. The results also show which entries need correcting.</p>
         <ul>
           <li>A recognized host is a compatibility signal, not a coverage guarantee or confirmation of role count and freshness.</li>
           <li>Employers can change, hide, or customize public career pages.</li>
           <li>Ordinary company careers pages may still need discovery and review.</li>
         </ul>
+        <details class="checker-providers">
+          <summary>Recognized public providers</summary>
+          <p>Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, Taleo, Avature, UKG Pro, and UKG Ready.</p>
+        </details>
       </aside>
     </div>
   </main>

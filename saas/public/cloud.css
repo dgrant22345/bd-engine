@@ -2498,12 +2498,6 @@ a:hover { text-decoration: underline; }
   border-top: 2px solid var(--landing-border);
 }
 
-.workflow-step-number {
-  color: var(--landing-accent);
-  font-size: 12px;
-  font-weight: 850;
-}
-
 .workflow-step h3 {
   margin: 12px 0 8px;
   color: var(--landing-ink);
@@ -3283,43 +3277,6 @@ a:hover { text-decoration: underline; }
   .proof-divider {
     display: none;
   }
-}
-
-/* ── Landing Page Signal Pills ── */
-.preview-signal-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 8px 0 12px 0;
-}
-
-.landing-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.landing-pill--surge {
-  background: rgba(239, 68, 68, 0.12);
-  color: #b91c1c;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.landing-pill--warm {
-  background: rgba(16, 185, 129, 0.12);
-  color: #047857;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.landing-pill--stale {
-  background: rgba(245, 158, 11, 0.12);
-  color: #92400e;
-  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .preview-interactive-cta {

@@ -509,7 +509,9 @@ test('ATS checker remains usable on mobile without horizontal overflow', async (
     'https://example.com/careers',
   ].join('\n'));
   await page.getByRole('button', { name: 'Audit coverage' }).click();
-  await expect(page.getByRole('heading', { name: '1 of 2 valid public URLs match a recognized ATS host' })).toBeVisible();
+  await expect(page.locator('#checker-result')).toBeFocused();
+  await expect(page.getByRole('heading', { name: '1 of 2 valid public URLs match a recognized ATS host' })).toBeInViewport();
+  await expect(page.locator('.audit-recognition meter')).toHaveJSProperty('value', 50);
   await expect(page.locator('td[data-label="Provider"]', { hasText: 'Greenhouse' })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,

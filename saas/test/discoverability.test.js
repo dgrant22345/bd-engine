@@ -71,7 +71,8 @@ test('ATS checker is a crawlable no-signup utility with explicit caveats', async
   const checker = await readFile(checkerPath, 'utf8');
 
   assert.match(checker, /<link rel="canonical" href="https:\/\/bd-engine-production\.up\.railway\.app\/ats-checker">/);
-  assert.match(checker, /The check runs in your browser and does not fetch the submitted site/);
+  assert.match(checker, /Your links stay in your browser/);
+  assert.match(checker, /No site requests/);
   assert.match(checker, /Try sample list/);
   assert.match(checker, /compatibility signal, not a coverage guarantee/);
   assert.match(checker, /<script type="module" src="\/ats-checker\.js"><\/script>/);

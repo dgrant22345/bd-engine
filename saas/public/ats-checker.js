@@ -197,6 +197,7 @@ function appendMetric(container, label, value) {
   description.textContent = value;
   wrapper.append(term, description);
   container.append(wrapper);
+  return description;
 }
 
 function resultLabel(result) {
@@ -337,7 +338,15 @@ function renderResult(audit) {
   appendMetric(summary, 'Audited', String(audit.totalCount));
   appendMetric(summary, 'Valid public URLs', String(audit.validCount));
   appendMetric(summary, 'Recognized ATS', String(audit.recognizedCount));
-  appendMetric(summary, 'Host recognition', `${audit.recognitionRate}%`);
+  const recognition = appendMetric(summary, 'Host recognition', `${audit.recognitionRate}%`);
+  recognition.className = 'audit-recognition';
+  if (hasValidUrls) {
+    const meter = document.createElement('meter');
+    meter.max = 100;
+    meter.value = audit.recognitionRate;
+    meter.setAttribute('aria-hidden', 'true');
+    recognition.append(meter);
+  }
 
   const notes = [];
   if (audit.duplicateCount) notes.push(`${countLabel(audit.duplicateCount, 'duplicate')} removed`);
@@ -373,7 +382,10 @@ function renderResult(audit) {
     actions.append(staffingLink, jobSearchLink);
   }
 
-  requestAnimationFrame(() => container.focus({ preventScroll: true }));
+  requestAnimationFrame(() => {
+    container.focus({ preventScroll: true });
+    container.scrollIntoView({ block: 'start' });
+  });
 }
 
 function getVisitorId() {
