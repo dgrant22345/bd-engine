@@ -221,7 +221,7 @@
       const filtered = Boolean(query.q || query.outreachStatus || query.minScore);
       root.innerHTML = `<section class="people-workspace${state.selected ? ' has-person' : ''}" aria-label="People workspace">
         <div class="people-toolbar">
-          <div class="people-count"><strong>${result.total.toLocaleString()}</strong> ${filtered ? 'matching' : 'saved'} people<span>Review your network, one person at a time.</span></div>
+          <div class="people-count"><strong>${result.total.toLocaleString()}</strong> ${filtered ? 'matching' : 'saved'} people</div>
           <div class="people-toolbar-actions"><button type="button" class="primary-button" data-people="add">Add person</button><button type="button" class="secondary-button" data-action="open-network-import-modal">Import CSV</button>${button('drafts', 'My drafts')}${exportOptions()}</div>
         </div>
         <div class="people-layout">

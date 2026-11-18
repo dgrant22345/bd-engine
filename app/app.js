@@ -4428,9 +4428,9 @@ function applyPersonaChrome() {
   if (navigation && !navigation.dataset.organized) {
     const group = text => { const label = document.createElement('p'); label.className = 'nav-group-label'; label.textContent = text; navigation.append(label); };
     group('Workspace');
-    for (const route of ['contacts', 'tasks']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
+    for (const route of ['dashboard', 'contacts', 'tasks']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
     group('Company intelligence');
-    for (const route of ['accounts', 'jobs', 'dashboard']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
+    for (const route of ['accounts', 'jobs']) navigation.append(navigation.querySelector(`[data-route="${route}"]`));
     group('Manage');
     navigation.append(navigation.querySelector('[data-route="admin"]'));
     navigation.dataset.organized = 'true';
@@ -10653,7 +10653,7 @@ async function copyMorningRadarText() {
 
 // Home: who to call today. The three people the People list ranks first
 // ("worth contacting first": companies with an active role, then
-// relationship priority), drawn as cards, with a plain count above them.
+// relationship priority), drawn as cards beneath the daily summary.
 const TODAY_NEXT_STEP = {
   not_started: 'Draft intro',
   researching: 'Finish research',
@@ -10726,7 +10726,6 @@ function renderDashboardToday(people, dashboard = {}) {
       why = `${pluralize(openRoles, 'open role')} at ${company}${newRoles ? `, ${formatNumber(newRoles)} new this week` : ''}.`;
     }
     const last = shortDate(context.lastOutreachAt);
-    const score = Math.max(0, Math.min(100, Math.round(Number(person.priorityScore) || 0)));
     const step = TODAY_NEXT_STEP[person.outreachStatus] || TODAY_NEXT_STEP.not_started;
     return `<article class="today-card${isHiring(person) ? ' today-card--hiring' : ''}">
       <div class="today-card__head">
@@ -10734,7 +10733,7 @@ function renderDashboardToday(people, dashboard = {}) {
           <h3>${escapeHtml(person.fullName || 'Unnamed person')}</h3>
           <p>${escapeHtml([person.title, person.companyName].filter(Boolean).join(', ') || 'Role not recorded')}</p>
         </div>
-        <p class="today-card__score" title="Relationship priority ${score} of 100. Based on title and employer signals, not candidate fit."><strong>${score}</strong><span>priority</span></p>
+        <p class="today-card__score" title="Relationship priority based on title and employer signals">${renderScoreRing(person.priorityScore, 'Relationship priority', 48)}<span class="today-card__score-label" aria-hidden="true">Priority</span></p>
       </div>
       <p class="today-card__why">${why}</p>
       <div class="today-card__foot">
@@ -10745,11 +10744,14 @@ function renderDashboardToday(people, dashboard = {}) {
   }).join('');
   return `<section class="today-board" aria-labelledby="today-board-heading">
     <div class="today-board__lead">
-      ${count ? `<p class="today-board__count" aria-hidden="true">${count}</p>` : ''}
+      <p class="eyebrow today-board__date">${escapeHtml(today)}</p>
       <div class="today-board__copy">
-        <p class="eyebrow">${escapeHtml(today)}</p>
         <h2 id="today-board-heading">${escapeHtml(heading)}</h2>
-        <p class="today-board__summary">${escapeHtml(summary)} <a href="#/contacts">See everyone, ranked</a>${focusSet ? ` · <a href="#/admin/search-focus">Change your focus</a>` : ''}</p>
+        <p class="today-board__summary">${escapeHtml(summary)}</p>
+      </div>
+      <div class="today-board__actions">
+        <a class="secondary-button" href="#/contacts">Ranked people <span aria-hidden="true">→</span></a>
+        ${focusSet ? '<a class="today-board__focus-link" href="#/admin/search-focus">Change your focus</a>' : ''}
       </div>
     </div>
     <div class="today-board__cards">${cards}</div>
@@ -10760,7 +10762,7 @@ function renderDashboardRoiHero(dashboard = {}) {
   const summary = dashboard.summary || {};
   const incomplete = Number(summary.incompleteBoardCount || 0);
   return `
-    <section class="workspace-health" aria-label="Workspace data status">
+    <section class="workspace-health${incomplete ? ' workspace-health--attention' : ''}" aria-label="Workspace data status">
       <div><span class="eyebrow">Data status</span><strong>${incomplete ? `${formatNumber(incomplete)} sources need attention` : 'Your tracked careers boards'}</strong>
         <p class="muted small">${summary.lastRefreshedAt ? `Last successful or partial refresh: ${escapeHtml(formatDate(summary.lastRefreshedAt))}` : 'No completed refresh recorded yet.'} Coverage is limited to configured sources.</p>
       </div>

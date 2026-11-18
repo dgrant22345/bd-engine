@@ -3974,12 +3974,12 @@ a {
   font-size: 0.88rem;
   pointer-events: auto;
   animation: toast-in 0.3s ease-out;
-  transition: opacity 0.3s, transform 0.3s;
+  transition: transform 0.3s;
 }
 
 .toast.toast-exit {
-  opacity: 0;
-  transform: translateX(20px);
+  transform: translateY(8px);
+  pointer-events: none;
 }
 
 .toast-icon {
@@ -4013,8 +4013,8 @@ a {
 }
 
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { transform: translateY(12px); }
+  to { transform: translateY(0); }
 }
 
 /* ══════════════════════════════════════════════════
