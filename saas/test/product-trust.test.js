@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { getPlan } from '../src/billing.js';
+import { renderLandingHtml } from '../src/landing-prerender.js';
 
 const landingPath = new URL('../public/index.html', import.meta.url);
 const appPath = new URL('../../app/app.js', import.meta.url);
@@ -107,16 +108,17 @@ test('commercial outcome failures remain distinct from genuine empty states', as
 
 test('public prices and limits match enforced plan entitlements', async () => {
   const landing = await readFile(landingPath, 'utf8');
+  const staffingOffer = renderLandingHtml(landing, 'bd');
+  const jobSeekerOffer = renderLandingHtml(landing, 'jobseeker');
   const expectedClaims = [
-    ['trial', /\$0<\/span><span class="price-period">for 14 days/, /25 accounts/, /100 contacts/, /50 ATS job boards/, /3 CSV imports/],
+    ['trial', /\$0<\/span><span class="price-period">for 14 days/, /25 accounts/, /100 contacts/, /50 ATS boards/, /3 CSV imports/],
     ['sales', /\$10<\/span><span class="price-period">USD \/ month/, /1,000 accounts/, /10,000 contacts/, /Unlimited ATS job boards/],
     ['jobseeker', /\$5<\/span><span class="price-period">USD \/ month/, /200 target companies/, /1,000 network contacts/, /50 CSV imports/],
   ];
-  for (const [planId, price, accounts, contacts, finalClaim] of expectedClaims) {
-    assert.match(landing, price, `${planId} public price drifted`);
-    assert.match(landing, accounts, `${planId} public account limit drifted`);
-    assert.match(landing, contacts, `${planId} public contact limit drifted`);
-    assert.match(landing, finalClaim, `${planId} public feature limit drifted`);
+  for (const [planId, price, ...limits] of expectedClaims) {
+    const offer = planId === 'jobseeker' ? jobSeekerOffer : staffingOffer;
+    assert.match(offer, price, `${planId} public price drifted`);
+    for (const limit of limits) assert.match(offer, limit, `${planId} public limit ${limit} drifted`);
   }
   assert.deepEqual(getPlan('trial').limits, { accounts: 25, contacts: 100, jobBoards: 50, users: 3, csvImports: 3 });
   assert.deepEqual(getPlan('jobseeker').limits, { accounts: 200, contacts: 1000, jobBoards: 50, users: 1, csvImports: 50 });
