@@ -108,7 +108,7 @@ test('commercial outcome failures remain distinct from genuine empty states', as
 test('public prices and limits match enforced plan entitlements', async () => {
   const landing = await readFile(landingPath, 'utf8');
   const expectedClaims = [
-    ['trial', /\$0<\/span><span class="price-period">\/14 days/, /25 accounts/, /100 contacts/, /50 ATS job boards/, /3 CSV imports/],
+    ['trial', /\$0<\/span><span class="price-period">for 14 days/, /25 accounts/, /100 contacts/, /50 ATS job boards/, /3 CSV imports/],
     ['sales', /\$10<\/span><span class="price-period">USD \/ month/, /1,000 accounts/, /10,000 contacts/, /Unlimited ATS job boards/],
     ['jobseeker', /\$5<\/span><span class="price-period">USD \/ month/, /200 target companies/, /1,000 network contacts/, /50 CSV imports/],
   ];

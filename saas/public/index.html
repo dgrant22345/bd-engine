@@ -1132,7 +1132,6 @@
       // <landing-template>
       const isJobSeekerLanding = state.signupPersona === 'jobseeker';
       const landingCopy = isJobSeekerLanding ? {
-        badge: 'A more focused job search',
         title: 'Know which employers are worth your next move.',
         titleAccent: 'worth your next move.',
         subtitle: 'Rank target companies and public roles by your role, location, and keyword focus. Add your network to see where a useful path may already exist.',
@@ -1151,10 +1150,9 @@
           ['Work the best path', 'Bring the strongest role, company context, and network contact into one next-action queue.'],
         ],
       } : {
-        badge: 'Hiring context for your next conversation',
         title: 'Know which target accounts are worth your next call.',
         titleAccent: 'worth your next call.',
-        subtitle: 'Refresh compatible public job boards, rank target accounts, and prepare outreach using current role and contact context. Coverage and freshness depend on your connected sources.',
+        subtitle: 'Rank your target accounts using public hiring activity and the contacts you already know. Review the role and relationship before you reach out.',
         primaryCta: 'Start free trial',
         sectionTitle: 'From a target list to a clear next action',
         sectionIntro: 'BD Engine joins hiring demand, relationship context, and follow-up work without hiding how the priority was chosen.',
@@ -1206,81 +1204,77 @@
           ${state.accountClosedMessage ? `<div class="cloud-account-notice landing-account-notice" role="status"><span>${escapeHtml(state.accountClosedMessage)}</span><button class="cloud-notice-close" type="button" data-dismiss-account-closed aria-label="Dismiss message">Close</button></div>` : ''}
 
           <main id="main-content">
-            <section class="hero" aria-labelledby="landing-title">
-              <div class="hero-content">
-                <nav class="persona-switch" aria-label="Choose a BD Engine workflow">
-                  <a href="/" class="persona-option ${isJobSeekerLanding ? '' : 'is-active'}" ${isJobSeekerLanding ? '' : 'aria-current="page"'}>Staffing BD ($10/mo)</a>
-                  <a href="/job-search" class="persona-option ${isJobSeekerLanding ? 'is-active' : ''}" ${isJobSeekerLanding ? 'aria-current="page"' : ''}>Job Seekers ($5/mo)</a>
-                </nav>
-                <p class="hero-badge">${landingCopy.badge}</p>
-                <h1 class="hero-title" id="landing-title">${escapeHtml(landingCopy.title).replace(escapeHtml(landingCopy.titleAccent), `<em>${escapeHtml(landingCopy.titleAccent)}</em>`)}</h1>
-                <p class="hero-subtitle">${landingCopy.subtitle}</p>
-                <div class="hero-cta">
-                  ${isJobSeekerLanding
-                    ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
-                       <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
-                    : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
-                       <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
+            <section class="public-hero" aria-labelledby="landing-title">
+              <div class="hero">
+                <div class="hero-content">
+                  <nav class="persona-switch" aria-label="Choose a BD Engine workflow">
+                    <a href="/" class="persona-option ${isJobSeekerLanding ? '' : 'is-active'}" ${isJobSeekerLanding ? '' : 'aria-current="page"'}>Staffing BD ($10/mo)</a>
+                    <a href="/job-search" class="persona-option ${isJobSeekerLanding ? 'is-active' : ''}" ${isJobSeekerLanding ? 'aria-current="page"' : ''}>Job Seekers ($5/mo)</a>
+                  </nav>
+                  <h1 class="hero-title" id="landing-title">${escapeHtml(landingCopy.title).replace(escapeHtml(landingCopy.titleAccent), `<em>${escapeHtml(landingCopy.titleAccent)}</em>`)}</h1>
+                  <p class="hero-subtitle">${landingCopy.subtitle}</p>
+                  <div class="hero-cta">
+                    ${isJobSeekerLanding
+                      ? `<button class="btn btn-primary btn-lg" id="hero-signup">${landingCopy.primaryCta}</button>
+                         <a class="btn btn-ghost btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=job_search_coverage&amp;utm_content=jobseeker_hero_secondary">Audit career sites</a>`
+                      : `<a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=recruiter_hero_primary">Run free ATS audit</a>
+                         <button class="btn btn-ghost btn-lg" data-demo-start>${state.busy ? 'Opening demo...' : 'Explore live demo'}</button>`}
+                  </div>
+                  ${isJobSeekerLanding ? '' : '<p><a class="hero-walkthrough-link" href="/recruiter-walkthrough">Watch the 30-second recruiter walkthrough →</a></p>'}
+                  <p class="hero-note">Try it free for 14 days. No credit card required.</p>
                 </div>
-                ${isJobSeekerLanding ? '' : '<p><a class="hero-walkthrough-link" href="/recruiter-walkthrough">Watch the 30-second recruiter walkthrough →</a></p>'}
-                <p class="hero-note">No credit card required &middot; 14-day free trial &middot; Bring your own targets</p>
-              </div>
-              <div class="product-preview" aria-label="Sample ranked daily action">
-                <div class="product-preview-header">
-                  <span>Product walkthrough</span>
-                  <span class="preview-status">Synthetic sample data</span>
-                </div>
-                <div class="preview-tabs" role="tablist" aria-label="Explore the sample workflow">
-                  <button type="button" id="preview-tab-signal" role="tab" aria-selected="true" aria-controls="preview-panel-signal" data-preview-step="signal">1. Hiring signal</button>
-                  <button type="button" id="preview-tab-network" role="tab" aria-selected="false" aria-controls="preview-panel-network" tabindex="-1" data-preview-step="network">2. Your network</button>
-                  <button type="button" id="preview-tab-action" role="tab" aria-selected="false" aria-controls="preview-panel-action" tabindex="-1" data-preview-step="action">3. Next action</button>
-                </div>
-                <div class="preview-stage" id="preview-panel-signal" role="tabpanel" aria-labelledby="preview-tab-signal" tabindex="0">
-                <div class="preview-focus">
-                  <div class="preview-focus-header">
-                    <div>
-                      <span class="preview-label">${landingCopy.previewLabel}</span>
-                      <h2>Northstar Robotics</h2>
-                      <div class="preview-signal-tags">
-                        <span class="landing-pill landing-pill--surge">${isJobSeekerLanding ? '3 relevant roles' : '2 active roles'}</span>
-                        <span class="landing-pill landing-pill--warm">1 mapped contact</span>
-                        <span class="landing-pill landing-pill--stale">Freshest role: 2 days</span>
+                <div class="product-preview" aria-label="Sample ranked daily action">
+                  <div class="product-preview-header">
+                    <span>Sample workspace</span>
+                    <span class="preview-status">Synthetic sample data</span>
+                  </div>
+                  <div class="preview-tabs" role="tablist" aria-label="Explore the sample workflow">
+                    <button type="button" id="preview-tab-signal" role="tab" aria-selected="true" aria-controls="preview-panel-signal" data-preview-step="signal">1. Hiring signal</button>
+                    <button type="button" id="preview-tab-network" role="tab" aria-selected="false" aria-controls="preview-panel-network" tabindex="-1" data-preview-step="network">2. Your network</button>
+                    <button type="button" id="preview-tab-action" role="tab" aria-selected="false" aria-controls="preview-panel-action" tabindex="-1" data-preview-step="action">3. Next action</button>
+                  </div>
+                  <div class="preview-stage" id="preview-panel-signal" role="tabpanel" aria-labelledby="preview-tab-signal" tabindex="0">
+                    <div class="preview-focus">
+                      <div class="preview-focus-header">
+                        <div>
+                          <span class="preview-label">${landingCopy.previewLabel}</span>
+                          <h2>Northstar Robotics</h2>
+                        </div>
+                        <div class="preview-score" role="img" aria-label="Target score ${landingCopy.previewScore} out of 100" style="--preview-score: ${landingCopy.previewScore}%">
+                          <strong>${landingCopy.previewScore}</strong>
+                          <span>/ 100</span>
+                        </div>
                       </div>
+                      <p>${landingCopy.previewReason}</p>
+                      <dl class="preview-stats">
+                        ${landingCopy.previewStats.map(([value, label]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
+                      </dl>
                     </div>
-                    <div class="preview-score" aria-label="Target score ${landingCopy.previewScore} out of 100">
-                      <strong>${landingCopy.previewScore}</strong>
-                      <span>/ 100</span>
+                  </div>
+                  <div class="preview-stage" id="preview-panel-network" role="tabpanel" aria-labelledby="preview-tab-network" tabindex="0" hidden>
+                    <div class="preview-contact">
+                      <span class="preview-avatar" aria-hidden="true">PS</span>
+                      <div><span class="preview-label">From your imported connections</span><h2>Priya Shah</h2><p>Talent leader · Northstar Robotics</p></div>
                     </div>
+                    <p class="preview-stage-copy">A company match brings someone you already know into the same view as the hiring signal.</p>
+                    <p class="preview-evidence">The contact comes from an imported network, rather than an inferred introduction. Review the relationship before asking for help.</p>
                   </div>
-                  <p>${landingCopy.previewReason}</p>
-                  <dl class="preview-stats">
-                    ${landingCopy.previewStats.map(([value, label]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}
-                  </dl>
-                </div>
-                </div>
-                <div class="preview-stage" id="preview-panel-network" role="tabpanel" aria-labelledby="preview-tab-network" tabindex="0" hidden>
-                  <div class="preview-contact">
-                    <span class="preview-avatar" aria-hidden="true">PS</span>
-                    <div><span class="preview-label">From your imported connections</span><h2>Priya Shah</h2><p>Talent leader · Northstar Robotics</p></div>
+                  <div class="preview-stage" id="preview-panel-action" role="tabpanel" aria-labelledby="preview-tab-action" tabindex="0" hidden>
+                    <span class="preview-label">Review a grounded draft</span>
+                    <blockquote class="preview-draft">${isJobSeekerLanding
+                      ? 'Hi Priya, I noticed the controls role at Northstar Robotics. Would you be open to pointing me toward the right person to ask about the team?'
+                      : 'Hi Priya, I noticed Northstar Robotics is hiring for two controls roles. Is support with either search something your team is considering?'}</blockquote>
+                    <div class="preview-next-action">
+                      <span class="preview-step">Your next step</span>
+                      <p>${landingCopy.nextAction}</p>
+                    </div>
+                    <p class="preview-evidence">Review and send through your own account, then log the outreach and set a follow-up.</p>
                   </div>
-                  <p class="preview-stage-copy">A company match brings someone you already know into the same view as the hiring signal.</p>
-                  <p class="preview-evidence">The contact comes from an imported network, rather than an inferred introduction. Review the relationship before asking for help.</p>
-                </div>
-                <div class="preview-stage" id="preview-panel-action" role="tabpanel" aria-labelledby="preview-tab-action" tabindex="0" hidden>
-                  <span class="preview-label">Review a grounded draft</span>
-                  <blockquote class="preview-draft">${isJobSeekerLanding
-                    ? 'Hi Priya, I noticed the controls role at Northstar Robotics. Would you be open to pointing me toward the right person to ask about the team?'
-                    : 'Hi Priya, I noticed Northstar Robotics is hiring for two controls roles. Is support with either search something your team is considering?'}</blockquote>
-                  <div class="preview-next-action">
-                    <span class="preview-step">Your next step</span>
-                    <p>${landingCopy.nextAction}</p>
+                  <div class="preview-interactive-cta">
+                    ${isJobSeekerLanding
+                      ? '<button class="btn btn-primary btn-sm" data-jobseeker-signup>Build my job-search watchlist</button>'
+                      : '<button class="btn btn-primary btn-sm" data-demo-start>Explore the sample workspace →</button>'}
                   </div>
-                  <p class="preview-evidence">Review and send through your own account, then log the outreach and set a follow-up.</p>
-                </div>
-                <div class="preview-interactive-cta">
-                  ${isJobSeekerLanding
-                    ? '<button class="btn btn-primary btn-sm" data-jobseeker-signup>Build my job-search watchlist</button>'
-                    : '<button class="btn btn-primary btn-sm" data-demo-start>Explore the sample workspace →</button>'}
                 </div>
               </div>
             </section>
@@ -1316,9 +1310,8 @@
                 <p class="section-intro">${landingCopy.sectionIntro}</p>
               </div>
               <ol class="workflow-grid">
-                ${landingCopy.workflowSteps.map(([title, description], index) => `
+                ${landingCopy.workflowSteps.map(([title, description]) => `
                   <li class="workflow-step">
-                    <span class="workflow-step-number">0${index + 1}</span>
                     <h3>${title}</h3>
                     <p>${description}</p>
                   </li>`).join('')}
@@ -1327,18 +1320,24 @@
 
             <section class="coverage-proof" id="coverage" aria-labelledby="coverage-title">
               <div class="coverage-copy">
-                <span class="section-kicker">Coverage, with a denominator</span>
+                <span class="section-kicker">Free ATS audit</span>
                 <h2 id="coverage-title">Check the target list before you trust the signal.</h2>
-                <p>The free browser audit checks up to 50 public career-site URLs against ATS hosts BD Engine recognizes. It reports the valid-URL denominator, flags sites that still need discovery, and exports the result as CSV.</p>
-                <p class="coverage-caveat">Recognized providers include Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, Taleo, Avature, UKG Pro, and UKG Ready. Role count, freshness, and employer coverage depend on the public feed.</p>
+                <p>Check up to 50 public career-site URLs in your browser. See which ATS hosts BD Engine recognizes, which sites need discovery, and take the results with you in a CSV.</p>
+                <details class="coverage-providers">
+                  <summary>Recognized providers</summary>
+                  <p class="coverage-caveat">Greenhouse, Lever, Ashby, SmartRecruiters, Workday, BambooHR, Workable, Jobvite, Recruitee, Personio, Rippling, JazzHR, Breezy HR, Paylocity, Teamtailor, iCIMS, Taleo, Avature, UKG Pro, and UKG Ready. Role count, freshness, and employer coverage depend on the public feed.</p>
+                </details>
                 <a class="btn btn-primary btn-lg" href="/ats-checker?utm_source=homepage&amp;utm_medium=product&amp;utm_campaign=coverage_audit&amp;utm_content=coverage_section">Run the free ATS audit</a>
               </div>
-              <dl class="coverage-facts">
-                <div><dt>Target-list size</dt><dd>Up to 50 URLs</dd></div>
-                <div><dt>Result</dt><dd>Explicit valid-URL rate</dd></div>
-                <div><dt>Data handling</dt><dd>Runs in your browser</dd></div>
-                <div><dt>Output</dt><dd>CSV export included</dd></div>
-              </dl>
+              <div class="coverage-sample">
+                <p class="coverage-sample-label">Sample audit</p>
+                <p class="coverage-sample-rate"><strong>67%</strong> host recognition</p>
+                <div class="coverage-sample-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+                <dl class="coverage-facts">
+                  <div><dt>Recognized ATS</dt><dd>2 URLs</dd></div>
+                  <div><dt>Needs discovery</dt><dd>1 URL</dd></div>
+                </dl>
+              </div>
             </section>
 
             <section class="pricing" id="pricing" aria-labelledby="pricing-title">
@@ -1349,19 +1348,22 @@
               </div>
               <div class="pricing-grid pricing-grid--focused">
                 <div class="pricing-card pricing-card--popular pricing-card--focused">
-                  <div class="pricing-badge popular">14-day free trial</div>
-                  <h3>${escapeHtml(pricingOffer.name)}</h3>
-                  <div class="pricing-trial-price" aria-label="Free for the first 14 days"><span class="price-amount">$0</span><span class="price-period">/14 days</span></div>
-                  <div class="pricing-price">${pricingOffer.priceMarkup}</div>
-                  <p class="pricing-fit">${escapeHtml(pricingOffer.fit)}</p>
-                <ul class="pricing-features">
-                    ${pricingOffer.features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join('')}
-                </ul>
-                  <p class="pricing-sync-note">${escapeHtml(pricingOffer.syncNote)}</p>
-                  <p class="pricing-upgrade">${escapeHtml(pricingOffer.trial)}</p>
-                  ${isJobSeekerLanding
-                    ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
-                    : '<button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Start 14-day trial</button>'}
+                  <div class="pricing-summary">
+                    <h3>${escapeHtml(pricingOffer.name)}</h3>
+                    <div class="pricing-trial-price"><span class="price-amount">$0</span><span class="price-period">for 14 days</span></div>
+                    <div class="pricing-price">${pricingOffer.priceMarkup}</div>
+                    <p class="pricing-fit">${escapeHtml(pricingOffer.fit)}</p>
+                    ${isJobSeekerLanding
+                      ? '<button class="btn btn-primary btn-block" data-jobseeker-signup data-plan-intent="jobseeker">Start 14-day trial</button>'
+                      : '<button class="btn btn-primary btn-block btn-glow" data-signup data-plan-intent="sales">Start 14-day trial</button>'}
+                  </div>
+                  <div class="pricing-includes">
+                    <ul class="pricing-features" aria-label="Plan features">
+                      ${pricingOffer.features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join('')}
+                    </ul>
+                    <p class="pricing-sync-note">${escapeHtml(pricingOffer.syncNote)}</p>
+                    <p class="pricing-upgrade">${escapeHtml(pricingOffer.trial)}</p>
+                  </div>
                 </div>
               </div>
             </section>
