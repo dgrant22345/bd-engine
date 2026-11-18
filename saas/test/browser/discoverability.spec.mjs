@@ -444,6 +444,7 @@ test('pricing selection persists the intended paid plan through signup', async (
 
 test('job-seeker route shows only its relevant paid offer and preserves plan intent', async ({ page }) => {
   await page.goto('/job-search');
+  await expect(page.getByRole('link', { name: 'Get the free target-account worksheet' })).toHaveCount(0);
 
   await expect(page.locator('.pricing-card')).toHaveCount(1);
   const jobSeekerPlan = page.locator('.pricing-card', { hasText: 'Job Seeker' });
@@ -461,7 +462,7 @@ test('job-seeker route shows only its relevant paid offer and preserves plan int
   });
 });
 
-test('recruiter hero keeps the trial, demo, and attributed ATS utility discoverable', async ({ page }) => {
+test('recruiter landing keeps the trial, demo, ATS utility, and worksheet discoverable', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.locator('.hero-cta').getByRole('link', { name: 'Run free ATS audit', exact: true })).toHaveAttribute('href', /utm_content=recruiter_hero_primary/);
@@ -472,6 +473,10 @@ test('recruiter hero keeps the trial, demo, and attributed ATS utility discovera
   await expect(audit).toHaveAttribute('href', /utm_source=homepage/);
   await expect(audit).toHaveAttribute('href', /utm_medium=navigation/);
   await expect(audit).toHaveAttribute('href', /utm_campaign=coverage_audit/);
+
+  await page.getByRole('link', { name: 'Get the free target-account worksheet' }).click();
+  await expect(page).toHaveURL(/\/guides\/staffing-target-account-list#template$/);
+  await expect(page.getByRole('link', { name: 'Download the CSV template' })).toBeVisible();
 });
 
 test('Terms review returns to the pricing decision instead of opening signup', async ({ page }) => {
